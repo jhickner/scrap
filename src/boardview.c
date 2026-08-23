@@ -33,6 +33,7 @@
 #define KEY_DELETE   'd'
 #define KEY_TRIAGE   't'
 #define KEY_START    's'
+#define KEY_START_MAX 'S'
 #define KEY_GO       'g'
 #define KEY_APPROVE  'a'
 #define KEY_APPROVE_ALL 'A'
@@ -46,14 +47,14 @@
 #define KEY_SERVE    'b'
 #define KEY_ALL      '*'
 
-#define BOARD_KEYS "ndtsgarxflcb*Aiu\t"
+#define BOARD_KEYS "ndtsSgarxflcb*Aiu\t"
 
 #define BOARD_RECENT 3
 
 #define BOARD_RECENT_INDENT 6
 
 #define BOARD_HINT \
-    "enter edit  ·  s start  ·  g worker  ·  "                                \
+    "enter edit  ·  s start  ·  S start max  ·  g worker  ·  "                \
     "a approve  ·  A approve all  ·  i audit\n"                               \
     "f feedback  ·  r send back  ·  x cancel start  ·  u undo\n"              \
     "n new  ·  t triage  ·  l log  ·  d delete  ·  c config  ·  "               \
@@ -655,6 +656,46 @@ static int approve_all(const struct board_card *cards, int n, const char *filter
     return did;
 }
 
+static int in_backlog(const struct board_card *cards, int n, const char *filter)
+{
+    int ready = 0;
+    for (int i = 0; i < n; i++)
+        if (cards[i].col == BOARD_BACKLOG && shows(&cards[i], filter))
+            ready++;
+    return ready;
+}
+
+static int start_max(const struct board_card *cards, int n, const char *filter,
+                     char *why, int size)
+{
+    const struct board_card **in = calloc((size_t)(n ? n : 1), sizeof *in);
+    if (!in)
+        return 0;
+
+    int k = 0;
+    for (int i = 0; i < n; i++)
+        if (cards[i].col == BOARD_BACKLOG && shows(&cards[i], filter))
+            in[k++] = &cards[i];
+    qsort(in, (size_t)k, sizeof *in, by_col);
+
+    int did = 0;
+    if (why && size > 0)
+        why[0] = '\0';
+    for (int i = 0; i < k; i++) {
+        if (boardwork_start(in[i], why, size)) {
+            did++;
+            if (why && size > 0)
+                why[0] = '\0';
+            continue;
+        }
+        if (boardwork_running() >= boardcfg()->workers ||
+            workspace_count() >= WORKSPACE_MAX)
+            break;
+    }
+    free(in);
+    return did;
+}
+
 static const char *const PRIORITIES[] = {"0", "1", "2", "3"};
 
 struct notes {
@@ -1163,6 +1204,21 @@ int boardview_run(const char *cwd)
                     snprintf(notice, sizeof notice, "%s", why);
             }
             break;
+        case KEY_START_MAX: {
+            if (!in_backlog(cards, n, filter))
+                snprintf(notice, sizeof notice, "nothing in backlog");
+            else {
+                char why[256];
+                int  did = start_max(cards, n, filter, why, sizeof why);
+                if (did)
+                    snprintf(notice, sizeof notice, "started %d worker%s", did,
+                             did == 1 ? "" : "s");
+                else
+                    snprintf(notice, sizeof notice, "%s",
+                             why[0] ? why : "could not start a worker");
+            }
+            break;
+        }
         case KEY_GO: {
             int tab = c ? boardwork_tab(c->id) : -1;
             if (tab >= 0) {
