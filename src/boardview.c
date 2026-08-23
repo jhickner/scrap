@@ -257,6 +257,8 @@ static const char *step_of(const char *id)
         return "landing";
     if (boardwork_auditing(id))
         return "auditing";
+    if (boardwork_sweeping(id))
+        return "sweeping";
     return NULL;
 }
 
@@ -396,7 +398,6 @@ static int board_reap(void)
             break;
         changed |= boardtriage_take(key, out);
         changed |= boardmerge_take(key, out, ok);
-        changed |= boardsweep_take(key, out);
         free(out);
     }
     return changed;
@@ -414,7 +415,7 @@ static int board_tick(void *ud)
 
     moved |= boardmerge_pump();
     moved |= boardwork_audit_pump();
-    moved |= boardsweep_pump();
+    moved |= boardwork_sweep_pump();
 
     static int seen;
     int        now = 0;
@@ -459,6 +460,57 @@ static void note(const char *fmt, ...)
     ui_note("%s", text);
     viewport_item_end();
     ui_flush();
+}
+
+static void sweep_review(void)
+{
+    while (boardsweep_proposed() > 0) {
+        int               n = boardsweep_proposed();
+        struct pick_item *items = calloc((size_t)n, sizeof *items);
+        char            **where = calloc((size_t)n, sizeof *where);
+        if (!items || !where) {
+            free(items);
+            free(where);
+            return;
+        }
+        for (int i = 0; i < n; i++) {
+            char home[4096];
+            path_home_relative(boardsweep_proposal_repo(i), home, sizeof home);
+            where[i] = dsprintf("%s", home);
+            items[i] = (struct pick_item){boardsweep_proposal(i), where[i]};
+        }
+
+        char title[128];
+        snprintf(title, sizeof title,
+                 "sweep proposed %d card%s \xc2\xb7 enter add, e edit, d drop, "
+                 "esc drops the rest", n, n == 1 ? "" : "s");
+
+        int pressed = 0;
+        int at = pick_run_keys(title, items, n, 0, "ed", &pressed);
+
+        for (int i = 0; i < n; i++)
+            free(where[i]);
+        free(where);
+        free(items);
+
+        if (at < 0) {
+            boardsweep_drop_all();
+            return;
+        }
+        if (pressed == 'd') {
+            boardsweep_drop(at);
+            continue;
+        }
+        if (pressed == 'e') {
+            char *text = ask_run("card", boardsweep_proposal(at));
+            if (text) {
+                boardsweep_accept(at, text);
+                free(text);
+            }
+            continue;
+        }
+        boardsweep_accept(at, NULL);
+    }
 }
 
 static void do_new(const char *cwd, char *sel_id)
@@ -699,6 +751,8 @@ int boardview_run(const char *cwd)
     }
 
     for (;;) {
+        sweep_review();
+
         struct board_card *cards = NULL;
         int                n = board_load(&cards);
 

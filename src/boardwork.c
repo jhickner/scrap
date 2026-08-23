@@ -13,15 +13,16 @@
 #include "boardflow.h"
 #include "boardlog.h"
 #include "boardmerge.h"
+#include "boardsweep.h"
 #include "session.h"
 #include "text.h"
 #include "workspace.h"
 
 struct worker {
-    char            id[BOARD_ID_MAX];
-    struct session *session;
-    int             audit;
-    int             done;
+    char             id[BOARD_ID_MAX];
+    struct session  *session;
+    enum board_role  role;
+    int              done;
 };
 
 static struct worker workers[WORKSPACE_MAX];
@@ -65,40 +66,52 @@ int boardwork_tab(const char *id)
 int boardwork_auditing(const char *id)
 {
     struct worker *w = id ? slot_of(id) : NULL;
-    return w && w->audit;
+    return w && w->role == BOARD_ROLE_AUDIT;
 }
 
-static int audit_start(const struct board_card *c)
+int boardwork_sweeping(const char *id)
 {
-    if (!c || !c->worktree[0] || boardwork_auditing(c->id))
-        return 0;
+    struct worker *w = id ? slot_of(id) : NULL;
+    return w && w->role == BOARD_ROLE_SWEEP;
+}
 
-    char *prompt = boardaudit_prompt(c);
+static int side_start(const struct board_card *c, enum board_who who,
+                      enum board_role role, const char *cwd, char *prompt,
+                      const char *label)
+{
     if (!prompt)
         return 0;
 
-    const struct board_profile *p = boardcfg_for(BOARD_WHO_AUDIT);
+    const struct board_profile *p = boardcfg_for(who);
 
     int front = workspace_index();
     int at = workspace_spawn(p->backend[0] ? p->backend : "claude",
                              p->model[0] ? p->model : NULL,
-                             p->effort[0] ? p->effort : NULL, c->worktree, NULL);
+                             p->effort[0] ? p->effort : NULL, cwd, NULL);
     if (at < 0) {
         free(prompt);
         return 0;
     }
     workspace_show(front);
 
-    if (!boardwork_hold(c->id, workspace_at(at), 1)) {
+    if (!boardwork_hold(c->id, workspace_at(at), role)) {
         workspace_close(at);
         free(prompt);
         return 0;
     }
 
     workspace_send(at, prompt, c->title);
-    boardlog_turn(c->id, "audit", prompt, NULL);
+    boardlog_turn(c->id, label, prompt, NULL);
     free(prompt);
     return 1;
+}
+
+static int audit_start(const struct board_card *c)
+{
+    if (!c || !c->worktree[0] || boardwork_auditing(c->id))
+        return 0;
+    return side_start(c, BOARD_WHO_AUDIT, BOARD_ROLE_AUDIT, c->worktree,
+                      boardaudit_prompt(c), "audit");
 }
 
 int boardwork_audit_pump(void)
@@ -123,7 +136,35 @@ int boardwork_audit_pump(void)
     return started;
 }
 
-int boardwork_hold(const char *id, struct session *s, int audit)
+static int sweeping_any(void)
+{
+    for (int i = 0; i < WORKSPACE_MAX; i++)
+        if (workers[i].session && workers[i].role == BOARD_ROLE_SWEEP)
+            return 1;
+    return 0;
+}
+
+int boardwork_sweep_pump(void)
+{
+    if (boardsweep_proposed() || sweeping_any())
+        return 0;
+
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+
+    char id[BOARD_ID_MAX], root[4096];
+    int  started = 0;
+    if (boardsweep_due(cards, n, id, sizeof id, root, sizeof root)) {
+        const struct board_card *c = board_find(cards, n, id);
+        if (c)
+            started = side_start(c, BOARD_WHO_SWEEP, BOARD_ROLE_SWEEP, root,
+                                 boardsweep_prompt(cards, n, c->cwd), "sweep");
+    }
+    board_free(cards, n);
+    return started;
+}
+
+int boardwork_hold(const char *id, struct session *s, enum board_role role)
 {
     if (!id || !*id || !s || slot_of(id))
         return 0;
@@ -134,7 +175,7 @@ int boardwork_hold(const char *id, struct session *s, int audit)
         memset(&workers[i], 0, sizeof workers[i]);
         snprintf(workers[i].id, sizeof workers[i].id, "%s", id);
         workers[i].session = s;
-        workers[i].audit = audit;
+        workers[i].role = role;
         return 1;
     }
     return 0;
@@ -382,7 +423,7 @@ int boardwork_start(const struct board_card *c, char *why, int size)
         free(turn);
     }
 
-    boardwork_hold(c->id, s, 0);
+    boardwork_hold(c->id, s, BOARD_ROLE_WORKER);
 
     struct board_card edited = *c;
     edited.col = BOARD_DOING;
@@ -407,11 +448,19 @@ void boardwork_finished(struct session *s)
     const char *reply = session_last_reply(s);
     const char *failed = session_last_error(s);
 
-    if (w->audit) {
+    if (w->role == BOARD_ROLE_AUDIT) {
         w->done = 1;
         if (failed && *failed)
             board_note(w->id, "audit", failed);
         boardaudit_finished(w->id, failed && *failed ? NULL : reply);
+        return;
+    }
+
+    if (w->role == BOARD_ROLE_SWEEP) {
+        w->done = 1;
+        if (failed && *failed)
+            board_note(w->id, "sweep", failed);
+        boardsweep_finished(w->id, failed && *failed ? NULL : reply);
         return;
     }
 
@@ -527,6 +576,18 @@ void boardwork_let_go(const char *id)
         workspace_close(at);
 }
 
+static int at_role(enum board_role role, enum board_col col)
+{
+    switch (role) {
+    case BOARD_ROLE_AUDIT:
+        return col == BOARD_AUDIT;
+    case BOARD_ROLE_SWEEP:
+        return col == BOARD_DONE;
+    default:
+        return col == BOARD_DOING || col == BOARD_REVIEW;
+    }
+}
+
 int boardwork_poll(void)
 {
     int changed = 0;
@@ -560,9 +621,7 @@ int boardwork_poll(void)
         if (!workers[i].session)
             continue;
         struct board_card *c = board_find(cards, n, workers[i].id);
-        if (c && (workers[i].audit
-                      ? c->col == BOARD_AUDIT
-                      : (c->col == BOARD_DOING || c->col == BOARD_REVIEW)))
+        if (c && at_role(workers[i].role, c->col))
             continue;
         boardwork_let_go(workers[i].id);
         changed = 1;
@@ -587,7 +646,7 @@ void boardwork_discard(const struct board_card *c)
     if (!c)
         return;
 
-    static const char *const STAGES[] = {"triage:", "merge:", "sweep:"};
+    static const char *const STAGES[] = {"triage:", "merge:"};
     for (size_t i = 0; i < sizeof STAGES / sizeof *STAGES; i++) {
         char key[CHILD_KEY_MAX];
         snprintf(key, sizeof key, "%s%s", STAGES[i], c->id);
