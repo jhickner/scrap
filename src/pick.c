@@ -145,7 +145,9 @@ static void step(struct view *v, int dir)
 static int visible_cap(const struct view *v)
 {
     int rows = tty_rows() - 3 - chrome_gap();
-    if (v->live && v->live->hint && *v->live->hint) {
+    if (v->live && v->live->ask && *v->live->ask)
+        rows -= 2;
+    else if (v->live && v->live->hint && *v->live->hint) {
         rows -= 2;
         for (const char *p = v->live->hint; (p = strchr(p, '\n')); p++)
             rows--;
@@ -377,7 +379,18 @@ static void paint(void *ud)
         rows++;
     }
 
-    if (v->live && v->live->hint && *v->live->hint) {
+    if (v->live && v->live->ask && *v->live->ask) {
+        const char *ask = v->live->ask;
+        size_t      budget = columns > 12 ? (size_t)(columns - 12) : 1;
+        ui_put("\n    ");
+        ui_putn(ask, ui_fit_visible(ask, strlen(ask), budget));
+        ui_put(" ");
+        ui_esc(ui_style(UI_ACCENT));
+        ui_put("y/n");
+        ui_esc(ui_style(UI_RESET));
+        rows += 2;
+    }
+    else if (v->live && v->live->hint && *v->live->hint) {
         ui_put("\n");
         size_t budget = columns > 6 ? (size_t)(columns - 6) : 1;
         for (const char *p = v->live->hint; p;) {
@@ -480,7 +493,8 @@ static int run(const char *title, const struct pick_item *items, int count,
         tty_event ev;
         int turning = animating(&v);
 
-        int watching = v.live && v.live->tick;
+        int asking = live && live->ask && *live->ask;
+        int watching = !asking && v.live && v.live->tick;
         int wait = turning ? SPIN_FRAME_MS : (watching ? LIVE_POLL_MS : -1);
         if (!tty_read(&ev, wait)) {
             if (chrome_modal_interrupted())
@@ -499,6 +513,28 @@ static int run(const char *title, const struct pick_item *items, int count,
                 chrome_paint();
             continue;
         }
+        if (asking) {
+            if (ev.key == TK_TEXT) {
+                free(ev.text);
+                continue;
+            }
+            int yes = ev.key == TK_CHAR && (ev.cp == 'y' || ev.cp == 'Y');
+            int no = (ev.key == TK_CHAR &&
+                      (ev.cp == 'n' || ev.cp == 'N' || ev.cp == 3 || ev.cp == 4)) ||
+                     ev.key == TK_ESCAPE || ev.key == TK_EOF;
+            if (!yes && !no) {
+                if (ev.key == TK_RESIZE) {
+                    refilter(&v);
+                    chrome_paint();
+                }
+                continue;
+            }
+            result = (v.count && v.sel < v.count) ? v.order[v.sel] : -1;
+            if (pressed)
+                *pressed = yes ? 'y' : 'n';
+            goto done;
+        }
+
         int typing = filter && (!slash || v.searching);
         if (ev.key == TK_TEXT) {
             int took = typing && type_into(&v, ev.text, ev.text ? strlen(ev.text) : 0);

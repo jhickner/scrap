@@ -20,7 +20,6 @@
 #include "boardwork.h"
 #include "child.h"
 #include "chrome.h"
-#include "confirm.h"
 #include "form.h"
 #include "pick.h"
 #include "text.h"
@@ -125,8 +124,8 @@ static void vlist_free(struct vlist *l)
 }
 
 static int vlist_run(const char *title, struct vlist *l, int initial,
-                     const char *hint, const char *shortcuts, int *pressed,
-                     int (*tick)(void *ud), void *tick_ud, int *cursor)
+                     const char *hint, const char *ask, const char *shortcuts,
+                     int *pressed, int (*tick)(void *ud), void *tick_ud, int *cursor)
 {
     struct pick_item *items = calloc((size_t)l->n, sizeof *items);
     unsigned char    *heading = calloc((size_t)l->n, 1);
@@ -157,6 +156,7 @@ static int vlist_run(const char *title, struct vlist *l, int initial,
         .mark = mark,
         .mark_role = role,
         .hint = hint,
+        .ask = ask,
         .align = 1,
         .tick = tick,
         .ud = tick_ud,
@@ -583,12 +583,10 @@ static void do_serve(char *notice, size_t size)
         snprintf(notice + used, size - used, " · %d after their current card", waiting);
 }
 
+enum { ASK_NONE, ASK_AUDIT, ASK_DELETE };
+
 static int do_delete(const struct board_card *c)
 {
-    char question[280];
-    snprintf(question, sizeof question, "delete \"%s\"?", c->title);
-    if (!confirm_run(question))
-        return 0;
     boardwork_discard(c);
     return board_remove(c->id);
 }
@@ -936,6 +934,8 @@ int boardview_run(const char *cwd)
     static char          filter[4096];
     static struct anchor cur = {.col = -1};
     char                 notice[256] = {0};
+    char                 ask[280] = {0};
+    int                  asking = ASK_NONE;
     static int           been_here;
 
     if (!been_here) {
@@ -1008,7 +1008,7 @@ int boardview_run(const char *cwd)
 
         int pressed = 0;
         int cursor = -1;
-        int at = vlist_run(title, &l, row_of(&l, &cur), hint, BOARD_KEYS,
+        int at = vlist_run(title, &l, row_of(&l, &cur), hint, ask, BOARD_KEYS,
                            &pressed, board_tick, NULL, &cursor);
         int row = at >= 0 ? at : cursor;
         if (row >= 0)
@@ -1017,6 +1017,25 @@ int boardview_run(const char *cwd)
 
         if (at == PICK_REOPEN) {
             board_free(cards, n);
+            continue;
+        }
+        if (asking) {
+            int what = asking;
+            asking = ASK_NONE;
+            ask[0] = '\0';
+
+            struct board_card *c = board_find(cards, n, cur.id);
+            if (c && at >= 0) {
+                if (what == ASK_AUDIT)
+                    boardwork_approve(c, pressed == 'y');
+                else if (pressed == 'y' && do_delete(c))
+                    cur.id[0] = '\0';
+            }
+            board_free(cards, n);
+            if (at < 0) {
+                close_list();
+                return -1;
+            }
             continue;
         }
         if (at < 0) {
@@ -1071,13 +1090,11 @@ int boardview_run(const char *cwd)
                 boardwork_let_go(c->id);
                 boardsweep_approve(c);
             } else if (c && c->col == BOARD_REVIEW) {
-                close_list();
                 int files = 0, lines = 0;
                 boardaudit_size(c, &files, &lines);
-                char ask[256];
                 snprintf(ask, sizeof ask, "audit %d file%s, %d line%s before it lands?",
                          files, files == 1 ? "" : "s", lines, lines == 1 ? "" : "s");
-                boardwork_approve(c, confirm_run(ask));
+                asking = ASK_AUDIT;
             }
             break;
         case KEY_REJECT:
@@ -1110,9 +1127,8 @@ int boardview_run(const char *cwd)
             break;
         case KEY_DELETE:
             if (c) {
-                close_list();
-                if (do_delete(c))
-                    cur.id[0] = '\0';
+                snprintf(ask, sizeof ask, "delete \"%s\"?", c->title);
+                asking = ASK_DELETE;
             }
             break;
         case KEY_LOG: {

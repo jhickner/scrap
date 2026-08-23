@@ -34,6 +34,8 @@ struct pick_live {
 
     const char *hint;
 
+    const char *ask;
+
     int align;
 
     int  (*tick)(void *ud);
