@@ -9,12 +9,14 @@
 
 #include "ask.h"
 #include "board.h"
+#include "boardcfg.h"
 #include "boardcfgui.h"
 #include "boardtriage.h"
 #include "boardwork.h"
 #include "confirm.h"
 #include "form.h"
 #include "pick.h"
+#include "quota.h"
 #include "text.h"
 #include "ui.h"
 #include "viewport.h"
@@ -313,9 +315,15 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             if (wide)
                 short_repo(c->cwd, where, sizeof where);
 
+            char waiting[256] = {0};
+            if (c->col == BOARD_BACKLOG)
+                boardwork_blocked(c, waiting, sizeof waiting);
+
             const char *question = c->col == BOARD_UNCLEAR ? asked(c) : NULL;
             if (question)
                 r->detail = dsprintf("%s", question);
+            else if (waiting[0])
+                r->detail = dsprintf("waiting · %s", waiting);
             else if (where[0] && c->kind[0])
                 r->detail = dsprintf("%s · %s · %s", where, c->kind, when);
             else if (where[0])
@@ -624,6 +632,7 @@ int boardview_run(const char *cwd)
     // rather than at the top of the list.
     static char filter[4096];
     static char sel_id[BOARD_ID_MAX];
+    char        notice[256] = {0};
     static int  been_here;
 
     if (!been_here) {
@@ -660,15 +669,38 @@ int boardview_run(const char *cwd)
         if (filter[0])
             path_home_relative(filter, where, sizeof where);
 
-        char title[700];
+        // What the board is holding back, and what is left to run it with.
+        const struct board_cfg *cfg = boardcfg();
+        char busy[64] = "";
+        if (boardwork_running())
+            snprintf(busy, sizeof busy, " · %d/%d workers", boardwork_running(),
+                     cfg->workers);
+
+        char left[64] = "";
+        int  spent = 0;
+        const char *whose = boardcfg_for(BOARD_WHO_WORKER)->backend;
+        if (whose[0] && quota_get(whose, &spent, NULL))
+            snprintf(left, sizeof left, " · %s %d%%", whose, spent);
+
+        char title[820];
         if (shown == n)
-            snprintf(title, sizeof title, "board · %s · %d card%s", where, n,
-                     n == 1 ? "" : "s");
+            snprintf(title, sizeof title, "board · %s · %d card%s%s%s", where, n,
+                     n == 1 ? "" : "s", busy, left);
         else
-            snprintf(title, sizeof title, "board · %s · %d of %d", where, shown, n);
+            snprintf(title, sizeof title, "board · %s · %d of %d%s%s", where,
+                     shown, n, busy, left);
+
+        // A refusal belongs under the list rather than in the transcript
+        // behind it: the board is what is being looked at.
+        char hint[512];
+        if (notice[0])
+            snprintf(hint, sizeof hint, "%s\n%s", notice, BOARD_HINT);
+        else
+            snprintf(hint, sizeof hint, "%s", BOARD_HINT);
+        notice[0] = '\0';
 
         int pressed = 0;
-        int at = vlist_run(title, &l, row_of(&l, sel_id), BOARD_HINT, BOARD_KEYS,
+        int at = vlist_run(title, &l, row_of(&l, sel_id), hint, BOARD_KEYS,
                            &pressed, board_tick, NULL);
         if (at >= 0)
             snprintf(sel_id, sizeof sel_id, "%s", l.v[at].id);
@@ -700,9 +732,9 @@ int boardview_run(const char *cwd)
             break;
         case KEY_START:
             if (c) {
-                char why[512];
-                if (!boardwork_start(c, why, sizeof why) && why[0])
-                    note("%s", why);
+                char why[256];
+                if (!boardwork_start(c, why, sizeof why))
+                    snprintf(notice, sizeof notice, "%s", why);
             }
             break;
         case KEY_GO: {

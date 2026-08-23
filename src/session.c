@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "agenttabs.h"
+#include "quota.h"
 #include "block.h"
 #include "app.h"
 #include "prompt.h"
@@ -485,8 +486,13 @@ static void quota_poll(struct session *s)
         return;
     backend_rate_limit limit = {0};
     s->agent->rate_limit(s->agent, &limit);
-    if (limit.available)
+    if (limit.available) {
         agenttabs_usage(limit.used_percent, limit.resets_at, limit.window_minutes);
+        // Kept per backend as well, where a window with no session on one can
+        // still ask what is left of it.
+        quota_note(s->backend, limit.used_percent, limit.resets_at,
+                   limit.window_minutes);
+    }
 }
 
 // Takes the cached name, unless it is the one a rename is replacing.

@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 
 #include "board.h"
+#include "quota.h"
 #include "boardcfg.h"
 #include "session.h"
 #include "text.h"
@@ -223,30 +224,106 @@ static char *first_turn(const struct board_card *c)
     return out;
 }
 
+/* ---- who can take it ---------------------------------------------------- */
+
+// A backend has room when it says how much is left and that is under the
+// ceiling. One that reports nothing is not one that is spent: only some
+// backends have a protocol for this at all, and those are the escape hatch
+// when everything measured is exhausted.
+static int has_room(const char *backend, int ceiling)
+{
+    int percent = 0;
+    if (!quota_get(backend, &percent, NULL))
+        return 1;
+    return percent < ceiling;
+}
+
+// The first backend in the chain with room, starting from the one the card
+// would otherwise use. Returns NULL when every one of them is spent.
+static const char *with_room(const char *first, const char *chain, int ceiling,
+                             char *out, size_t size)
+{
+    if (has_room(first, ceiling)) {
+        snprintf(out, size, "%s", first);
+        return out;
+    }
+
+    char rest[256];
+    snprintf(rest, sizeof rest, "%s", chain ? chain : "");
+    for (char *save = rest, *name; (name = strsep(&save, ","));) {
+        while (*name == ' ')
+            name++;
+        if (!*name || !strcmp(name, first))
+            continue;
+        if (has_room(name, ceiling)) {
+            snprintf(out, size, "%s", name);
+            return out;
+        }
+    }
+    return NULL;
+}
+
 /* ---- starting and finishing --------------------------------------------- */
 
-int boardwork_start(const struct board_card *c, char *why, int size)
+// Which backend a card would run on, before anything is asked of it.
+static const char *wanted_backend(const struct board_card *c)
+{
+    const struct board_profile *p = boardcfg_for(BOARD_WHO_WORKER);
+    const char                 *b = c->backend[0] ? c->backend : p->backend;
+    return b[0] ? b : "claude";
+}
+
+int boardwork_blocked(const struct board_card *c, char *why, int size)
 {
     snprintf(why, (size_t)size, "%s", "");
+    if (!c)
+        return 1;
 
-    if (!c || !c->cwd[0]) {
-        snprintf(why, (size_t)size, "the card does not say which repo it is in");
-        return 0;
+    if (!c->cwd[0]) {
+        snprintf(why, (size_t)size, "no repo on the card");
+        return 1;
     }
     if (slot_of(c->id)) {
-        snprintf(why, (size_t)size, "a worker already has that card");
-        return 0;
+        snprintf(why, (size_t)size, "a worker already has it");
+        return 1;
     }
 
     const struct board_cfg *cfg = boardcfg();
     if (boardwork_running() >= cfg->workers) {
-        snprintf(why, (size_t)size, "all %d workers are busy", cfg->workers);
-        return 0;
+        snprintf(why, (size_t)size, "all %d workers busy", cfg->workers);
+        return 1;
     }
     if (workspace_count() >= WORKSPACE_MAX) {
-        snprintf(why, (size_t)size, "this window is full of tabs");
-        return 0;
+        snprintf(why, (size_t)size, "no room for another tab");
+        return 1;
     }
+
+    const char *wanted = wanted_backend(c);
+    if (has_room(wanted, cfg->usage_ceiling))
+        return 0;
+
+    // Over the ceiling: either the window turns over soon enough to be worth
+    // waiting for, or somebody else in the chain takes it.
+    int soon = quota_resets_in(wanted);
+    if (soon >= 0 && soon <= cfg->reset_hold) {
+        snprintf(why, (size_t)size, "%s resets in %d min", wanted, soon);
+        return 1;
+    }
+
+    char took[32];
+    if (!with_room(wanted, cfg->delegation, cfg->usage_ceiling, took, sizeof took)) {
+        snprintf(why, (size_t)size, "every backend over %d%%", cfg->usage_ceiling);
+        return 1;
+    }
+    return 0;
+}
+
+int boardwork_start(const struct board_card *c, char *why, int size)
+{
+    if (boardwork_blocked(c, why, size))
+        return 0;
+
+    const struct board_cfg *cfg = boardcfg();
 
     char root[4096];
     if (!repo_root(c->cwd, root, sizeof root)) {
@@ -268,15 +345,24 @@ int boardwork_start(const struct board_card *c, char *why, int size)
     write_card_file(path, c);
 
     const struct board_profile *p = boardcfg_for(BOARD_WHO_WORKER);
-    const char *backend = c->backend[0] ? c->backend : p->backend;
+    const char *wanted = wanted_backend(c);
     const char *model = c->model[0] ? c->model : p->model;
     const char *effort = c->effort[0] ? c->effort : p->effort;
+
+    char        took[32];
+    const char *backend = with_room(wanted, cfg->delegation, cfg->usage_ceiling,
+                                    took, sizeof took);
+    if (!backend)
+        backend = wanted;
+    // A card that ran somewhere other than where it was meant to should say so
+    // later, when the question is why it came out the way it did.
+    int handed_on = strcmp(backend, wanted) != 0;
 
     // Opening a tab brings it to the front, and the window is not the
     // worker's -- it is parked in the board. Put back what was showing.
     int front = workspace_index();
 
-    int at = workspace_spawn(backend[0] ? backend : "claude",
+    int at = workspace_spawn(backend,
                              model[0] ? model : NULL,
                              effort[0] ? effort : NULL, path, NULL);
     if (at < 0) {
@@ -304,8 +390,19 @@ int boardwork_start(const struct board_card *c, char *why, int size)
     edited.col = BOARD_DOING;
     snprintf(edited.worktree, sizeof edited.worktree, "%s", path);
     snprintf(edited.base, sizeof edited.base, "%s", base);
+    snprintf(edited.backend, sizeof edited.backend, "%s", backend);
     board_update(&edited);
-    board_note(c->id, "board", "a worker took it");
+
+    if (handed_on) {
+        int spent = 0;
+        quota_get(wanted, &spent, NULL);
+        char said[256];
+        snprintf(said, sizeof said, "%s was at %d%%, so %s took it", wanted,
+                 spent, backend);
+        board_note(c->id, "board", said);
+    } else {
+        board_note(c->id, "board", "a worker took it");
+    }
     return 1;
 }
 

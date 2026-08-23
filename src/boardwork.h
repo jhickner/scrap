@@ -23,6 +23,11 @@ void boardwork_finished(struct session *s);
 // Returns nonzero once the worker is going; `why` is filled in when it is not.
 int boardwork_start(const struct board_card *c, char *why, int size);
 
+// Why this card cannot start now, or zero if it can. The board asks it of
+// every card that is waiting, so a row can say what it is waiting for without
+// anyone having to press anything at it.
+int boardwork_blocked(const struct board_card *c, char *why, int size);
+
 int boardwork_running(void);
 
 // The card this session is working, or NULL. What the live list asks so that a
