@@ -97,15 +97,41 @@ static const char WORKER_PROMPT[] =
     "Do not merge, do not switch branches, do not touch the main branch, and "
     "do not start work the card does not ask for.";
 
+// The audit is a gate, so it has to answer a question rather than write an
+// essay: findings are things that would stop a merge, and everything else is
+// clean.
 static const char AUDIT_PROMPT[] =
-    "Review the diff on this branch for problems worth a second pass: "
-    "duplicated mechanisms that should be one, architecture that fights the "
-    "code around it, memory handling, and anything with a security cost. "
-    "Report only what you would stop a merge for.";
+    "Review the change on this branch against the commit it branched from. "
+    "Answer with JSON only, no prose and no code fence:\n"
+    "\n"
+    "  {\"clean\":true,\"findings\":[]}\n"
+    "\n"
+    "Look for: a mechanism duplicated that should be one, structure that "
+    "fights the code around it, memory handled wrongly, and anything with a "
+    "security cost.\n"
+    "\n"
+    "A finding is something you would stop the merge for, written as one "
+    "sentence naming the file. Style, naming and taste are not findings. If "
+    "there are none, say clean and mean it -- a gate that never opens is a "
+    "gate nobody keeps.";
 
 static char *dup_or_null(const char *s)
 {
     return s ? strdup(s) : NULL;
+}
+
+// The prompt each job has when nothing has been written over it. Kept
+// reachable so a saved copy identical to it can be recognised and left out of
+// the file -- otherwise opening the config screen once would freeze the
+// defaults as they were that day, and a better one written later would never
+// reach anybody.
+static const char *default_prompt(enum board_who who)
+{
+    switch (who) {
+    case BOARD_WHO_WORKER: return WORKER_PROMPT;
+    case BOARD_WHO_AUDIT:  return AUDIT_PROMPT;
+    default:               return TRIAGE_PROMPT;
+    }
 }
 
 static void defaults(struct board_cfg *c)
@@ -270,7 +296,11 @@ static int write_out(const struct board_cfg *c)
         cJSON_AddStringToObject(p, "backend", c->who[i].backend);
         cJSON_AddStringToObject(p, "model", c->who[i].model);
         cJSON_AddStringToObject(p, "effort", c->who[i].effort);
-        cJSON_AddStringToObject(p, "prompt", c->who[i].prompt ? c->who[i].prompt : "");
+        // Only a prompt somebody has actually changed is written down.
+        const char *prompt = c->who[i].prompt;
+        const char *stock = default_prompt((enum board_who)i);
+        if (prompt && strcmp(prompt, stock))
+            cJSON_AddStringToObject(p, "prompt", prompt);
     }
 
     char *text = cJSON_Print(o);

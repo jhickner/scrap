@@ -41,10 +41,10 @@ int boardwork_tab(const char *id);
 // changed. A slot no card holds any more is one no card can wait for.
 int boardwork_poll(void);
 
-// Done with it: the card is finished, the tab closes, the worker is freed. The
-// worktree is left where it is -- merging is a judgement, and the branch name
-// says where the work went.
-int boardwork_approve(const struct board_card *c);
+// Done with it: the tab closes and the worker is freed. `audit` sends the
+// change for a second pass first; without it the card goes straight to the
+// merge queue.
+int boardwork_approve(const struct board_card *c, int audit);
 
 // Not done with it: the tab closes and the card goes back for someone else,
 // carrying why it bounced.

@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include "board.h"
+#include "boardaudit.h"
 #include "boardtriage.h"
 #include "sessionfork.h"
 
@@ -281,6 +282,58 @@ static void test_empty_and_missing(void)
     board_free(v, n);
 }
 
+// The audit's verdict, without a model in the way: what it answers decides
+// whether the card goes on to land or back to be worked on.
+static void test_audit_verdict(void)
+{
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("a card to audit", "/tmp/repo", id), "capture");
+    expect(board_move(id, BOARD_AUDIT, "you", NULL), "into audit");
+
+    char key[64];
+    snprintf(key, sizeof key, "audit:%s", id);
+
+    expect(!boardaudit_take("merge:x", "{}"), "another job's key is not ours");
+
+    expect(boardaudit_take(key, "{\"clean\":false,"
+                                "\"findings\":[\"src/a.c: leaks the buffer\"]}"),
+           "a verdict is taken");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    if (!c) {
+        fail("card survives the audit");
+        board_free(v, n);
+        return;
+    }
+    expect(c->col == BOARD_DOING, "findings send it back to be worked on");
+    int said = 0;
+    for (int i = 0; i < c->log_n; i++)
+        if (!strcmp(c->log[i].who, "audit") && strstr(c->log[i].text, "leaks"))
+            said = 1;
+    expect(said, "the finding is on the card");
+    board_free(v, n);
+
+    // Clean, and it goes on to land.
+    expect(board_move(id, BOARD_AUDIT, "you", NULL), "back into audit");
+    expect(boardaudit_take(key, "{\"clean\":true,\"findings\":[]}"), "clean verdict");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && c->col == BOARD_MERGING, "clean sends it on to land");
+    board_free(v, n);
+
+    // An audit that says nothing is not one that failed the card.
+    expect(board_move(id, BOARD_AUDIT, "you", NULL), "into audit again");
+    expect(boardaudit_take(key, "the model wandered off"), "unparsable verdict");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && c->col == BOARD_MERGING, "an unreadable audit does not hold it");
+    board_free(v, n);
+
+    board_remove(id);
+}
+
 int main(void)
 {
     if (!mkdtemp(home)) {
@@ -297,6 +350,7 @@ int main(void)
     test_remove();
     test_columns();
     test_attempts_reset_when_answered();
+    test_audit_verdict();
     test_empty_and_missing();
 
     cleanup();

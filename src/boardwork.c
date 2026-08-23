@@ -450,17 +450,18 @@ static void let_go(const char *id)
         workspace_close(at);
 }
 
-int boardwork_approve(const struct board_card *c)
+int boardwork_approve(const struct board_card *c, int audit)
 {
     if (!c)
         return 0;
     let_go(c->id);
-    board_note(c->id, "you", "approved");
+    board_note(c->id, "you", audit ? "approved, for audit" : "approved");
 
     // Approving is not finishing: the work still has to land, and a card with
     // no worktree has nothing to land.
-    return board_move(c->id, c->worktree[0] ? BOARD_MERGING : BOARD_DONE,
-                      "you", NULL);
+    if (!c->worktree[0])
+        return board_move(c->id, BOARD_DONE, "you", NULL);
+    return board_move(c->id, audit ? BOARD_AUDIT : BOARD_MERGING, "you", NULL);
 }
 
 int boardwork_reject(const struct board_card *c, const char *why)

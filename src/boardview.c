@@ -10,6 +10,7 @@
 #include "ask.h"
 #include "board.h"
 #include "boardcfg.h"
+#include "boardaudit.h"
 #include "boardcfgui.h"
 #include "boardmerge.h"
 #include "boardtriage.h"
@@ -33,12 +34,13 @@
 #define KEY_START    's'
 #define KEY_GO       'g'
 #define KEY_APPROVE  'a'
+#define KEY_APPROVE_OTHER 'A'
 #define KEY_REJECT   'r'
 #define KEY_FEEDBACK 'f'
 #define KEY_CONFIG   'c'
 #define KEY_ALL      '*'
 
-#define BOARD_KEYS "ndtsgarfc*"
+#define BOARD_KEYS "ndtsgaArfc*"
 
 // Letters are shortcuts here rather than a search, so without a line saying
 // so the list gives no sign it has any keys at all.
@@ -301,6 +303,7 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             int tab = boardwork_tab(c->id);
             r->spin = (unsigned char)(boardtriage_running(c->id) ||
                                       boardmerge_running(c->id) ||
+                                      boardaudit_running(c->id) ||
                                       (tab >= 0 && session_busy(workspace_at(tab))));
 
             char ts[32], when[64];
@@ -309,6 +312,8 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
                 snprintf(when, sizeof when, "triaging…");
             else if (boardmerge_running(c->id))
                 snprintf(when, sizeof when, "landing…");
+            else if (boardaudit_running(c->id))
+                snprintf(when, sizeof when, "auditing…");
             else if (tab >= 0)
                 snprintf(when, sizeof when, "tab %d · %s", tab + 1, ts);
             else
@@ -329,7 +334,17 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
                 r->detail = dsprintf("%s", question);
             else if (waiting[0])
                 r->detail = dsprintf("waiting · %s", waiting);
-            else if (c->cost_usd > 0 &&
+            else if (c->col == BOARD_REVIEW && c->worktree[0]) {
+                // What approving it will do, so pressing a is never a
+                // surprise: the size of the change, and which way it sends it.
+                int files = 0, lines = 0;
+                boardaudit_size(c, &files, &lines);
+                r->detail = dsprintf("%d file%s, %d line%s · %s", files,
+                                     files == 1 ? "" : "s", lines,
+                                     lines == 1 ? "" : "s",
+                                     boardaudit_wanted(c) ? "a audits"
+                                                          : "a lands it");
+            } else if (c->cost_usd > 0 &&
                      (c->col == BOARD_REVIEW || c->col == BOARD_DONE)) {
                 // What it cost is the thing worth knowing about work that is
                 // finished, so it takes the place of the age.
@@ -384,6 +399,7 @@ static int board_reap(void)
             break;
         changed |= boardtriage_take(key, out);
         changed |= boardmerge_take(key, out, ok);
+        changed |= boardaudit_take(key, out);
         free(out);
     }
     return changed;
@@ -403,6 +419,7 @@ static int board_tick(void *ud)
     moved |= boardwork_poll();
     // One card lands at a time, and the next one starts when it is done.
     moved |= boardmerge_pump();
+    moved |= boardaudit_pump();
     return moved ? PICK_TICK_REOPEN : 0;
 }
 
@@ -790,7 +807,12 @@ int boardview_run(const char *cwd)
         }
         case KEY_APPROVE:
             if (c && c->col == BOARD_REVIEW)
-                boardwork_approve(c);
+                boardwork_approve(c, boardaudit_wanted(c));
+            break;
+        case KEY_APPROVE_OTHER:
+            // The row says which way `a` goes; this is the other way.
+            if (c && c->col == BOARD_REVIEW)
+                boardwork_approve(c, !boardaudit_wanted(c));
             break;
         case KEY_REJECT:
             if (c && (c->col == BOARD_REVIEW || c->col == BOARD_DOING)) {
