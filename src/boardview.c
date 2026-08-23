@@ -555,25 +555,59 @@ static void card_form(const struct board_card *c)
     if (!kept)
         return;
 
-    struct board_card edited = *c;
+    // The card may have moved while the form was open -- triage answers on its
+    // own schedule. Merge onto what is in the store now rather than onto the
+    // copy the form was built from, or a turn that landed a second ago is
+    // written back out of existence.
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    struct board_card *live = board_find(cards, n, c->id);
+    if (!live) {
+        board_free(cards, n);
+        return;
+    }
+
+    struct board_card edited = *live;
     snprintf(edited.kind, sizeof edited.kind, "%s", kind);
+    edited.col = board_col_from_name(column);
+    edited.priority = atoi(priority);
+
     // The spec is the card; the title is only how it reads in a list. Until
     // triage has named it, that name follows the spec rather than drifting
     // from it.
+    int respec = 0;
     if (spec_is_field(c)) {
+        respec = strcmp(spec, live->body ? live->body : "") != 0;
         edited.body = spec;
-        if (!c->kind[0])
+        if (!live->kind[0])
             board_title_of(spec, edited.title, sizeof edited.title);
     }
-    edited.col = board_col_from_name(column);
-    edited.priority = atoi(priority);
 
     char *full = path_expand_home(where);
     if (full && *full)
         snprintf(edited.cwd, sizeof edited.cwd, "%s", full);
     free(full);
 
-    board_update(&edited);
+    // Rewriting the spec of a card triage could not read is the answer to the
+    // question it asked. It goes round again rather than sitting there until
+    // someone remembers to ask for it.
+    int answered = respec && live->col == BOARD_UNCLEAR &&
+                   edited.col == BOARD_UNCLEAR;
+    if (answered)
+        edited.col = BOARD_NEW;
+
+    int ok = board_update(&edited);
+    board_free(cards, n);
+
+    if (ok && answered) {
+        board_note(c->id, "you", "answered, and sent back to triage");
+        struct board_card *again = NULL;
+        int                m = board_load(&again);
+        struct board_card *fresh = board_find(again, m, c->id);
+        if (fresh)
+            boardtriage_start(fresh);
+        board_free(again, m);
+    }
 }
 
 /* ---- the board -------------------------------------------------------- */
