@@ -861,6 +861,7 @@ static void card_form(const struct board_card *c)
     snprintf(backend, sizeof backend, "%s", c->backend_pin);
 
     char unstart_at[2] = "";
+    char approve_at[2] = "";
 
     struct form_field fields[8];
     int               fields_n = 0;
@@ -883,6 +884,10 @@ static void card_form(const struct board_card *c)
         fields[fields_n++] = (struct form_field){
             "cancel starting, back to backlog", FORM_BUTTON, unstart_at,
             sizeof unstart_at, NULL, 0};
+    if (c->col == BOARD_REVIEW)
+        fields[fields_n++] = (struct form_field){"approve", FORM_BUTTON,
+                                                 approve_at, sizeof approve_at,
+                                                 NULL, 0};
 
     struct notes notes = {0};
     build_notes(c, &notes);
@@ -904,12 +909,16 @@ static void card_form(const struct board_card *c)
     int kept = form_run(&f);
 
     notes_free(&notes);
-    if (unstart_at[0]) {
+    if (unstart_at[0] || approve_at[0]) {
         struct board_card *cards = NULL;
         int                n = board_load(&cards);
         struct board_card *live = board_find(cards, n, c->id);
-        if (live)
-            unstart(live);
+        if (live) {
+            if (unstart_at[0])
+                unstart(live);
+            else
+                approve(live, 0);
+        }
         board_free(cards, n);
         return;
     }
