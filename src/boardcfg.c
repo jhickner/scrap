@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "boardflow.h"
 #include "text.h"
 #include "mdcfg.h"
 #include "sessionfork.h"
@@ -217,7 +218,7 @@ static void overlay(struct board_cfg *c, const cJSON *o)
 
 #define BOARD_DIR "board"
 
-static int board_path(char *out, size_t size, const char *leaf, const char *name)
+static int cfg_path(char *out, size_t size, const char *leaf, const char *name)
 {
     char dir[4096];
     if (!mdcfg_dir(dir, sizeof dir, leaf))
@@ -265,7 +266,7 @@ static void steps_str(unsigned mask, char *out, size_t size)
 static void read_settings(struct board_cfg *c)
 {
     char path[4300];
-    if (!board_path(path, sizeof path, BOARD_DIR, "settings"))
+    if (!cfg_path(path, sizeof path, BOARD_DIR, "settings"))
         return;
 
     struct mdcfg m;
@@ -294,7 +295,7 @@ static int read_roles(struct board_cfg *c)
 
     for (int i = 0; i < BOARD_WHO; i++) {
         char path[4300];
-        if (!board_path(path, sizeof path, BOARD_DIR "/roles", WHO_NAMES[i]))
+        if (!cfg_path(path, sizeof path, BOARD_DIR "/roles", WHO_NAMES[i]))
             continue;
 
         struct mdcfg m;
@@ -335,7 +336,7 @@ static void read_backends(struct board_cfg *c)
 {
     for (int i = 0; i < c->backends_n; i++) {
         char path[4300];
-        if (!board_path(path, sizeof path, BOARD_DIR "/backends", c->backends[i].name))
+        if (!cfg_path(path, sizeof path, BOARD_DIR "/backends", c->backends[i].name))
             continue;
 
         struct mdcfg m;
@@ -365,7 +366,7 @@ static void read_kinds(struct board_cfg *c)
 
     for (int i = 0; i < found; i++) {
         char path[4300];
-        if (!board_path(path, sizeof path, BOARD_DIR "/kinds", names[i]))
+        if (!cfg_path(path, sizeof path, BOARD_DIR "/kinds", names[i]))
             continue;
 
         struct mdcfg m;
@@ -385,7 +386,7 @@ static void read_kinds(struct board_cfg *c)
 static int write_settings(const struct board_cfg *c)
 {
     char path[4300];
-    if (!board_path(path, sizeof path, BOARD_DIR, "settings"))
+    if (!cfg_path(path, sizeof path, BOARD_DIR, "settings"))
         return 0;
 
     char nums[7][32];
@@ -424,7 +425,7 @@ static int write_roles(const struct board_cfg *c)
     int ok = 1;
     for (int i = 0; i < BOARD_WHO; i++) {
         char path[4300];
-        if (!board_path(path, sizeof path, BOARD_DIR "/roles", WHO_NAMES[i])) {
+        if (!cfg_path(path, sizeof path, BOARD_DIR "/roles", WHO_NAMES[i])) {
             ok = 0;
             continue;
         }
@@ -432,7 +433,7 @@ static int write_roles(const struct board_cfg *c)
         snprintf(skip, sizeof skip, "%d", c->who[i].skippable);
         const char *keys[] = {"tier", "skippable"};
         const char *vals[] = {c->who[i].tier, skip};
-        int         n = i == BOARD_WHO_AUDIT ? 2 : 1;
+        int         n = boardflow_has_stage((enum board_who)i) ? 2 : 1;
         if (!mdcfg_write(path, keys, vals, n, c->who[i].prompt))
             ok = 0;
     }
@@ -444,7 +445,7 @@ static int write_backends(const struct board_cfg *c)
     int ok = 1;
     for (int i = 0; i < c->backends_n; i++) {
         char path[4300];
-        if (!board_path(path, sizeof path, BOARD_DIR "/backends", c->backends[i].name)) {
+        if (!cfg_path(path, sizeof path, BOARD_DIR "/backends", c->backends[i].name)) {
             ok = 0;
             continue;
         }
@@ -483,14 +484,14 @@ static int write_kinds(const struct board_cfg *c)
         if (still)
             continue;
         char gone[4300];
-        if (board_path(gone, sizeof gone, BOARD_DIR "/kinds", names[i]))
+        if (cfg_path(gone, sizeof gone, BOARD_DIR "/kinds", names[i]))
             unlink(gone);
     }
 
     int ok = 1;
     for (int i = 0; i < c->kinds_n; i++) {
         char path[4300];
-        if (!board_path(path, sizeof path, BOARD_DIR "/kinds", c->kinds[i].name)) {
+        if (!cfg_path(path, sizeof path, BOARD_DIR "/kinds", c->kinds[i].name)) {
             ok = 0;
             continue;
         }
@@ -580,7 +581,7 @@ static void read_all(void)
     read_kinds(&cache);
 
     char seed[4300];
-    if (aged || (board_path(seed, sizeof seed, BOARD_DIR, "settings") && access(seed, F_OK)))
+    if (aged || (cfg_path(seed, sizeof seed, BOARD_DIR, "settings") && access(seed, F_OK)))
         write_out(&cache);
 }
 

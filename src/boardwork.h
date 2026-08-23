@@ -44,6 +44,8 @@ int boardwork_hold(const char *id, struct session *s, enum board_role role);
 
 void boardwork_let_go(const char *id);
 
+void boardwork_halt(const char *id);
+
 int boardwork_poll(void);
 
 int boardwork_release(const struct board_card *c);

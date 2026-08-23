@@ -1057,19 +1057,24 @@ int boardwork_poll(void)
     return changed;
 }
 
+void boardwork_halt(const char *id)
+{
+    static const char *const STAGES[] = {"triage:", "merge:"};
+    for (size_t i = 0; i < sizeof STAGES / sizeof *STAGES; i++) {
+        char key[CHILD_KEY_MAX];
+        snprintf(key, sizeof key, "%s%s", STAGES[i], id);
+        child_stop(key);
+    }
+
+    boardwork_let_go(id);
+}
+
 void boardwork_discard(const struct board_card *c)
 {
     if (!c)
         return;
 
-    static const char *const STAGES[] = {"triage:", "merge:"};
-    for (size_t i = 0; i < sizeof STAGES / sizeof *STAGES; i++) {
-        char key[CHILD_KEY_MAX];
-        snprintf(key, sizeof key, "%s%s", STAGES[i], c->id);
-        child_stop(key);
-    }
-
-    boardwork_let_go(c->id);
+    boardwork_halt(c->id);
     if (c->worktree[0])
         drop_worktree(c);
 }

@@ -7,6 +7,7 @@
 #include "app.h"
 #include "ask.h"
 #include "boardcfg.h"
+#include "boardflow.h"
 #include "edit.h"
 #include "form.h"
 #include "pick.h"
@@ -82,7 +83,6 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
     head(rows, n, "audit");
     count_row(rows, n, "file threshold", &c->audit_files, 0, 500, NULL);
     count_row(rows, n, "line threshold", &c->audit_lines, 0, 100000, NULL);
-    toggle_row(rows, n, "skippable", &c->who[BOARD_WHO_AUDIT].skippable);
 
     head(rows, n, "sweep");
     count_row(rows, n, "interval", &c->sweep_every, 0, 500, "cards");
@@ -121,6 +121,12 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
         rows[*n].who = (enum board_who)i;
         (*n)++;
     }
+
+    head(rows, n, "skippable");
+    for (int i = 0; i < BOARD_WHO; i++)
+        if (boardflow_has_stage((enum board_who)i))
+            toggle_row(rows, n, boardcfg_who_name((enum board_who)i),
+                       &c->who[i].skippable);
 
     head(rows, n, "prompts");
     for (int i = 0; i < BOARD_WHO; i++) {

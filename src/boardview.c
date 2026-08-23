@@ -14,6 +14,7 @@
 #include "edit.h"
 #include "boardaudit.h"
 #include "boardcfgui.h"
+#include "boardflow.h"
 #include "boardmerge.h"
 #include "boardsweep.h"
 #include "boardtriage.h"
@@ -58,7 +59,7 @@
     "enter edit  ·  s start  ·  S start max  ·  g worker  ·  "                \
     "a approve  ·  A approve all  ·  i audit\n"                               \
     "f feedback  ·  r send back  ·  x cancel start  ·  u undo  ·  "          \
-    "k skip audit\n"                                                          \
+    "k skip the step\n"                                                       \
     "n new  ·  t triage  ·  l log  ·  d delete  ·  c config  ·  "               \
     "b backend  ·  * all repos  ·  / search"
 
@@ -1263,12 +1264,16 @@ int boardview_run(const char *cwd)
                 approve(c, 1);
             break;
         case KEY_SKIP:
-            if (c && c->col == BOARD_AUDIT) {
-                if (!boardaudit_skippable())
-                    snprintf(notice, sizeof notice, "the audit is not skippable");
+            if (c) {
+                enum board_who who = boardflow_who_at(c->col);
+                if (who >= BOARD_WHO)
+                    snprintf(notice, sizeof notice, "nothing to skip here");
+                else if (!boardflow_skippable(c))
+                    snprintf(notice, sizeof notice, "%s is not skippable",
+                             boardcfg_who_name(who));
                 else {
-                    boardwork_let_go(c->id);
-                    boardaudit_skip(c);
+                    boardwork_halt(c->id);
+                    boardflow_skip(c);
                 }
             }
             break;

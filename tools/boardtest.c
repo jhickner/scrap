@@ -510,42 +510,66 @@ static void land_cards(const char *cwd, int count, const char *what)
     }
 }
 
-static void test_audit_skip(void)
+static enum board_col col_of(const char *id)
+{
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    enum board_col     col = c ? c->col : BOARD_COLS;
+    board_free(v, n);
+    return col;
+}
+
+static int skip_card(const char *id)
+{
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    int                did = c && boardflow_skip(c);
+    board_free(v, n);
+    return did;
+}
+
+static void test_skipping_a_step(void)
 {
     char id[BOARD_ID_MAX] = {0};
     expect(board_add("a card to skip past", "/tmp/repo", id), "capture");
     expect(board_move(id, BOARD_AUDIT, "you", NULL), "into audit");
 
+    expect(boardflow_who_at(BOARD_AUDIT) == BOARD_WHO_AUDIT,
+           "the audit column belongs to the audit role");
+    expect(boardflow_who_at(BOARD_BACKLOG) == BOARD_WHO,
+           "a column no role runs has none");
+    expect(boardflow_has_stage(BOARD_WHO_MERGE), "merge is a step a card waits in");
+    expect(!boardflow_has_stage(BOARD_WHO_SWEEP), "the sweep is not");
+
     struct board_cfg *cfg = boardcfg_copy();
-    cfg->who[BOARD_WHO_AUDIT].skippable = 0;
+    for (int i = 0; i < BOARD_WHO; i++)
+        cfg->who[i].skippable = 0;
     boardcfg_set(cfg);
-    expect(!boardaudit_skippable(), "the setting turns skipping off");
-    expect(!boardaudit_skip(NULL), "a missing card is not skipped");
+
+    expect(!boardflow_skip(NULL), "a missing card is not skipped");
+    expect(!skip_card(id), "an unskippable step holds the card");
+
+    cfg->who[BOARD_WHO_AUDIT].skippable = 1;
+    cfg->who[BOARD_WHO_MERGE].skippable = 1;
+    boardcfg_set(cfg);
+    boardcfg_free(cfg);
+
+    expect(skip_card(id), "a skippable step is skipped");
+    expect(col_of(id) == BOARD_MERGING, "skipping the audit sends it on to land");
+    expect(skip_card(id), "and the next step skips too");
+    expect(col_of(id) == BOARD_DONE, "skipping the merge is the end of it");
 
     struct board_card *v = NULL;
     int                n = board_load(&v);
     struct board_card *c = board_find(v, n, id);
-    expect(c && !boardaudit_skip(c), "an unskippable audit holds the card");
-    board_free(v, n);
-
-    cfg->who[BOARD_WHO_AUDIT].skippable = 1;
-    boardcfg_set(cfg);
-    boardcfg_free(cfg);
-
-    n = board_load(&v);
-    c = board_find(v, n, id);
-    expect(c && boardaudit_skip(c), "a skippable audit lets go");
-    board_free(v, n);
-
-    n = board_load(&v);
-    c = board_find(v, n, id);
-    expect(c && c->col == BOARD_MERGING, "skipping sends it on to land");
-    int said = 0;
+    int                said = 0;
     if (c)
         for (int i = 0; i < c->log_n; i++)
             if (strstr(c->log[i].text, "audit skipped"))
                 said = 1;
-    expect(said, "the skip is on the card");
+    expect(said, "the skip says which step it was");
     board_free(v, n);
 
     board_remove(id);
@@ -862,7 +886,7 @@ int main(void)
     test_columns();
     test_attempts_reset_when_answered();
     test_audit_verdict();
-    test_audit_skip();
+    test_skipping_a_step();
     test_sweep_counts_landed_cards();
     test_sweep_review_can_refuse();
     test_sweep_with_nothing_to_raise();

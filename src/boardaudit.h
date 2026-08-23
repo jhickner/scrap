@@ -15,10 +15,6 @@ int boardaudit_wanted(const struct board_card *c);
 
 char *boardaudit_prompt(const struct board_card *c);
 
-int boardaudit_skippable(void);
-
-int boardaudit_skip(const struct board_card *c);
-
 int boardaudit_finished(const char *id, const char *reply);
 
 #endif

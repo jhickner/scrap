@@ -76,19 +76,6 @@ int boardaudit_wanted(const struct board_card *c)
     return 0;
 }
 
-int boardaudit_skippable(void)
-{
-    return boardcfg_for(BOARD_WHO_AUDIT)->skippable;
-}
-
-int boardaudit_skip(const struct board_card *c)
-{
-    if (!c || c->col != BOARD_AUDIT || !boardaudit_skippable())
-        return 0;
-    return board_move(c->id, boardflow_from(c->kind, BOARD_STEP_MERGE, 0), "you",
-                      "audit skipped");
-}
-
 char *boardaudit_prompt(const struct board_card *c)
 {
     const struct board_profile *p = boardcfg_for(BOARD_WHO_AUDIT);
