@@ -451,8 +451,6 @@ static void read_settings(struct board_cfg *c)
     mdcfg_free(&m);
 }
 
-/* A role file written before tiers keeps the tier the defaults gave it, so an
- * existing board follows the serving backend instead of staying on claude. */
 static int read_roles(struct board_cfg *c)
 {
     int aged = 0;
@@ -689,7 +687,6 @@ static struct board_cfg cache;
 static int              loaded;
 static struct board_profile serving_who[BOARD_WHO];
 
-/* serving_who borrows cache's prompt pointers and never owns them. */
 static void resolve(void)
 {
     const struct board_backend *b = boardcfg_backend(&cache, cache.serving);

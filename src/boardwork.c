@@ -229,7 +229,6 @@ static int handover(struct worker *w)
     return 1;
 }
 
-/* A role with no tier is pinned to its own backend and does not follow. */
 static int follows(const struct worker *w)
 {
     const struct board_profile *p = boardcfg_for(who_of(w->role));

@@ -37,8 +37,6 @@ struct board_backend {
     struct board_level level[BOARD_TIERS];
 };
 
-/* tier, when set, points backend/model/effort at the serving backend's level
- * of that name instead of the three fields below it. */
 struct board_profile {
     char  tier[8];
     char  backend[32];
@@ -97,7 +95,6 @@ void              boardcfg_free(struct board_cfg *c);
 
 int boardcfg_set(const struct board_cfg *c);
 
-/* The profile as a role runs it: a tiered role reads the serving backend. */
 const struct board_profile *boardcfg_for(enum board_who who);
 
 const char *boardcfg_serving(void);

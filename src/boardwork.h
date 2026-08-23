@@ -21,8 +21,6 @@ int boardwork_blocked(const struct board_card *c, char *why, int size);
 
 int boardwork_running(void);
 
-/* Move every worker whose role follows the serving backend onto it now;
- * one mid-turn waits for that turn. *waiting counts those. */
 int boardwork_serve(int *waiting);
 
 const char *boardwork_card_of(const struct session *s);
