@@ -10,6 +10,8 @@
 #include "ask.h"
 #include "board.h"
 #include "boardcfg.h"
+#include "boardlog.h"
+#include "edit.h"
 #include "boardaudit.h"
 #include "boardcfgui.h"
 #include "boardmerge.h"
@@ -38,17 +40,19 @@
 #define KEY_APPROVE_OTHER 'A'
 #define KEY_REJECT   'r'
 #define KEY_FEEDBACK 'f'
+#define KEY_LOG      'l'
 #define KEY_CONFIG   'c'
 #define KEY_ALL      '*'
 
-#define BOARD_KEYS "ndtsgaArfc*"
+#define BOARD_KEYS "ndtsgaArflc*"
 
 // Letters are shortcuts here rather than a search, so without a line saying
 // so the list gives no sign it has any keys at all.
 #define BOARD_HINT \
     "enter edit  ·  s start  ·  g worker  ·  "                                \
     "a approve  ·  f feedback  ·  r reject\n"                                 \
-    "n new  ·  t triage  ·  d delete  ·  c config  ·  * all repos  ·  / search"
+    "n new  ·  t triage  ·  l log  ·  d delete  ·  c config  ·  "               \
+    "* all repos  ·  / search"
 
 /* ---- rows ------------------------------------------------------------- */
 
@@ -822,6 +826,12 @@ int boardview_run(const char *cwd)
             if (c && do_delete(c))
                 sel_id[0] = '\0';
             break;
+        case KEY_LOG: {
+            char path[4300];
+            if (c && boardlog_path(c->id, path, sizeof path) && !edit_open(path))
+                note("nothing has happened to this card yet");
+            break;
+        }
         case KEY_CONFIG:
             boardcfgui_run();
             break;

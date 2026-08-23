@@ -51,6 +51,42 @@ static int temp_path(char *out, size_t size, const char *suffix)
     return 1;
 }
 
+// The terminal goes to the editor whole and comes back the same way. Returns
+// what system() did, or -1.
+static int run_editor(const char *path)
+{
+    char quoted[4200];
+    if (!text_shell_quote(path, quoted, sizeof quoted))
+        return -1;
+
+    char cmd[8500];
+    snprintf(cmd, sizeof cmd, "%s %s", editor_command(), quoted);
+
+    chrome_clear();
+    viewport_suspend();
+    ui_raw(0);
+    tty_raw_end();
+
+    int status = system(cmd);
+
+    if (tty_raw_begin() != 0) {
+        fprintf(stderr, "could not return the terminal to raw mode\n");
+        exit(1);
+    }
+    ui_raw(1);
+    ui_cursor_plain();
+    block_forget();
+    viewport_resume();
+    return status;
+}
+
+int edit_open(const char *path)
+{
+    if (!path || !*path || access(path, R_OK))
+        return 0;
+    return run_editor(path) != -1;
+}
+
 char *edit_run(const char *initial, const char *suffix)
 {
     char path[4100];
@@ -74,31 +110,11 @@ char *edit_run(const char *initial, const char *suffix)
         return NULL;
     }
 
-    char quoted[4200];
-    if (!text_shell_quote(path, quoted, sizeof quoted)) {
+    int status = run_editor(path);
+    if (status == -1) {
         unlink(path);
         return NULL;
     }
-    char cmd[8500];
-    snprintf(cmd, sizeof cmd, "%s %s", editor_command(), quoted);
-
-    // The terminal goes to the editor whole and comes back the same way.
-    chrome_clear();
-    viewport_suspend();
-    ui_raw(0);
-    tty_raw_end();
-
-    int status = system(cmd);
-
-    if (tty_raw_begin() != 0) {
-        fprintf(stderr, "could not return the terminal to raw mode\n");
-        exit(1);
-    }
-    ui_raw(1);
-    ui_cursor_plain();
-    block_forget();
-    viewport_resume();
-
     char *text = NULL;
     if (status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0)
         text = text_slurp(path, EDIT_MAX_BYTES, NULL);

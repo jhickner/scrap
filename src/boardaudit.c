@@ -6,6 +6,7 @@
 
 #include "board.h"
 #include "boardcfg.h"
+#include "boardlog.h"
 #include "boardflow.h"
 #include "child.h"
 #include "gitcmd.h"
@@ -147,6 +148,8 @@ int boardaudit_start(const struct board_card *c)
     argv[n] = NULL;
 
     int ok = child_start(key, argv, c->worktree);
+    if (ok)
+        boardlog_turn(c->id, "audit", prompt, NULL);
     free(prompt);
     return ok;
 }
@@ -190,6 +193,11 @@ static enum board_col next_after_audit(const char *id)
 
 int boardaudit_take(const char *key, const char *reply)
 {
+    {
+        size_t mark = strlen(AUDIT_KEY);
+        if (key && !strncmp(key, AUDIT_KEY, mark))
+            boardlog_turn(key + mark, "audit", NULL, reply);
+    }
     size_t mark = strlen(AUDIT_KEY);
     if (!key || strncmp(key, AUDIT_KEY, mark))
         return 0;

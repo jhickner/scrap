@@ -10,4 +10,8 @@
 // highlights it sensibly; NULL for none.
 char *edit_run(const char *initial, const char *suffix);
 
+// $EDITOR on a file that is already there, for reading rather than writing.
+// Zero when there is no such file.
+int edit_open(const char *path);
+
 #endif

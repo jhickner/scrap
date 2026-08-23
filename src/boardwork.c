@@ -11,6 +11,7 @@
 #include "boardcfg.h"
 #include "boardaudit.h"
 #include "boardflow.h"
+#include "boardlog.h"
 #include "boardmerge.h"
 #include "session.h"
 #include "text.h"
@@ -393,6 +394,7 @@ int boardwork_start(const struct board_card *c, char *why, int size)
     char           *turn = first_turn(c);
     if (turn) {
         workspace_send(at, turn, c->title);
+        boardlog_turn(c->id, c->stuck[0] ? "merge worker" : "worker", turn, NULL);
         free(turn);
     }
 
@@ -455,6 +457,9 @@ void boardwork_finished(struct session *s)
 
     // An errored turn is not a finished one: the card stays where it is,
     // marked, because what is needed to fix it is the tab and not a field.
+    boardlog_turn(w->id, "worker", NULL,
+                  failed && *failed ? failed : reply);
+
     // Whatever the kind asks for next -- a person to look at it, or nothing at
     // all, which is what filing a note wants.
     if (!failed || !*failed)

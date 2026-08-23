@@ -11,6 +11,7 @@
 #include "board.h"
 #include "child.h"
 #include "boardcfg.h"
+#include "boardlog.h"
 #include "sessionfork.h"
 #include "replyjson.h"
 #include "vendor/cJSON.h"
@@ -204,6 +205,8 @@ int boardtriage_start(const struct board_card *c)
     argv[n] = NULL;
 
     int ok = child_start(key, argv, c->cwd[0] ? c->cwd : NULL);
+    if (ok)
+        boardlog_turn(c->id, "triage", prompt, NULL);
     free(prompt);
     return ok;
 }
@@ -220,6 +223,11 @@ int boardtriage_running(const char *id)
 // filed under another key is not ours to take.
 int boardtriage_take(const char *key, const char *reply)
 {
+    {
+        size_t mark = strlen(TRIAGE_KEY);
+        if (key && !strncmp(key, TRIAGE_KEY, mark))
+            boardlog_turn(key + mark, "triage", NULL, reply);
+    }
     size_t mark = strlen(TRIAGE_KEY);
     if (!key || strncmp(key, TRIAGE_KEY, mark))
         return 0;

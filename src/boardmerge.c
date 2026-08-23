@@ -6,6 +6,7 @@
 
 #include "board.h"
 #include "boardcfg.h"
+#include "boardlog.h"
 #include "boardsweep.h"
 #include "child.h"
 #include "gitcmd.h"
@@ -139,6 +140,8 @@ int boardmerge_pump(void)
     char key[CHILD_KEY_MAX];
     merge_key(next->id, key, sizeof key);
     int ok = child_shell(key, script, next->worktree);
+    if (ok)
+        boardlog_turn(next->id, "merge", script, NULL);
     free(script);
     board_free(cards, n);
     return ok;
@@ -169,6 +172,11 @@ static const char *last_line(const char *text)
 
 int boardmerge_take(const char *key, const char *out, int ok)
 {
+    {
+        size_t mark = strlen(MERGE_KEY);
+        if (key && !strncmp(key, MERGE_KEY, mark))
+            boardlog_turn(key + mark, "merge", NULL, out);
+    }
     size_t mark = strlen(MERGE_KEY);
     if (!key || strncmp(key, MERGE_KEY, mark))
         return 0;
@@ -213,7 +221,9 @@ int boardmerge_take(const char *key, const char *out, int ok)
             board_update(&edited);
         }
         board_free(cards, n);
-        board_note(id, "board", said);
+        // The whole of what it said is in the transcript; the card's own log
+        // wants the verdict.
+        board_note(id, "board", last_line(said));
     }
     return 1;
 }

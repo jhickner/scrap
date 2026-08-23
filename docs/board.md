@@ -253,6 +253,19 @@ There is no coordinator agent because you are the coordinator. There is no
 standing cast of specialist roles because profiles-per-kind and a conditional
 audit get the same routing without a population to keep alive.
 
+## The record
+
+The card's log says what changed. `~/.config/mux/board-log/<id>.md` says why:
+every stage the card went through, what that stage was asked, and what it
+answered -- the triage prompt and its JSON, the audit's verdict, the merge
+script and what git said to it, each worker's opening turn and its reply. `l`
+on the board opens it.
+
+It is markdown because the reader is a person with a question, and it is kept
+apart from the card because it grows without bound and nothing but a person
+ever reads it. A deleted card takes its transcript with it; an archived one
+keeps it.
+
 ## Order of work
 
 1. Store, `/card`, `mux --card`, the board list, the detail view.
@@ -264,3 +277,4 @@ audit get the same routing without a population to keep alive.
 6. The refactor sweep, priorities per kind, archiving.
 7. Kinds as configuration: the classes, what they mean, their prompts, and
    the steps each takes.
+8. A transcript per card, and a worker for the cards the queue cannot land.

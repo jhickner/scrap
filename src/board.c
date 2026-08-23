@@ -7,6 +7,7 @@
 #include <sys/file.h>
 #include <unistd.h>
 
+#include "boardlog.h"
 #include "text.h"
 #include "vendor/cJSON.h"
 
@@ -498,7 +499,10 @@ static int apply_note(struct board_card *c, void *ud)
 int board_note(const char *id, const char *who, const char *text)
 {
     struct note_args a = {who, text};
-    return with_card(id, apply_note, &a);
+    int              ok = with_card(id, apply_note, &a);
+    if (ok)
+        boardlog_note(id, who, text);
+    return ok;
 }
 
 struct move_args {
@@ -519,7 +523,14 @@ static int apply_move(struct board_card *c, void *ud)
 int board_move(const char *id, enum board_col col, const char *who, const char *why)
 {
     struct move_args a = {col, who, why};
-    return with_card(id, apply_move, &a);
+    if (!with_card(id, apply_move, &a))
+        return 0;
+
+    char said[512];
+    snprintf(said, sizeof said, "\xe2\x86\x92 %s%s%s", board_col_name(col),
+             why && *why ? " \xc2\xb7 " : "", why && *why ? why : "");
+    boardlog_note(id, who, said);
+    return 1;
 }
 
 // Where finished work goes to stop being in the way. Never read by the board;
@@ -589,6 +600,10 @@ int board_remove(const char *id)
 {
     if (!id || !*id)
         return 0;
+
+    // A deleted card is one nobody wants a record of. An archived one keeps
+    // its transcript, because the point of archiving is that it happened.
+    boardlog_remove(id);
 
     int lock = store_lock(LOCK_EX);
 
