@@ -417,6 +417,17 @@ static int board_tick(void *ud)
         seen = now;
         moved = 1;
     }
+
+    static unsigned seen_busy;
+    unsigned        busy = 0;
+    for (int i = 0; i < WORKSPACE_MAX; i++)
+        if (session_busy(workspace_at(i)))
+            busy |= 1u << i;
+    if (busy != seen_busy) {
+        seen_busy = busy;
+        moved = 1;
+    }
+
     return moved ? PICK_TICK_REOPEN : 0;
 }
 
