@@ -72,6 +72,9 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
     head(rows, n, "sweep");
     count_row(rows, n, "interval", &c->sweep_every, 0, 500, "cards");
 
+    head(rows, n, "archive");
+    count_row(rows, n, "after", &c->archive_after, 0, 3650, "days");
+
     head(rows, n, "models");
     for (int i = 0; i < BOARD_WHO; i++) {
         rows[*n].kind = ROW_PROFILE;

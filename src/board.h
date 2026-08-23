@@ -87,6 +87,11 @@ int board_update(const struct board_card *card);
 
 int board_remove(const char *id);
 
+// Moves cards finished longer than `days` ago out to board-archive.jsonl, so
+// the store stays the working set rather than everything that ever happened.
+// Zero days keeps everything. Returns how many were moved.
+int board_archive(int days);
+
 // Appends a line to a card's log without having to load and write it whole,
 // which is what the worker reporting its own progress does.
 int board_note(const char *id, const char *who, const char *text);

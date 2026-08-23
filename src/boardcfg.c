@@ -143,6 +143,7 @@ static void defaults(struct board_cfg *c)
     c->audit_files = 5;
     c->audit_lines = 200;
     c->sweep_every = 8;
+    c->archive_after = 14;
     snprintf(c->delegation, sizeof c->delegation, "claude,codex,grok");
     c->verify[0] = '\0';
 
@@ -191,6 +192,7 @@ static void overlay(struct board_cfg *c, const cJSON *o)
     set_int(&c->audit_files, o, "audit_files");
     set_int(&c->audit_lines, o, "audit_lines");
     set_int(&c->sweep_every, o, "sweep_every");
+    set_int(&c->archive_after, o, "archive_after");
     set_str(c->delegation, sizeof c->delegation, o, "delegation");
     set_str(c->verify, sizeof c->verify, o, "verify");
 
@@ -281,6 +283,7 @@ static int write_out(const struct board_cfg *c)
     cJSON_AddNumberToObject(o, "audit_files", c->audit_files);
     cJSON_AddNumberToObject(o, "audit_lines", c->audit_lines);
     cJSON_AddNumberToObject(o, "sweep_every", c->sweep_every);
+    cJSON_AddNumberToObject(o, "archive_after", c->archive_after);
     cJSON_AddStringToObject(o, "delegation", c->delegation);
     cJSON_AddStringToObject(o, "verify", c->verify);
 
@@ -342,6 +345,7 @@ int boardcfg_set(const struct board_cfg *c)
     cache.audit_files = c->audit_files;
     cache.audit_lines = c->audit_lines;
     cache.sweep_every = c->sweep_every;
+    cache.archive_after = c->archive_after;
     snprintf(cache.delegation, sizeof cache.delegation, "%s", c->delegation);
     snprintf(cache.verify, sizeof cache.verify, "%s", c->verify);
     for (int i = 0; i < BOARD_WHO; i++) {

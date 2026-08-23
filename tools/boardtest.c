@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include "board.h"
+#include "text.h"
 #include "boardaudit.h"
 #include "boardtriage.h"
 #include "sessionfork.h"
@@ -271,6 +272,61 @@ static void test_attempts_reset_when_answered(void)
     board_remove(id);
 }
 
+// A card as it sits in the store, finished and long stale. Nothing in the API
+// can age one, so the line is written the way the store would have written it.
+static void plant_stale(const char *id)
+{
+    FILE *f = fopen(board_path(), "a");
+    if (!f) {
+        fail("could not plant a stale card");
+        return;
+    }
+    fprintf(f, "{\"id\":\"%s\",\"col\":\"done\",\"title\":\"ancient\","
+               "\"body\":\"ancient\",\"cwd\":\"/tmp/repo\","
+               "\"created\":1000,\"updated\":1000,\"log\":[]}\n", id);
+    fclose(f);
+}
+
+// Finished work leaves the board after a while, but is not thrown away.
+static void test_archive(void)
+{
+    char busy[BOARD_ID_MAX] = {0}, fresh[BOARD_ID_MAX] = {0};
+    expect(board_add("still being worked on", "/tmp/repo", busy), "capture");
+    expect(board_add("finished just now", "/tmp/repo", fresh), "capture");
+    expect(board_move(fresh, BOARD_DONE, "you", NULL), "done");
+    plant_stale("aged");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    expect(board_find(v, n, "aged") != NULL, "the stale card is on the board");
+    board_free(v, n);
+
+    expect(board_archive(0) == 0, "zero days keeps everything");
+    n = board_load(&v);
+    expect(board_find(v, n, "aged") != NULL, "and it is still there");
+    board_free(v, n);
+
+    expect(board_archive(1) == 1, "one stale card is archived");
+
+    n = board_load(&v);
+    expect(board_find(v, n, "aged") == NULL, "the stale card has left the board");
+    expect(board_find(v, n, busy) != NULL, "unfinished work stays");
+    expect(board_find(v, n, fresh) != NULL, "recently finished work stays");
+    board_free(v, n);
+
+    // Moved, not thrown away.
+    char path[4300];
+    snprintf(path, sizeof path, "%s/.config/mux/board-archive.jsonl", home);
+    char *text = text_slurp(path, 1u << 20, NULL);
+    expect(text && strstr(text, "\"id\":\"aged\""), "and is in the archive");
+    free(text);
+
+    expect(board_archive(1) == 0, "nothing left to archive");
+
+    board_remove(busy);
+    board_remove(fresh);
+}
+
 static void test_empty_and_missing(void)
 {
     struct board_card *v = (struct board_card *)1;
@@ -351,6 +407,7 @@ int main(void)
     test_columns();
     test_attempts_reset_when_answered();
     test_audit_verdict();
+    test_archive();
     test_empty_and_missing();
 
     cleanup();

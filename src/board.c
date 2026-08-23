@@ -505,6 +505,69 @@ int board_move(const char *id, enum board_col col, const char *who, const char *
     return with_card(id, apply_move, &a);
 }
 
+// Where finished work goes to stop being in the way. Never read by the board;
+// kept because a card is a record of what was decided and why.
+static const char *archive_path(void)
+{
+    static char p[4200];
+    if (!p[0] && !path_config_file(p, sizeof p, "board-archive.jsonl"))
+        snprintf(p, sizeof p, "/tmp/board-archive.jsonl");
+    return p;
+}
+
+int board_archive(int days)
+{
+    if (days <= 0)
+        return 0;
+
+    int lock = store_lock(LOCK_EX);
+
+    struct board_card *v = NULL;
+    int                n = load_locked(&v);
+
+    time_t cutoff = time(NULL) - (time_t)days * 24 * 3600;
+    int    moved = 0;
+
+    FILE *out = NULL;
+    for (int i = 0; i < n; i++) {
+        if (v[i].col != BOARD_DONE)
+            continue;
+        time_t when = v[i].updated ? v[i].updated : v[i].created;
+        if (when > cutoff)
+            continue;
+
+        if (!out && !(out = fopen(archive_path(), "ab")))
+            break;
+
+        cJSON *o = card_to_json(&v[i]);
+        char  *text = o ? cJSON_PrintUnformatted(o) : NULL;
+        cJSON_Delete(o);
+        if (!text)
+            continue;
+        int wrote = fprintf(out, "%s\n", text) > 0;
+        free(text);
+        if (!wrote)
+            break;
+
+        card_wipe(&v[i]);
+        memmove(&v[i], &v[i + 1], (size_t)(n - i - 1) * sizeof *v);
+        n--;
+        i--;
+        moved++;
+    }
+
+    // Written and flushed before the store loses them, or a card could be in
+    // neither file.
+    if (out && fclose(out) != 0)
+        moved = 0;
+    if (moved)
+        moved = save_locked(v, n) ? moved : 0;
+
+    board_free(v, n);
+    store_unlock(lock);
+    return moved;
+}
+
 int board_remove(const char *id)
 {
     if (!id || !*id)

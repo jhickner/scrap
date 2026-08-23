@@ -33,6 +33,7 @@ struct board_cfg {
     int audit_files;     /* a diff over this many files is audited; 0 never */
     int audit_lines;
     int sweep_every;     /* cards done in a repo before a refactor sweep; 0 never */
+    int archive_after;   /* days a done card stays on the board; 0 forever */
 
     char delegation[256];   /* "claude,codex,grok": who takes over when quota runs out */
 

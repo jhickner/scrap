@@ -705,6 +705,12 @@ int boardview_run(const char *cwd)
         // that bargain.
         triage_the_new(cards, n);
 
+        // Work that finished a fortnight ago is not what the board is for.
+        if (board_archive(boardcfg()->archive_after)) {
+            board_free(cards, n);
+            n = board_load(&cards);
+        }
+
         struct vlist l = {0};
         int          shown = build_board(&l, cards, n, filter, !filter[0]);
 
