@@ -653,6 +653,26 @@ static void test_sweep_files_against_the_repo(void)
            "and not against the worktree it was found in");
 }
 
+static void test_revision_tracks_writes(void)
+{
+    unsigned long before = board_revision();
+
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("watch the store change", "/tmp/repo", id), "capture");
+    unsigned long added = board_revision();
+    expect(added != before, "capture moves the revision");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    expect(board_revision() == added, "a read leaves the revision alone");
+    board_free(v, n);
+
+    expect(board_move(id, BOARD_REVIEW, "worker", "finished"), "move");
+    expect(board_revision() != added, "a move moves the revision");
+
+    board_remove(id);
+}
+
 int main(void)
 {
     if (!mkdtemp(home)) {
@@ -678,6 +698,7 @@ int main(void)
     test_kinds();
     test_archive();
     test_empty_and_missing();
+    test_revision_tracks_writes();
 
     cleanup();
     if (failures)

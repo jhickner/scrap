@@ -305,7 +305,8 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             int         tab = boardwork_tab(c->id);
             const char *step = step_of(c->id);
             r->spin = (unsigned char)(step ||
-                                      (tab >= 0 && session_busy(workspace_at(tab))));
+                                      (c->col == BOARD_DOING && tab >= 0 &&
+                                       session_busy(workspace_at(tab))));
 
             char ts[32], when[64];
             ago(c->updated ? c->updated : c->created, ts, sizeof ts);
@@ -410,6 +411,8 @@ static int board_reap(void)
     return changed;
 }
 
+static unsigned long shown_rev;
+
 static int board_tick(void *ud)
 {
     (void)ud;
@@ -442,6 +445,9 @@ static int board_tick(void *ud)
         seen_busy = busy;
         moved = 1;
     }
+
+    if (board_revision() != shown_rev)
+        moved = 1;
 
     return moved ? PICK_TICK_REOPEN : 0;
 }
@@ -724,6 +730,8 @@ int boardview_run(const char *cwd)
             board_free(cards, n);
             n = board_load(&cards);
         }
+
+        shown_rev = board_revision();
 
         struct vlist l = {0};
         int          shown = build_board(&l, cards, n, filter, !filter[0]);

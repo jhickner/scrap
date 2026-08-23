@@ -59,6 +59,9 @@ struct board_card {
 const char *board_path(void);
 
 int  board_load(struct board_card **out);
+
+unsigned long board_revision(void);
+
 void board_free(struct board_card *cards, int n);
 
 struct board_card *board_find(struct board_card *cards, int n, const char *id);

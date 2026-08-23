@@ -318,6 +318,8 @@ static int load_locked(struct board_card **out)
     return n;
 }
 
+static unsigned long revision;
+
 static int save_locked(const struct board_card *v, int n)
 {
     char tmp[BOARD_PATH_MAX];
@@ -344,8 +346,11 @@ static int save_locked(const struct board_card *v, int n)
         unlink(tmp);
         return 0;
     }
+    revision++;
     return 1;
 }
+
+unsigned long board_revision(void) { return revision; }
 
 int board_load(struct board_card **out)
 {
