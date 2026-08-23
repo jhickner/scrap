@@ -467,9 +467,17 @@ void boardwork_finished(struct session *s)
     boardlog_turn(w->id, "worker", NULL,
                   failed && *failed ? failed : reply);
 
+    // An empty diff means the turn achieved nothing, whatever it answered: a
+    // backend that is not logged in still answers. Not stuck[], which starts a
+    // worker -- this card has just shown one achieves nothing.
+    int files = 0, lines = 0;
+    int empty = boardcfg_kind_takes(c->kind, BOARD_STEP_WORKTREE) &&
+                c->worktree[0] && c->base[0] &&
+                !boardaudit_size(c, &files, &lines);
+
     // Whatever the kind asks for next -- a person to look at it, or nothing at
     // all, which is what filing a note wants.
-    if (!failed || !*failed)
+    if ((!failed || !*failed) && !empty)
         edited.col = boardflow_from(c->kind, BOARD_STEP_REVIEW,
                                     boardaudit_wanted(c));
     board_update(&edited);
@@ -482,6 +490,8 @@ void boardwork_finished(struct session *s)
         snprintf(said, sizeof said, "%s",
                  reply && *reply ? reply : "finished without saying anything");
     board_note(w->id, "worker", said);
+    if (empty)
+        board_note(w->id, "board", "nothing was committed, so it stays here");
 }
 
 // A worker whose tab has gone -- closed by hand, or lost with a restart --
