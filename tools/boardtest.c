@@ -11,6 +11,7 @@
 #include "boardflow.h"
 #include "boardsweep.h"
 #include "boardtriage.h"
+#include "gitcmd.h"
 #include "replyjson.h"
 #include "sessionfork.h"
 
@@ -679,6 +680,79 @@ static void test_done_lists_newest_first(void)
     expect(board_cmp_col(&high, &low) < 0, "higher priority still leads the backlog");
 }
 
+static int make_repo(char *root, size_t rsize)
+{
+    snprintf(root, rsize, "%s/named-wt", home);
+    char cmd[2048];
+    snprintf(cmd, sizeof cmd,
+             "rm -rf %s && git init -q %s >/dev/null 2>&1 && "
+             "git -C %s -c user.email=t@t -c user.name=t commit -q --allow-empty "
+             "-m base >/dev/null 2>&1",
+             root, root, root);
+    if (system(cmd) != 0)
+        return 0;
+
+    char real[4096];
+    if (realpath(root, real))
+        snprintf(root, rsize, "%s", real);
+    return 1;
+}
+
+static void test_worktree_name_is_stable(void)
+{
+    char root[4096];
+    if (!make_repo(root, sizeof root)) {
+        fprintf(stderr, "skipping worktree name test: no git\n");
+        return;
+    }
+
+    char path[4200];
+    snprintf(path, sizeof path, "%s/.claude/worktrees/abcd", root);
+
+    expect(gitcmd_worktree_add(root, path, "worktree-abcd"), "first add");
+    expect(gitcmd_worktree_add(root, path, "worktree-abcd"),
+           "a second add reuses the same path");
+
+    char file[4300];
+    snprintf(file, sizeof file, "%s/kept.txt", path);
+    FILE *f = fopen(file, "w");
+    expect(f != NULL, "a file can be written in the worktree");
+    if (f) {
+        fputs("previous work\n", f);
+        fclose(f);
+    }
+
+    expect(gitcmd_worktree_add(root, path, "worktree-abcd"),
+           "add after a failed job still lands at the same path");
+    f = fopen(file, "r");
+    expect(f != NULL, "uncommitted work is still there");
+    if (f) {
+        char line[64] = {0};
+        expect(fgets(line, sizeof line, f) && strstr(line, "previous work"),
+               "and it is the file that was written");
+        fclose(f);
+    }
+
+    char cmd[8192];
+    snprintf(cmd, sizeof cmd,
+             "git -C %s -c user.email=t@t -c user.name=t add kept.txt && "
+             "git -C %s -c user.email=t@t -c user.name=t commit -q -m kept && "
+             "rm -rf %s",
+             path, path, path);
+    expect(system(cmd) == 0, "commit then lose the directory");
+
+    expect(gitcmd_worktree_add(root, path, "worktree-abcd"),
+           "add after the directory is gone still uses the same path");
+    f = fopen(file, "r");
+    expect(f != NULL, "the committed file is checked out again");
+    if (f) {
+        char line[64] = {0};
+        expect(fgets(line, sizeof line, f) && strstr(line, "previous work"),
+               "from the branch of the same name");
+        fclose(f);
+    }
+}
+
 static void test_revision_tracks_writes(void)
 {
     unsigned long before = board_revision();
@@ -725,6 +799,7 @@ int main(void)
     test_archive();
     test_empty_and_missing();
     test_done_lists_newest_first();
+    test_worktree_name_is_stable();
     test_revision_tracks_writes();
 
     cleanup();

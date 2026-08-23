@@ -289,33 +289,33 @@ void boardwork_branch_of(const char *id, char *out, size_t size)
 static int worktree_make(const char *root, const char *id, const char *path,
                          char *why, int size)
 {
-    struct stat st;
-    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode))
-        return 1;
-
     char branch[128];
     boardwork_branch_of(id, branch, sizeof branch);
-
-    char qroot[4200], qpath[4200];
-    if (!text_shell_quote(root, qroot, sizeof qroot) ||
-        !text_shell_quote(path, qpath, sizeof qpath)) {
-        snprintf(why, (size_t)size, "worktree path too long");
-        return 0;
-    }
-
-    char cmd[9000];
-    snprintf(cmd, sizeof cmd,
-             "git -C %s worktree add %s -b %s >/dev/null 2>&1", qroot, qpath, branch);
-    if (system(cmd) == 0)
+    if (gitcmd_worktree_add(root, path, branch))
         return 1;
-
-    snprintf(cmd, sizeof cmd,
-             "git -C %s worktree add %s %s >/dev/null 2>&1", qroot, qpath, branch);
-    if (system(cmd) == 0)
-        return 1;
-
     snprintf(why, (size_t)size, "could not make a worktree at %s", path);
     return 0;
+}
+
+static void base_of(const char *root, const char *path, const char *kept,
+                    char *out, size_t size)
+{
+    out[0] = '\0';
+    if (kept && *kept) {
+        snprintf(out, size, "%s", kept);
+        return;
+    }
+
+    char onto[128], sha[64], args[192];
+    if (gitcmd_line(root, "rev-parse --abbrev-ref HEAD", onto, sizeof onto)) {
+        snprintf(args, sizeof args, "merge-base HEAD %s", onto);
+        if (gitcmd_line(path, args, sha, sizeof sha)) {
+            snprintf(args, sizeof args, "rev-parse --short %s", sha);
+            gitcmd_line(path, args, out, size);
+        }
+    }
+    if (!out[0])
+        gitcmd_line(root, "rev-parse --short HEAD", out, size);
 }
 
 static void ignore_card_file(const char *path)
@@ -521,7 +521,7 @@ int boardwork_start(const struct board_card *c, char *why, int size)
         if (!worktree_make(root, c->id, path, why, size))
             return 0;
 
-        gitcmd_line(path, "rev-parse --short HEAD", base, sizeof base);
+        base_of(root, path, c->base, base, sizeof base);
 
         ignore_card_file(path);
         write_card_file(path, c);
@@ -873,7 +873,7 @@ int boardwork_poll(void)
     for (int i = 0; i < n; i++) {
         if (!cards[i].worktree[0])
             continue;
-        if (cards[i].col != BOARD_BACKLOG && cards[i].col != BOARD_DONE)
+        if (cards[i].col != BOARD_DONE)
             continue;
         if (!boardwork_release(&cards[i]))
             continue;
