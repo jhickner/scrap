@@ -794,7 +794,7 @@ static const struct cmd COMMANDS[] = {
     {"/settings", "show and change every setting", NULL, 0, do_settings},
     {"/resume", "resume a past conversation", NULL, 0, do_resume},
     {"/sessions", "every session: this window's, other windows', past ones", NULL,
-     0, do_sessions},
+     CMD_LIVE, do_sessions},
     {"/fh", "fork into a horizontal tmux split", NULL, CMD_LIVE, do_fork_h},
     {"/fs", "alias for /fh", NULL, CMD_LIVE, do_fork_h},
     {"/fv", "fork into a vertical tmux split", NULL, CMD_LIVE, do_fork_v},
