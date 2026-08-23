@@ -168,9 +168,15 @@ static const char WORKER_PROMPT[] =
     "deleted. No rhetorical framing, no restating the signature, no explaining "
     "the obvious. Brief and technical.\n"
     "\n"
-    "Commits. The message says what changed, briefly and technically. No "
-    "co-author trailers, no attribution to a tool, no summary of your own "
-    "process.";
+    "Commits. Read the last twenty messages in the log and write like them. "
+    "The subject is `area: what changed`, lower case, no trailing full stop, "
+    "naming the change rather than passing judgement on it: `sessions: close "
+    "keeps the list open` and not `sessions: make closing behave sensibly`. "
+    "Add a body only where the subject cannot carry it, and then it is more "
+    "of what changed -- the functions, files and behaviour added, removed or "
+    "replaced -- not an argument for the change, not what the reader gains, "
+    "and not an account of how you worked. No co-author trailers and no "
+    "attribution to a tool.";
 
 // The audit is a gate, so it has to answer a question rather than write an
 // essay: findings are things that would stop a merge, and everything else is
