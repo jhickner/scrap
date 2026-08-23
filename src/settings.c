@@ -5,6 +5,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "text.h"
+
 #define MAX_SETTINGS 512
 #define MAX_KEY      MAX_SETTING_KEY
 #define MAX_VALUE    MAX_SETTING_VALUE
@@ -60,6 +62,14 @@ const char *settings_get_str(const char *key, const char *fallback)
     return i < 0 ? fallback : entries[i].value;
 }
 
+static int write_entries(FILE *f, void *ud)
+{
+    (void)ud;
+    for (int j = 0; j < count; j++)
+        fprintf(f, "%s=%s\n", entries[j].key, entries[j].value);
+    return 1;
+}
+
 void settings_set_str(const char *key, const char *value)
 {
     if (!value)
@@ -75,16 +85,7 @@ void settings_set_str(const char *key, const char *value)
     }
     snprintf(entries[i].value, MAX_VALUE, "%s", value);
 
-    char temp[sizeof file_path + 8];
-    if (snprintf(temp, sizeof temp, "%s.tmp", file_path) >= (int)sizeof temp)
-        return;
-    FILE *f = fopen(temp, "w");
-    if (!f)
-        return;
-    for (int j = 0; j < count; j++)
-        fprintf(f, "%s=%s\n", entries[j].key, entries[j].value);
-    if (fclose(f) != 0 || rename(temp, file_path) != 0)
-        unlink(temp);
+    text_spit(file_path, write_entries, NULL);
 }
 
 int settings_get_int(const char *key, int fallback)

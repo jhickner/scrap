@@ -8,6 +8,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "text.h"
+
 static char record[4200];
 static char hook_dir[4200];
 static char agent[32];
@@ -51,16 +53,9 @@ static int pane_id(const char *s)
     return 1;
 }
 
-static void write_record(void)
+static int write_json(FILE *f, void *ud)
 {
-    if (!record[0] || !current_status)
-        return;
-
-    char tmp[4300];
-    snprintf(tmp, sizeof tmp, "%s.tmp", record);
-    FILE *f = fopen(tmp, "w");
-    if (!f)
-        return;
+    (void)ud;
 
     const char *pane = getenv("TMUX_PANE");
     fprintf(f, "{\"agent\":\"%s\",\"pid\":%ld,\"status\":\"%s\",\"ts\":%ld",
@@ -74,11 +69,15 @@ static void write_record(void)
                 (long)usage_updated_at);
     }
     fprintf(f, "}\n");
+    return 1;
+}
 
-    if (fclose(f) == 0)
-        rename(tmp, record);
-    else
-        unlink(tmp);
+static void write_record(void)
+{
+    if (!record[0] || !current_status)
+        return;
+
+    text_spit(record, write_json, NULL);
 }
 
 static void drop_record(void)

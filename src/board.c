@@ -351,32 +351,32 @@ static int load_locked(struct board_card **out)
 
 static unsigned long revision;
 
-static int save_locked(const struct board_card *v, int n)
+struct save_set {
+    const struct board_card *v;
+    int                      n;
+};
+
+static int write_cards(FILE *f, void *ud)
 {
-    char tmp[BOARD_PATH_MAX];
-    if (!sidecar_path(tmp, sizeof tmp, ".tmp"))
-        return 0;
+    const struct save_set *set = ud;
 
-    FILE *f = fopen(tmp, "wb");
-    if (!f)
-        return 0;
-
-    int ok = 1;
-    for (int i = 0; i < n && ok; i++) {
-        cJSON *o = card_to_json(&v[i]);
+    for (int i = 0; i < set->n; i++) {
+        cJSON *o = card_to_json(&set->v[i]);
         char  *s = o ? cJSON_PrintUnformatted(o) : NULL;
         cJSON_Delete(o);
-        if (!s || fprintf(f, "%s\n", s) < 0)
-            ok = 0;
+        int ok = s && fprintf(f, "%s\n", s) >= 0;
         free(s);
+        if (!ok)
+            return 0;
     }
-    if (fclose(f) != 0)
-        ok = 0;
+    return 1;
+}
 
-    if (!ok || rename(tmp, board_path()) != 0) {
-        unlink(tmp);
+static int save_locked(const struct board_card *v, int n)
+{
+    struct save_set set = {v, n};
+    if (!text_spit(board_path(), write_cards, &set))
         return 0;
-    }
     revision++;
     return 1;
 }

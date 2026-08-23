@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 #include "app.h"
 
@@ -94,6 +95,31 @@ char *text_slurp(const char *path, size_t max_bytes, size_t *len_out)
     if (len_out)
         *len_out = got;
     return buf;
+}
+
+int text_spit(const char *path, int (*fill)(FILE *f, void *ud), void *ud)
+{
+    size_t n = strlen(path) + sizeof ".tmp";
+    char  *tmp = malloc(n);
+    if (!tmp)
+        return 0;
+    snprintf(tmp, n, "%s.tmp", path);
+
+    FILE *f = fopen(tmp, "wb");
+    if (!f) {
+        free(tmp);
+        return 0;
+    }
+
+    int ok = fill(f, ud) && !ferror(f);
+    if (fclose(f) != 0)
+        ok = 0;
+    if (ok && rename(tmp, path) != 0)
+        ok = 0;
+    if (!ok)
+        unlink(tmp);
+    free(tmp);
+    return ok;
 }
 
 int text_fuzzy_score(const char *name, const char *q)

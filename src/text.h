@@ -3,6 +3,7 @@
 #define TEXT_H
 
 #include <stddef.h>
+#include <stdio.h>
 #include <stdint.h>
 
 void text_one_line(const char *in, char *out, size_t size);
@@ -12,6 +13,8 @@ void text_block(const char *in, char *out, size_t size);
 void text_chomp(char *s);
 
 char *text_slurp(const char *path, size_t max_bytes, size_t *len_out);
+
+int text_spit(const char *path, int (*fill)(FILE *f, void *ud), void *ud);
 
 int text_shell_quote(const char *s, char *out, size_t size);
 

@@ -99,34 +99,34 @@ int mdcfg_int(const struct mdcfg *m, const char *key, int fallback)
     return end && end != s ? (int)v : fallback;
 }
 
+struct cfg_out {
+    const char *const *keys;
+    const char *const *values;
+    int                n;
+    const char        *body;
+};
+
+static int write_cfg(FILE *f, void *ud)
+{
+    const struct cfg_out *c = ud;
+
+    int ok = fprintf(f, "%s\n", FENCE) > 0;
+    for (int i = 0; i < c->n && ok; i++)
+        ok = fprintf(f, "%s: %s\n", c->keys[i], c->values[i] ? c->values[i] : "") > 0;
+    if (ok)
+        ok = fprintf(f, "%s\n", FENCE) > 0;
+    if (ok && c->body && *c->body) {
+        size_t len = strlen(c->body);
+        ok = fprintf(f, "\n%s%s", c->body, c->body[len - 1] == '\n' ? "" : "\n") > 0;
+    }
+    return ok;
+}
+
 int mdcfg_write(const char *path, const char *const *keys,
                 const char *const *values, int n, const char *body)
 {
-    char tmp[4300];
-    if ((size_t)snprintf(tmp, sizeof tmp, "%s.tmp", path) >= sizeof tmp)
-        return 0;
-
-    FILE *f = fopen(tmp, "wb");
-    if (!f)
-        return 0;
-
-    int ok = fprintf(f, "%s\n", FENCE) > 0;
-    for (int i = 0; i < n && ok; i++)
-        ok = fprintf(f, "%s: %s\n", keys[i], values[i] ? values[i] : "") > 0;
-    if (ok)
-        ok = fprintf(f, "%s\n", FENCE) > 0;
-    if (ok && body && *body) {
-        size_t len = strlen(body);
-        ok = fprintf(f, "\n%s%s", body, body[len - 1] == '\n' ? "" : "\n") > 0;
-    }
-    if (fclose(f) != 0)
-        ok = 0;
-
-    if (!ok || rename(tmp, path) != 0) {
-        unlink(tmp);
-        return 0;
-    }
-    return 1;
+    struct cfg_out out = {keys, values, n, body};
+    return text_spit(path, write_cfg, &out);
 }
 
 int mdcfg_list(const char *dir, char names[][MDCFG_NAME], int max)

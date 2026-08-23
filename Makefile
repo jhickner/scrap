@@ -88,7 +88,7 @@ $(BUILD)/claudetest: tools/claudetest.c src/vendor/impl.o src/vendor/cJSON.o | $
 $(BUILD)/pitest: tools/pitest.c src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
-$(BUILD)/agenttabstest: tools/agenttabstest.c src/agenttabs.o src/vendor/cJSON.o | $(BUILD)
+$(BUILD)/agenttabstest: tools/agenttabstest.c src/agenttabs.o src/text.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
 $(BUILD)/imagetest: tools/imagetest.c src/image.o src/md.o src/ui.o src/viewport.o src/block.o src/settings.o src/tty.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)

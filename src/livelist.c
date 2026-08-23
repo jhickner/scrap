@@ -154,6 +154,11 @@ void livelist_on_card(const char *(*fn)(const struct session *s))
     card_of = fn;
 }
 
+static int write_line(FILE *f, void *ud)
+{
+    return fprintf(f, "%s\n", (const char *)ud) > 0;
+}
+
 void livelist_publish(const struct session *s, const char *status)
 {
     if (!publishing || !s || !status)
@@ -162,13 +167,8 @@ void livelist_publish(const struct session *s, const char *status)
     if (slot < 0)
         return;
 
-    char path[4400], tmp[4500];
+    char path[4400];
     if (!record_path(slot, path, sizeof path))
-        return;
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
-
-    FILE *f = fopen(tmp, "w");
-    if (!f)
         return;
 
     const char *id = session_id(s);
@@ -177,11 +177,8 @@ void livelist_publish(const struct session *s, const char *status)
         title_lookup(id, name, sizeof name);
 
     cJSON *rec = cJSON_CreateObject();
-    if (!rec) {
-        fclose(f);
-        unlink(tmp);
+    if (!rec)
         return;
-    }
     cJSON_AddNumberToObject(rec, "pid", (double)getpid());
     cJSON_AddNumberToObject(rec, "slot", slot);
     cJSON_AddStringToObject(rec, "backend", session_backend(s));
@@ -209,17 +206,11 @@ void livelist_publish(const struct session *s, const char *status)
 
     char *text = cJSON_PrintUnformatted(rec);
     cJSON_Delete(rec);
-    if (!text) {
-        fclose(f);
-        unlink(tmp);
+    if (!text)
         return;
-    }
-    int ok = fprintf(f, "%s\n", text) > 0;
+
+    text_spit(path, write_line, text);
     free(text);
-    if (fclose(f) == 0 && ok)
-        rename(tmp, path);
-    else
-        unlink(tmp);
 }
 
 void livelist_forget(const struct session *s)

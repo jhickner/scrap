@@ -234,6 +234,32 @@ typedef struct {
     time_t at;
 } Ent;
 
+struct rewrite {
+    const Ent  *ents;
+    int         nent;
+    const char *tail;
+    size_t      tail_len;
+};
+
+static int write_entries(FILE *f, void *ud)
+{
+    const struct rewrite *out = ud;
+
+    for (int i = 0; i < out->nent; i++) {
+        if (!out->ents[i].o)
+            continue;
+        char *s = cJSON_PrintUnformatted(out->ents[i].o);
+        if (!s)
+            return 0;
+        fputs(s, f);
+        fputc('\n', f);
+        free(s);
+    }
+    if (out->tail_len)
+        fwrite(out->tail, 1, out->tail_len, f);
+    return 1;
+}
+
 static void store_rewrite(const Ent *ents, int nent, const char *orig, size_t orig_len)
 {
     const char *path = reminders_path();
@@ -246,39 +272,9 @@ static void store_rewrite(const Ent *ents, int nent, const char *orig, size_t or
         return;
     }
 
-    char tmp[REMINDERS_PATH_MAX];
-    if (!sidecar_path(tmp, sizeof tmp, ".tmp")) {
-        free(cur);
-        return;
-    }
-    FILE *f = fopen(tmp, "wb");
-    if (!f) {
-        free(cur);
-        return;
-    }
-    for (int i = 0; i < nent; i++) {
-        if (!ents[i].o)
-            continue;
-        char *s = cJSON_PrintUnformatted(ents[i].o);
-        if (!s) {
-            fclose(f);
-            unlink(tmp);
-            free(cur);
-            return;
-        }
-        fputs(s, f);
-        fputc('\n', f);
-        free(s);
-    }
-    if (cur_len > orig_len)
-        fwrite(cur + orig_len, 1, cur_len - orig_len, f);
+    struct rewrite out = {ents, nent, cur + orig_len, cur_len - orig_len};
+    text_spit(path, write_entries, &out);
     free(cur);
-
-    int ok = !ferror(f);
-    if (fclose(f) != 0)
-        ok = 0;
-    if (!ok || rename(tmp, path) != 0)
-        unlink(tmp);
 }
 
 int reminders_pop_due(time_t now, char *out, size_t n)

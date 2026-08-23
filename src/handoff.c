@@ -121,6 +121,11 @@ static void nap(void)
     nanosleep(&ts, NULL);
 }
 
+static int write_id(FILE *f, void *ud)
+{
+    return fprintf(f, "%s\n", (const char *)ud) > 0;
+}
+
 int handoff_ask(long pid, const char *id, char *screen, size_t size,
                 void (*tick)(int waited_ms, void *ud), void *ud)
 {
@@ -132,16 +137,8 @@ int handoff_ask(long pid, const char *id, char *screen, size_t size,
     unlink(state);
     unlink(no);
 
-    char tmp[4500];
-    snprintf(tmp, sizeof tmp, "%s.tmp", req);
-    FILE *f = fopen(tmp, "w");
-    if (!f)
+    if (!text_spit(req, write_id, (void *)id))
         return 0;
-    int ok = fprintf(f, "%s\n", id) > 0;
-    if (fclose(f) != 0 || !ok || rename(tmp, req) != 0) {
-        unlink(tmp);
-        return 0;
-    }
 
     if (kill((pid_t)pid, SIGURG) != 0) {
         unlink(req);

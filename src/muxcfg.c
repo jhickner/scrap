@@ -141,6 +141,11 @@ static void load_file(void)
     cJSON_Delete(root);
 }
 
+static int write_text(FILE *f, void *ud)
+{
+    return fputs((const char *)ud, f) >= 0 && fputc('\n', f) != EOF;
+}
+
 static void save_file(void)
 {
     char path[4096];
@@ -169,15 +174,7 @@ static void save_file(void)
     if (!text)
         return;
 
-    char temp[sizeof path + 8];
-    if (snprintf(temp, sizeof temp, "%s.tmp", path) < (int)sizeof temp) {
-        FILE *f = fopen(temp, "w");
-        if (f) {
-            int wrote = fputs(text, f) >= 0 && fputc('\n', f) != EOF;
-            if (fclose(f) != 0 || !wrote || rename(temp, path) != 0)
-                unlink(temp);
-        }
-    }
+    text_spit(path, write_text, text);
     free(text);
 }
 
