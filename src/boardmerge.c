@@ -151,8 +151,15 @@ int boardmerge_pump(void)
     char key[CHILD_KEY_MAX];
     merge_key(next->id, key, sizeof key);
     int ok = child_shell(key, script, next->worktree);
-    if (ok)
+    if (ok) {
+        struct board_card edited = *next;
+        snprintf(edited.merge_into, sizeof edited.merge_into, "%s", base);
+        gitcmd_line(root, "rev-parse HEAD", edited.merge_from,
+                    sizeof edited.merge_from);
+        edited.merge_to[0] = '\0';
+        board_update(&edited);
         boardlog_turn(next->id, "merge", script, NULL);
+    }
     free(script);
     board_free(cards, n);
     return ok;
@@ -204,9 +211,14 @@ int boardmerge_take(const char *key, const char *out, int ok)
         if (c) {
             boardmerge_base(c, into, sizeof into);
 
+            char root[4096];
             struct board_card edited = *c;
             edited.col = BOARD_DONE;
             edited.worktree[0] = '\0';
+            snprintf(edited.merge_into, sizeof edited.merge_into, "%s", into);
+            if (gitcmd_root(c->cwd, root, sizeof root))
+                gitcmd_line(root, "rev-parse HEAD", edited.merge_to,
+                            sizeof edited.merge_to);
             board_update(&edited);
         }
         board_free(cards, n);

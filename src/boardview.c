@@ -17,6 +17,7 @@
 #include "boardmerge.h"
 #include "boardsweep.h"
 #include "boardtriage.h"
+#include "boardundo.h"
 #include "boardwork.h"
 #include "child.h"
 #include "chrome.h"
@@ -34,25 +35,28 @@
 #define KEY_START    's'
 #define KEY_GO       'g'
 #define KEY_APPROVE  'a'
+#define KEY_APPROVE_ALL 'A'
+#define KEY_AUDIT    'i'
+#define KEY_UNDO     'u'
 #define KEY_REJECT   'r'
 #define KEY_UNSTART  'x'
-#define KEY_REOPEN   'u'
 #define KEY_FEEDBACK 'f'
 #define KEY_LOG      'l'
 #define KEY_CONFIG   'c'
 #define KEY_SERVE    'b'
 #define KEY_ALL      '*'
 
-#define BOARD_KEYS "ndtsgarxuflcb*\t"
+#define BOARD_KEYS "ndtsgarxflcb*Aiu\t"
 
 #define BOARD_RECENT 3
 
 #define BOARD_RECENT_INDENT 6
 
 #define BOARD_HINT \
-    "enter edit  ·  s start  ·  g worker  ·  a approve  ·  f feedback  ·  "    \
-    "r reject  ·  x cancel start  ·  u not done\n"                             \
-    "n new  ·  t triage  ·  l log  ·  d delete  ·  c config  ·  "              \
+    "enter edit  ·  s start  ·  g worker  ·  "                                \
+    "a approve  ·  A approve all  ·  i audit\n"                               \
+    "f feedback  ·  r reject  ·  x cancel start  ·  u undo\n"                 \
+    "n new  ·  t triage  ·  l log  ·  d delete  ·  c config  ·  "               \
     "b backend  ·  * all repos  ·  / search"
 
 struct vrow {
@@ -610,12 +614,44 @@ static void do_serve(char *notice, size_t size)
         snprintf(notice + used, size - used, " · %d after their current card", waiting);
 }
 
-enum { ASK_NONE, ASK_AUDIT, ASK_DELETE };
+enum { ASK_NONE, ASK_APPROVE_ALL, ASK_DELETE };
 
 static int do_delete(const struct board_card *c)
 {
     boardwork_discard(c);
     return board_remove(c->id);
+}
+
+static void approve(const struct board_card *c, int audit)
+{
+    if (!c || c->col != BOARD_REVIEW)
+        return;
+    if (boardsweep_is(c)) {
+        boardwork_let_go(c->id);
+        boardsweep_approve(c);
+    } else
+        boardwork_approve(c, audit);
+}
+
+static int in_review(const struct board_card *cards, int n, const char *filter)
+{
+    int ready = 0;
+    for (int i = 0; i < n; i++)
+        if (cards[i].col == BOARD_REVIEW && shows(&cards[i], filter))
+            ready++;
+    return ready;
+}
+
+static int approve_all(const struct board_card *cards, int n, const char *filter)
+{
+    int did = 0;
+    for (int i = 0; i < n; i++) {
+        if (cards[i].col != BOARD_REVIEW || !shows(&cards[i], filter))
+            continue;
+        approve(&cards[i], 0);
+        did++;
+    }
+    return did;
 }
 
 static const char *const PRIORITIES[] = {"0", "1", "2", "3"};
@@ -1052,10 +1088,12 @@ int boardview_run(const char *cwd)
             ask[0] = '\0';
 
             struct board_card *c = board_find(cards, n, cur.id);
-            if (c && at >= 0) {
-                if (what == ASK_AUDIT)
-                    boardwork_approve(c, pressed == 'y');
-                else if (pressed == 'y' && do_delete(c))
+            if (at >= 0 && pressed == 'y') {
+                if (what == ASK_APPROVE_ALL) {
+                    int did = approve_all(cards, n, filter);
+                    snprintf(notice, sizeof notice, "approved %d card%s", did,
+                             did == 1 ? "" : "s");
+                } else if (c && do_delete(c))
                     cur.id[0] = '\0';
             }
             board_free(cards, n);
@@ -1113,15 +1151,28 @@ int boardview_run(const char *cwd)
             break;
         }
         case KEY_APPROVE:
-            if (c && c->col == BOARD_REVIEW && boardsweep_is(c)) {
-                boardwork_let_go(c->id);
-                boardsweep_approve(c);
-            } else if (c && c->col == BOARD_REVIEW) {
-                int files = 0, lines = 0;
-                boardaudit_size(c, &files, &lines);
-                snprintf(ask, sizeof ask, "audit %d file%s, %d line%s before it lands?",
-                         files, files == 1 ? "" : "s", lines, lines == 1 ? "" : "s");
-                asking = ASK_AUDIT;
+            approve(c, 0);
+            break;
+        case KEY_AUDIT:
+            if (c && !boardsweep_is(c))
+                approve(c, 1);
+            break;
+        case KEY_APPROVE_ALL: {
+            int ready = in_review(cards, n, filter);
+            if (!ready)
+                snprintf(notice, sizeof notice, "nothing in review");
+            else {
+                snprintf(ask, sizeof ask, "approve %d card%s in review?", ready,
+                         ready == 1 ? "" : "s");
+                asking = ASK_APPROVE_ALL;
+            }
+            break;
+        }
+        case KEY_UNDO:
+            if (c && boardundo_can(c)) {
+                char said[256];
+                boardundo_run(c, said, sizeof said);
+                snprintf(notice, sizeof notice, "%s", said);
             }
             break;
         case KEY_REJECT:
@@ -1133,16 +1184,6 @@ int boardview_run(const char *cwd)
                 char *why = ask_run("reason for sending it back", NULL);
                 if (why) {
                     boardwork_reject(c, why);
-                    free(why);
-                }
-            }
-            break;
-        case KEY_REOPEN:
-            if (c && c->col == BOARD_DONE && !boardsweep_is(c)) {
-                close_list();
-                char *why = ask_run("reason for sending it back", NULL);
-                if (why) {
-                    boardwork_reopen(c, why);
                     free(why);
                 }
             }

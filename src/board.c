@@ -218,6 +218,9 @@ static int card_from_json(const cJSON *o, struct board_card *c)
     set_str(c->session, sizeof c->session, json_str(o, "session"));
     set_str(c->worktree, sizeof c->worktree, json_str(o, "worktree"));
     set_str(c->base, sizeof c->base, json_str(o, "base"));
+    set_str(c->merge_into, sizeof c->merge_into, json_str(o, "merge_into"));
+    set_str(c->merge_from, sizeof c->merge_from, json_str(o, "merge_from"));
+    set_str(c->merge_to, sizeof c->merge_to, json_str(o, "merge_to"));
     set_str(c->stuck, sizeof c->stuck, json_str(o, "stuck"));
 
     c->priority = (int)json_num(o, "priority");
@@ -269,6 +272,9 @@ static cJSON *card_to_json(const struct board_card *c)
     cJSON_AddStringToObject(o, "session", c->session);
     cJSON_AddStringToObject(o, "worktree", c->worktree);
     cJSON_AddStringToObject(o, "base", c->base);
+    cJSON_AddStringToObject(o, "merge_into", c->merge_into);
+    cJSON_AddStringToObject(o, "merge_from", c->merge_from);
+    cJSON_AddStringToObject(o, "merge_to", c->merge_to);
     cJSON_AddStringToObject(o, "stuck", c->stuck);
     cJSON_AddNumberToObject(o, "cost_usd", c->cost_usd);
     cJSON_AddNumberToObject(o, "created", (double)c->created);

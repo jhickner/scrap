@@ -48,6 +48,10 @@ struct board_card {
     char   worktree[4096];
     char   base[24];
 
+    char merge_into[128];
+    char merge_from[48];
+    char merge_to[48];
+
     char stuck[256];
     double cost_usd;
 

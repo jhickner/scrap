@@ -41,6 +41,17 @@ int gitcmd_line(const char *dir, const char *args, char *out, size_t size)
     return out[0] != '\0';
 }
 
+int gitcmd_run(const char *dir, const char *args)
+{
+    char quoted[4200];
+    if (!text_shell_quote(dir, quoted, sizeof quoted))
+        return 0;
+
+    char cmd[8192];
+    snprintf(cmd, sizeof cmd, "git -C %s %s >/dev/null 2>&1", quoted, args);
+    return system(cmd) == 0;
+}
+
 int gitcmd_root(const char *cwd, char *out, size_t size)
 {
     char line[4200];
