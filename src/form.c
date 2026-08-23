@@ -30,6 +30,7 @@ struct line {
     const struct md_text *note;
     size_t                from, len;
     int                   row;
+    int                   indent;
 };
 
 struct lines {
@@ -45,6 +46,8 @@ struct state {
     int              focus;
     int              label_width;
     int              top;
+    int              pinned; /* the view is where the user scrolled it */
+    int              rows, room;
     int              budget;
 
     struct replframe frame;
@@ -85,6 +88,7 @@ static void focus_step(struct state *st, int delta)
     int n = st->form->fields_n;
     if (n <= 0)
         return;
+    st->pinned = 0;
     st->focus = (st->focus + delta) % n;
     if (st->focus < 0)
         st->focus += n;
@@ -136,9 +140,20 @@ static void wrap_notes(struct lines *out, const struct md_text *note, int budget
             l->field = -1;
         return;
     }
+    /* What a note indents itself by, its wrapped rows keep. */
+    size_t lead = 0;
+    while (lead < rest && text[lead] == ' ')
+        lead++;
+    if ((int)lead > budget / 2)
+        lead = 0;
+
+    int first = 1;
     while (at < rest) {
+        int room = first ? budget : budget - (int)lead;
+        if (room < 8)
+            room = 8;
         size_t skip = 0;
-        size_t got = ui_wrap_row(text + at, rest - at, (size_t)budget, &skip, NULL);
+        size_t got = ui_wrap_row(text + at, rest - at, (size_t)room, &skip, NULL);
         struct line *l = line_add(out);
         if (!l)
             return;
@@ -146,7 +161,9 @@ static void wrap_notes(struct lines *out, const struct md_text *note, int budget
         l->note = note;
         l->from = at;
         l->len = got;
+        l->indent = first ? 0 : (int)lead;
         at += got + skip;
+        first = 0;
     }
 }
 
@@ -285,8 +302,16 @@ static void paint(void *ud)
     for (int i = 0; i < HIT_MAX; i++)
         st->hit[i] = -1;
 
+    st->rows = n;
+    st->room = room;
+
     if (n <= room) {
         st->top = 0;
+    } else if (st->pinned) {
+        if (st->top > n - room)
+            st->top = n - room;
+        if (st->top < 0)
+            st->top = 0;
     } else {
         int first = -1, last = -1, caret = -1;
         for (int i = 0; i < n; i++) {
@@ -348,7 +373,7 @@ static void paint(void *ud)
 
         if (l->field < 0) {
             if (l->len) {
-                ui_pad(FORM_INDENT);
+                ui_pad(FORM_INDENT + l->indent);
                 md_text_put(l->note, l->from, l->len, UI_DIM);
             }
             ui_put("\n");
@@ -465,7 +490,20 @@ static int feed(struct state *st, const ReplEvent *ev)
     st->budget = value_budget(st, ui_columns());
     repl_set_width(&s->repl, repl_width(st));
     st->framed = -1;
+    st->pinned = 0;
     return repl_handle_input(&s->repl, ev);
+}
+
+static void scroll_by(struct state *st, int rows)
+{
+    if (st->rows <= st->room)
+        return;
+    st->pinned = 1;
+    st->top += rows;
+    if (st->top > st->rows - st->room)
+        st->top = st->rows - st->room;
+    if (st->top < 0)
+        st->top = 0;
 }
 
 static void step_or_leave(struct state *st, int delta)
@@ -523,6 +561,22 @@ int form_run(struct form *form)
 
         case TK_TAB:
             focus_step(&st, 1);
+            break;
+
+        case TK_PAGE_UP:
+            scroll_by(&st, -(st.room > 1 ? st.room - 1 : 1));
+            break;
+
+        case TK_PAGE_DOWN:
+            scroll_by(&st, st.room > 1 ? st.room - 1 : 1);
+            break;
+
+        case TK_SCROLL_UP:
+            scroll_by(&st, -3);
+            break;
+
+        case TK_SCROLL_DOWN:
+            scroll_by(&st, 3);
             break;
 
         case TK_MOUSE_DOWN: {

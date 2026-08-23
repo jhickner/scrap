@@ -672,13 +672,14 @@ static void build_stages(const struct board_card *c, struct notes *notes)
     }
 }
 
-#define NOTE_MAX 200
+#define NOTE_LEAD 14 /* the width of "HH:MM  who    " */
 
-/* one tidy line: no escapes, no control characters, no runs of blanks */
-static char *flatten(const char *text)
+/* Strip escapes and control characters, keeping the line structure: the card
+ * shows a whole turn, and its paragraphs and lists are the formatting. */
+static char *clean(const char *text)
 {
     size_t n = strlen(text);
-    char  *out = malloc(n + 4); /* room for the ellipsis a cut adds */
+    char  *out = malloc(n + 1);
     if (!out)
         return NULL;
 
@@ -689,31 +690,47 @@ static char *flatten(const char *text)
         if (kind == UI_ESC_TEXT)
             for (size_t k = i; k < end; k++) {
                 unsigned char ch = (unsigned char)text[k];
-                if (ch < ' ' || ch == 0x7f)
+                if (ch == '\r')
+                    continue;
+                if (ch == '\t')
                     ch = ' ';
-                if (ch == ' ' && (!w || out[w - 1] == ' '))
+                if (ch != '\n' && ch < ' ')
+                    continue;
+                if (ch == 0x7f)
+                    continue;
+                if (ch == ' ' && w && out[w - 1] == '\n')
                     continue;
                 out[w++] = (char)ch;
             }
         i = end;
     }
-    while (w && out[w - 1] == ' ')
+    while (w && (out[w - 1] == '\n' || out[w - 1] == ' '))
         w--;
-
-    /* The whole turn is in the card's log file; the card only needs its
-     * opening. */
-    if (w > NOTE_MAX) {
-        size_t cut = NOTE_MAX;
-        while (cut && out[cut] != ' ')
-            cut--;
-        if (!cut)
-            for (cut = NOTE_MAX; cut && ((unsigned char)out[cut] & 0xc0) == 0x80; cut--)
-                ;
-        memcpy(out + cut, "\xe2\x80\xa6", 3);
-        w = cut + 3;
-    }
     out[w] = '\0';
     return out;
+}
+
+/* The first line carries the stamp and who said it; the rest sit under them. */
+static void note_entry(struct notes *notes, const char *stamp, const char *who,
+                       const char *text)
+{
+    const char *at = text;
+    int         first = 1;
+
+    do {
+        const char *nl = strchr(at, '\n');
+        size_t      len = nl ? (size_t)(nl - at) : strlen(at);
+
+        if (first)
+            note_line(notes, dsprintf("%s  %-6s %.*s", stamp, who, (int)len, at));
+        else if (len)
+            note_line(notes, dsprintf("%*s%.*s", NOTE_LEAD, "", (int)len, at));
+        else
+            note_line(notes, NULL);
+
+        first = 0;
+        at = nl ? nl + 1 : NULL;
+    } while (at);
 }
 
 static void build_notes(const struct board_card *c, struct notes *notes)
@@ -729,8 +746,8 @@ static void build_notes(const struct board_card *c, struct notes *notes)
             localtime_r(&c->log[i].ts, &when);
             strftime(stamp, sizeof stamp, "%H:%M", &when);
         }
-        char *text = flatten(c->log[i].text ? c->log[i].text : "");
-        note_line(notes, dsprintf("%s  %-6s %s", stamp, c->log[i].who, text ? text : ""));
+        char *text = clean(c->log[i].text ? c->log[i].text : "");
+        note_entry(notes, stamp, c->log[i].who, text ? text : "");
         free(text);
     }
 }
