@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "board.h"
+#include "boardaudit.h"
 #include "boardcfg.h"
 #include "boardlog.h"
 #include "gitcmd.h"
@@ -71,7 +72,8 @@ static char *findings_for(const struct board_card *cards, int n, const char *cwd
         if (strcmp(cards[i].cwd, cwd))
             continue;
         for (int j = 0; j < cards[i].log_n; j++) {
-            if (strcmp(cards[i].log[j].who, "audit") || !cards[i].log[j].text)
+            if (strcmp(cards[i].log[j].who, "audit") || !cards[i].log[j].text ||
+                boardaudit_is_marker(cards[i].log[j].text))
                 continue;
             size_t add = strlen(cards[i].log[j].text) + 4;
             if (len + add >= cap)

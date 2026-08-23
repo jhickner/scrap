@@ -127,6 +127,12 @@ static int finding_text(cJSON *f, char *out, size_t size)
     return 0;
 }
 
+int boardaudit_is_marker(const char *text)
+{
+    return text && (!strcmp(text, BOARDAUDIT_PASS) ||
+                    !strcmp(text, BOARDAUDIT_NO_VERDICT));
+}
+
 int boardaudit_finished(const char *id, const char *reply)
 {
     if (!id || !*id)
@@ -136,7 +142,7 @@ int boardaudit_finished(const char *id, const char *reply)
 
     cJSON *o = replyjson_parse(reply);
     if (!o) {
-        board_note(id, "audit", "no verdict; not held");
+        board_note(id, "audit", BOARDAUDIT_NO_VERDICT);
         board_move(id, next_after_audit(id), "audit", NULL);
         return 1;
     }
@@ -158,7 +164,7 @@ int boardaudit_finished(const char *id, const char *reply)
     cJSON_Delete(o);
 
     if (passed) {
-        board_note(id, "audit", "no findings");
+        board_note(id, "audit", BOARDAUDIT_PASS);
         board_move(id, next_after_audit(id), "audit", NULL);
     } else {
         board_move(id, BOARD_DOING, "audit", NULL);
