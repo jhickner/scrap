@@ -7,6 +7,7 @@
 
 #include "board.h"
 #include "gitcmd.h"
+#include "md.h"
 #include "boardcfg.h"
 #include "boardaudit.h"
 #include "child.h"
@@ -275,13 +276,8 @@ static void ignore_card_file(const char *path)
     fclose(f);
 }
 
-static void write_card_file(const char *path, const struct board_card *c)
+static void card_write(FILE *f, const struct board_card *c)
 {
-    char file[4300];
-    snprintf(file, sizeof file, "%s/CARD.md", path);
-    FILE *f = fopen(file, "w");
-    if (!f)
-        return;
     fprintf(f, "# %s\n\n%s\n", c->title, c->body ? c->body : "");
     if (c->kind[0])
         fprintf(f, "\nkind: %s\n", c->kind);
@@ -291,7 +287,44 @@ static void write_card_file(const char *path, const struct board_card *c)
             fprintf(f, "- %s: %s\n", c->log[i].who,
                     c->log[i].text ? c->log[i].text : "");
     }
+}
+
+static char *card_text(const struct board_card *c)
+{
+    char  *buf = NULL;
+    size_t len = 0;
+    FILE  *f = open_memstream(&buf, &len);
+    if (!f)
+        return NULL;
+    card_write(f, c);
     fclose(f);
+    return buf;
+}
+
+static void write_card_file(const char *path, const struct board_card *c)
+{
+    char file[4300];
+    snprintf(file, sizeof file, "%s/CARD.md", path);
+    FILE *f = fopen(file, "w");
+    if (!f)
+        return;
+    card_write(f, c);
+    fclose(f);
+}
+
+static void draw_card(struct session *s, void *ud)
+{
+    (void)s;
+    md_render_kept(ud, 0);
+}
+
+static void show_card(int at, const struct board_card *c)
+{
+    char *text = card_text(c);
+    if (!text)
+        return;
+    workspace_render(at, draw_card, text);
+    free(text);
 }
 
 static char *landing_turn(const struct board_card *c)
@@ -437,6 +470,8 @@ int boardwork_start(const struct board_card *c, char *why, int size)
         return 0;
     }
     workspace_show(front);
+
+    show_card(at, c);
 
     struct session *s = workspace_at(at);
     char           *turn = first_turn(c);
