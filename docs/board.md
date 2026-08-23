@@ -151,7 +151,9 @@ The audit is a gate a card may skip, not a stage every card walks. `git diff
 --stat` against the card's `base` decides: past a file or line threshold it
 runs, under it the card goes straight on. You can always force one, and always
 skip one, from the approve row — which says which it will do, so pressing it is
-never a surprise.
+never a surprise. A card already in `audit` is skipped with `k`, which drops the
+audit worker and sends the card on to `merge`; `skippable` in `roles/audit.md`
+turns that key off for a board where the audit is not optional.
 
 An audit is a worker in the same worktree running the review skills already
 installed, scoped to architecture, duplicated mechanisms, memory, and security.

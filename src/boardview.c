@@ -38,6 +38,7 @@
 #define KEY_APPROVE  'a'
 #define KEY_APPROVE_ALL 'A'
 #define KEY_AUDIT    'i'
+#define KEY_SKIP     'k'
 #define KEY_UNDO     'u'
 #define KEY_REJECT   'r'
 #define KEY_UNSTART  'x'
@@ -47,7 +48,7 @@
 #define KEY_SERVE    'b'
 #define KEY_ALL      '*'
 
-#define BOARD_KEYS "ndtsSgarxflcb*Aiu\t"
+#define BOARD_KEYS "ndtsSgarxflcb*Aiuk\t"
 
 #define BOARD_RECENT 3
 
@@ -56,7 +57,8 @@
 #define BOARD_HINT \
     "enter edit  ·  s start  ·  S start max  ·  g worker  ·  "                \
     "a approve  ·  A approve all  ·  i audit\n"                               \
-    "f feedback  ·  r send back  ·  x cancel start  ·  u undo\n"              \
+    "f feedback  ·  r send back  ·  x cancel start  ·  u undo  ·  "          \
+    "k skip audit\n"                                                          \
     "n new  ·  t triage  ·  l log  ·  d delete  ·  c config  ·  "               \
     "b backend  ·  * all repos  ·  / search"
 
@@ -1259,6 +1261,16 @@ int boardview_run(const char *cwd)
         case KEY_AUDIT:
             if (c && !boardsweep_is(c))
                 approve(c, 1);
+            break;
+        case KEY_SKIP:
+            if (c && c->col == BOARD_AUDIT) {
+                if (!boardaudit_skippable())
+                    snprintf(notice, sizeof notice, "the audit is not skippable");
+                else {
+                    boardwork_let_go(c->id);
+                    boardaudit_skip(c);
+                }
+            }
             break;
         case KEY_APPROVE_ALL: {
             int ready = in_review(cards, n, filter);

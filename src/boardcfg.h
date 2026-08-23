@@ -39,6 +39,7 @@ struct board_backend {
 
 struct board_profile {
     char  tier[8];
+    int   skippable;
     char  backend[32];
     char  model[128];
     char  effort[32];

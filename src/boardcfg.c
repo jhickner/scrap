@@ -132,6 +132,7 @@ static void defaults(struct board_cfg *c)
     for (int i = 0; i < BOARD_WHO; i++)
         snprintf(c->who[i].tier, sizeof c->who[i].tier, "%s",
                  boardcfg_tier_name(WHO_TIERS[i]));
+    c->who[BOARD_WHO_AUDIT].skippable = 1;
 
 }
 
@@ -306,6 +307,8 @@ static int read_roles(struct board_cfg *c)
         else
             aged = 1;
 
+        c->who[i].skippable = mdcfg_int(&m, "skippable", c->who[i].skippable);
+
         if (mdcfg_has(&m, "backend") || mdcfg_has(&m, "model") ||
             mdcfg_has(&m, "effort"))
             aged = 1;
@@ -425,9 +428,12 @@ static int write_roles(const struct board_cfg *c)
             ok = 0;
             continue;
         }
-        const char *keys[] = {"tier"};
-        const char *vals[] = {c->who[i].tier};
-        if (!mdcfg_write(path, keys, vals, 1, c->who[i].prompt))
+        char        skip[8];
+        snprintf(skip, sizeof skip, "%d", c->who[i].skippable);
+        const char *keys[] = {"tier", "skippable"};
+        const char *vals[] = {c->who[i].tier, skip};
+        int         n = i == BOARD_WHO_AUDIT ? 2 : 1;
+        if (!mdcfg_write(path, keys, vals, n, c->who[i].prompt))
             ok = 0;
     }
     return ok;
@@ -822,6 +828,7 @@ int boardcfg_set(const struct board_cfg *c)
     memcpy(cache.backends, c->backends, sizeof cache.backends);
     for (int i = 0; i < BOARD_WHO; i++) {
         snprintf(cache.who[i].tier, sizeof cache.who[i].tier, "%s", c->who[i].tier);
+        cache.who[i].skippable = c->who[i].skippable;
     }
     resolve();
     return write_out(&cache);

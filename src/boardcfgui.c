@@ -82,6 +82,7 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
     head(rows, n, "audit");
     count_row(rows, n, "file threshold", &c->audit_files, 0, 500, NULL);
     count_row(rows, n, "line threshold", &c->audit_lines, 0, 100000, NULL);
+    toggle_row(rows, n, "skippable", &c->who[BOARD_WHO_AUDIT].skippable);
 
     head(rows, n, "sweep");
     count_row(rows, n, "interval", &c->sweep_every, 0, 500, "cards");
