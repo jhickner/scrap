@@ -77,6 +77,7 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
     head(rows, n, "workers");
     count_row(rows, n, "concurrency", &c->workers, 1, 11, NULL);
     toggle_row(rows, n, "auto pull", &c->auto_pull);
+    toggle_row(rows, n, "auto pick", &c->auto_pick);
 
     head(rows, n, "audit");
     count_row(rows, n, "file threshold", &c->audit_files, 0, 500, NULL);

@@ -72,6 +72,7 @@ struct board_cfg {
 
     int workers;
     int auto_pull;
+    int auto_pick;
     int audit_files;
     int audit_lines;
     int sweep_every;

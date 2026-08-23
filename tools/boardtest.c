@@ -756,6 +756,34 @@ static void test_worktree_name_is_stable(void)
     }
 }
 
+static void test_auto_pick_roundtrip(void)
+{
+    expect(boardcfg()->auto_pick == 0, "auto pick is off by default");
+
+    struct board_cfg *c = boardcfg_copy();
+    if (!c) {
+        fail("cfg copy");
+        return;
+    }
+    c->auto_pick = 1;
+    expect(boardcfg_set(c), "save auto pick");
+    boardcfg_free(c);
+
+    boardcfg_reload();
+    expect(boardcfg()->auto_pick == 1, "auto pick survives a reload");
+
+    c = boardcfg_copy();
+    if (!c) {
+        fail("cfg copy after reload");
+        return;
+    }
+    c->auto_pick = 0;
+    boardcfg_set(c);
+    boardcfg_free(c);
+    boardcfg_reload();
+    expect(boardcfg()->auto_pick == 0, "auto pick turns back off");
+}
+
 static void test_revision_tracks_writes(void)
 {
     unsigned long before = board_revision();
@@ -803,6 +831,7 @@ int main(void)
     test_empty_and_missing();
     test_done_lists_newest_first();
     test_worktree_name_is_stable();
+    test_auto_pick_roundtrip();
     test_revision_tracks_writes();
 
     cleanup();
