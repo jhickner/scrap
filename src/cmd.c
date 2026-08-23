@@ -791,9 +791,9 @@ static const struct cmd COMMANDS[] = {
     {"/fs", "alias for /fh", NULL, CMD_LIVE, do_fork_h},
     {"/fv", "fork into a vertical tmux split", NULL, CMD_LIVE, do_fork_v},
     {"/fw", "fork into a tmux window", NULL, CMD_LIVE, do_fork_w},
-    {"/split", "a shell split here, in this directory", "[h|v|w]", 0, do_split},
-    {"/card", "put a thought on the board, unsorted", "<text>", CMD_LIVE, do_card},
-    {"/board", "the cards, by column", NULL, CMD_LIVE, do_board},
+    {"/split", "open a shell split in this directory", "[h|v|w]", 0, do_split},
+    {"/card", "add a card to the board, untriaged", "<text>", CMD_LIVE, do_card},
+    {"/board", "show the cards, by column", NULL, CMD_LIVE, do_board},
     {"/status", "reprint the status bar", NULL, CMD_LIVE, do_status},
     {"/session", "show this session's info and totals", NULL, CMD_LIVE, do_session},
     {"/rename", "name this session, or ask the model to name it again", "[name]",
@@ -802,7 +802,7 @@ static const struct cmd COMMANDS[] = {
     {"/restart", "reload the mux binary, keeping this conversation", NULL, 0,
      do_restart},
     {"/help", "show this help", NULL, CMD_LIVE, do_help},
-    {"/quit", "leave", NULL, CMD_QUITS, NULL},
+    {"/quit", "quit mux", NULL, CMD_QUITS, NULL},
     {"/exit", "alias for /quit", NULL, CMD_QUITS, NULL},
 };
 

@@ -790,7 +790,7 @@ int boardview_run(const char *cwd)
                 continue;
             }
             close_list();
-            note("the board is empty — /card <text> puts something on it");
+            note("the board is empty — /card <text> adds one");
             return -1;
         }
 
@@ -908,7 +908,7 @@ int boardview_run(const char *cwd)
                 boardsweep_reject(c);
             } else if (c && (c->col == BOARD_REVIEW || c->col == BOARD_DOING)) {
                 close_list();
-                char *why = ask_run("why is it going back?", NULL);
+                char *why = ask_run("why it is going back", NULL);
                 if (why) {
                     boardwork_reject(c, why);
                     free(why);
@@ -918,7 +918,7 @@ int boardview_run(const char *cwd)
         case KEY_FEEDBACK:
             if (c && boardwork_tab(c->id) >= 0) {
                 close_list();
-                char *say = ask_run("what should it do?", NULL);
+                char *say = ask_run("what it should do", NULL);
                 if (say) {
                     if (!boardwork_feedback(c, say))
                         note("the worker did not take it");

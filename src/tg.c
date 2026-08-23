@@ -417,7 +417,7 @@ static void menu_send(const char *title, int per_row)
     long id = tg_send_keyboard(tx, chat_id, title, 0, buttons, menu.count, per_row);
     if (id < 0) {
         menu.serial = 0;
-        send_note("could not put the menu up");
+        send_note("could not show the menu");
         return;
     }
     menu.serial = serial;
@@ -1577,7 +1577,7 @@ static const char *HELP =
     "/tabs        the conversations open here, to switch between\n"
     "             (/sessions is the same list)\n"
     "/open [dir]  another conversation, here or somewhere else\n"
-    "/close [n]   drop one\n"
+    "/close [n]   close one\n"
     "/resume      reopen a past conversation from this directory\n"
     "/agents      background agents: status, runtime, latest\n"
     "/artifacts   published files and their links\n"

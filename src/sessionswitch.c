@@ -279,14 +279,14 @@ static int tmux_do(const char *verb, const char *target)
 static void jump(const struct live_session *v)
 {
     if (!getenv("TMUX") || !v->pane[0]) {
-        ui_error("that one is not in a tmux pane");
+        ui_error("that session is not in a tmux pane");
         ui_put("\n");
         ui_flush();
         return;
     }
 
     if (!tmux_do("select-window", v->pane) || !tmux_do("select-pane", v->pane)) {
-        ui_error("tmux would not go there");
+        ui_error("tmux would not switch there");
         ui_put("\n");
         ui_flush();
     }
@@ -312,7 +312,7 @@ static void yank(const struct live_session *v)
     char screen[4400];
     int said = 0;
     if (!handoff_ask(v->pid, v->id, screen, sizeof screen, waiting, &said)) {
-        ui_error("that window would not let go of it");
+        ui_error("that window would not release it");
         ui_put("\n");
         ui_flush();
         return;
@@ -333,7 +333,7 @@ static void yank(const struct live_session *v)
     else
         sessionload_into(workspace_current());
     unlink(screen);
-    ui_bar(ui_style(UI_DIM), "yanked \xc2\xb7 %s", v->title[0] ? v->title : v->backend);
+    ui_bar(ui_style(UI_DIM), "brought here \xc2\xb7 %s", v->title[0] ? v->title : v->backend);
     ui_put("\n");
     ui_flush();
 }
@@ -397,7 +397,7 @@ static void ask_new(const struct row *r, const struct live_session *live)
         cwd = session_cwd(here);
     }
 
-    char *line = ask_run("a new session, with this to get on with", NULL);
+    char *line = ask_run("a new session, with this prompt", NULL);
     if (!line)
         return;
     if (!*line) {
@@ -649,7 +649,7 @@ static int switch_once(void)
     }
 
     if (chosen.kind == ROW_LIVE && chosen.at < 0) {
-        ui_note("that one is gone");
+        ui_note("that session is gone");
         ui_put("\n");
         ui_flush();
         free(live);

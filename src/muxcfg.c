@@ -374,7 +374,7 @@ static int edit_row(struct mux_spec *v, int n, int at)
     static const struct pick_item ACTIONS[] = {
         {"backend", "answer from another CLI"},
         {"model", "answer with another model"},
-        {"effort", "how hard it thinks"},
+        {"effort", "reasoning effort"},
         {"prompt", "standing instructions for this row"},
         {"duplicate", "another row on the same backend"},
         {"remove", "drop this row from the matrix"},
@@ -448,7 +448,7 @@ static void configs_menu(void)
         if (nsets < MUX_SETS) {
             items[count++] = (struct pick_item){"new config", "an empty matrix"};
             items[count++] = (struct pick_item){"describe one",
-                                                "say what you want in it"};
+                                                "say what should be in it"};
         }
         items[count++] = (struct pick_item){"back", NULL};
 
