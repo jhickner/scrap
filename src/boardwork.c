@@ -465,7 +465,7 @@ static char *first_turn(const struct board_card *c)
         : "";
 
     size_t need = strlen(head) + strlen(mine) + strlen(body) +
-                  strlen(c->title) + strlen(card) + 256;
+                  strlen(c->title) + strlen(card) + strlen(c->sent_back) + 256;
     char  *out = malloc(need);
     if (!out)
         return NULL;
@@ -475,7 +475,11 @@ static char *first_turn(const struct board_card *c)
         at += snprintf(out + at, need - (size_t)at, "%s%s", *head ? "\n\n" : "", mine);
     if (*card)
         at += snprintf(out + at, need - (size_t)at, "\n\n%s", card);
-    snprintf(out + at, need - (size_t)at, "\n\n# %s\n\n%s\n", c->title, body);
+    at += snprintf(out + at, need - (size_t)at, "\n\n# %s\n\n%s\n", c->title, body);
+    if (c->sent_back[0])
+        snprintf(out + at, need - (size_t)at,
+                 "\nAn earlier attempt was sent back. What was said about it:\n\n%s\n",
+                 c->sent_back);
     return out;
 }
 
@@ -580,6 +584,7 @@ int boardwork_start(const struct board_card *c, char *why, int size)
     edited.col = BOARD_DOING;
 
     edited.stuck[0] = '\0';
+    edited.sent_back[0] = '\0';
     snprintf(edited.worktree, sizeof edited.worktree, "%s", lands ? path : "");
     snprintf(edited.base, sizeof edited.base, "%s", base);
     snprintf(edited.backend, sizeof edited.backend, "%s", backend);
@@ -931,6 +936,25 @@ int boardwork_approve(const struct board_card *c, int audit)
                       "you", NULL);
 }
 
+int boardwork_send_back(const struct board_card *c, const char *why)
+{
+    if (!c || !why || !*why)
+        return 0;
+
+    struct board_card edited = *c;
+    snprintf(edited.sent_back, sizeof edited.sent_back, "%s", why);
+    edited.merge_into[0] = '\0';
+    edited.merge_from[0] = '\0';
+    edited.merge_to[0] = '\0';
+    board_update(&edited);
+
+    boardwork_let_go(c->id);
+    if (edited.col == BOARD_DONE && edited.worktree[0])
+        boardwork_release(&edited);
+
+    return boardwork_reject(c, why);
+}
+
 int boardwork_reject(const struct board_card *c, const char *why)
 {
     if (!c)
@@ -938,16 +962,6 @@ int boardwork_reject(const struct board_card *c, const char *why)
     boardwork_let_go(c->id);
     return board_move(c->id, BOARD_BACKLOG, "you",
                       why && *why ? why : "rejected");
-}
-
-int boardwork_reopen(const struct board_card *c, const char *why)
-{
-    if (!c || c->col != BOARD_DONE)
-        return 0;
-    if (c->worktree[0])
-        boardwork_release(c);
-    return board_move(c->id, BOARD_BACKLOG, "you",
-                      why && *why ? why : "sent back as incomplete");
 }
 
 int boardwork_feedback(const struct board_card *c, const char *text)

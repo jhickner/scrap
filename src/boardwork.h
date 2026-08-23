@@ -54,9 +54,9 @@ int boardwork_pump(void);
 
 int boardwork_approve(const struct board_card *c, int audit);
 
-int boardwork_reject(const struct board_card *c, const char *why);
+int boardwork_send_back(const struct board_card *c, const char *why);
 
-int boardwork_reopen(const struct board_card *c, const char *why);
+int boardwork_reject(const struct board_card *c, const char *why);
 
 int boardwork_feedback(const struct board_card *c, const char *text);
 

@@ -55,7 +55,7 @@
 #define BOARD_HINT \
     "enter edit  ·  s start  ·  g worker  ·  "                                \
     "a approve  ·  A approve all  ·  i audit\n"                               \
-    "f feedback  ·  r reject  ·  x cancel start  ·  u undo\n"                 \
+    "f feedback  ·  r send back  ·  x cancel start  ·  u undo\n"              \
     "n new  ·  t triage  ·  l log  ·  d delete  ·  c config  ·  "               \
     "b backend  ·  * all repos  ·  / search"
 
@@ -1179,11 +1179,15 @@ int boardview_run(const char *cwd)
             if (c && boardsweep_is(c)) {
                 boardwork_let_go(c->id);
                 boardsweep_reject(c);
-            } else if (c && (c->col == BOARD_REVIEW || c->col == BOARD_DOING)) {
+            } else if (c && (c->col == BOARD_REVIEW || c->col == BOARD_DOING ||
+                             c->col == BOARD_DONE)) {
                 close_list();
-                char *why = ask_run("reason for sending it back", NULL);
+                char *why = ask_run(c->col == BOARD_DONE
+                                        ? "why it is not fixed"
+                                        : "reason for sending it back",
+                                    NULL);
                 if (why) {
-                    boardwork_reject(c, why);
+                    boardwork_send_back(c, why);
                     free(why);
                 }
             }
