@@ -191,6 +191,35 @@ static enum board_col next_after_audit(const char *id)
     return col;
 }
 
+// Asked for a sentence, a model will as readily give an object with the
+// sentence in it. Either is the finding; dropping the ones that came back in
+// the wrong shape sent the card back with nothing on it saying why.
+static int finding_text(cJSON *f, char *out, size_t size)
+{
+    const char *text = cJSON_GetStringValue(f);
+    if (text && *text) {
+        snprintf(out, size, "%s", text);
+        return 1;
+    }
+    if (!cJSON_IsObject(f))
+        return 0;
+
+    static const char *const SAYS[] = {"finding", "text", "message", "detail",
+                                       "description", "issue"};
+    for (size_t i = 0; i < sizeof SAYS / sizeof *SAYS; i++) {
+        text = cJSON_GetStringValue(cJSON_GetObjectItem(f, SAYS[i]));
+        if (!text || !*text)
+            continue;
+        const char *file = cJSON_GetStringValue(cJSON_GetObjectItem(f, "file"));
+        if (file && *file && !strstr(text, file))
+            snprintf(out, size, "%s: %s", file, text);
+        else
+            snprintf(out, size, "%s", text);
+        return 1;
+    }
+    return 0;
+}
+
 int boardaudit_take(const char *key, const char *reply)
 {
     {
@@ -218,10 +247,10 @@ int boardaudit_take(const char *key, const char *reply)
     int nfound = 0;
     const cJSON *f = NULL;
     cJSON_ArrayForEach(f, found) {
-        const char *text = cJSON_GetStringValue((cJSON *)f);
-        if (!text || !*text)
+        char said[1024];
+        if (!finding_text((cJSON *)f, said, sizeof said))
             continue;
-        board_note(id, "audit", text);
+        board_note(id, "audit", said);
         nfound++;
     }
 

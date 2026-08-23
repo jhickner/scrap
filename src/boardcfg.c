@@ -186,6 +186,7 @@ static const char AUDIT_PROMPT[] =
     "Answer with JSON only, no prose and no code fence:\n"
     "\n"
     "  {\"clean\":true,\"findings\":[]}\n"
+    "  {\"clean\":false,\"findings\":[\"src/a.c: frees buf twice on the error path\"]}\n"
     "\n"
     "Look for: a mechanism duplicated that should be one, structure that "
     "fights the code around it, memory handled wrongly, and anything with a "

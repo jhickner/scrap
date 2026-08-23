@@ -382,6 +382,25 @@ static void test_audit_verdict(void)
     expect(c && c->col == BOARD_MERGING, "clean sends it on to land");
     board_free(v, n);
 
+    // A finding that came back as an object rather than a sentence is still a
+    // finding, and the card has to be told what it was.
+    expect(board_move(id, BOARD_AUDIT, "you", NULL), "into audit once more");
+    expect(boardaudit_take(key, "{\"clean\":false,\"findings\":["
+                                "{\"file\":\"src/b.c\",\"finding\":\"restates the code\"}]}"),
+           "an object verdict is taken");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    said = 0;
+    if (c)
+        for (int i = 0; i < c->log_n; i++)
+            if (!strcmp(c->log[i].who, "audit") &&
+                strstr(c->log[i].text, "src/b.c") &&
+                strstr(c->log[i].text, "restates the code"))
+                said = 1;
+    expect(said, "the finding reaches the card whatever shape it came in");
+    expect(c && c->col == BOARD_DOING, "and still sends it back");
+    board_free(v, n);
+
     // An audit that says nothing is not one that failed the card.
     expect(board_move(id, BOARD_AUDIT, "you", NULL), "into audit again");
     expect(boardaudit_take(key, "the model wandered off"), "unparsable verdict");
