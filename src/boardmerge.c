@@ -64,31 +64,47 @@ static char *script_for(const struct board_card *c, const char *root,
 
     const char *verify = cfg->verify[0] ? cfg->verify : NULL;
 
-    size_t need = 4096 + (verify ? strlen(verify) : 0);
-    char  *out = malloc(need);
-    if (!out)
-        return NULL;
-
-    int at = snprintf(out, need,
+    static const char rebase_fmt[] =
         "echo '== rebase onto %s'\n"
         "git fetch . %s:%s >/dev/null 2>&1 || true\n"
         "git rebase %s || { git rebase --abort >/dev/null 2>&1; "
-        "echo 'rebase failed'; exit 1; }\n",
-        base, base, base, base);
-
-    if (verify)
-        at += snprintf(out + at, need - (size_t)at,
-            "echo '== check'\n"
-            "%s || { echo 'check failed'; exit 1; }\n", verify);
-
-    at += snprintf(out + at, need - (size_t)at,
+        "echo 'rebase failed'; exit 1; }\n";
+    static const char check_fmt[] =
+        "echo '== check'\n"
+        "%s || { echo 'check failed'; exit 1; }\n";
+    static const char merge_fmt[] =
         "echo '== merge'\n"
         "git -C %s merge --ff-only %s || { echo 'merge failed'; exit 1; }\n"
         "echo '== tidy'\n"
         "git -C %s worktree remove --force %s >/dev/null 2>&1\n"
         "git -C %s branch -d %s >/dev/null 2>&1\n"
-        "echo merged\n",
-        qroot, branch, qroot, qtree, qroot, branch);
+        "echo merged\n";
+
+    size_t need = strlen(rebase_fmt) + strlen(merge_fmt) +
+                  4 * strlen(base) + 2 * strlen(branch) +
+                  3 * strlen(qroot) + strlen(qtree) + 1;
+    if (verify)
+        need += strlen(check_fmt) + strlen(verify);
+
+    char *out = malloc(need);
+    if (!out)
+        return NULL;
+
+    int at = snprintf(out, need, rebase_fmt, base, base, base, base);
+    if (at < 0 || (size_t)at >= need)
+        abort();
+
+    if (verify) {
+        int n = snprintf(out + at, need - (size_t)at, check_fmt, verify);
+        if (n < 0 || (size_t)n >= need - (size_t)at)
+            abort();
+        at += n;
+    }
+
+    int n = snprintf(out + at, need - (size_t)at, merge_fmt,
+                     qroot, branch, qroot, qtree, qroot, branch);
+    if (n < 0 || (size_t)n >= need - (size_t)at)
+        abort();
 
     return out;
 }
