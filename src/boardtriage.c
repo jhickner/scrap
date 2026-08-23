@@ -16,6 +16,12 @@
 #define TRIAGE_SLOTS 4
 #define REPLY_MAX    (1u << 18)
 
+// A card short enough to read as a row is its own best title. Rewriting one
+// buys a few columns and stakes the meaning on a paraphrase -- and a title
+// that inverts a card is worse than a title that runs off the edge, because
+// the truncated one is still the words that were written.
+#define TITLE_KEEP 100
+
 struct slot {
     pid_t  pid;
     char   id[BOARD_ID_MAX];
@@ -207,8 +213,8 @@ static int apply(const char *id, const cJSON *o)
     char             *spec_kept = NULL;
 
     // A title is only how the card reads in a list, so a better one is worth
-    // having either way.
-    if (*title)
+    // having either way -- but only where there is something to gain by it.
+    if (*title && c->body && strlen(c->body) > TITLE_KEEP)
         snprintf(edited.title, sizeof edited.title, "%s", title);
 
     // The rest is what triage worked out, and it only worked anything out if

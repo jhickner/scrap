@@ -337,14 +337,31 @@ static void align(struct vlist *l)
         if (is_text(&l->v[i]) || !l->v[i].detail)
             continue;
         size_t cells = ui_cells(l->v[i].label);
-        if (cells >= width)
+        if (cells == width)
             continue;
-        char *padded = malloc(strlen(l->v[i].label) + (width - cells) + 1);
+
+        // Over the width, a title is cut rather than left to run into what
+        // sits beside it: a card keeps the words it was written with, and the
+        // row is only how they read in a list.
+        if (cells > width) {
+            size_t fit = ui_fit_bytes(l->v[i].label, width - 1);
+            char  *cut = malloc(fit + sizeof "…");
+            if (!cut)
+                continue;
+            memcpy(cut, l->v[i].label, fit);
+            strcpy(cut + fit, "…");
+            free(l->v[i].label);
+            l->v[i].label = cut;
+            continue;
+        }
+
+        size_t len = strlen(l->v[i].label);
+        char  *padded = malloc(len + (width - cells) + 1);
         if (!padded)
             continue;
-        strcpy(padded, l->v[i].label);
-        memset(padded + strlen(l->v[i].label), ' ', width - cells);
-        padded[strlen(l->v[i].label) + (width - cells)] = '\0';
+        memcpy(padded, l->v[i].label, len);
+        memset(padded + len, ' ', width - cells);
+        padded[len + (width - cells)] = '\0';
         free(l->v[i].label);
         l->v[i].label = padded;
     }
