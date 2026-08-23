@@ -212,6 +212,7 @@ static int card_from_json(const cJSON *o, struct board_card *c)
     set_str(c->title, sizeof c->title, json_str(o, "title"));
     set_str(c->cwd, sizeof c->cwd, json_str(o, "cwd"));
     set_str(c->backend, sizeof c->backend, json_str(o, "backend"));
+    set_str(c->backend_pin, sizeof c->backend_pin, json_str(o, "backend_pin"));
     set_str(c->model, sizeof c->model, json_str(o, "model"));
     set_str(c->effort, sizeof c->effort, json_str(o, "effort"));
     set_str(c->session, sizeof c->session, json_str(o, "session"));
@@ -262,6 +263,7 @@ static cJSON *card_to_json(const struct board_card *c)
     cJSON_AddStringToObject(o, "cwd", c->cwd);
     cJSON_AddNumberToObject(o, "priority", c->priority);
     cJSON_AddStringToObject(o, "backend", c->backend);
+    cJSON_AddStringToObject(o, "backend_pin", c->backend_pin);
     cJSON_AddStringToObject(o, "model", c->model);
     cJSON_AddStringToObject(o, "effort", c->effort);
     cJSON_AddStringToObject(o, "session", c->session);

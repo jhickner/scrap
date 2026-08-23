@@ -101,6 +101,9 @@ int boardcfg_set(const struct board_cfg *c);
 
 const struct board_profile *boardcfg_for(enum board_who who);
 
+const struct board_profile *boardcfg_for_backend(enum board_who who,
+                                                 const char *backend);
+
 const char *boardcfg_serving(void);
 
 int boardcfg_set_serving(const char *backend);

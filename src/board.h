@@ -40,6 +40,7 @@ struct board_card {
     int            priority;
 
     char backend[32];
+    char backend_pin[32];
     char model[128];
     char effort[32];
 

@@ -208,9 +208,26 @@ static void card_backend(const char *id, const char *backend)
     board_free(cards, n);
 }
 
+static void card_pin(const char *id, char *out, size_t size)
+{
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    struct board_card *c = board_find(cards, n, id);
+    snprintf(out, size, "%s", c ? c->backend_pin : "");
+    board_free(cards, n);
+}
+
+static const struct board_profile *worker_profile(const struct worker *w)
+{
+    char pin[32] = "";
+    if (w->role == BOARD_ROLE_WORKER)
+        card_pin(w->id, pin, sizeof pin);
+    return boardcfg_for_backend(who_of(w->role), pin);
+}
+
 static int handover(struct worker *w)
 {
-    const struct board_profile *p = boardcfg_for(who_of(w->role));
+    const struct board_profile *p = worker_profile(w);
 
     w->handover = 0;
     if (!session_switch_backend(w->session, p->backend))
@@ -231,7 +248,7 @@ static int handover(struct worker *w)
 
 static int follows(const struct worker *w)
 {
-    const struct board_profile *p = boardcfg_for(who_of(w->role));
+    const struct board_profile *p = worker_profile(w);
     return strcmp(session_backend(w->session), p->backend) != 0;
 }
 
@@ -464,6 +481,8 @@ static char *first_turn(const struct board_card *c)
 
 static const char *wanted_backend(const struct board_card *c)
 {
+    if (c->backend_pin[0])
+        return c->backend_pin;
     const struct board_profile *p = boardcfg_for(BOARD_WHO_WORKER);
     const char                 *b = c->backend[0] ? c->backend : p->backend;
     return b[0] ? b : "claude";
@@ -529,8 +548,8 @@ int boardwork_start(const struct board_card *c, char *why, int size)
         snprintf(path, sizeof path, "%s", c->cwd);
     }
 
-    const struct board_profile *p = boardcfg_for(BOARD_WHO_WORKER);
     const char *wanted = wanted_backend(c);
+    const struct board_profile *p = boardcfg_for_backend(BOARD_WHO_WORKER, wanted);
     const char *model = c->model[0] ? c->model : p->model;
     const char *effort = c->effort[0] ? c->effort : p->effort;
 

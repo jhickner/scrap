@@ -676,6 +676,31 @@ const struct board_profile *boardcfg_for(enum board_who who)
     return &serving_who[who];
 }
 
+const struct board_profile *boardcfg_for_backend(enum board_who who,
+                                                 const char *backend)
+{
+    load();
+    if (who < 0 || who >= BOARD_WHO)
+        who = BOARD_WHO_TRIAGE;
+
+    const struct board_backend *b = backend && *backend
+                                        ? boardcfg_backend(&cache, backend)
+                                        : NULL;
+    if (!b || !strcmp(b->name, boardcfg_serving()))
+        return &serving_who[who];
+
+    enum board_tier tier = boardcfg_tier_from_name(cache.who[who].tier);
+    if (tier >= BOARD_TIERS)
+        tier = BOARD_TIER_MED;
+
+    static struct board_profile out;
+    out = cache.who[who];
+    snprintf(out.backend, sizeof out.backend, "%s", b->name);
+    snprintf(out.model, sizeof out.model, "%s", b->level[tier].model);
+    snprintf(out.effort, sizeof out.effort, "%s", b->level[tier].effort);
+    return &out;
+}
+
 const char *boardcfg_serving(void)
 {
     load();
