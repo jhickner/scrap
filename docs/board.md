@@ -57,8 +57,10 @@ Done cards are archived past an age, so the store stays a working set.
 
 A one-shot silent fork — the `sidechannel.c` shape, `fork` plus `mux -C dir
 "prompt"`, read stdout — so the board stays responsive and nothing new has to
-be threaded. It returns JSON: `kind`, `title`, `spec`, `cwd`, `priority`,
-`confidence`, and `question`.
+be threaded. It returns JSON: `kind`, `title`, `spec`, `cwd`, `confidence`,
+and `question`. Priority is not among them: it follows from the kind, out of
+the table in the config screen, so the classifier is not asked to invent a
+number on top of everything else. A card can still be given one by hand.
 
 Kinds fall in two classes. `todo`, `data` and `reference` are wiki kinds: the
 same turn hands them to the `w` skill and the card lands in `done` without ever

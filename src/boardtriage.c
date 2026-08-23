@@ -67,17 +67,15 @@ static double num_of(const cJSON *o, const char *key, double fallback)
     return (j && cJSON_IsNumber(j)) ? j->valuedouble : fallback;
 }
 
-// Notes to file want no worker; work does.
 static int is_wiki_kind(const char *kind)
 {
-    return !strcmp(kind, "todo") || !strcmp(kind, "data") ||
-           !strcmp(kind, "reference");
+    enum board_kind k = board_kind_from_name(kind);
+    return k != BOARD_KIND_NONE && !board_kind_is_work(k);
 }
 
 static int is_work_kind(const char *kind)
 {
-    return !strcmp(kind, "feature") || !strcmp(kind, "bug") ||
-           !strcmp(kind, "chore");
+    return board_kind_is_work(board_kind_from_name(kind));
 }
 
 // Counted from the last thing a person said, not from the start of the card.
@@ -137,7 +135,7 @@ static int apply(const char *id, const cJSON *o)
         }
         if (*cwd)
             snprintf(edited.cwd, sizeof edited.cwd, "%s", cwd);
-        edited.priority = (int)num_of(o, "priority", 0);
+        edited.priority = boardcfg_priority(kind);
     }
 
     char said[1024];

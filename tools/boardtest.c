@@ -6,6 +6,7 @@
 #include "board.h"
 #include "text.h"
 #include "boardaudit.h"
+#include "boardcfg.h"
 #include "boardtriage.h"
 #include "replyjson.h"
 #include "sessionfork.h"
@@ -425,6 +426,29 @@ static void test_reply_json(void)
     expect(!replyjson_parse(NULL), "nothing is nothing");
 }
 
+// Triage names a kind; what the card is worth follows from it, so the
+// classifier is not asked to invent a number as well.
+static void test_kind_priority(void)
+{
+    expect(board_kind_from_name("bug") == BOARD_KIND_BUG, "a kind by its name");
+    expect(board_kind_from_name("") == BOARD_KIND_NONE, "no name, no kind");
+    expect(board_kind_from_name("nonsense") == BOARD_KIND_NONE,
+           "an unknown name is no kind");
+    expect(!strcmp(board_kind_name(BOARD_KIND_CHORE), "chore"), "a name by its kind");
+    expect(!strcmp(board_kind_name(BOARD_KINDS), ""), "out of range is no kind");
+
+    expect(board_kind_is_work(BOARD_KIND_BUG), "a bug wants a worker");
+    expect(!board_kind_is_work(BOARD_KIND_REFERENCE), "a reference does not");
+    expect(!board_kind_is_work(BOARD_KIND_NONE), "an unsorted card does not");
+
+    expect(boardcfg_priority("bug") > boardcfg_priority("feature"),
+           "a bug comes before a feature");
+    expect(boardcfg_priority("feature") > boardcfg_priority("chore"),
+           "a feature comes before a chore");
+    expect(boardcfg_priority("nonsense") == boardcfg_priority(""),
+           "an unknown kind is worth what an unsorted one is");
+}
+
 int main(void)
 {
     if (!mkdtemp(home)) {
@@ -443,6 +467,7 @@ int main(void)
     test_attempts_reset_when_answered();
     test_audit_verdict();
     test_reply_json();
+    test_kind_priority();
     test_archive();
     test_empty_and_missing();
 

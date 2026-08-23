@@ -33,6 +33,32 @@ enum board_col board_col_from_name(const char *name)
     return BOARD_NEW;
 }
 
+static const char *const KIND_NAMES[BOARD_KINDS] = {
+    "", "todo", "data", "reference", "feature", "bug", "chore",
+};
+
+const char *board_kind_name(enum board_kind kind)
+{
+    if (kind < 0 || kind >= BOARD_KINDS)
+        return KIND_NAMES[BOARD_KIND_NONE];
+    return KIND_NAMES[kind];
+}
+
+enum board_kind board_kind_from_name(const char *name)
+{
+    if (name && *name)
+        for (int i = 1; i < BOARD_KINDS; i++)
+            if (!strcmp(name, KIND_NAMES[i]))
+                return (enum board_kind)i;
+    return BOARD_KIND_NONE;
+}
+
+int board_kind_is_work(enum board_kind kind)
+{
+    return kind == BOARD_KIND_FEATURE || kind == BOARD_KIND_BUG ||
+           kind == BOARD_KIND_CHORE;
+}
+
 const char *board_path(void)
 {
     static char path[4200];

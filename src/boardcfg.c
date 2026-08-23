@@ -30,7 +30,7 @@ const char *boardcfg_who_name(enum board_who who)
 static const char TRIAGE_PROMPT[] =
     "You are sorting one card on a work board. Read it and answer with JSON only, no prose and no code fence.\n"
     "\n"
-    "  {\"kind\":\"...\",\"title\":\"...\",\"spec\":\"...\",\"cwd\":\"...\",\"priority\":0,\"confidence\":0.0,\"question\":\"\"}\n"
+    "  {\"kind\":\"...\",\"title\":\"...\",\"spec\":\"...\",\"cwd\":\"...\",\"confidence\":0.0,\"question\":\"\"}\n"
     "\n"
     "kind is one of: todo, data, reference, feature, bug, chore.\n"
     "  todo       something the person means to do, off the computer or on it\n"
@@ -44,7 +44,6 @@ static const char TRIAGE_PROMPT[] =
     "spec is what the card asks for, in a few sentences. Do not invent\n"
     "  requirements the card does not imply.\n"
     "cwd is the absolute path of the repo it belongs to.\n"
-    "priority is 0 to 3, 0 being ordinary.\n"
     "confidence is 0.0 to 1.0.\n"
     "question is the one thing you would have to ask, or \"\".\n"
     "\n"
@@ -168,6 +167,11 @@ static void defaults(struct board_cfg *c)
     snprintf(c->delegation, sizeof c->delegation, "claude,codex,grok");
     c->verify[0] = '\0';
 
+    // A bug is ahead of a feature, a feature ahead of a chore, and a note to
+    // file is not queued against them at all.
+    c->priority[BOARD_KIND_BUG] = 2;
+    c->priority[BOARD_KIND_FEATURE] = 1;
+
     for (int i = 0; i < BOARD_WHO; i++)
         snprintf(c->who[i].backend, sizeof c->who[i].backend, "claude");
 
@@ -218,6 +222,11 @@ static void overlay(struct board_cfg *c, const cJSON *o)
     set_str(c->delegation, sizeof c->delegation, o, "delegation");
     set_str(c->verify, sizeof c->verify, o, "verify");
 
+    const cJSON *pri = cJSON_GetObjectItem((cJSON *)o, "priority");
+    if (pri)
+        for (int i = 1; i < BOARD_KINDS; i++)
+            set_int(&c->priority[i], pri, board_kind_name((enum board_kind)i));
+
     const cJSON *who = cJSON_GetObjectItem((cJSON *)o, "who");
     if (!who)
         return;
@@ -264,6 +273,11 @@ const struct board_cfg *boardcfg(void)
     return &cache;
 }
 
+int boardcfg_priority(const char *kind)
+{
+    return boardcfg()->priority[board_kind_from_name(kind)];
+}
+
 const struct board_profile *boardcfg_for(enum board_who who)
 {
     load();
@@ -306,6 +320,11 @@ static int write_out(const struct board_cfg *c)
     cJSON_AddNumberToObject(o, "audit_lines", c->audit_lines);
     cJSON_AddNumberToObject(o, "sweep_every", c->sweep_every);
     cJSON_AddNumberToObject(o, "archive_after", c->archive_after);
+
+    cJSON *pri = cJSON_AddObjectToObject(o, "priority");
+    for (int i = 1; pri && i < BOARD_KINDS; i++)
+        cJSON_AddNumberToObject(pri, board_kind_name((enum board_kind)i),
+                                c->priority[i]);
     cJSON_AddStringToObject(o, "delegation", c->delegation);
     cJSON_AddStringToObject(o, "verify", c->verify);
 
@@ -368,6 +387,7 @@ int boardcfg_set(const struct board_cfg *c)
     cache.audit_lines = c->audit_lines;
     cache.sweep_every = c->sweep_every;
     cache.archive_after = c->archive_after;
+    memcpy(cache.priority, c->priority, sizeof cache.priority);
     snprintf(cache.delegation, sizeof cache.delegation, "%s", c->delegation);
     snprintf(cache.verify, sizeof cache.verify, "%s", c->verify);
     for (int i = 0; i < BOARD_WHO; i++) {

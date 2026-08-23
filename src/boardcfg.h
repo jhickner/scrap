@@ -2,6 +2,8 @@
 #ifndef BOARDCFG_H
 #define BOARDCFG_H
 
+#include "board.h"
+
 // What the board runs things with, kept beside the cards in
 // ~/.config/mux/board.json and edited from the board itself rather than from
 // the settings list: it is the board's own machinery, not a preference.
@@ -43,6 +45,10 @@ struct board_cfg {
     // fails. Empty means nothing is checked.
     char verify[256];
 
+    // What a card is worth by what it turned out to be, so triage does not have
+    // to invent a number. The card's own priority can still be set by hand.
+    int priority[BOARD_KINDS];
+
     struct board_profile who[BOARD_WHO];
 };
 
@@ -59,5 +65,8 @@ void              boardcfg_free(struct board_cfg *c);
 int boardcfg_set(const struct board_cfg *c);
 
 const struct board_profile *boardcfg_for(enum board_who who);
+
+// What a card of this kind starts out worth.
+int boardcfg_priority(const char *kind);
 
 #endif

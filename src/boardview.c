@@ -479,12 +479,6 @@ static int do_delete(const struct board_card *c)
 
 /* ---- the card, as a form --------------------------------------------- */
 
-// What triage may call a card. Empty leads, because a card that has not been
-// sorted yet has no kind and saying so is not the same as guessing one.
-static const char *const KINDS[] = {
-    "", "todo", "data", "reference", "feature", "bug", "chore",
-};
-
 static const char *const PRIORITIES[] = {"0", "1", "2", "3"};
 
 #define NOTES_MAX 48
@@ -557,6 +551,10 @@ static void card_form(const struct board_card *c)
     for (int i = 0; i < BOARD_COLS; i++)
         cols[i] = board_col_name((enum board_col)i);
 
+    const char *kinds[BOARD_KINDS];
+    for (int i = 0; i < BOARD_KINDS; i++)
+        kinds[i] = board_kind_name((enum board_kind)i);
+
     char spec[1024];
     char kind[16];
     char column[16];
@@ -576,7 +574,7 @@ static void card_form(const struct board_card *c)
         fields[fields_n++] = (struct form_field){"spec", FORM_TEXT, spec,
                                                  sizeof spec, NULL, 0};
     fields[fields_n++] = (struct form_field){"kind", FORM_CHOICE, kind,
-                                             sizeof kind, KINDS, COUNT(KINDS)};
+                                             sizeof kind, kinds, BOARD_KINDS};
     fields[fields_n++] = (struct form_field){"column", FORM_CHOICE, column,
                                              sizeof column, cols, BOARD_COLS};
     fields[fields_n++] = (struct form_field){"repo", FORM_TEXT, where,

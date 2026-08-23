@@ -35,7 +35,7 @@ struct row {
     enum board_who who; /* ROW_PROFILE, ROW_PROMPT */
 };
 
-#define ROWS_MAX 24
+#define ROWS_MAX 48
 
 static void head(struct row *rows, int *n, const char *label)
 {
@@ -71,6 +71,11 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
 
     head(rows, n, "sweep");
     count_row(rows, n, "interval", &c->sweep_every, 0, 500, "cards");
+
+    head(rows, n, "priority");
+    for (int i = 1; i < BOARD_KINDS; i++)
+        count_row(rows, n, board_kind_name((enum board_kind)i),
+                  &c->priority[i], 0, 3, NULL);
 
     head(rows, n, "archive");
     count_row(rows, n, "after", &c->archive_after, 0, 3650, "days");

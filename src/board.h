@@ -28,6 +28,25 @@ enum board_col {
 const char    *board_col_name(enum board_col col);
 enum board_col board_col_from_name(const char *name);
 
+// What triage may call a card. NONE leads, because a card that has not been
+// sorted yet has no kind and saying so is not the same as guessing one.
+enum board_kind {
+    BOARD_KIND_NONE,
+    BOARD_KIND_TODO,
+    BOARD_KIND_DATA,
+    BOARD_KIND_REFERENCE,
+    BOARD_KIND_FEATURE,
+    BOARD_KIND_BUG,
+    BOARD_KIND_CHORE,
+    BOARD_KINDS,
+};
+
+const char     *board_kind_name(enum board_kind kind);
+enum board_kind board_kind_from_name(const char *name);
+
+// Notes to file want no worker; work does.
+int board_kind_is_work(enum board_kind kind);
+
 #define BOARD_ID_MAX    16
 #define BOARD_TITLE_MAX 200
 #define BOARD_WHO_MAX   16
