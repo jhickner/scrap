@@ -9,6 +9,8 @@
 #include "gitcmd.h"
 #include "quota.h"
 #include "boardcfg.h"
+#include "boardaudit.h"
+#include "boardflow.h"
 #include "session.h"
 #include "text.h"
 #include "workspace.h"
@@ -170,20 +172,38 @@ static void write_card_file(const char *path, const struct board_card *c)
     fclose(f);
 }
 
+// What the worker is told: the standing instructions for work that lands, then
+// whatever the kind itself asks for, then the card.
+//
+// A kind that does not land is not given the standing instructions at all --
+// they are about worktrees, branches and commits, and a note being filed has
+// none of those.
 static char *first_turn(const struct board_card *c)
 {
     const struct board_profile *p = boardcfg_for(BOARD_WHO_WORKER);
-    const char                 *head = p->prompt ? p->prompt : "";
-    const char                 *body = c->body && *c->body ? c->body : c->title;
+    const struct board_kind    *k = boardcfg_kind(c->kind);
+    int                         lands = boardcfg_kind_takes(c->kind, BOARD_STEP_WORKTREE);
 
-    size_t need = strlen(head) + strlen(body) + strlen(c->title) + 256;
+    const char *head = lands && p->prompt ? p->prompt : "";
+    const char *mine = k && k->prompt ? k->prompt : "";
+    const char *body = c->body && *c->body ? c->body : c->title;
+    const char *card = lands
+        ? "The card is also written to CARD.md here, which is the copy to go "
+          "back to rather than this message."
+        : "";
+
+    size_t need = strlen(head) + strlen(mine) + strlen(body) +
+                  strlen(c->title) + strlen(card) + 256;
     char  *out = malloc(need);
     if (!out)
         return NULL;
-    snprintf(out, need,
-             "%s\n\nThe card is also written to CARD.md here, which is the copy "
-             "to go back to rather than this message.\n\n# %s\n\n%s\n",
-             head, c->title, body);
+
+    int at = snprintf(out, need, "%s", head);
+    if (*mine)
+        at += snprintf(out + at, need - (size_t)at, "%s%s", *head ? "\n\n" : "", mine);
+    if (*card)
+        at += snprintf(out + at, need - (size_t)at, "\n\n%s", card);
+    snprintf(out + at, need - (size_t)at, "\n\n# %s\n\n%s\n", c->title, body);
     return out;
 }
 
@@ -288,24 +308,31 @@ int boardwork_start(const struct board_card *c, char *why, int size)
 
     const struct board_cfg *cfg = boardcfg();
 
-    char root[4096];
-    if (!gitcmd_root(c->cwd, root, sizeof root)) {
-        snprintf(why, (size_t)size, "%s is not in a git repo", c->cwd);
-        return 0;
-    }
-
+    // A kind that lands gets a worktree and a branch to land from. One that
+    // does not works where the card points, and there is nothing to merge.
+    int  lands = boardcfg_kind_takes(c->kind, BOARD_STEP_WORKTREE);
     char path[4200];
-    worktree_of(root, c->id, path, sizeof path);
-    if (!worktree_make(root, c->id, path, why, size))
-        return 0;
-
-    // Asked of the worktree rather than of the repo: what the work is actually
-    // sitting on is the thing the diff and the rebase are against.
     char base[64] = {0};
-    gitcmd_line(path, "rev-parse --short HEAD", base, sizeof base);
 
-    ignore_card_file(path);
-    write_card_file(path, c);
+    if (lands) {
+        char root[4096];
+        if (!gitcmd_root(c->cwd, root, sizeof root)) {
+            snprintf(why, (size_t)size, "%s is not in a git repo", c->cwd);
+            return 0;
+        }
+        worktree_of(root, c->id, path, sizeof path);
+        if (!worktree_make(root, c->id, path, why, size))
+            return 0;
+
+        // Asked of the worktree rather than of the repo: what the work is
+        // actually sitting on is the thing the diff and the rebase are against.
+        gitcmd_line(path, "rev-parse --short HEAD", base, sizeof base);
+
+        ignore_card_file(path);
+        write_card_file(path, c);
+    } else {
+        snprintf(path, sizeof path, "%s", c->cwd);
+    }
 
     const struct board_profile *p = boardcfg_for(BOARD_WHO_WORKER);
     const char *wanted = wanted_backend(c);
@@ -351,7 +378,7 @@ int boardwork_start(const struct board_card *c, char *why, int size)
 
     struct board_card edited = *c;
     edited.col = BOARD_DOING;
-    snprintf(edited.worktree, sizeof edited.worktree, "%s", path);
+    snprintf(edited.worktree, sizeof edited.worktree, "%s", lands ? path : "");
     snprintf(edited.base, sizeof edited.base, "%s", base);
     snprintf(edited.backend, sizeof edited.backend, "%s", backend);
     board_update(&edited);
@@ -398,8 +425,11 @@ void boardwork_finished(struct session *s)
 
     // An errored turn is not a finished one: the card stays where it is,
     // marked, because what is needed to fix it is the tab and not a field.
+    // Whatever the kind asks for next -- a person to look at it, or nothing at
+    // all, which is what filing a note wants.
     if (!failed || !*failed)
-        edited.col = BOARD_REVIEW;
+        edited.col = boardflow_from(c->kind, BOARD_STEP_REVIEW,
+                                    boardaudit_wanted(c));
     board_update(&edited);
     board_free(cards, n);
 
@@ -461,7 +491,8 @@ int boardwork_approve(const struct board_card *c, int audit)
     // no worktree has nothing to land.
     if (!c->worktree[0])
         return board_move(c->id, BOARD_DONE, "you", NULL);
-    return board_move(c->id, audit ? BOARD_AUDIT : BOARD_MERGING, "you", NULL);
+    return board_move(c->id, boardflow_from(c->kind, BOARD_STEP_AUDIT, audit),
+                      "you", NULL);
 }
 
 int boardwork_reject(const struct board_card *c, const char *why)

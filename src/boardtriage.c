@@ -42,13 +42,23 @@ static char *build_prompt(const struct board_card *c)
     const char                 *head = p->prompt ? p->prompt : "";
     const char                 *body = c->body && *c->body ? c->body : c->title;
 
-    size_t need = strlen(head) + strlen(body) + strlen(c->cwd) + 128;
+    // The kinds are configuration, so the prompt says where they go rather
+    // than listing them. A prompt edited to drop the mark still gets them.
+    char kinds[4096];
+    boardcfg_kinds_block(kinds, sizeof kinds);
+
+    const char *mark = strstr(head, "{kinds}");
+    size_t      lead = mark ? (size_t)(mark - head) : strlen(head);
+    const char *rest = mark ? mark + strlen("{kinds}") : "";
+
+    size_t need = strlen(head) + strlen(kinds) + strlen(body) + strlen(c->cwd) + 128;
     char  *out = malloc(need);
     if (!out)
         return NULL;
     snprintf(out, need,
-             "%s\n\nThe card was captured in: %s\n\ncard:\n%s\n",
-             head, c->cwd[0] ? c->cwd : "(nowhere in particular)", body);
+             "%.*s%s%s%s\n\nThe card was captured in: %s\n\ncard:\n%s\n",
+             (int)lead, head, kinds, mark ? "" : "\n", rest,
+             c->cwd[0] ? c->cwd : "(nowhere in particular)", body);
     return out;
 }
 
@@ -67,16 +77,6 @@ static double num_of(const cJSON *o, const char *key, double fallback)
     return (j && cJSON_IsNumber(j)) ? j->valuedouble : fallback;
 }
 
-static int is_wiki_kind(const char *kind)
-{
-    enum board_kind k = board_kind_from_name(kind);
-    return k != BOARD_KIND_NONE && !board_kind_is_work(k);
-}
-
-static int is_work_kind(const char *kind)
-{
-    return board_kind_is_work(board_kind_from_name(kind));
-}
 
 // Counted from the last thing a person said, not from the start of the card.
 // Answering the question triage asked is new information, so the passes it
@@ -112,8 +112,9 @@ static int apply(const char *id, const cJSON *o)
     const char *question = str_of(o, "question");
     double      confidence = num_of(o, "confidence", 1.0);
 
-    int unsure = confidence < 0.5 || *question || !(*kind) ||
-                 (!is_wiki_kind(kind) && !is_work_kind(kind));
+    // A kind the configuration does not name is a kind nothing downstream
+    // knows what to do with, so it counts as not having decided.
+    int unsure = confidence < 0.5 || *question || !boardcfg_kind(kind);
 
     struct board_card edited = *c;
     char             *spec_kept = NULL;
@@ -147,9 +148,12 @@ static int apply(const char *id, const cJSON *o)
                  *question ? question : "could not tell what this card is");
     } else {
         snprintf(edited.kind, sizeof edited.kind, "%s", kind);
-        edited.col = is_wiki_kind(kind) ? BOARD_DONE : BOARD_BACKLOG;
+        // Every kind waits for a worker now: filing a note is work too, and
+        // the wiki is not going to write itself.
+        edited.col = BOARD_BACKLOG;
         snprintf(said, sizeof said, "%s · %s · priority %d", kind,
-                 is_wiki_kind(kind) ? "filed" : "for a worker", edited.priority);
+                 boardcfg_kind_takes(kind, BOARD_STEP_WORKTREE) ? "to build" : "to file",
+                 edited.priority);
     }
 
     int ok = board_update(&edited);

@@ -32,13 +32,7 @@ static const char TRIAGE_PROMPT[] =
     "\n"
     "  {\"kind\":\"...\",\"title\":\"...\",\"spec\":\"...\",\"cwd\":\"...\",\"confidence\":0.0,\"question\":\"\"}\n"
     "\n"
-    "kind is one of: todo, data, reference, feature, bug, chore.\n"
-    "  todo       something the person means to do, off the computer or on it\n"
-    "  data       a measurement, a number, a result, a scrap worth keeping\n"
-    "  reference  a link, a name, a fact, something to look up again later\n"
-    "  feature    something that should exist and does not\n"
-    "  bug        something that exists and is wrong\n"
-    "  chore      upkeep: a rename, a bump, a cleanup\n"
+    "{kinds}"
     "\n"
     "title is a short name for the card, under 60 characters.\n"
     "spec is what the card asks for, in a few sentences. Do not invent\n"
@@ -85,6 +79,59 @@ static const char TRIAGE_PROMPT[] =
 // "Do not commit to the main branch" reads as "do not commit" often enough to
 // matter: work left dirty in a worktree is work the merge queue cannot see, the
 // audit cannot measure, and a reaped worker loses.
+// The classes a card can fall into, and what a worker is told for each. All of
+// it is configuration: a board whose work does not divide this way says so in
+// board.json rather than in here.
+//
+// A wiki kind is a note to be filed, so it wants no branch and no review: the
+// worker writes it where it goes and the card is done. Work kinds go through
+// the gate.
+#define ALL_STEPS ((1u << BOARD_STEPS) - 1u)
+
+static const char *const STEP_NAMES[BOARD_STEPS] = {
+    "worktree", "review", "audit", "merge",
+};
+
+const char *boardcfg_step_name(enum board_step step)
+{
+    if (step < 0 || step >= BOARD_STEPS)
+        return "";
+    return STEP_NAMES[step];
+}
+
+enum board_step boardcfg_step_from_name(const char *name)
+{
+    if (name)
+        for (int i = 0; i < BOARD_STEPS; i++)
+            if (!strcmp(name, STEP_NAMES[i]))
+                return (enum board_step)i;
+    return BOARD_STEPS;
+}
+
+static const struct {
+    const char *name, *means, *prompt;
+    int         priority;
+    unsigned    steps;
+} KINDS[] = {
+    {"todo", "something the person means to do, off the computer or on it",
+     "Use the wiki skill to add this to the todo list. Add it, say where it "
+     "went, and stop. Do not do the thing itself.", 0, 0},
+
+    {"data", "a measurement, a number, a result, a scrap worth keeping",
+     "Use the wiki skill to file this where it belongs, compiling it into the "
+     "article it bears on rather than leaving it loose. Say where it went and "
+     "stop.", 0, 0},
+
+    {"reference", "a link, a name, a fact, something to look up again later",
+     "Use the wiki skill to file this as reference. Follow a link if there is "
+     "one and write down what it actually says, rather than filing the bare "
+     "URL. Say where it went and stop.", 0, 0},
+
+    {"feature", "something that should exist and does not", "", 1, ALL_STEPS},
+    {"bug", "something that exists and is wrong", "", 2, ALL_STEPS},
+    {"chore", "upkeep: a rename, a bump, a cleanup", "", 0, ALL_STEPS},
+};
+
 static const char WORKER_PROMPT[] =
     "You are working one card from a board, alone, in a worktree of your own "
     "and on a branch of its own.\n"
@@ -167,10 +214,16 @@ static void defaults(struct board_cfg *c)
     snprintf(c->delegation, sizeof c->delegation, "claude,codex,grok");
     c->verify[0] = '\0';
 
-    // A bug is ahead of a feature, a feature ahead of a chore, and a note to
-    // file is not queued against them at all.
-    c->priority[BOARD_KIND_BUG] = 2;
-    c->priority[BOARD_KIND_FEATURE] = 1;
+    c->kinds_n = (int)(sizeof KINDS / sizeof *KINDS);
+    if (c->kinds_n > BOARD_KINDS_MAX)
+        c->kinds_n = BOARD_KINDS_MAX;
+    for (int i = 0; i < c->kinds_n; i++) {
+        snprintf(c->kinds[i].name, sizeof c->kinds[i].name, "%s", KINDS[i].name);
+        c->kinds[i].means = dup_or_null(KINDS[i].means);
+        c->kinds[i].prompt = dup_or_null(KINDS[i].prompt);
+        c->kinds[i].priority = KINDS[i].priority;
+        c->kinds[i].steps = KINDS[i].steps;
+    }
 
     for (int i = 0; i < BOARD_WHO; i++)
         snprintf(c->who[i].backend, sizeof c->who[i].backend, "claude");
@@ -222,10 +275,48 @@ static void overlay(struct board_cfg *c, const cJSON *o)
     set_str(c->delegation, sizeof c->delegation, o, "delegation");
     set_str(c->verify, sizeof c->verify, o, "verify");
 
-    const cJSON *pri = cJSON_GetObjectItem((cJSON *)o, "priority");
-    if (pri)
-        for (int i = 1; i < BOARD_KINDS; i++)
-            set_int(&c->priority[i], pri, board_kind_name((enum board_kind)i));
+    // Named in the file, the kinds replace the built-in list rather than
+    // adding to it: a board that drops a class means to be without it.
+    const cJSON *kinds = cJSON_GetObjectItem((cJSON *)o, "kinds");
+    if (cJSON_IsArray(kinds)) {
+        for (int i = 0; i < c->kinds_n; i++) {
+            free(c->kinds[i].means);
+            free(c->kinds[i].prompt);
+        }
+        memset(c->kinds, 0, sizeof c->kinds);
+        c->kinds_n = 0;
+
+        const cJSON *k = NULL;
+        cJSON_ArrayForEach(k, kinds) {
+            if (c->kinds_n >= BOARD_KINDS_MAX)
+                break;
+            const char *name = cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)k, "name"));
+            if (!name || !*name)
+                continue;
+            struct board_kind *into = &c->kinds[c->kinds_n++];
+            snprintf(into->name, sizeof into->name, "%s", name);
+            const char *means = cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)k, "means"));
+            const char *prompt = cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)k, "prompt"));
+            into->means = dup_or_null(means ? means : "");
+            into->prompt = dup_or_null(prompt ? prompt : "");
+            set_int(&into->priority, k, "priority");
+
+            // Absent, a kind takes every step: a class written by hand that
+            // forgot to say is a class that gets the careful treatment.
+            const cJSON *steps = cJSON_GetObjectItem((cJSON *)k, "steps");
+            if (!cJSON_IsArray(steps)) {
+                into->steps = ALL_STEPS;
+            } else {
+                into->steps = 0;
+                const cJSON *e = NULL;
+                cJSON_ArrayForEach(e, steps) {
+                    enum board_step at = boardcfg_step_from_name(cJSON_GetStringValue((cJSON *)e));
+                    if (at < BOARD_STEPS)
+                        into->steps |= 1u << at;
+                }
+            }
+        }
+    }
 
     const cJSON *who = cJSON_GetObjectItem((cJSON *)o, "who");
     if (!who)
@@ -273,9 +364,55 @@ const struct board_cfg *boardcfg(void)
     return &cache;
 }
 
+const struct board_kind *boardcfg_kind(const char *name)
+{
+    if (!name || !*name)
+        return NULL;
+    const struct board_cfg *c = boardcfg();
+    for (int i = 0; i < c->kinds_n; i++)
+        if (!strcmp(c->kinds[i].name, name))
+            return &c->kinds[i];
+    return NULL;
+}
+
 int boardcfg_priority(const char *kind)
 {
-    return boardcfg()->priority[board_kind_from_name(kind)];
+    const struct board_kind *k = boardcfg_kind(kind);
+    return k ? k->priority : 0;
+}
+
+int boardcfg_kind_takes(const char *kind, enum board_step step)
+{
+    if (step < 0 || step >= BOARD_STEPS)
+        return 0;
+    const struct board_kind *k = boardcfg_kind(kind);
+    return k ? (k->steps & (1u << step)) != 0 : 1;
+}
+
+void boardcfg_kinds_block(char *out, size_t size)
+{
+    const struct board_cfg *c = boardcfg();
+    size_t                  at = 0;
+
+    at += (size_t)snprintf(out + at, size - at, "kind is one of:");
+    for (int i = 0; i < c->kinds_n && at < size; i++)
+        at += (size_t)snprintf(out + at, size - at, "%s %s", i ? "," : "",
+                               c->kinds[i].name);
+    if (at < size)
+        at += (size_t)snprintf(out + at, size - at, ".\n");
+
+    // The width the names line up to, so the list reads as a table rather
+    // than as a paragraph the model has to parse.
+    int wide = 0;
+    for (int i = 0; i < c->kinds_n; i++) {
+        int n = (int)strlen(c->kinds[i].name);
+        if (n > wide)
+            wide = n;
+    }
+    for (int i = 0; i < c->kinds_n && at < size; i++)
+        at += (size_t)snprintf(out + at, size - at, "  %-*s  %s\n", wide,
+                               c->kinds[i].name,
+                               c->kinds[i].means ? c->kinds[i].means : "");
 }
 
 const struct board_profile *boardcfg_for(enum board_who who)
@@ -295,6 +432,10 @@ struct board_cfg *boardcfg_copy(void)
     *c = cache;
     for (int i = 0; i < BOARD_WHO; i++)
         c->who[i].prompt = dup_or_null(cache.who[i].prompt);
+    for (int i = 0; i < c->kinds_n; i++) {
+        c->kinds[i].means = dup_or_null(cache.kinds[i].means);
+        c->kinds[i].prompt = dup_or_null(cache.kinds[i].prompt);
+    }
     return c;
 }
 
@@ -304,6 +445,10 @@ void boardcfg_free(struct board_cfg *c)
         return;
     for (int i = 0; i < BOARD_WHO; i++)
         free(c->who[i].prompt);
+    for (int i = 0; i < c->kinds_n; i++) {
+        free(c->kinds[i].means);
+        free(c->kinds[i].prompt);
+    }
     free(c);
 }
 
@@ -321,10 +466,22 @@ static int write_out(const struct board_cfg *c)
     cJSON_AddNumberToObject(o, "sweep_every", c->sweep_every);
     cJSON_AddNumberToObject(o, "archive_after", c->archive_after);
 
-    cJSON *pri = cJSON_AddObjectToObject(o, "priority");
-    for (int i = 1; pri && i < BOARD_KINDS; i++)
-        cJSON_AddNumberToObject(pri, board_kind_name((enum board_kind)i),
-                                c->priority[i]);
+    cJSON *kinds = cJSON_AddArrayToObject(o, "kinds");
+    for (int i = 0; kinds && i < c->kinds_n; i++) {
+        cJSON *k = cJSON_CreateObject();
+        if (!k)
+            break;
+        cJSON_AddStringToObject(k, "name", c->kinds[i].name);
+        cJSON_AddStringToObject(k, "means", c->kinds[i].means ? c->kinds[i].means : "");
+        cJSON_AddNumberToObject(k, "priority", c->kinds[i].priority);
+        cJSON *steps = cJSON_AddArrayToObject(k, "steps");
+        for (int j = 0; steps && j < BOARD_STEPS; j++)
+            if (c->kinds[i].steps & (1u << j))
+                cJSON_AddItemToArray(steps,
+                    cJSON_CreateString(boardcfg_step_name((enum board_step)j)));
+        cJSON_AddStringToObject(k, "prompt", c->kinds[i].prompt ? c->kinds[i].prompt : "");
+        cJSON_AddItemToArray(kinds, k);
+    }
     cJSON_AddStringToObject(o, "delegation", c->delegation);
     cJSON_AddStringToObject(o, "verify", c->verify);
 
@@ -387,7 +544,19 @@ int boardcfg_set(const struct board_cfg *c)
     cache.audit_lines = c->audit_lines;
     cache.sweep_every = c->sweep_every;
     cache.archive_after = c->archive_after;
-    memcpy(cache.priority, c->priority, sizeof cache.priority);
+
+    for (int i = 0; i < cache.kinds_n; i++) {
+        free(cache.kinds[i].means);
+        free(cache.kinds[i].prompt);
+    }
+    memset(cache.kinds, 0, sizeof cache.kinds);
+    cache.kinds_n = c->kinds_n;
+    for (int i = 0; i < cache.kinds_n; i++) {
+        cache.kinds[i] = c->kinds[i];
+        cache.kinds[i].means = dup_or_null(c->kinds[i].means);
+        cache.kinds[i].prompt = dup_or_null(c->kinds[i].prompt);
+    }
+
     snprintf(cache.delegation, sizeof cache.delegation, "%s", c->delegation);
     snprintf(cache.verify, sizeof cache.verify, "%s", c->verify);
     for (int i = 0; i < BOARD_WHO; i++) {

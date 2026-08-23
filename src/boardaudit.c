@@ -6,6 +6,7 @@
 
 #include "board.h"
 #include "boardcfg.h"
+#include "boardflow.h"
 #include "child.h"
 #include "gitcmd.h"
 #include "sessionfork.h"
@@ -162,8 +163,9 @@ int boardaudit_pump(void)
         started = boardaudit_start(&cards[i]);
         // A card that cannot be audited must not sit in the column forever.
         if (!started && !cards[i].worktree[0]) {
-            board_move(cards[i].id, BOARD_MERGING, "board",
-                       "nothing to audit");
+            board_move(cards[i].id,
+                       boardflow_from(cards[i].kind, BOARD_STEP_MERGE, 0),
+                       "board", "nothing to audit");
             started = 1;
         }
     }
@@ -173,6 +175,18 @@ int boardaudit_pump(void)
 
 /* ---- what it found ------------------------------------------------------ */
 
+
+// The audit is behind it either way; what is left is whatever the kind still
+// asks for.
+static enum board_col next_after_audit(const char *id)
+{
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    struct board_card *c = board_find(cards, n, id);
+    enum board_col     col = boardflow_from(c ? c->kind : "", BOARD_STEP_MERGE, 0);
+    board_free(cards, n);
+    return col;
+}
 
 int boardaudit_take(const char *key, const char *reply)
 {
@@ -186,7 +200,7 @@ int boardaudit_take(const char *key, const char *reply)
         // An audit that did not answer is not an audit that passed, but it is
         // not a reason to hold the card either: it goes on, and says so.
         board_note(id, "audit", "the audit did not answer; going on without it");
-        board_move(id, BOARD_MERGING, "audit", NULL);
+        board_move(id, next_after_audit(id), "audit", NULL);
         return 1;
     }
 
@@ -208,7 +222,7 @@ int boardaudit_take(const char *key, const char *reply)
 
     if (passed) {
         board_note(id, "audit", "nothing worth stopping for");
-        board_move(id, BOARD_MERGING, "audit", NULL);
+        board_move(id, next_after_audit(id), "audit", NULL);
     } else {
         board_move(id, BOARD_DOING, "audit", NULL);
     }

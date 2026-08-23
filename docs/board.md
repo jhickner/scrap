@@ -62,10 +62,20 @@ and `question`. Priority is not among them: it follows from the kind, out of
 the table in the config screen, so the classifier is not asked to invent a
 number on top of everything else. A card can still be given one by hand.
 
-Kinds fall in two classes. `todo`, `data` and `reference` are wiki kinds: the
-same turn hands them to the `w` skill and the card lands in `done` without ever
-costing a worker. `feature`, `bug` and `chore` are work kinds and go to
-`backlog`.
+Kinds are configuration, not code. `board.json` holds the list: each has a
+name, what the classifier is told it means, a priority, the prompt a worker
+gets, and the steps a card of that kind takes once a worker has had it --
+`worktree`, `review`, `audit`, `merge`. The triage prompt is written with a
+`{kinds}` mark where the list goes, so editing the kinds edits what the
+classifier is told.
+
+Every card goes to `backlog` and waits for a worker; nothing is filed without
+one. What differs is what the worker is told and what happens after it stops.
+`todo`, `data` and `reference` take no steps at all: the worker writes the note
+into the wiki with the `w` skill and the card is done. `feature`, `bug` and
+`chore` take all four, so they get a worktree, stop for a person, may be
+audited, and land through the queue. A kind between the two -- landing without
+a human stop, say -- is a matter of which steps it lists.
 
 The third outcome is the important one. A cheap classifier told only to pick a
 kind will always pick one, so the prompt licenses "I don't know" explicitly:
@@ -252,3 +262,5 @@ audit get the same routing without a population to keep alive.
 4. Quota ceiling and delegation; headroom averaging once there is data.
 5. Conditional audit, then the merge queue.
 6. The refactor sweep, priorities per kind, archiving.
+7. Kinds as configuration: the classes, what they mean, their prompts, and
+   the steps each takes.

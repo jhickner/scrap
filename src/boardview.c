@@ -523,9 +523,14 @@ static void card_form(const struct board_card *c)
     for (int i = 0; i < BOARD_COLS; i++)
         cols[i] = board_col_name((enum board_col)i);
 
-    const char *kinds[BOARD_KINDS];
-    for (int i = 0; i < BOARD_KINDS; i++)
-        kinds[i] = board_kind_name((enum board_kind)i);
+    // Empty leads, because a card that has not been sorted yet has no kind and
+    // saying so is not the same as guessing one.
+    const struct board_cfg *cfg = boardcfg();
+    const char             *kinds[BOARD_KINDS_MAX + 1];
+    int                     kinds_n = 0;
+    kinds[kinds_n++] = "";
+    for (int i = 0; i < cfg->kinds_n; i++)
+        kinds[kinds_n++] = cfg->kinds[i].name;
 
     char spec[8192];
     char kind[16];
@@ -545,7 +550,7 @@ static void card_form(const struct board_card *c)
     fields[fields_n++] = (struct form_field){"spec", FORM_TEXT, spec,
                                              sizeof spec, NULL, 0};
     fields[fields_n++] = (struct form_field){"kind", FORM_CHOICE, kind,
-                                             sizeof kind, kinds, BOARD_KINDS};
+                                             sizeof kind, kinds, kinds_n};
     fields[fields_n++] = (struct form_field){"column", FORM_CHOICE, column,
                                              sizeof column, cols, BOARD_COLS};
     fields[fields_n++] = (struct form_field){"repo", FORM_TEXT, where,

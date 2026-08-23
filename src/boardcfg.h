@@ -2,7 +2,7 @@
 #ifndef BOARDCFG_H
 #define BOARDCFG_H
 
-#include "board.h"
+#include <stddef.h>
 
 // What the board runs things with, kept beside the cards in
 // ~/.config/mux/board.json and edited from the board itself rather than from
@@ -30,6 +30,35 @@ struct board_profile {
     char *prompt;       /* standing instructions; never NULL once loaded */
 };
 
+// What a card can turn out to be. The classifier is told the name and what it
+// means; a worker given a card of that kind is told the prompt. Kinds are
+// configuration rather than code, so a board can have the classes its work
+// actually falls into.
+#define BOARD_KINDS_MAX 16
+
+// What a card of a kind goes through after a worker has had it. A note being
+// filed takes none of them and is done when the worker stops; work that has to
+// land takes all four. Anything between is a matter of configuration.
+enum board_step {
+    BOARD_STEP_WORKTREE,    /* a worktree and a branch of its own */
+    BOARD_STEP_REVIEW,      /* stops for a person to say yes */
+    BOARD_STEP_AUDIT,       /* read by an auditor, if the diff is big enough */
+    BOARD_STEP_MERGE,       /* through the merge queue */
+    BOARD_STEPS,
+};
+
+const char     *boardcfg_step_name(enum board_step step);
+enum board_step boardcfg_step_from_name(const char *name);
+
+struct board_kind {
+    char  name[32];
+    char *means;    /* what the classifier is told this kind is; never NULL */
+    char *prompt;   /* what a worker of this kind is told; never NULL */
+    int   priority;
+
+    unsigned steps;     /* a bit per enum board_step */
+};
+
 struct board_cfg {
     int workers;         /* how many may run at once */
     int usage_ceiling;   /* percent of quota above which nothing starts */
@@ -45,9 +74,8 @@ struct board_cfg {
     // fails. Empty means nothing is checked.
     char verify[256];
 
-    // What a card is worth by what it turned out to be, so triage does not have
-    // to invent a number. The card's own priority can still be set by hand.
-    int priority[BOARD_KINDS];
+    struct board_kind kinds[BOARD_KINDS_MAX];
+    int               kinds_n;
 
     struct board_profile who[BOARD_WHO];
 };
@@ -66,7 +94,18 @@ int boardcfg_set(const struct board_cfg *c);
 
 const struct board_profile *boardcfg_for(enum board_who who);
 
+// The kind by that name, or NULL when the configuration does not name one.
+const struct board_kind *boardcfg_kind(const char *name);
+
 // What a card of this kind starts out worth.
 int boardcfg_priority(const char *kind);
+
+// Whether a card of this kind takes this step. An unknown kind takes all of
+// them, which is the careful way round.
+int boardcfg_kind_takes(const char *kind, enum board_step step);
+
+// The kinds as the classifier is told them: a list of names, then a line each
+// saying what it means. Written into the triage prompt where {kinds} is.
+void boardcfg_kinds_block(char *out, size_t size);
 
 #endif

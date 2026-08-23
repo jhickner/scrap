@@ -7,6 +7,7 @@
 #include "text.h"
 #include "boardaudit.h"
 #include "boardcfg.h"
+#include "boardflow.h"
 #include "boardtriage.h"
 #include "replyjson.h"
 #include "sessionfork.h"
@@ -426,27 +427,47 @@ static void test_reply_json(void)
     expect(!replyjson_parse(NULL), "nothing is nothing");
 }
 
-// Triage names a kind; what the card is worth follows from it, so the
-// classifier is not asked to invent a number as well.
-static void test_kind_priority(void)
+// Triage names a kind; what the card is worth and whether it goes through a
+// worktree both follow from it, so the classifier is not asked for either.
+static void test_kinds(void)
 {
-    expect(board_kind_from_name("bug") == BOARD_KIND_BUG, "a kind by its name");
-    expect(board_kind_from_name("") == BOARD_KIND_NONE, "no name, no kind");
-    expect(board_kind_from_name("nonsense") == BOARD_KIND_NONE,
-           "an unknown name is no kind");
-    expect(!strcmp(board_kind_name(BOARD_KIND_CHORE), "chore"), "a name by its kind");
-    expect(!strcmp(board_kind_name(BOARD_KINDS), ""), "out of range is no kind");
-
-    expect(board_kind_is_work(BOARD_KIND_BUG), "a bug wants a worker");
-    expect(!board_kind_is_work(BOARD_KIND_REFERENCE), "a reference does not");
-    expect(!board_kind_is_work(BOARD_KIND_NONE), "an unsorted card does not");
+    expect(boardcfg_kind("bug") != NULL, "a configured kind is found");
+    expect(boardcfg_kind("nonsense") == NULL, "an unconfigured one is not");
+    expect(boardcfg_kind("") == NULL, "nor is no kind at all");
 
     expect(boardcfg_priority("bug") > boardcfg_priority("feature"),
            "a bug comes before a feature");
     expect(boardcfg_priority("feature") > boardcfg_priority("chore"),
            "a feature comes before a chore");
-    expect(boardcfg_priority("nonsense") == boardcfg_priority(""),
-           "an unknown kind is worth what an unsorted one is");
+    expect(boardcfg_priority("nonsense") == 0, "an unknown kind is worth nothing");
+
+    expect(boardcfg_kind_takes("bug", BOARD_STEP_WORKTREE), "work gets a worktree");
+    expect(boardcfg_kind_takes("bug", BOARD_STEP_MERGE), "and lands through the queue");
+    expect(!boardcfg_kind_takes("reference", BOARD_STEP_WORKTREE),
+           "a note to file gets neither");
+    expect(!boardcfg_kind_takes("reference", BOARD_STEP_REVIEW), "nor a review");
+    expect(boardcfg_kind_takes("nonsense", BOARD_STEP_MERGE),
+           "an unknown kind takes every step, which is the careful way round");
+
+    // Where a card goes once a step is behind it follows from the kind.
+    expect(boardflow_from("bug", BOARD_STEP_REVIEW, 1) == BOARD_REVIEW,
+           "work stops for a person first");
+    expect(boardflow_from("bug", BOARD_STEP_AUDIT, 1) == BOARD_AUDIT,
+           "then for an audit when the diff is worth it");
+    expect(boardflow_from("bug", BOARD_STEP_AUDIT, 0) == BOARD_MERGING,
+           "and straight to the queue when it is not");
+    expect(boardflow_from("bug", BOARD_STEP_MERGE, 0) == BOARD_MERGING,
+           "the queue is the last of it");
+    expect(boardflow_from("reference", BOARD_STEP_REVIEW, 1) == BOARD_DONE,
+           "a filed note is done when the worker stops");
+
+    // The classifier is told the kinds from the configuration, not from a
+    // list written into the prompt beside it.
+    char block[4096];
+    boardcfg_kinds_block(block, sizeof block);
+    expect(strstr(block, "todo") && strstr(block, "chore"), "every kind is named");
+    expect(strstr(block, "something that exists and is wrong") != NULL,
+           "and each says what it means");
 }
 
 int main(void)
@@ -467,7 +488,7 @@ int main(void)
     test_attempts_reset_when_answered();
     test_audit_verdict();
     test_reply_json();
-    test_kind_priority();
+    test_kinds();
     test_archive();
     test_empty_and_missing();
 

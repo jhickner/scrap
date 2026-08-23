@@ -12,7 +12,7 @@
 #include "pick.h"
 #include "vendor/agents/backend.h"
 
-#define CFG_HINT "enter edit  ·  esc done"
+#define CFG_HINT "enter edit  \xc2\xb7  d delete a kind  \xc2\xb7  esc done"
 
 enum row_kind {
     ROW_HEAD,
@@ -21,6 +21,8 @@ enum row_kind {
     ROW_PROMPT,     /* several paragraphs, in $EDITOR */
     ROW_CHAIN,      /* the delegation order */
     ROW_VERIFY,     /* the command a card must pass to land */
+    ROW_KIND,       /* one class of card, as a form */
+    ROW_KIND_NEW,   /* the row that adds another */
 };
 
 struct row {
@@ -33,9 +35,10 @@ struct row {
     const char *units;
 
     enum board_who who; /* ROW_PROFILE, ROW_PROMPT */
+    int            kind_at;  /* ROW_KIND: which of them */
 };
 
-#define ROWS_MAX 48
+#define ROWS_MAX 64
 
 static void head(struct row *rows, int *n, const char *label)
 {
@@ -72,10 +75,18 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
     head(rows, n, "sweep");
     count_row(rows, n, "interval", &c->sweep_every, 0, 500, "cards");
 
-    head(rows, n, "priority");
-    for (int i = 1; i < BOARD_KINDS; i++)
-        count_row(rows, n, board_kind_name((enum board_kind)i),
-                  &c->priority[i], 0, 3, NULL);
+    head(rows, n, "kinds");
+    for (int i = 0; i < c->kinds_n && *n < ROWS_MAX - 2; i++) {
+        rows[*n].kind = ROW_KIND;
+        rows[*n].label = c->kinds[i].name;
+        rows[*n].kind_at = i;
+        (*n)++;
+    }
+    if (c->kinds_n < BOARD_KINDS_MAX && *n < ROWS_MAX - 1) {
+        rows[*n].kind = ROW_KIND_NEW;
+        rows[*n].label = "add";
+        (*n)++;
+    }
 
     head(rows, n, "archive");
     count_row(rows, n, "after", &c->archive_after, 0, 3650, "days");
@@ -139,6 +150,17 @@ static void value_of(const struct row *r, const struct board_cfg *c,
     case ROW_VERIFY:
         snprintf(out, size, "%s", c->verify[0] ? c->verify : "none");
         break;
+    case ROW_KIND: {
+        const struct board_kind *k = &c->kinds[r->kind_at];
+        size_t                   at = (size_t)snprintf(out, size, "p%d", k->priority);
+        for (int i = 0; i < BOARD_STEPS && at < size; i++)
+            if (k->steps & (1u << i))
+                at += (size_t)snprintf(out + at, size - at, " \xc2\xb7 %s",
+                                       boardcfg_step_name((enum board_step)i));
+        if (!k->steps && at < size)
+            snprintf(out + at, size - at, " \xc2\xb7 nothing after the worker");
+        break;
+    }
     case ROW_CHAIN: {
         // Commas are how it is stored; arrows are what it means.
         char shown[256];
@@ -261,6 +283,103 @@ static void edit_chain(struct board_cfg *c)
     snprintf(c->delegation, sizeof c->delegation, "%s", packed);
 }
 
+static const char *const YES_NO[] = {"no", "yes"};
+static const char *const LEVELS[] = {"0", "1", "2", "3"};
+
+// A class of card: the name the classifier answers with, what it is told the
+// name means, and what a worker given one is told to do.
+static void edit_kind(struct board_cfg *c, int at)
+{
+    struct board_kind *k = &c->kinds[at];
+
+    char name[32], means[256], priority[8];
+    char steps[BOARD_STEPS][8];
+    char *prompt = calloc(1, 8192);
+    if (!prompt)
+        return;
+
+    snprintf(name, sizeof name, "%s", k->name);
+    snprintf(means, sizeof means, "%s", k->means ? k->means : "");
+    snprintf(priority, sizeof priority, "%d", k->priority);
+    snprintf(prompt, 8192, "%s", k->prompt ? k->prompt : "");
+    for (int i = 0; i < BOARD_STEPS; i++)
+        snprintf(steps[i], sizeof steps[i], "%s",
+                 k->steps & (1u << i) ? "yes" : "no");
+
+    struct form_field fields[3 + BOARD_STEPS + 1];
+    int               fields_n = 0;
+    fields[fields_n++] = (struct form_field){"name", FORM_TEXT, name, sizeof name, NULL, 0};
+    fields[fields_n++] = (struct form_field){"means", FORM_TEXT, means, sizeof means, NULL, 0};
+    fields[fields_n++] = (struct form_field){"priority", FORM_CHOICE, priority,
+                                             sizeof priority, LEVELS, 4};
+    for (int i = 0; i < BOARD_STEPS; i++)
+        fields[fields_n++] = (struct form_field){
+            boardcfg_step_name((enum board_step)i), FORM_CHOICE, steps[i],
+            sizeof steps[i], YES_NO, 2};
+    fields[fields_n++] = (struct form_field){"prompt", FORM_TEXT, prompt, 8192, NULL, 0};
+
+    static const char *const NOTES[] = {
+        "means is what the classifier is told this kind is.",
+        "prompt is what a worker given one is told, before the card.",
+        "the steps a card of this kind takes once a worker has had it.",
+        "none of them: the worker writes it and the card is done.",
+    };
+
+    struct form f = {.title = "kind", .notes = NOTES, .notes_n = 4,
+                     .fields = fields, .fields_n = fields_n};
+    if (!form_run(&f) || !name[0]) {
+        free(prompt);
+        return;
+    }
+
+    snprintf(k->name, sizeof k->name, "%s", name);
+    k->priority = atoi(priority);
+    k->steps = 0;
+    for (int i = 0; i < BOARD_STEPS; i++)
+        if (!strcmp(steps[i], "yes"))
+            k->steps |= 1u << i;
+
+    char *kept_means = strdup(means);
+    if (kept_means) {
+        free(k->means);
+        k->means = kept_means;
+    }
+    free(k->prompt);
+    k->prompt = prompt;
+}
+
+static void add_kind(struct board_cfg *c)
+{
+    if (c->kinds_n >= BOARD_KINDS_MAX)
+        return;
+    struct board_kind *k = &c->kinds[c->kinds_n];
+    memset(k, 0, sizeof *k);
+    k->steps = (1u << BOARD_STEPS) - 1u;
+    k->means = strdup("");
+    k->prompt = strdup("");
+    c->kinds_n++;
+
+    edit_kind(c, c->kinds_n - 1);
+    // Named nothing, it was never a kind: the row goes away again.
+    if (!c->kinds[c->kinds_n - 1].name[0]) {
+        free(c->kinds[c->kinds_n - 1].means);
+        free(c->kinds[c->kinds_n - 1].prompt);
+        c->kinds_n--;
+    }
+}
+
+static void drop_kind(struct board_cfg *c, int at)
+{
+    if (at < 0 || at >= c->kinds_n)
+        return;
+    free(c->kinds[at].means);
+    free(c->kinds[at].prompt);
+    for (int i = at; i + 1 < c->kinds_n; i++)
+        c->kinds[i] = c->kinds[i + 1];
+    c->kinds_n--;
+    memset(&c->kinds[c->kinds_n], 0, sizeof c->kinds[c->kinds_n]);
+}
+
 /* ---- the screen --------------------------------------------------------- */
 
 void boardcfgui_run(void)
@@ -291,9 +410,17 @@ void boardcfgui_run(void)
         struct pick_live live = {.heading = heading, .hint = CFG_HINT, .align = 1};
         int              pressed = 0;
         at = pick_run_live("board config", items, n, at, &live, PICK_SEARCH_SLASH,
-                           "", &pressed);
+                           "d", &pressed);
         if (at < 0)
             break;
+
+        if (pressed == 'd') {
+            if (rows[at].kind == ROW_KIND) {
+                drop_kind(c, rows[at].kind_at);
+                touched = 1;
+            }
+            continue;
+        }
 
         switch (rows[at].kind) {
         case ROW_COUNT:   edit_count(&rows[at]); touched = 1; break;
@@ -301,6 +428,8 @@ void boardcfgui_run(void)
         case ROW_PROMPT:  edit_prompt(c, rows[at].who); touched = 1; break;
         case ROW_VERIFY:  edit_verify(c); touched = 1; break;
         case ROW_CHAIN:   edit_chain(c); touched = 1; break;
+        case ROW_KIND:    edit_kind(c, rows[at].kind_at); touched = 1; break;
+        case ROW_KIND_NEW: add_kind(c); touched = 1; break;
         default:          break;
         }
     }
