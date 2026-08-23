@@ -4,10 +4,12 @@
 #include <unistd.h>
 
 #include "board.h"
+#include "child.h"
 #include "text.h"
 #include "boardaudit.h"
 #include "boardcfg.h"
 #include "boardflow.h"
+#include "boardsweep.h"
 #include "boardtriage.h"
 #include "replyjson.h"
 #include "sessionfork.h"
@@ -463,6 +465,80 @@ static void test_kinds(void)
            "and each says what it means");
 }
 
+static int sweep_mark_count(const char *cwd)
+{
+    struct board_card *v = NULL;
+    int                n = board_load(&v), marked = 0;
+    for (int i = 0; i < n; i++) {
+        if (strcmp(v[i].cwd, cwd))
+            continue;
+        for (int j = 0; j < v[i].log_n; j++)
+            marked += !strcmp(v[i].log[j].who, "sweep") &&
+                      !strcmp(v[i].log[j].text, "swept");
+    }
+    board_free(v, n);
+    return marked;
+}
+
+static void sweep_host(const char *cwd, char out[BOARD_ID_MAX])
+{
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    out[0] = '\0';
+    for (int i = 0; i < n && !out[0]; i++)
+        if (v[i].col == BOARD_DONE && !strcmp(v[i].cwd, cwd))
+            snprintf(out, BOARD_ID_MAX, "%s", v[i].id);
+    board_free(v, n);
+}
+
+static void test_sweep_counts_landed_cards(void)
+{
+    const char *cwd = "/tmp/sweeprepo";
+    int         every = boardcfg()->sweep_every;
+
+    for (int i = 0; i < every - 1; i++) {
+        char id[BOARD_ID_MAX] = {0}, text[64];
+        snprintf(text, sizeof text, "landed card %d", i);
+        expect(board_add(text, cwd, id), "capture");
+        expect(board_move(id, BOARD_DONE, "board", NULL), "landed");
+    }
+    expect(!boardsweep_pump(), "one short of the interval sweeps nothing");
+
+    char last[BOARD_ID_MAX] = {0};
+    expect(board_add("the card that trips it", cwd, last), "capture");
+    expect(board_move(last, BOARD_DONE, "board", NULL), "landed");
+    expect(boardsweep_pump(), "the interval starts a sweep");
+
+    char host[BOARD_ID_MAX], key[64];
+    sweep_host(cwd, host);
+    snprintf(key, sizeof key, "sweep:%s", host);
+
+    expect(!boardsweep_take("audit:x", "{}"), "another job's key is not ours");
+    expect(boardsweep_take(key, "{\"cards\":[\"two ways to spell a worktree\"]}"),
+           "the sweep's cards are taken");
+
+    expect(sweep_mark_count(cwd) == every,
+           "every landed card is marked, so the count is on the board");
+    expect(!boardsweep_pump(), "and a restart does not sweep them twice");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v), raised = 0;
+    for (int i = 0; i < n; i++)
+        raised += !strcmp(v[i].cwd, cwd) && v[i].col == BOARD_NEW &&
+                  strstr(v[i].title, "two ways to spell a worktree") != NULL;
+    board_free(v, n);
+    expect(raised == 1, "the sweep files what it found");
+
+    for (;;) {
+        char  gone[CHILD_KEY_MAX];
+        char *out = NULL;
+        int   ok = 0;
+        if (!child_reap(gone, sizeof gone, &out, &ok))
+            break;
+        free(out);
+    }
+}
+
 int main(void)
 {
     if (!mkdtemp(home)) {
@@ -480,6 +556,7 @@ int main(void)
     test_columns();
     test_attempts_reset_when_answered();
     test_audit_verdict();
+    test_sweep_counts_landed_cards();
     test_reply_json();
     test_kinds();
     test_archive();
