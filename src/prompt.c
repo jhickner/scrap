@@ -12,7 +12,6 @@
 #include "chrome.h"
 #include "block.h"
 #include "files.h"
-#include "paste.h"
 #include "scrollback.h"
 #include "settings.h"
 #include "sidechannel.h"
@@ -454,24 +453,9 @@ static int feed(struct prompt *p, ReplKey key, uint32_t cp, const char *text)
 
 static void paste_clipboard(struct prompt *p, int live)
 {
-    char path[1024];
-    if (paste_image(path, sizeof path - 1)) {
-        size_t n = strlen(path);
-        path[n] = ' ';
-        path[n + 1] = '\0';
-        p->frame_ok = 0;
-        repl_insert_text(&p->repl, path);
+    p->frame_ok = 0;
+    if (replkeys_paste(&p->repl))
         return;
-    }
-
-    char *text = paste_text();
-    if (text) {
-        p->frame_ok = 0;
-        repl_insert_text(&p->repl, text);
-        free(text);
-        return;
-    }
-
     if (live)
         return;
     ui_note("clipboard is empty");

@@ -6,4 +6,6 @@
 
 int replkeys_map(const tty_event *ev, ReplEvent *out);
 
+int replkeys_paste(Repl *r);
+
 #endif

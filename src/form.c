@@ -15,6 +15,8 @@
 
 #define FORM_FIELDS 12
 
+#define KEY_CTRL(c) ((c) - 'A' + 1)
+
 #define FORM_INDENT 2
 
 #define HIT_MAX 128
@@ -618,6 +620,13 @@ int form_run(struct form *form)
                     cycle(&st, st.focus, 1);
                 else if (ev.key == TK_LEFT || ev.key == TK_RIGHT)
                     cycle(&st, st.focus, ev.key == TK_LEFT ? -1 : 1);
+                free(ev.text);
+                break;
+            }
+            if (ev.key == TK_CHAR && ev.cp == KEY_CTRL('V')) {
+                st.framed = -1;
+                st.pinned = 0;
+                replkeys_paste(&st.slots[st.focus].repl);
                 free(ev.text);
                 break;
             }

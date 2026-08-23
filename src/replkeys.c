@@ -1,5 +1,28 @@
 #include "replkeys.h"
 
+#include <stdlib.h>
+#include <string.h>
+
+#include "paste.h"
+
+int replkeys_paste(Repl *r)
+{
+    char path[1024];
+    if (paste_image(path, sizeof path - 1)) {
+        size_t n = strlen(path);
+        path[n] = ' ';
+        path[n + 1] = '\0';
+        repl_insert_text(r, path);
+        return 1;
+    }
+    char *text = paste_text();
+    if (!text)
+        return 0;
+    repl_insert_text(r, text);
+    free(text);
+    return 1;
+}
+
 int replkeys_map(const tty_event *ev, ReplEvent *out)
 {
     static const struct {

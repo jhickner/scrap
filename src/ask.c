@@ -14,6 +14,8 @@
 #define ASK_INDENT 2
 #define ASK_GUTTER 2
 
+#define KEY_CTRL(c) ((c) - 'A' + 1)
+
 struct field {
     const char *title;
     Repl        repl;
@@ -154,6 +156,11 @@ char *ask_run(const char *title, const char *initial)
         default: {
             if (ev.key == TK_CHAR && (ev.cp == 3 || ev.cp == 4))
                 return leave(&f, NULL);
+            if (ev.key == TK_CHAR && ev.cp == KEY_CTRL('V')) {
+                replkeys_paste(&f.repl);
+                free(ev.text);
+                break;
+            }
             ReplEvent re;
             if (replkeys_map(&ev, &re))
                 feed(&f, &re);
