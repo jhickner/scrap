@@ -51,8 +51,6 @@ static void spec_add(char *out, size_t cap, size_t *at, const char *fmt, ...)
     *at += (size_t)n < cap - *at ? (size_t)n : cap - *at - 1;
 }
 
-// What the model is allowed to pick from: the installed CLIs, and the models
-// and efforts each of them offers here.
 static void backend_spec(char *out, size_t cap)
 {
     size_t at = 0;
@@ -133,7 +131,6 @@ static void *make_work(void *ud)
     return NULL;
 }
 
-// Models fence their JSON as often as not.
 static const char *json_start(const char *reply)
 {
     const char *brace = strchr(reply, '{');
@@ -146,7 +143,6 @@ static void field(char *out, size_t cap, const cJSON *row, const char *key)
     snprintf(out, cap, "%s", v ? v : "");
 }
 
-// An effort the CLI does not know is worse than none: it fails the whole turn.
 static void keep_known_effort(struct mux_spec *m)
 {
     if (!*m->effort)

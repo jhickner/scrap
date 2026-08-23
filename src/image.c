@@ -20,8 +20,7 @@
 #include "vendor/cJSON.h"
 
 #define TERM_H
-// Placeholder cells are text and go in the transcript row; the graphics
-// commands around them go straight to the terminal, not into every repaint.
+
 static int term_to_row;
 static void term_write_n(const char *s, int n)
 {
@@ -121,7 +120,7 @@ struct pending {
     char     tmp[4200];
     char     src[4096];
     time_t   mtime;
-    unsigned mark;              /* the entry its placeholders were drawn into */
+    unsigned mark;
 };
 
 static struct img_cache cache[CACHE_MAX];
@@ -257,12 +256,10 @@ static void write_placeholders(uint32_t id, int indent, int cols, int rows)
     ui_flush();
 }
 
-// The cell box an image is drawn into. Split out so it can be tested.
 void image_fit(int img_w, int img_h, int cw, int ch, int cols_box, int rows_box,
                int *cols, int *rows)
 {
     if (img_w > 0 && img_h > 0 && cw > 0 && ch > 0) {
-        // Capped at the image's own size: scaled down or left alone, never up.
         int natural_cols = (img_w + cw - 1) / cw;
         int natural_rows = (img_h + ch - 1) / ch;
         if (natural_cols > 0 && natural_cols < cols_box)
@@ -270,9 +267,6 @@ void image_fit(int img_w, int img_h, int cw, int ch, int cols_box, int rows_box,
         if (natural_rows > 0 && natural_rows < rows_box)
             rows_box = natural_rows;
 
-        // The placement fills the box, so the box must have the image's
-        // shape. The tighter side is spent in full and the other rounded to
-        // the nearest cell: rounding up costs a whole cell of distortion.
         long box_w = (long)cols_box * cw, box_h = (long)rows_box * ch;
         int  c, r;
         if ((long)img_w * box_h > (long)img_h * box_w) {
@@ -293,7 +287,7 @@ void image_fit(int img_w, int img_h, int cw, int ch, int cols_box, int rows_box,
             c = cols_box;
         if (r > rows_box)
             r = rows_box;
-        // A placeholder cell can only name a row or column this far along.
+
         if (c > KG_DIACRITIC_COUNT)
             c = KG_DIACRITIC_COUNT;
         if (r > KG_DIACRITIC_COUNT)
@@ -303,7 +297,6 @@ void image_fit(int img_w, int img_h, int cw, int ch, int cols_box, int rows_box,
         return;
     }
 
-    // Shape unknown: a square claims nothing.
     int side = cols_box < rows_box * 2 ? cols_box : rows_box * 2;
     if (side > 48)
         side = 48;
@@ -318,11 +311,6 @@ static int box_size(int indent, int img_w, int img_h, int *cols, int *rows)
     int cw, ch, term_rows;
     cell_pixels(&cw, &ch, &term_rows);
 
-    // The last column is left alone. The viewport paints with autowrap off, so
-    // a row that fills the screen parks the cursor there, and tmux then hangs
-    // the cell's combining marks on the cell before it: the last placeholder
-    // loses its row and column, the one before it gains a diacritic that reads
-    // as a different image id, and both stop being drawn.
     int cols_box = ui_columns() - indent - 1;
     int rows_box = term_rows - 4 < max_rows ? term_rows - 4 : max_rows;
     if (cols_box < 4 || rows_box < 2)
@@ -361,8 +349,6 @@ static char *placed_encode(void *ud)
     return out;
 }
 
-// The image itself is the terminal's, and it outlives the process that sent
-// it: the placeholders come back pointing at the same id.
 void image_placed_load(const cJSON *st)
 {
     struct placed *p = malloc(sizeof *p);
@@ -380,7 +366,6 @@ void image_placed_load(const cJSON *st)
     viewport_item_persist(mark, IMAGE_PLACED_KIND, placed_encode);
 }
 
-// Kept, so a narrower pane re-fits the image instead of keeping its old box.
 static unsigned place_kept(uint32_t id, int indent, int img_w, int img_h)
 {
     unsigned mark = 0;
@@ -463,7 +448,7 @@ static int start_convert(const char *path, time_t mtime, int indent)
     snprintf(pending[slot].tmp, sizeof pending[slot].tmp, "%s", tmp);
     snprintf(pending[slot].src, sizeof pending[slot].src, "%s", path);
     pending[slot].mtime = mtime;
-    // The dimensions arrive with the converted PNG; finish_pending re-fits.
+
     pending[slot].mark = place_kept(id, indent, 0, 0);
     cache_store(path, mtime, id, 0, 0);
     return 1;
@@ -507,7 +492,6 @@ static void finish_pending(struct pending *p, int status)
         if (data) {
             kg_transmit_png(p->id, data, len);
 
-            // The shape is known now: re-fit the default box to it.
             int w = 0, h = 0;
             if (png_dims(data, len, &w, &h)) {
                 cache_store(p->src, p->mtime, p->id, w, h);

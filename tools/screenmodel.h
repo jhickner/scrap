@@ -1,16 +1,6 @@
 #ifndef SCREENMODEL_H
 #define SCREENMODEL_H
 
-// A model of the screen the viewport paints onto, applying only the sequences
-// it emits. The painter sends just what changed, so a test that wants to know
-// what is on screen has to keep the screen the way a terminal does rather than
-// reading one frame in isolation.
-//
-// A cell holds a whole codepoint, not a byte. mux's chrome is full of box
-// drawing and marks, and counting their bytes as columns would put everything
-// after them in the wrong place — a row would look full several columns before
-// the terminal thought so.
-
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -18,14 +8,14 @@
 
 #define ROWS_MAX 64
 #define COLS_MAX 256
-#define CELL_MAX 16             /* a UTF-8 codepoint, its marks and a terminator */
+#define CELL_MAX 16
 
 struct screen {
     int  rows, cols;
     char cell[ROWS_MAX][COLS_MAX + 1][CELL_MAX];
     int  cur_r, cur_c;
     int  cursor_visible;
-    int  top, bot;              /* scroll region, 0-based inclusive */
+    int  top, bot;
 };
 
 __attribute__((unused)) static void row_blank_out(struct screen *s, int r, int from)
@@ -47,8 +37,6 @@ __attribute__((unused)) static void screen_init(struct screen *s, int rows, int 
         row_blank_out(s, r, 0);
 }
 
-// Scroll the region by n rows: positive moves content toward the top, which is
-// what ESC[nS does, and negative is ESC[nT.
 __attribute__((unused)) static void scroll_region(struct screen *s, int n)
 {
     if (n == 0)
@@ -79,11 +67,6 @@ __attribute__((unused)) static void scroll_region(struct screen *s, int n)
     }
 }
 
-// One codepoint into one cell. Wrapping is off in every paint the viewport
-// makes, so anything past the last column is dropped the way the terminal
-// drops it. A combining mark takes no column of its own: it joins the cell
-// before it, which is what makes an image's placeholder cells - a base
-// codepoint and two diacritics - one column each rather than three.
 static int is_combining(const char *p, size_t n)
 {
     unsigned cp = 0;
@@ -134,9 +117,6 @@ static size_t utf8_cell(const char *p, size_t n)
     return want <= n ? want : 1;
 }
 
-// Only what the viewport emits: absolute placement, erase-to-end-of-line, the
-// scroll region and text. Anything else would be a change this model has to
-// learn about.
 __attribute__((unused)) static void feed(struct screen *s, const char *p, size_t n)
 {
     for (size_t i = 0; i < n;) {
@@ -187,7 +167,6 @@ __attribute__((unused)) static void feed(struct screen *s, const char *p, size_t
             continue;
         }
         if (p[i] == 0x1b) {
-            // OSC and friends: skip to the terminator.
             size_t j = i + 1;
             while (j < n && p[j] != 0x07 && !(p[j] == 0x1b && j > i + 1))
                 j++;
@@ -200,7 +179,6 @@ __attribute__((unused)) static void feed(struct screen *s, const char *p, size_t
     }
 }
 
-// The text of one row, NUL-terminated.
 __attribute__((unused)) static const char *row_text(const struct screen *s, int r)
 {
     static char row[(COLS_MAX + 1) * CELL_MAX];
@@ -234,7 +212,6 @@ __attribute__((unused)) static int row_blank(const struct screen *s, int r)
     return 1;
 }
 
-// The first row whose text contains `needle`, or -1.
 __attribute__((unused)) static int row_with(const struct screen *s, const char *needle)
 {
     for (int r = 0; r < s->rows; r++)

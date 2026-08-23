@@ -15,8 +15,6 @@
 #include "restart.h"
 void restart_shield_thread(void) {}
 
-// sidechannel is stubbed rather than linked: it would drag the session, the
-// agent drivers and the markdown renderer in behind it.
 int  sidechannel_rows(void) { return 0; }
 void sidechannel_paint(int budget) { (void)budget; }
 void sidechannel_tick(void) {}
@@ -109,12 +107,8 @@ static int looks_like_spinner(const char *out)
     return 0;
 }
 
-// status.c marks the newest entry when the prompt is echoed, so the test has
-// to have echoed one for there to be anything to mark.
 static void echo_then_mark(const char *text)
 {
-    // Deliberately not the prompt text: the capture is the whole painted
-    // screen, so an echo carrying it could not be told from the sticky copy.
     viewport_write("<echo>\n", 7);
     status_sticky_prompt(text);
 }
@@ -210,10 +204,6 @@ static void check_sticky(void)
     status_sticky_set(0);
 }
 
-// A spinner is asked to advance by whatever loop happens to be running: the
-// prompt's idle timeout at one frame apiece, the agent's abort check at the
-// rate its driver polls. It may only move on the clock, or two spinners on
-// screen together run at visibly different speeds.
 static void check_spin_rate(void)
 {
     int    frame = 0;
@@ -230,14 +220,12 @@ static void check_spin_rate(void)
     if (frame != settled)
         fail("a spinner advances on the clock, not on the number of asks");
 
-    // A frame later it moves again, once.
     at -= (double)SPIN_FRAME_MS / 1000.0;
     if (!spin_advance(&frame, &at))
         fail("a spinner advances once a frame has passed");
     if (frame != settled + 1)
         fail("a frame that has passed is worth exactly one step");
 
-    // Independent spinners keep their own clocks.
     int    other = 0;
     double other_at = 0;
     spin_advance(&other, &other_at);
@@ -252,13 +240,8 @@ int main(void)
 
     ui_init();
 
-    // status.c decides the floating prompt against the viewport's rows, so the
-    // viewport has to be the thing holding them. Its first paint is swallowed
-    // so the test's own output stays readable.
     free(capture(viewport_begin));
 
-    // The sticky prompt is a section of the one painter, so it only reaches the
-    // screen through a bound prompt.
     struct prompt *prompt = prompt_new(NULL, 0);
     chrome_bind(prompt);
 

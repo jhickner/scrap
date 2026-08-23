@@ -1,4 +1,4 @@
-// The matrix store: named configs, per-row prompts, and the older settings line.
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,7 +83,6 @@ void ui_error(const char *fmt, ...) { (void)fmt; }
 void ui_put(const char *s) { (void)s; }
 void ui_flush(void) {}
 
-// The store is read once per process, so each case gets its own.
 static void in_home(const char *name, void (*body)(const char *home))
 {
     char home[256];
@@ -115,7 +114,6 @@ static void write_file(const char *path, const char *text)
     fclose(f);
 }
 
-// No store yet: the matrix comes from the settings line the first cut wrote.
 static void case_legacy(const char *home)
 {
     char path[512];
@@ -137,7 +135,6 @@ static void case_legacy(const char *home)
     assert(!strcmp(muxcfg_active(), "default"));
 }
 
-// A store with two named matrices: the active one is what runs.
 static void case_configs(const char *home)
 {
     char dir[512];
@@ -167,7 +164,6 @@ static void case_configs(const char *home)
     assert(!strcmp(v[1].backend, "grok"));
 }
 
-// The label names a row without repeating what the store spells as empty.
 static void case_labels(const char *home)
 {
     (void)home;

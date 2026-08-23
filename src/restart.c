@@ -16,8 +16,6 @@
 #include "viewport.h"
 #include "workspace.h"
 
-// SIGURG, not SIGUSR1: its default action is to ignore, so signalling every
-// mux on the machine cannot kill one built before this handler.
 #define RESTART_SIGNAL SIGURG
 
 static volatile sig_atomic_t wanted;
@@ -33,17 +31,15 @@ void restart_arm(void)
     struct sigaction sa = {0};
     sa.sa_handler = on_signal;
     sigemptyset(&sa.sa_mask);
-    // No SA_RESTART: select() should break so a waiting prompt restarts now.
+
     sigaction(RESTART_SIGNAL, &sa, NULL);
 
-    // An inherited mask would hold it pending for the life of the process.
     sigset_t set;
     sigemptyset(&set);
     sigaddset(&set, RESTART_SIGNAL);
     pthread_sigmask(SIG_UNBLOCK, &set, NULL);
 }
 
-// Workers call this so the restart signal only reaches the main thread.
 void restart_shield_thread(void)
 {
     sigset_t set;
@@ -52,8 +48,6 @@ void restart_shield_thread(void)
     pthread_sigmask(SIG_BLOCK, &set, NULL);
 }
 
-// Flags the new build has to be given again: the argv is rebuilt from the
-// session, which knows nothing about the front ends attached to it.
 #define RESTART_FLAGS 4
 static const char *extra[RESTART_FLAGS];
 static int         extra_n;
@@ -79,7 +73,6 @@ void restart_clear(void)
     wanted = 0;
 }
 
-// The session is freed before the exec, so its strings are copied to a pool.
 static char  pool[8192];
 static size_t pool_used;
 
@@ -94,9 +87,6 @@ static char *arg_copy(const char *s)
     return out;
 }
 
-// What travels to the successor goes through files in the temp directory; it
-// unlinks each once it has it. `index` names one of a set, or is negative for
-// the only one of its kind.
 static int tmp_path(char *out, size_t n, const char *what, int index)
 {
     const char *tmp = getenv("TMPDIR");
@@ -117,7 +107,6 @@ static int dump_path(char *out, size_t n)
     return tmp_path(out, n, "restore", -1);
 }
 
-// The installed build, for when the one this process was started from is gone.
 static int path_lookup(const char *name, char *out, size_t size)
 {
     const char *path = getenv("PATH");
@@ -137,9 +126,6 @@ static int path_lookup(const char *name, char *out, size_t size)
     return 0;
 }
 
-// The other sessions this window holds. They cannot travel in argv the way the
-// one in front does — there may be a dozen — so they go in a file the successor
-// reads and opens a tab from, one line each.
 static int tabs_path(char *out, size_t n)
 {
     return tmp_path(out, n, "tabs", -1);
@@ -153,22 +139,16 @@ static int tabs_dump(const struct session *front, const char *path)
     for (int i = 0; i < workspace_count(); i++) {
         struct session *s = workspace_at(i);
         const char *id = session_id(s);
-        // Only a conversation the CLI can pick up again is worth a tab: one
-        // with nothing written down yet would come back empty.
+
         if (s == front || !id || !*id || !session_can_resume(s))
             continue;
         if (!f && !(f = fopen(path, "w")))
             return 0;
 
-        // Its screen travels with it, the way the front one's does: a tab
-        // switched to after a restart is the tab that was there, not a replay
-        // of the conversation it held.
         char screen[4096];
         if (!tmp_path(screen, sizeof screen, "tab", i) || !workspace_dump(i, screen))
             screen[0] = '\0';
 
-        // The screen, then the argv that reopens it: the same words the
-        // successor would take on its command line, so the two cannot drift.
         char *args[SESSION_ARGV_MAX];
         int   n = session_argv(s, args, COUNT(args),
                                SESSION_ARGV_CWD | SESSION_ARGV_RESUME);
@@ -195,20 +175,15 @@ int restart_exec(struct session *s)
     argv[n++] = (char *)sessionfork_program();
     n += session_argv(s, argv + n, SESSION_ARGV_MAX,
                       SESSION_ARGV_CWD | SESSION_ARGV_RESUME | SESSION_ARGV_SAFE);
-    // The front ends this process was started with: the session cannot know
-    // about them, and they do not belong to a fork of it either.
+
     for (int i = 0; i < extra_n; i++)
         argv[n++] = (char *)extra[i];
 
-    // The session is freed before the exec, so nothing may point into it.
     for (int i = 0; i < n; i++)
         if (!(argv[i] = arg_copy(argv[i])))
             return 0;
     argv[n] = NULL;
 
-    // Checked before the teardown: past it there is nothing to return to.
-    // A build launched by path can outlive its directory - a worktree that was
-    // merged away - so fall back to whatever is installed on PATH.
     if (strchr(argv[0], '/') && access(argv[0], X_OK) != 0) {
         char found[4096];
         if (!path_lookup(APP_NAME, found, sizeof found))
@@ -224,8 +199,6 @@ int restart_exec(struct session *s)
     viewport_item_end();
     ui_flush();
 
-    // The rest of the window travels too: the successor opens a tab for each
-    // and puts the screen it had back in it.
     char tabs[4096];
     if (tabs_path(tabs, sizeof tabs) && tabs_dump(s, tabs)) {
         char *arg = arg_copy(tabs);
@@ -238,8 +211,6 @@ int restart_exec(struct session *s)
         }
     }
 
-    // Handed over rather than torn down, so the screen is not wiped between
-    // the two builds.
     char path[4096];
     int carried = dump_path(path, sizeof path) && viewport_dump(path);
     if (carried) {
@@ -254,8 +225,6 @@ int restart_exec(struct session *s)
         }
     }
 
-    // Every agent CLI is a child: they go before the exec, or they are
-    // orphaned still holding their conversations.
     if (workspace_index_of(s) >= 0)
         workspace_end();
     else
@@ -269,7 +238,6 @@ int restart_exec(struct session *s)
 
     execvp(argv[0], argv);
 
-    // The session is already gone, so there is nothing to fall back to.
     if (carried) {
         unlink(path);
         viewport_end();

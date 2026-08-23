@@ -22,16 +22,14 @@ struct entry {
     const char *about;
     enum kind   kind;
 
-    // S_FLAG: the two faces of it, off first.
     const char *off;
     const char *on;
 
-    // S_ROWS: what the count may be, and what it means at zero.
     int         low;
     int         high;
     const char *unbounded;
 
-    enum ui_group group;   /* S_COLOR */
+    enum ui_group group;
 };
 
 static const struct entry ENTRIES[] = {

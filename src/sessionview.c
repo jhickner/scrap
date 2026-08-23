@@ -16,20 +16,16 @@
 
 #define COUNT(a) (sizeof (a) / sizeof *(a))
 
-/* --- kept entries --------------------------------------------------------- */
-
-// What a turn prints, kept as entries that redraw themselves at a new width.
-
 enum keep_kind { KEEP_ACTIVITY, KEEP_CALL, KEEP_OUTPUT, KEEP_DIFF, KEEP_CLUSTER };
 
 struct keep {
     enum keep_kind kind;
-    char          *a;           /* marker, tool name, text or patch */
-    char          *b;           /* the argument of a tool call */
-    unsigned char *spans;       /* highlighting for a cluster row */
+    char          *a;
+    char          *b;
+    unsigned char *spans;
     enum ui_role   role;
-    int            error;       /* output drawn as a failure */
-    int            gap;         /* asks for a blank row above */
+    int            error;
+    int            gap;
 };
 
 static void keep_free(void *ud)
@@ -119,7 +115,6 @@ static char *keep_encode(void *ud)
     return out;
 }
 
-// Opens the entry, draws it once, closes it. Returns its mark.
 static unsigned keep(struct keep *k)
 {
     unsigned mark = viewport_item_begin(&(struct viewport_entry){
@@ -199,7 +194,6 @@ void view_keep_output(const char *text, enum ui_role role, int error)
     keep(k);
 }
 
-// Takes the patch.
 void view_keep_diff(char *patch)
 {
     if (!patch || !*patch) {
@@ -338,7 +332,6 @@ static void tool_tag(const char *name, char *out, size_t size)
 
 #define TOOL_CALL_ROWS 24
 
-/* Per-byte highlight roles for a shell command, or NULL for other tools. */
 static unsigned char *shell_spans(const char *name, const char *text, size_t len)
 {
     if (!toolstyle_is_shell(name) || !len)
@@ -394,7 +387,6 @@ void view_cluster_forget(struct turnview *v)
     v->onscreen = 0;
 }
 
-/* Highlights the command that follows `prefix` bytes of chrome in `row`. */
 static unsigned char *row_spans(const char *name, const char *row, size_t prefix)
 {
     size_t len = strlen(row);
@@ -415,7 +407,6 @@ static int cluster_budget(void)
     return budget < 8 ? 8 : budget;
 }
 
-// The whole row is kept; it is cut to the width when drawn.
 void view_cluster_start(struct turnview *v, const char *name, const char *arg, int gap)
 {
     char tag[64];
@@ -495,7 +486,6 @@ static void cluster_paint(const char *line, const unsigned char *spans)
     ui_put("\n");
 }
 
-// One entry, amended: another call of the same tool changes what it says.
 void view_cluster_paint(struct turnview *v)
 {
     if (!v->line)
@@ -525,8 +515,7 @@ void view_cluster_paint(struct turnview *v)
     k->spans = spans;
     k->gap = v->gap;
     v->mark = keep(k);
-    // No mark means the screen was somebody else's and nothing was kept: the
-    // next paint starts an entry of its own rather than amending one.
+
     v->onscreen = v->mark != 0;
 }
 

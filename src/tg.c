@@ -1,10 +1,3 @@
-// The Telegram front end. Two threads: the poller does the chat's network I/O
-// and drops what arrives into an inbox; everything else — dispatching a line,
-// running a turn, rendering what the agent does — happens on the main thread,
-// which is the only one that may touch the session.
-//
-// With a terminal, this is a mirror: the same session answers at the prompt and
-// on the phone. Without one it is the whole front end.
 
 #include "tg.h"
 
@@ -47,36 +40,32 @@
 #include "viewport.h"
 #include "workspace.h"
 
-#define TG_LIMIT    4000        // Telegram caps a message at 4096 characters
+#define TG_LIMIT    4000
 #define MAX_ATTACH  8
 #define INBOX_MAX   32
 
 enum { MIRROR_OFF = 0, MIRROR_REMOTE = 1, MIRROR_ALL = 2 };
 
 static struct session *sess;
-static tg_client      *rx;              // poller thread's client
-static tg_client      *tx;              // main thread's client
+static tg_client      *rx;
+static tg_client      *tx;
 static long            chat_id;
 static int             mirror = MIRROR_ALL;
 static int             running;
-static volatile int    stop_wanted;     // "stop": abandon the turn in flight
+static volatile int    stop_wanted;
 static volatile int    poller_stop;
 static pthread_t       poller;
 static int             wake[2] = {-1, -1};
-static char            label[96];       // "telegram @bot", for the hud
-static whisper_config  voice;           // where the voice-note transcriber lives
+static char            label[96];
+static whisper_config  voice;
 static int             voice_set;
 static int             poll_seconds = 30;
-static char           *last_said;       // last assistant text already relayed
-static char            last_log[240];   // the client's last complaint, for /tg
+static char           *last_said;
+static char            last_log[240];
 static int             log_repeats;
 static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
-static int             from_chat;       // the turn now running came from the chat
+static int             from_chat;
 
-// ---- config -------------------------------------------------------------
-
-// ~/.config/mux/telegram, "key = value" per line. The token is a secret and
-// comes from the environment only.
 #define CFG_MAX 32
 static struct { char key[64]; char val[512]; } cfg[CFG_MAX];
 static int cfg_count = -1;
@@ -135,8 +124,6 @@ static long cfg_get_long(const char *key, long dflt)
     return v ? strtol(v, NULL, 10) : dflt;
 }
 
-// Small pieces of state the bridge keeps between runs, one per file, under
-// ~/.config/mux/tg-<name>: the update offset, the artifact token.
 static int state_path(const char *name, char *out, size_t size)
 {
     char leaf[64];
@@ -173,15 +160,11 @@ static void state_write(const char *name, const char *value)
     fclose(f);
 }
 
-// ---- inbox --------------------------------------------------------------
-
-// What the poller has taken from the chat and the main thread has not run yet.
 struct inbox_item {
     char *text;
-    int   quiet;    // the daemon asked, not the user: say nothing if there is
-                    // nothing to say
-    int   tap;      // an inline button, not something typed: `text` is the
-                    // menu payload behind it, not a line for the agent
+    int   quiet;
+
+    int   tap;
 };
 
 static struct inbox_item inbox[INBOX_MAX];
@@ -247,7 +230,7 @@ static char *inbox_take(int *quiet, int *tap)
     if (text) {
         wake_drain();
         if (remaining)
-            wake_up();          // the next one still has to wake the prompt
+            wake_up();
     }
     return text;
 }
@@ -268,10 +251,6 @@ int tg_fds(int *out, int max)
     return 1;
 }
 
-// ---- text helpers -------------------------------------------------------
-
-// Copy at most size-1 bytes, marking truncation with an ellipsis. A cut never
-// lands inside a UTF-8 sequence: Telegram rejects invalid UTF-8.
 static void copy_trunc(char *dst, size_t size, const char *src)
 {
     size_t i = 0;
@@ -281,11 +260,11 @@ static void copy_trunc(char *dst, size_t size, const char *src)
         for (size_t j = i; j > 0; j--) {
             unsigned char c = (unsigned char)dst[j - 1];
             if ((c & 0xC0) == 0x80)
-                continue;                          // continuation byte
+                continue;
             size_t need = (c & 0x80) == 0    ? 1 : (c & 0xE0) == 0xC0 ? 2
                         : (c & 0xF0) == 0xE0 ? 3 : 4;
             if (j - 1 + need > i)
-                i = j - 1;                         // the sequence was cut
+                i = j - 1;
             break;
         }
         if (i + 4 <= size) {
@@ -296,7 +275,6 @@ static void copy_trunc(char *dst, size_t size, const char *src)
     dst[i] = '\0';
 }
 
-// As copy_trunc, but collapsing newlines so a tool preview stays on one line.
 static void one_line(char *dst, size_t size, const char *src)
 {
     copy_trunc(dst, size, src);
@@ -305,7 +283,6 @@ static void one_line(char *dst, size_t size, const char *src)
             dst[i] = ' ';
 }
 
-// The terminal's own output, stripped of the escapes that styled it.
 static char *strip_ansi(char *s)
 {
     if (!s)
@@ -324,10 +301,6 @@ static char *strip_ansi(char *s)
     return s;
 }
 
-// ---- sending ------------------------------------------------------------
-
-// The agent writes markdown; render it as MarkdownV2, split so no message
-// exceeds Telegram's cap and none is cut mid-entity.
 static void send_markdown(const char *text)
 {
     if (!tx || !chat_id)
@@ -350,8 +323,6 @@ static void send_markdown(const char *text)
     free(msgs);
 }
 
-// Command output is column-aligned, so it goes as a code block: Telegram's body
-// font is proportional and would collapse the columns.
 static void send_pre(const char *text)
 {
     if (!tx || !chat_id || !text)
@@ -371,7 +342,6 @@ static void send_pre(const char *text)
     free(b.p);
 }
 
-// One italic line: the bridge talking, not the agent.
 static void send_note(const char *text)
 {
     if (!tx || !chat_id || !text || !*text)
@@ -396,25 +366,13 @@ static void send_notef(const char *fmt, ...)
     send_note(line);
 }
 
-// ---- menus --------------------------------------------------------------
-
-// A menu is a message with buttons under it. The chat keeps every message it
-// has ever been sent, so a tap can arrive from a menu scrolled back to weeks
-// later: each one carries a serial, only the newest is live, and a tap on any
-// older one is answered with a note instead of acted on. Once a live menu has
-// been used its buttons are edited away, which is both the receipt and what
-// stops it being tapped twice.
-//
-// Telegram caps a button's payload at 64 bytes, so what travels is the serial
-// and a row number; what the row means is kept here.
-
 #define MENU_MAX 16
 
 static struct {
-    long serial;                    // 0 when no menu is live
+    long serial;
     long message_id;
-    char kind[16];                  // whose menu it is, for the handler
-    char payload[MENU_MAX][200];    // what each row means, in that kind's terms
+    char kind[16];
+    char payload[MENU_MAX][200];
     char label[MENU_MAX][80];
     int  count;
 } menu;
@@ -438,9 +396,6 @@ static void menu_add(const char *label, const char *payload)
     menu.count++;
 }
 
-// Sends what has been added as a keyboard under `title`. Without buttons —
-// nothing was added, or the send failed — the caller still gets its text out,
-// so a menu is never the only way to see something.
 static void menu_send(const char *title, int per_row)
 {
     if (!tx || !chat_id || !menu.count) {
@@ -469,10 +424,6 @@ static void menu_send(const char *title, int per_row)
     menu.message_id = id;
 }
 
-// A tap has come back. Fills `kind` and `payload` with what the row meant, or
-// says so in the chat and returns 0 when the menu it came from is not the live
-// one.
-// What the last tap picked, waiting to be written back over its own menu.
 static struct {
     long message_id;
     char label[80];
@@ -492,10 +443,6 @@ static int menu_take(const char *tapped, char *kind, size_t kind_size,
     snprintf(kind, kind_size, "%s", menu.kind);
     snprintf(payload, payload_size, "%s", menu.payload[row]);
 
-    // Spent: the buttons go, and the message says what was picked in their
-    // place. That is a round trip, and a tap is resolved wherever it happens
-    // to arrive — inside the prompt's read, with a terminal attached — so it
-    // is left for menu_flush() to do somewhere it can afford to wait.
     if (menu.message_id) {
         receipt.message_id = menu.message_id;
         snprintf(receipt.label, sizeof receipt.label, "%s", menu.label[row]);
@@ -505,7 +452,6 @@ static int menu_take(const char *tapped, char *kind, size_t kind_size,
     return 1;
 }
 
-// Retires the menu the last tap came from.
 static void menu_flush(void)
 {
     if (!receipt.message_id || !tx)
@@ -515,9 +461,6 @@ static void menu_flush(void)
     tg_edit_message(tx, chat_id, id, receipt.label, 0, NULL, 0, 0);
 }
 
-// A local image the answer points at goes as a photo: a path on this machine
-// means nothing on the phone. The link stays in the text, which is what says
-// where it came from.
 static void send_images(const char *text)
 {
     for (const char *p = text; (p = strstr(p, "![")) != NULL;) {
@@ -537,9 +480,6 @@ static void send_images(const char *text)
     }
 }
 
-// ---- the tool trace -----------------------------------------------------
-
-// Drop the project dir prefix so a path reads as it would in the editor.
 static const char *short_path(const char *p)
 {
     const char *cwd = sess ? session_cwd(sess) : NULL;
@@ -549,7 +489,6 @@ static const char *short_path(const char *p)
     return p;
 }
 
-// "mcp__gmail__send_email" and "Bash" both want their last readable segment.
 static void tool_label(char *dst, size_t size, const char *name)
 {
     if (!strncmp(name, "mcp__", 5)) {
@@ -566,7 +505,6 @@ static void tool_label(char *dst, size_t size, const char *name)
     dst[i] = '\0';
 }
 
-// The one argument worth showing for a tool call: a path, a command, a query.
 static const char *tool_arg(cJSON *in)
 {
     static const char *const keys[] = {
@@ -581,8 +519,6 @@ static const char *tool_arg(cJSON *in)
     return NULL;
 }
 
-// "read" + "src/main.c", "bash" + "make -j8". The argument falls back to the
-// compact JSON, and is empty when the tool takes nothing worth showing.
 static void tool_line(char *label, size_t ln, char *arg, size_t an,
                       const backend_event *ev)
 {
@@ -596,10 +532,8 @@ static void tool_line(char *label, size_t ln, char *arg, size_t an,
     cJSON_Delete(in);
 }
 
-#define DIFF_MAX_LINES 40   // a long edit is cut rather than split in two
+#define DIFF_MAX_LINES 40
 
-// Lines of `s` prefixed with `sign` for a ```diff block. *left is the line
-// budget, decremented as lines are written; exhausting it emits an ellipsis.
 static void put_diff_lines(mdv2_buf *b, const char *s, char sign, int *left)
 {
     while (s && *s) {
@@ -624,9 +558,6 @@ static void put_diff_lines(mdv2_buf *b, const char *s, char sign, int *left)
     }
 }
 
-// An edit reads best as a diff: Telegram colours -/+ lines inside a ```diff
-// block. A write has no prior text, so its whole body shows as added. Returns 0
-// when the call carries no diffable text, leaving the caller to fall back.
 static int send_edit_diff(const char *label, const char *path, cJSON *in)
 {
     const char *old = cJSON_GetStringValue(cJSON_GetObjectItem(in, "old_string"));
@@ -657,16 +588,12 @@ static int send_edit_diff(const char *label, const char *path, cJSON *in)
     return ok;
 }
 
-// Built by hand rather than converted: the argument is a shell command or a
-// path and must never be read as markdown.
 static void send_tool_line(const backend_event *ev)
 {
     char label[48], raw[600];
     tool_line(label, sizeof label, raw, sizeof raw, ev);
     mdv2_buf b = {0};
     if (*raw && !strcmp(label, "bash")) {
-        // No italic label: Telegram already heads the block with "bash", and a
-        // command keeps its own line breaks.
         mdv2_puts(&b, "```bash\n");
         mdv2_esc_code(&b, raw, strlen(raw));
         mdv2_puts(&b, "\n```");
@@ -700,30 +627,23 @@ static void send_tool_line(const backend_event *ev)
     free(b.p);
 }
 
-// ---- subagents ----------------------------------------------------------
-
-// Work the agent handed to a subagent. A background subagent outlives the turn
-// that launched it, so the turn ending is not the work ending: this is what
-// /agents reports and what the idle pump is watching for.
 #define SUBAGENT_MAX 16
 
 struct subagent {
     char   id[40];
     char   desc[140];
     char   type[40];
-    char   status[24];      // "running", "completed", "failed", ...
-    char   latest[240];     // what it is doing now, then what it ended on
+    char   status[24];
+    char   latest[240];
     time_t started, ended;
-    int    repeats;         // times it ended again after already ending
+    int    repeats;
 };
 
 static struct subagent agents[SUBAGENT_MAX];
 static int agent_count;
-static int task_events;     // the backend reports a task life cycle
-static int repeat_task;     // an already-finished task re-notified
+static int task_events;
+static int repeat_task;
 
-// "launched" counts as done for the running tally: a backend that never reports
-// completion must not leave the user reading a count that only grows.
 static int subagent_done(const struct subagent *a)
 {
     return strcmp(a->status, "running") != 0 && strcmp(a->status, "pending") != 0;
@@ -737,8 +657,6 @@ static struct subagent *subagent_find(const char *id)
     return NULL;
 }
 
-// A new task takes a free slot, or the oldest finished one. Nothing is dropped
-// while it is still running: those are what the user is waiting on.
 static struct subagent *subagent_add(const char *id)
 {
     if (agent_count < SUBAGENT_MAX) {
@@ -769,7 +687,6 @@ static int subagents_running(void)
     return n;
 }
 
-// "4m12s", the only resolution that matters for a turn measured in minutes.
 static void human_secs(char *out, size_t size, long secs)
 {
     if (secs < 60)
@@ -780,8 +697,6 @@ static void human_secs(char *out, size_t size, long secs)
         snprintf(out, size, "%ldh%02ldm", secs / 3600, (secs % 3600) / 60);
 }
 
-// Fold one task event into the registry. Returns the entry so the caller can
-// announce a change; NULL when the event says nothing new.
 static struct subagent *subagent_note(const backend_event *ev)
 {
     if (!ev->id || !*ev->id)
@@ -798,17 +713,13 @@ static struct subagent *subagent_note(const backend_event *ev)
     if (ev->arg && *ev->arg)
         snprintf(a->type, sizeof a->type, "%s", ev->arg);
     if (ev->text && *ev->text) {
-        // The launch carries the description, and every event after it carries
-        // either what the task is doing now or the summary it ended on — both
-        // read as "latest", and neither may overwrite what it was asked to do.
         if (!a->desc[0])
             copy_trunc(a->desc, sizeof a->desc, ev->text);
         else
             copy_trunc(a->latest, sizeof a->latest, ev->text);
     }
     int changed = fresh;
-    // The CLI re-announces a task at shutdown, so a finished one is never put
-    // back to running: only a status that ends it is taken after it has ended.
+
     if (ev->name && *ev->name && strcmp(a->status, ev->name) &&
         !(subagent_done(a) && !strcmp(ev->name, "running"))) {
         snprintf(a->status, sizeof a->status, "%s", ev->name);
@@ -819,17 +730,13 @@ static struct subagent *subagent_note(const backend_event *ev)
     return changed ? a : NULL;
 }
 
-// Backends other than claude report no task life cycle: the only evidence a
-// subagent exists is the call that spawned it, and nothing announces its end.
-// Those are recorded as launches — what was handed off, and when — and never
-// pretended to be finished or still running.
 static int is_spawn_tool(const char *name)
 {
     static const char *const spawn[] = {
         "task", "agent", "spawn_subagent", "spawn_agent", "workflow", NULL
     };
     char lower[64];
-    tool_label(lower, sizeof lower, name);      // also strips mcp__ prefixes
+    tool_label(lower, sizeof lower, name);
     for (int i = 0; spawn[i]; i++)
         if (!strcmp(lower, spawn[i]))
             return 1;
@@ -864,8 +771,6 @@ static void send_subagent_line(const struct subagent *a)
                took[0] ? " in " : "", took);
 }
 
-// Append to a fixed buffer, clamping at its end: snprintf reports what it would
-// have written, which would run the offset past the buffer on a long line.
 __attribute__((format(printf, 4, 5)))
 static void appendf(char *buf, size_t size, size_t *n, const char *fmt, ...)
 {
@@ -911,9 +816,6 @@ static void send_agents(void)
     send_pre(msg);
 }
 
-// ---- the observer -------------------------------------------------------
-
-// Whether what the agent is doing right now belongs in the chat.
 static int mirroring(void)
 {
     if (!running || !chat_id)
@@ -923,8 +825,6 @@ static int mirroring(void)
     return mirror == MIRROR_ALL || from_chat;
 }
 
-// Telegram expires the typing indicator after about five seconds. Refreshing it
-// is an HTTP round trip, so it is refreshed on that clock and no faster.
 static void typing(void)
 {
     static time_t last;
@@ -941,12 +841,7 @@ static void on_event(void *ud, const backend_event *ev)
 
     if (ev->kind == BACKEND_EV_TASK) {
         task_events = 1;
-        // A subagent woken again after finishing — by a background command it
-        // left running, or by anything else that resumes it — ends a second
-        // time, and the CLI notifies again. That is legitimate: the late result
-        // may be the news. But an agent that keeps re-ending is a loop, and
-        // every wake costs a turn, so the first repeat is relayed and the rest
-        // are dropped.
+
         struct subagent *prev = subagent_find(ev->id ? ev->id : "");
         int was_done = prev && subagent_done(prev);
         struct subagent *a = subagent_note(ev);
@@ -961,8 +856,6 @@ static void on_event(void *ud, const backend_event *ev)
         return;
 
     if (repeat_task && !from_chat) {
-        // Nobody asked, and the only news is a task that already reported. The
-        // model still answers the wake; that answer is the duplicate.
         if (ev->kind == BACKEND_EV_ASSISTANT)
             repeat_task = 0;
         return;
@@ -1000,15 +893,12 @@ static void on_event(void *ud, const backend_event *ev)
     typing();
 }
 
-// Telegram expires the typing indicator after about five seconds, and a turn
-// that is only thinking sends nothing else.
 static int on_abort(void *ud)
 {
     const struct session *s = ud;
     if (mirroring())
         typing();
-    // "stop" means the turn the chat is watching. A tab working in the
-    // background is not what was being complained about.
+
     if (stop_wanted && (!s || s == sess)) {
         stop_wanted = 0;
         return 1;
@@ -1016,9 +906,6 @@ static int on_abort(void *ud)
     return 0;
 }
 
-// The client's own diagnostics, which come off the polling thread. They are
-// kept rather than printed: writing to the terminal from another thread lands
-// in the middle of whatever is drawn. /tg reports the last one.
 static void on_log(const char *msg)
 {
     pthread_mutex_lock(&log_lock);
@@ -1031,9 +918,6 @@ static void on_log(const char *msg)
     pthread_mutex_unlock(&log_lock);
 }
 
-// Something worth knowing as the bridge comes up. It has to go through the ui,
-// or it lands on the screen as raw bytes the viewport does not know about and
-// the hud paints over.
 __attribute__((format(printf, 1, 2)))
 static void note_up(const char *fmt, ...)
 {
@@ -1049,13 +933,10 @@ static void note_up(const char *fmt, ...)
     ui_flush();
 }
 
-// ---- artifacts ----------------------------------------------------------
-
 static httpd *server;
 static char   art_dir[4096];
-static char   art_base[300];    // link prefix, token included
+static char   art_base[300];
 
-// Persisted, so links already sent keep working across a restart.
 static void artifacts_token(char *out, size_t size)
 {
     char *saved = state_read("artifacts_token");
@@ -1075,8 +956,6 @@ static void artifacts_token(char *out, size_t size)
     state_write("artifacts_token", hex);
 }
 
-// Serve a directory of build products over HTTP so a turn can answer with a
-// link. Failure is not fatal: the bridge works, it just cannot link.
 static void artifacts_init(void)
 {
     const char *dir = cfg_get("artifacts_dir", NULL);
@@ -1092,9 +971,6 @@ static void artifacts_init(void)
 
     int port = (int)cfg_get_long("artifacts_port", 8787);
 
-    // The link has to open on the phone, and nothing beyond the user's own
-    // devices should be able to fetch it — so the tailnet address, when there
-    // is one, is the right default.
     const char *bind = cfg_get("artifacts_bind", NULL);
     if (!bind || !*bind)
         bind = httpd_tailscale_ip();
@@ -1123,7 +999,6 @@ static void artifacts_init(void)
     }
 }
 
-// Newest first — what was just built is what is being asked about.
 struct artifact { char name[256]; time_t mtime; };
 
 static int artifact_newer(const void *a, const void *b)
@@ -1171,8 +1046,6 @@ static void send_artifacts(void)
         appendf(msg, sizeof msg, &n, "\n… and %d more", count - 10);
     send_pre(msg);
 }
-
-// ---- what the agent is told ---------------------------------------------
 
 const char *tg_system_note(void)
 {
@@ -1239,15 +1112,9 @@ const char *tg_system_note(void)
         "first, do NOT auto-create it and do NOT just acknowledge the statement.\n",
         reminders_path());
 
-
     return note;
 }
 
-// ---- reminders ----------------------------------------------------------
-
-// Queue any reminders that have come due. The text is an instruction to the
-// agent rather than a message from the user, so it carries its own framing; the
-// reply is what actually reaches the chat.
 static void fire_due_reminders(void)
 {
     for (int guard = 0; guard < 64; guard++) {
@@ -1274,8 +1141,6 @@ static void fire_due_reminders(void)
     }
 }
 
-// ---- the poller ---------------------------------------------------------
-
 static int poller_aborting(void) { return poller_stop; }
 
 static const char *ext_for(const tg_update *u)
@@ -1298,15 +1163,12 @@ static const char *ext_for(const tg_update *u)
     return "bin";
 }
 
-// A message being assembled from one update, or from a whole album.
 struct incoming {
     char *text;
     char *files[MAX_ATTACH];
     int   nfiles;
 };
 
-// Download one attachment into /tmp and record its path. Voice and audio are
-// transcribed locally (whisper.h) and the transcript becomes the text.
 static void take_file(const tg_update *u, struct incoming *in)
 {
     if (in->nfiles >= MAX_ATTACH)
@@ -1328,7 +1190,6 @@ static void take_file(const tg_update *u, struct incoming *in)
     in->files[in->nfiles++] = strdup(path);
 }
 
-// Attachments are named in the line so the agent reads them with its own tools.
 static char *compose(struct incoming *in)
 {
     if (!in->nfiles)
@@ -1353,8 +1214,6 @@ static char *compose(struct incoming *in)
     return out;
 }
 
-// A message that says nothing but "stop" — the word alone is what gets typed
-// (or dictated, hence the trailing punctuation) when a turn should end.
 static int is_bare_stop(const char *s)
 {
     if (!s)
@@ -1378,13 +1237,11 @@ static void *poller_thread(void *ud)
     free(saved);
 
     while (!poller_stop) {
-        fire_due_reminders();       // before the long poll: runs even if it errors
+        fire_due_reminders();
 
         tg_update *u = NULL;
         int n = tg_get_updates(rx, offset, poll_seconds, &u);
         if (n < 0) {
-            // Aborting reads as a failed poll, so the wait before retrying has
-            // to notice the stop rather than sitting out its two seconds.
             for (int i = 0; i < 20 && !poller_stop; i++) {
                 struct timespec nap = {0, 100 * 1000 * 1000};
                 nanosleep(&nap, NULL);
@@ -1398,9 +1255,6 @@ static void *poller_thread(void *ud)
             if (u[i].chat_id != chat_id)
                 continue;
 
-            // A tapped button. The spinner on the sender's phone runs until
-            // the tap is acknowledged, so that happens here rather than
-            // wherever the queue gets to it.
             if (u[i].callback_data) {
                 tg_answer_callback(rx, u[i].callback_id, NULL);
                 char *tapped = strdup(u[i].callback_data);
@@ -1409,7 +1263,6 @@ static void *poller_thread(void *ud)
                 continue;
             }
 
-            // Stop must not queue behind the turn it is meant to cancel.
             if (u[i].text && (!strcmp(u[i].text, "/stop") || is_bare_stop(u[i].text))) {
                 stop_wanted = 1;
                 wake_up();
@@ -1422,8 +1275,6 @@ static void *poller_thread(void *ud)
             if (u[i].file_id)
                 take_file(&u[i], &in);
 
-            // An album arrives as several updates sharing a media_group_id;
-            // fold the rest of this batch into the same message.
             while (u[i].media_group_id && i + 1 < n && u[i + 1].media_group_id &&
                    !strcmp(u[i].media_group_id, u[i + 1].media_group_id)) {
                 i++;
@@ -1449,21 +1300,11 @@ static void *poller_thread(void *ud)
     return NULL;
 }
 
-// ---- the chat's tabs ----------------------------------------------------
-
-// The conversations the chat can reach are the window's own tabs. There is one
-// current tab, not one per front end: switching from the phone switches the
-// terminal, and switching at the terminal is what the phone is then talking
-// to. The chat is a second screen onto the window, so what it does has to be
-// what the window did.
-
-// The observer follows the chat: what another tab does is its own business.
 static void focus(struct session *s)
 {
     if (sess == s)
         return;
-    // The tab left behind keeps working, and keeps its own screen, but what it
-    // does stops being relayed.
+
     if (sess)
         session_set_observer(sess, NULL, NULL);
     sess = s;
@@ -1477,25 +1318,22 @@ static int tab_switch(int i)
 {
     if (i < 0 || i >= workspace_count())
         return 0;
-    workspace_show(i);          // the terminal comes along; it is the same tab
+    workspace_show(i);
     focus(workspace_at(i));
     return 1;
 }
 
-// Starts one the way the tab in front was started, and points the chat at it.
 static int tab_open(const char *cwd, const char *id)
 {
     struct session *from = workspace_current();
     if (!from)
         return -1;
-    // The workspace brings a new tab up as it opens, which is what the chat
-    // wants too: it is about to be talking to it.
+
     return workspace_spawn(session_backend(from), session_model(from),
                            session_effort(from),
                            cwd && *cwd ? cwd : session_cwd(from), id);
 }
 
-// The last part of a path, which is what a directory is called in practice.
 static const char *dir_name(const char *path)
 {
     if (!path || !*path)
@@ -1504,7 +1342,6 @@ static const char *dir_name(const char *path)
     return slash && slash[1] ? slash + 1 : path;
 }
 
-// How a tab reads in a list: where it is, and what it is doing.
 static void tab_label(int i, char *out, size_t size)
 {
     struct session *s = workspace_at(i);
@@ -1519,8 +1356,6 @@ static void tab_label(int i, char *out, size_t size)
     snprintf(out, size, "%s%d  %s%s", mark, i + 1, title, what);
 }
 
-// What a menu row means for the "tab" kind: the conversation itself when the
-// backend has named it, and where it sits when it has not yet.
 static void tab_payload(int i, char *out, size_t size)
 {
     const char *id = session_id(workspace_at(i));
@@ -1541,8 +1376,6 @@ static int tab_from_payload(const char *payload)
     return workspace_find_id(payload);
 }
 
-// Says which conversation the chat is now talking to. Worth saying on every
-// switch: with no tab strip in front of you it is the only thing that does.
 static void send_here(void)
 {
     struct session *s = sess;
@@ -1574,7 +1407,6 @@ static void send_tabs(void)
     menu_send("conversations", 1);
 }
 
-// The past conversations of this directory, newest first, as a menu.
 static void send_resume(void)
 {
     if (!sess) {
@@ -1595,7 +1427,7 @@ static void send_resume(void)
         return;
     }
 
-    int room = MENU_MAX - 1;            // the last row is the way back
+    int room = MENU_MAX - 1;
     menu_begin("resume");
     for (int i = 0; i < n && i < room; i++) {
         char label[80];
@@ -1610,7 +1442,6 @@ static void send_resume(void)
     menu_send(title, 1);
 }
 
-// Opens one, in `cwd` when it is named, and points the chat at it.
 static void open_tab(const char *cwd, const char *id)
 {
     if (workspace_count() >= WORKSPACE_MAX) {
@@ -1651,8 +1482,7 @@ static void close_tab(int at)
         return;
     }
     workspace_close(at);
-    // The window closes tabs by way of tg_refocus(), so the chat is already
-    // standing wherever it left it.
+
     send_here();
 }
 
@@ -1672,9 +1502,6 @@ void tg_refocus(void)
     focus(workspace_current());
 }
 
-// A tapped row as the line it stands for. Everything else reaches the bridge
-// as a line, so a tap becomes one nobody had to type, and runs where a typed
-// one runs rather than wherever it happened to arrive.
 static char *menu_line(const char *tapped)
 {
     char kind[16], payload[200], line[256];
@@ -1707,13 +1534,10 @@ static char *menu_line(const char *tapped)
     return strdup(line);
 
 nothing:
-    // Nothing to run, so nothing will come along and retire the menu the tap
-    // came from. It has to happen here instead.
+
     menu_flush();
     return NULL;
 }
-
-// ---- running a line -----------------------------------------------------
 
 static void send_bridge_status(void)
 {
@@ -1761,9 +1585,6 @@ static const char *HELP =
     "/tg          the bridge's own settings, and this\n\n"
     "Settings live in ~/.config/mux/telegram.";
 
-// The bridge's own commands, which the terminal has no use for.
-// The word after the command, or NULL. Also answers whether `line` is that
-// command at all.
 static const char *arg_of(const char *line, const char *cmd)
 {
     size_t n = strlen(cmd);
@@ -1772,13 +1593,11 @@ static const char *arg_of(const char *line, const char *cmd)
     const char *arg = line + n;
     while (*arg == ' ')
         arg++;
-    return arg;                 // "" when the command stood alone
+    return arg;
 }
 
 static int bridge_command(const char *line)
 {
-    // /sessions is the terminal's name for the same list, and reaches a
-    // picker with nowhere to draw when the ask came from the chat.
     if (!strcmp(line, "/tabs") || !strcmp(line, "/tab") ||
         !strcmp(line, "/sessions")) {
         send_tabs();
@@ -1798,12 +1617,10 @@ static int bridge_command(const char *line)
         return 1;
     }
     if ((arg = arg_of(line, "/resume")) != NULL) {
-        // With an id behind it the row of a menu was tapped; on its own it is
-        // the ask for that menu.
         if (*arg) {
             int at = workspace_find_id(arg);
             if (at >= 0)
-                switch_tab(at);         // already open here
+                switch_tab(at);
             else
                 open_tab(NULL, arg);
         } else {
@@ -1825,11 +1642,10 @@ static int bridge_command(const char *line)
         return 1;
     }
     if (!strcmp(line, "/stop"))
-        return 1;               // handled by the poller; nothing left to do
+        return 1;
     return 0;
 }
 
-// Relay what the turn ended on, unless the stream already said it.
 static void send_turn_reply(int ok, int quiet)
 {
     if (!ok) {
@@ -1843,7 +1659,7 @@ static void send_turn_reply(int ok, int quiet)
     const char *reply = session_last_reply(sess);
     int nothing_said = (!reply || !*reply) && (!last_said || !*last_said);
     if (quiet && nothing_said)
-        return;                 // nobody asked; an empty answer is not news
+        return;
     if (session_last_interrupted(sess) && (!reply || !*reply)) {
         send_note("(stopped)");
         return;
@@ -1858,23 +1674,19 @@ static void send_turn_reply(int ok, int quiet)
         send_notef("context %d%% of %ldk", pct, window / 1000);
 }
 
-// One line from the chat, run exactly as the prompt would run it: a bash
-// escape, a mux command, or a turn.
 static void run_line(char *line, int quiet)
 {
     menu_flush();
     free(last_said);
     last_said = NULL;
     from_chat = 1;
-    frontend_push(0);   // the chat has no keyboard behind it
+    frontend_push(0);
     repeat_task = 0;
-    stop_wanted = 0;    // a stop sent before this line was meant for the last
+    stop_wanted = 0;
 
     if (bridge_command(line))
         goto done;
 
-    // The tab the chat was standing in has been closed at the terminal. There
-    // is usually another to stand in.
     if (!sess)
         focus(workspace_current());
     if (!sess) {
@@ -1882,9 +1694,6 @@ static void run_line(char *line, int quiet)
         goto done;
     }
 
-    // A bash escape writes to the terminal and may want to be answered there,
-    // which is why it runs at all: the chat is a second screen onto a window
-    // that has a keyboard.
     if (bash_is_command(line)) {
         bash_run(line);
         gitinfo_forget();
@@ -1926,12 +1735,6 @@ done:
     free(line);
 }
 
-// ---- the front end ------------------------------------------------------
-
-// The bot to be. A token in the environment is the default and the one to
-// prefer — `token_env` picks which variable, so a second bot is a config change
-// rather than an edit here. A token written in the config file works too, for
-// a daemon started by something with no environment to speak of.
 static const char *bot_token(void)
 {
     const char *var = cfg_get("token_env", "TELEGRAM_TOKEN");
@@ -1960,11 +1763,6 @@ int tg_start(struct session *s)
         return 0;
     }
 
-    // With no terminal there is nothing to mirror from: everything the agent
-    // does is only visible in the chat.
-    // At the terminal the phone is a second screen, not the only one, and every
-    // mirrored event is an HTTP round trip in the middle of the turn. So the
-    // default there is to mirror only what the chat itself asked for.
     const char *m = cfg_get("mirror", "remote");
     mirror = !strcmp(m, "off") ? MIRROR_OFF : !strcmp(m, "remote") ? MIRROR_REMOTE
                                                                   : MIRROR_ALL;
@@ -1977,8 +1775,6 @@ int tg_start(struct session *s)
     if (poll_seconds < 1 || poll_seconds > 60)
         poll_seconds = 30;
 
-    // What the hud says. The bot's own name is worth showing when there is more
-    // than one: which bot answered is not otherwise visible from the terminal.
     const char *bot = cfg_get("bot", NULL);
     snprintf(label, sizeof label, "telegram%s%s", bot ? " " : "", bot ? bot : "");
 
@@ -2003,9 +1799,7 @@ int tg_start(struct session *s)
 
     tg_set_abort_check(poller_aborting);
     tg_set_log(on_log);
-    // The successor is built from the session, which knows nothing about the
-    // front ends attached to it: without this a rebuilt window comes back with
-    // no bridge, and the chat goes quiet with nothing to say why.
+
     restart_flag("--telegram");
     signal(SIGPIPE, SIG_IGN);
     running = 1;
@@ -2036,11 +1830,6 @@ const char *tg_label(void)
     return running ? label : NULL;
 }
 
-// Only ever called on the way out of the process, and nothing here is worth
-// making anyone wait for: the poller is usually parked in a long poll that
-// libcurl will not abandon for up to a second, and tearing a curl handle down
-// can itself talk to the network. So the port is freed, the threads are cut
-// loose to die with the process, and the clients are left unfreed on purpose.
 void tg_stop(void)
 {
     if (!running)
@@ -2056,8 +1845,6 @@ void tg_stop(void)
     last_said = NULL;
 }
 
-// The terminal is sharing this session: hand the line over for the prompt to
-// run, so everything happens on the one thread that owns the session.
 char *tg_take_line(void)
 {
     if (!running)
@@ -2070,18 +1857,15 @@ char *tg_take_line(void)
         char *cmd = menu_line(line);
         free(line);
         if (cmd)
-            return cmd;             // the prompt runs it as any chat line
+            return cmd;
     }
 }
 
-// The prompt handed a chat line back for the main thread to run. Takes the line.
 struct session *tg_session(void)
 {
     return sess;
 }
 
-// The session the bridge cached is going away: a tab closing frees it, a
-// handoff gives it to another window. Either way the pointer must not be used.
 void tg_forget_session(struct session *s)
 {
     if (sess == s)

@@ -1,7 +1,3 @@
-// An image is a block of placeholder cells. Every row of it must reach the
-// same column, and none of them may reach the last column of the screen: the
-// viewport paints with autowrap off, and tmux hangs a combining mark written
-// there on the cell before it, which costs the row its last placeholder.
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -41,8 +37,6 @@ static void say(const char *t)
     viewport_write("\n", 1);
 }
 
-// Cells of the placeholder codepoint on one screen row, and the column the
-// last of them sits in.
 static int row_cells(struct screen *s, int r, int *last_col)
 {
     int n = 0;
@@ -68,7 +62,6 @@ static void report(struct screen *s, const char *what)
     }
 }
 
-// Rows of one block must agree; a blank row starts a new block.
 static void check_uniform(struct screen *s, const char *what)
 {
     int first = -1, first_last = -1;
@@ -134,9 +127,9 @@ int main(void)
 
     viewport_clear();
     say("before");
-    place_image(1404, 1872);        /* portrait: the height is what binds */
+    place_image(1404, 1872);
     say("between");
-    place_image(2400, 600);         /* landscape: the fit runs to the width */
+    place_image(2400, 600);
     say("after");
     viewport_paint();
     pump(&s);
@@ -159,7 +152,6 @@ int main(void)
     return failures ? 1 : 0;
 }
 
-/* The loader table wants every kind; only the image one is under test. */
 void bash_ran_load(const cJSON *st);
 void md_kept_load(const cJSON *st);
 void prompt_echo_load(const cJSON *st);

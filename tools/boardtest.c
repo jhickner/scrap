@@ -14,8 +14,6 @@
 
 static int failures;
 
-// Only the counting is under test here, and nothing in it forks. The stub is
-// what keeps the harness off the rest of the session machinery.
 const char *sessionfork_program(void)
 {
     return "false";
@@ -33,8 +31,6 @@ static void expect(int ok, const char *what)
         fail(what);
 }
 
-// The store is found through HOME, so a throwaway one is enough to keep the
-// test off the real board.
 static char home[] = "/tmp/boardtest.XXXXXX";
 
 static void cleanup(void)
@@ -235,9 +231,6 @@ static void test_columns(void)
     board_free(v, n);
 }
 
-// A card that came back unclear has had its turn. Answering the question puts
-// something on the card triage has not seen, so the count starts again and the
-// board is free to give it another turn on its own.
 static void test_attempts_reset_when_answered(void)
 {
     char id[BOARD_ID_MAX] = {0};
@@ -275,8 +268,6 @@ static void test_attempts_reset_when_answered(void)
     board_remove(id);
 }
 
-// A card as it sits in the store, finished and long stale. Nothing in the API
-// can age one, so the line is written the way the store would have written it.
 static void plant_stale(const char *id)
 {
     FILE *f = fopen(board_path(), "a");
@@ -290,7 +281,6 @@ static void plant_stale(const char *id)
     fclose(f);
 }
 
-// Finished work leaves the board after a while, but is not thrown away.
 static void test_archive(void)
 {
     char busy[BOARD_ID_MAX] = {0}, fresh[BOARD_ID_MAX] = {0};
@@ -317,7 +307,6 @@ static void test_archive(void)
     expect(board_find(v, n, fresh) != NULL, "recently finished work stays");
     board_free(v, n);
 
-    // Moved, not thrown away.
     char path[4300];
     snprintf(path, sizeof path, "%s/.config/mux/board-archive.jsonl", home);
     char *text = text_slurp(path, 1u << 20, NULL);
@@ -341,8 +330,6 @@ static void test_empty_and_missing(void)
     board_free(v, n);
 }
 
-// The audit's verdict, without a model in the way: what it answers decides
-// whether the card goes on to land or back to be worked on.
 static void test_audit_verdict(void)
 {
     char id[BOARD_ID_MAX] = {0};
@@ -374,7 +361,6 @@ static void test_audit_verdict(void)
     expect(said, "the finding is on the card");
     board_free(v, n);
 
-    // Clean, and it goes on to land.
     expect(board_move(id, BOARD_AUDIT, "you", NULL), "back into audit");
     expect(boardaudit_take(key, "{\"clean\":true,\"findings\":[]}"), "clean verdict");
     n = board_load(&v);
@@ -382,8 +368,6 @@ static void test_audit_verdict(void)
     expect(c && c->col == BOARD_MERGING, "clean sends it on to land");
     board_free(v, n);
 
-    // A finding that came back as an object rather than a sentence is still a
-    // finding, and the card has to be told what it was.
     expect(board_move(id, BOARD_AUDIT, "you", NULL), "into audit once more");
     expect(boardaudit_take(key, "{\"clean\":false,\"findings\":["
                                 "{\"file\":\"src/b.c\",\"finding\":\"restates the code\"}]}"),
@@ -401,7 +385,6 @@ static void test_audit_verdict(void)
     expect(c && c->col == BOARD_DOING, "and still sends it back");
     board_free(v, n);
 
-    // An audit that says nothing is not one that failed the card.
     expect(board_move(id, BOARD_AUDIT, "you", NULL), "into audit again");
     expect(boardaudit_take(key, "the model wandered off"), "unparsable verdict");
     n = board_load(&v);
@@ -412,9 +395,6 @@ static void test_audit_verdict(void)
     board_remove(id);
 }
 
-// The reply that started this: the model answered, thought better of it, and
-// answered again. Taking the outermost braces spans both and lands the one it
-// took back.
 static void test_reply_json(void)
 {
     cJSON *o = replyjson_parse("{\"n\":1}\n\nCorrection:\n\n{\"n\":2}");
@@ -429,7 +409,6 @@ static void test_reply_json(void)
            "prose either side is stepped over");
     cJSON_Delete(o);
 
-    // A brace inside a string is not a brace.
     o = replyjson_parse("{\"s\":\"a } in the text\",\"n\":4}");
     expect(o && cJSON_GetObjectItem(o, "n") &&
            cJSON_GetObjectItem(o, "n")->valuedouble == 4,
@@ -446,8 +425,6 @@ static void test_reply_json(void)
     expect(!replyjson_parse(NULL), "nothing is nothing");
 }
 
-// Triage names a kind; what the card is worth and whether it goes through a
-// worktree both follow from it, so the classifier is not asked for either.
 static void test_kinds(void)
 {
     expect(boardcfg_kind("bug") != NULL, "a configured kind is found");
@@ -468,7 +445,6 @@ static void test_kinds(void)
     expect(boardcfg_kind_takes("nonsense", BOARD_STEP_MERGE),
            "an unknown kind takes every step, which is the careful way round");
 
-    // Where a card goes once a step is behind it follows from the kind.
     expect(boardflow_from("bug", BOARD_STEP_REVIEW, 1) == BOARD_REVIEW,
            "work stops for a person first");
     expect(boardflow_from("bug", BOARD_STEP_AUDIT, 1) == BOARD_AUDIT,
@@ -480,8 +456,6 @@ static void test_kinds(void)
     expect(boardflow_from("reference", BOARD_STEP_REVIEW, 1) == BOARD_DONE,
            "a filed note is done when the worker stops");
 
-    // The classifier is told the kinds from the configuration, not from a
-    // list written into the prompt beside it.
     char block[4096];
     boardcfg_kinds_block(block, sizeof block);
     expect(strstr(block, "todo") && strstr(block, "chore"), "every kind is named");

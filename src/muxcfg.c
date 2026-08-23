@@ -47,8 +47,6 @@ static int store_path(char *out, size_t size)
     return path_config_file(out, size, MUX_FILE);
 }
 
-// The first format: one settings line of backend[:model[:effort]] entries, a
-// bare name meaning the model last picked for that backend.
 static void seed_from_settings(struct set *s)
 {
     const char *p = settings_get_str(SETTING_MUX_BACKENDS, MUX_DEFAULT);
@@ -183,7 +181,6 @@ static void save_file(void)
     free(text);
 }
 
-// The store, read once. An empty one starts from the older settings line.
 static void ensure_loaded(void)
 {
     if (loaded)
@@ -215,7 +212,6 @@ int muxcfg_load(struct mux_spec *out, int max)
     return n;
 }
 
-// A name the store can tell apart from the ones already in it.
 static void unique_name(const char *want, char *out, size_t cap)
 {
     snprintf(out, cap, "%s", want && *want ? want : "matrix");
@@ -231,7 +227,6 @@ int muxcfg_install(const char *name, const struct mux_spec *v, int n)
     if (nsets < MUX_SETS) {
         s = &sets[nsets++];
     } else {
-        // Full: the oldest one that is not in use makes way.
         s = &sets[active == 0 ? 1 : 0];
     }
     memset(s, 0, sizeof *s);
@@ -266,8 +261,6 @@ void muxcfg_label(const struct mux_spec *m, char *out, size_t cap)
         snprintf(out, cap, "%s \xc2\xb7 %s", m->backend, short_model(m));
 }
 
-// "default" is how the pickers spell "leave it to the CLI", which is the empty
-// string in the store.
 static int pick_field(const char *title, const struct pick_item *items, int count,
                       char *out, size_t cap, int filter)
 {
@@ -320,7 +313,6 @@ static int pick_backend(char *out, size_t cap, const char *current)
     return 1;
 }
 
-// Standing instructions, put in front of whatever the row is asked.
 static void row_prompt(struct mux_spec *m)
 {
     char title[160];
@@ -335,7 +327,6 @@ static void row_prompt(struct mux_spec *m)
     free(text);
 }
 
-// Models and efforts belong to a backend: the old ones cannot follow.
 static void row_backend(struct mux_spec *m)
 {
     char was[32];
@@ -439,7 +430,6 @@ static int name_config(const char *title, char *out, size_t cap, int except)
     return 1;
 }
 
-// The named matrices: one is in use, and the rest wait their turn.
 static void configs_menu(void)
 {
     for (;;) {
@@ -555,7 +545,6 @@ void muxcfg_run(void)
             break;
         sel = index;
 
-        // Adding and the config list need no row under the cursor.
         if (pressed == 'c') {
             configs_menu();
             sel = 0;

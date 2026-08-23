@@ -17,7 +17,7 @@ struct field {
     const char *title;
     char        text[ASK_MAX];
     size_t      len;
-    size_t      at;   /* the caret, as a byte offset into text */
+    size_t      at;
 };
 
 static int lead_byte(const char *s, size_t at)
@@ -64,8 +64,6 @@ static void insert_codepoint(struct field *f, uint32_t cp)
     insert(f, buf, text_utf8_encode(cp, buf));
 }
 
-// The line scrolls under a fixed caret rather than wrapping: everything here
-// is one field on one row.
 static void paint(void *ud)
 {
     struct field *f = ud;
@@ -89,7 +87,6 @@ static void paint(void *ud)
     ui_esc(ui_style(UI_TEXT));
     ui_putn(f->text + from, f->at - from);
 
-    // The terminal's own caret sits with the prompt, so this one is drawn.
     size_t next = step_right(f, f->at);
     ui_esc("\x1b[7m");
     if (next > f->at)
@@ -111,7 +108,7 @@ static void paint(void *ud)
 char *ask_run(const char *title, const char *initial)
 {
     if (!frontend_has_keyboard() || !tty_is_raw())
-        return NULL;            // nothing to type on
+        return NULL;
 
     struct field f = {.title = title ? title : ""};
     if (initial) {
@@ -131,7 +128,7 @@ char *ask_run(const char *title, const char *initial)
 
         switch (ev.key) {
         case TK_TEXT:
-            // A paste is one line: newlines would break out of the field.
+
             for (char *p = ev.text; p && *p; p++)
                 if (*p == '\n' || *p == '\r')
                     *p = ' ';
@@ -143,9 +140,9 @@ char *ask_run(const char *title, const char *initial)
                 chrome_modal(NULL, NULL);
                 return NULL;
             }
-            if (ev.cp == 21) {          /* ctrl-u */
+            if (ev.cp == 21) {
                 cut(&f, 0, f.at);
-            } else if (ev.cp == 23) {   /* ctrl-w */
+            } else if (ev.cp == 23) {
                 size_t to = f.at;
                 while (f.at && f.text[f.at - 1] == ' ')
                     f.at--;

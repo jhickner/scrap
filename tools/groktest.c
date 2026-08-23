@@ -148,8 +148,6 @@ static int mock_server(int argc, char **argv)
                 emit_tool("edit-type", "failed", "[]",
                           "{\"type\":\"PermissionDenied\"}");
             } else if (text && strstr(text, "search-replace")) {
-                /* Two edits announced together, completing out of order: the
-                 * shape parallel search_replace calls actually arrive in. */
                 static const char *ids[] = { "sr-1", "sr-2" };
                 static const char *olds[] = { "int a;\\nint b;", "int x;" };
                 static const char *news[] = { "int a;\\nint mid;\\nint b;", "long x;" };
@@ -212,7 +210,6 @@ static int mock_server(int argc, char **argv)
             }
             respond(id, "{\"stopReason\":\"end_turn\"}");
         } else if (idj) {
-
             printf("{\"jsonrpc\":\"2.0\",\"id\":%d,\"error\":{"
                    "\"code\":-32601,\"message\":\"unhandled method: %s\"}}\n",
                    id, method ? method : "(none)");

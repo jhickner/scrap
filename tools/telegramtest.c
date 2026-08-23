@@ -1,5 +1,4 @@
-// The inline-keyboard side of the bot client: the markup a menu sends, and the
-// tap that comes back.
+
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -7,7 +6,6 @@
 #define TELEGRAM_IMPLEMENTATION
 #include "telegram.h"
 
-// Buttons are laid out `per_row` across, and the last row takes the remainder.
 static void case_rows(void)
 {
     const tg_button b[] = {
@@ -25,8 +23,6 @@ static void case_rows(void)
     assert(!strcmp(cJSON_GetObjectItem(first, "callback_data")->valuestring, "1:0"));
     cJSON_Delete(markup);
 
-    // One per row is the list case, and no buttons at all leaves the message
-    // plain rather than carrying an empty keyboard.
     markup = tg_keyboard_json(b, 3, 1);
     rows = cJSON_GetObjectItemCaseSensitive(markup, "inline_keyboard");
     assert(cJSON_GetArraySize(rows) == 3);
@@ -35,8 +31,6 @@ static void case_rows(void)
     assert(tg_keyboard_json(NULL, 3, 1) == NULL);
 }
 
-// A tap answers where the menu was shown: the chat and the message come off
-// the message the keyboard hangs from, not off the query.
 static void case_tap(void)
 {
     const char *json =
@@ -59,8 +53,6 @@ static void case_tap(void)
     free(u.callback_data);
 }
 
-// A tap on a menu whose message Telegram no longer sends back still parses:
-// the bridge needs the payload to answer, and answers in the known chat.
 static void case_tap_no_message(void)
 {
     cJSON *cb = cJSON_Parse("{\"id\":\"9\",\"data\":\"1:0\"}");

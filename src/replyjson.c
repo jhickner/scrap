@@ -3,14 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Walks back from `close` to the brace that opens it, stepping over anything
-// inside a string so a brace in the text does not count.
 static const char *opener(const char *text, const char *close)
 {
     int depth = 0;
     for (const char *p = close; p >= text; p--) {
         if (*p == '"') {
-            // Back over the string, and over an escaped quote inside it.
             int escaped;
             do {
                 p--;
@@ -52,7 +49,7 @@ cJSON *replyjson_parse(const char *text)
         free(slice);
         if (o)
             return o;
-        close = open;   /* not that one; look further back */
+        close = open;
     }
     return NULL;
 }

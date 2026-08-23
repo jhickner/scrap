@@ -72,7 +72,7 @@ struct prompt {
     void        *cancel_ud;
     int          stopped;
     int          frame_ok;
-    int          aside;         /* the line goes out as a side question */
+    int          aside;
 };
 
 static void history_append(struct prompt *p, const char *line)
@@ -112,15 +112,11 @@ void prompt_history_open(struct prompt *p, const char *path)
     fclose(f);
 }
 
-
-
-
 static void put_codepoint(uint32_t cp)
 {
     char buf[4];
     ui_putn(buf, text_utf8_encode(cp, buf));
 }
-
 
 static size_t queued_budget(int cols)
 {
@@ -131,8 +127,7 @@ static struct ui_wrap bar_wrap(size_t budget, enum ui_role role, int cap,
                                const char *mark)
 {
     struct ui_wrap w = {0};
-    // The ellipsis is written past the budget, so a capped block keeps a cell
-    // back for it or it lands off the row and is clipped away.
+
     if (cap > 0 && budget > 1)
         budget--;
     w.budget = budget;
@@ -181,7 +176,6 @@ void prompt_set_queued_source(struct prompt *p, int (*count)(void *ud),
     p->q_ud = ud;
 }
 
-// The tab's waiting lines, then the prompt's own.
 static int queued_total(struct prompt *p)
 {
     return (p->q_count ? p->q_count(p->q_ud) : 0) + p->queued_count;
@@ -199,7 +193,7 @@ int prompt_queued_rows(struct prompt *p, int cols)
     if (n == 0)
         return 0;
     size_t budget = queued_budget(cols);
-    int rows = n - 1;                    /* the blank between each pair */
+    int rows = n - 1;
     for (int i = 0; i < n; i++)
         rows += painted_rows(queued_line(p, i), budget, QUEUED_LINES, NULL);
     return rows;
@@ -216,7 +210,7 @@ void prompt_paint_queued(struct prompt *p, int room)
         const char *line = queued_line(p, i);
         int need = painted_rows(line, budget, QUEUED_LINES, NULL);
         if (i)
-            need++;                      /* the blank above this one */
+            need++;
         if (used + need > room)
             break;
         used += need;
@@ -260,7 +254,6 @@ static void emit_input(struct prompt *p, int rows)
     }
 }
 
-// Renders the input into the frame and reports its rows. The frame is kept.
 int prompt_input_rows(struct prompt *p, int cols)
 {
     if (!p)
@@ -304,7 +297,7 @@ struct echo_item {
     char        *text;
     enum ui_role role;
     int          cap;
-    int          gap;           /* asks for a blank row above */
+    int          gap;
 };
 
 static void echo_paint(const struct echo_item *e)
@@ -313,8 +306,6 @@ static void echo_paint(const struct echo_item *e)
     ui_wrap_paint(e->text, &w);
 }
 
-// A blank row under it, except for a shell command: its output starts on the
-// next row.
 static int echo_pad_after(const struct echo_item *e)
 {
     return e->role != UI_BASH;
@@ -363,7 +354,7 @@ void prompt_echo_message(const char *text)
             e = NULL;
         }
     }
-    // Kept, so the bar and its wrap are laid out again at a new width.
+
     if (e) {
         unsigned mark = viewport_item_begin(&(struct viewport_entry){
             .render = echo_render, .ud = e, .free_ud = echo_free, .reflow = 1,
@@ -563,8 +554,6 @@ static void edit_in_editor(struct prompt *p, int live)
         return;
     }
 
-    // $EDITOR is user config and may carry its own arguments, so it goes in as
-    // written; only the path is quoted.
     char quoted[sizeof path * 4 + 3];
     char cmd[4096];
     int  len = text_shell_quote(path, quoted, sizeof quoted)
@@ -590,7 +579,6 @@ static void edit_in_editor(struct prompt *p, int live)
     int status = system(cmd);
 
     if (tty_raw_begin() != 0) {
-
         fprintf(stderr, "could not return the terminal to raw mode\n");
         exit(1);
     }
@@ -657,9 +645,6 @@ static void cycle_colors(struct prompt *p, int live, int mine)
 
 #define KEY_CTRL(c) ((c) - 'A' + 1)
 
-// Every row here is a key feed_key() below handles, or one the repl underneath
-// it handles on the prompt's behalf. Adding a binding without a row leaves it
-// undocumented, so add both.
 static const struct prompt_key SHORTCUTS[] = {
     {"enter", "submit prompt, or queue it while a turn is running"},
     {"enter (empty)", "reprint the status bar"},
@@ -693,11 +678,8 @@ const struct prompt_key *prompt_shortcuts(int *count)
     return SHORTCUTS;
 }
 
-// Tab on a line with nothing left to complete asks it on the side.
 #define ASIDE_COMMAND "/btw "
 
-// A command or a shell line already says what it is; anything else is a
-// question, and a bare word is more likely a completion that found nothing.
 static int aside_worthy(const char *line)
 {
     if (!line || !*line || *line == '/' || *line == '!')
@@ -705,8 +687,6 @@ static int aside_worthy(const char *line)
     return strchr(line, ' ') != NULL;
 }
 
-// The dropdown and the history search own the keys that would otherwise reach
-// the session, so every "nothing is in the way" guard has to test both.
 static int overlay_open(const struct prompt *p)
 {
     return p->repl.dropdown_open || p->repl.searching;
@@ -742,8 +722,7 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
         if (ev->cp == KEY_CTRL('C') && p->repl.len == 0 && !overlay_open(p)) {
             if (live)
                 return KEY_CANCEL;
-            // Nothing typed and a turn running behind the prompt: the key
-            // belongs to the turn.
+
             if (p->cancel && p->cancel(p->cancel_ud))
                 return KEY_OK;
         }
@@ -755,8 +734,7 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             edit_in_editor(p, live);
             return KEY_OK;
         }
-        // A shell beside this one, where the session is working. Nothing is
-        // said about it mid-turn: the stream owns the screen then.
+
         if (ev->cp == KEY_CTRL('T')) {
             if (p->split)
                 p->split(p->split_ud, live);
@@ -764,8 +742,7 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
                 repaint(p);
             return KEY_OK;
         }
-        // Another session beside this one. Mid-turn the stream owns the
-        // screen, so the key is ignored then.
+
         if (ev->cp == KEY_CTRL('B')) {
             if (!live && p->another) {
                 chrome_clear();
@@ -795,9 +772,7 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             feed(p, REPL_KEY_RIGHT, 0, NULL);
             return KEY_OK;
         }
-        // Nothing to complete: what is typed goes out on the side instead,
-        // which is the quick way to ask something without holding up the
-        // conversation. A command or a shell line means itself.
+
         if (p->repl.len && !overlay_open(p) && aside_worthy(repl_line(&p->repl))) {
             p->aside = 1;
             viewport_scroll_end();
@@ -819,9 +794,6 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
         return KEY_OK;
 
     case TK_ENTER: {
-        // The repl consumes enter on an empty line, so it never submits one.
-        // It works mid-turn too, which is when the status is most worth asking
-        // for; the spinner steps aside the way a live command's echo does.
         if (p->blank && p->repl.len == 0 && !overlay_open(p)) {
             if (live)
                 status_pause();
@@ -836,7 +808,7 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
         const char *line = repl_line(&p->repl);
         if (!line || !*line)
             return KEY_OK;
-        // Sending is the one thing that means "show me the end again".
+
         viewport_scroll_end();
         return KEY_SUBMIT;
     }
@@ -858,8 +830,6 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
         return KEY_OK;
 
     default: {
-        // Left with nothing typed is not a cursor move: it is the way out of
-        // this conversation into the list of all of them.
         if (ev->key == TK_LEFT && !live && p->switcher && p->repl.len == 0 &&
             !overlay_open(p)) {
             chrome_clear();
@@ -889,8 +859,6 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
     }
 }
 
-// Typed as a question, sent as one: the line becomes the command that asks it
-// on the side, so history and the echo show what it really did.
 static char *aside_line(const char *line)
 {
     size_t want = sizeof ASIDE_COMMAND + strlen(line);
@@ -946,8 +914,6 @@ static void idle_ready_hook(void *ud)
     repaint(p);
 }
 
-// A restart would throw away a half-typed line or a queued one, so the request
-// is sticky and waits for a moment with neither.
 static void restart_check(struct prompt *p)
 {
     if (!p->restart || p->repl.len || p->queued_count)
@@ -998,8 +964,6 @@ void prompt_stop(struct prompt *p)
         p->stopped = 1;
 }
 
-// Unlike a restart, this cannot wait for a quiet prompt: the window asking for
-// the session is waiting on it.
 static void takeover_check(struct prompt *p)
 {
     if (!p->takeover || !p->takeover_pending || !p->takeover_pending(p->takeover_ud))
@@ -1034,9 +998,6 @@ static char *read_loop(struct prompt *p)
             return NULL;
         }
 
-        // A line from somewhere other than the keyboard — the chat bridge. It
-        // submits as typed when nothing is half-written, and waits its turn
-        // behind the line being composed when something is.
         if (p->external) {
             char *line = p->external(p->external_ud);
             if (line) {
@@ -1054,14 +1015,13 @@ static char *read_loop(struct prompt *p)
             }
         }
 
-        // Something animating needs waking on a frame, not on a keystroke.
         int animating = !resizing && p->animate_busy && p->animate_busy(p->animate_ud);
         int wait = resizing ? TTY_RESIZE_SETTLE_MS : (animating ? SPIN_FRAME_MS : -1);
 
         if (!tty_read(&ev, wait)) {
             if (resizing) {
                 resizing = 0;
-                // Goes over whatever else drew on the pane while it resized.
+
                 viewport_forget();
                 repaint(p);
             } else {
@@ -1105,7 +1065,6 @@ static char *read_loop(struct prompt *p)
 
 char *prompt_read(struct prompt *p)
 {
-
     tty_watch(p->idle_fds ? idle_fds_hook : NULL, idle_ready_hook, p);
     char *out = read_loop(p);
     tty_watch(NULL, NULL, NULL);
@@ -1150,9 +1109,6 @@ char *prompt_take_queued(struct prompt *p)
     return line;
 }
 
-// Up with nothing typed takes the last waiting line back into the editor: the
-// one you meant to fix, not the one before it in history. The prompt's own
-// come off first — they are the newer ones, drawn under the tab's.
 static int recall_queued(struct prompt *p)
 {
     const char *live = repl_line(&p->repl);
@@ -1230,4 +1186,3 @@ int prompt_live_key(void *ud, tty_event *ev)
         return 0;
     }
 }
-

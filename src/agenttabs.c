@@ -89,7 +89,6 @@ static void drop_record(void)
 
 void agenttabs_begin(const char *backend)
 {
-
     if (!getenv("TMUX_PANE"))
         return;
 
@@ -152,7 +151,6 @@ void agenttabs_usage(int percent, long resets_at, long window_minutes)
 
 void agenttabs_forget_hook(const char *id)
 {
-
     if (!record[0] || !id || !*id || strchr(id, '/'))
         return;
 

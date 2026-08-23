@@ -26,8 +26,6 @@ int boardmerge_running(const char *id)
     return child_running(key);
 }
 
-// Somewhere in the pool there is already a card landing. Only one may: that is
-// the whole point of a queue.
 static int something_landing(void)
 {
     struct board_card *cards = NULL;
@@ -39,7 +37,6 @@ static int something_landing(void)
     return yes;
 }
 
-// What the work is going back onto: whatever the repo itself has checked out.
 static int base_branch(const char *root, char *out, size_t size)
 {
     return gitcmd_line(root, "rev-parse --abbrev-ref HEAD", out, size);
@@ -53,9 +50,6 @@ int boardmerge_base(const struct board_card *c, char *out, size_t size)
     return base_branch(root, out, size);
 }
 
-// Rebase, check, merge, tidy up. Written out as one script so the output says
-// which step it got to, and so a failure leaves the worktree as it was rather
-// than half-rebased.
 static char *script_for(const struct board_card *c, const char *root,
                         const char *base)
 {
@@ -108,8 +102,6 @@ int boardmerge_pump(void)
     struct board_card *cards = NULL;
     int                n = board_load(&cards);
 
-    // The oldest waiting card goes first: a queue that reordered itself would
-    // be a queue nothing could be predicted about.
     struct board_card *next = NULL;
     for (int i = 0; i < n; i++) {
         if (cards[i].col != BOARD_MERGING || !cards[i].worktree[0])
@@ -147,7 +139,6 @@ int boardmerge_pump(void)
     return ok;
 }
 
-// The last few lines of what it said, which is where the reason is.
 static void tail_of(const char *text, char *out, size_t size)
 {
     if (!text || !*text) {
@@ -190,7 +181,6 @@ int boardmerge_take(const char *key, const char *out, int ok)
         int                n = board_load(&cards);
         struct board_card *c = board_find(cards, n, id);
         if (c) {
-            // The worktree is gone, so the card should stop naming one.
             struct board_card edited = *c;
             edited.col = BOARD_DONE;
             edited.worktree[0] = '\0';
@@ -201,28 +191,21 @@ int boardmerge_take(const char *key, const char *out, int ok)
             snprintf(landed_in, sizeof landed_in, "%s", c->cwd);
         board_free(cards, n);
         board_note(id, "board", "landed");
-        // Another card down in that repo, and every so often that is the one
-        // that brings a look over the whole of it due.
+
         boardsweep_landed(landed_in);
     } else {
-        // Nothing here can resolve a conflict or make a check pass. The card
-        // says why it could not land and goes back to being worked on; a
-        // worker is sent in for it on the next turn of the board.
         struct board_card *cards = NULL;
         int                n = board_load(&cards);
         struct board_card *c = board_find(cards, n, id);
         if (c) {
             struct board_card edited = *c;
             edited.col = BOARD_DOING;
-            // The script's own verdict is its last line; everything above it
-            // is git explaining itself, which the note keeps and the worker
-            // can see for itself in the worktree.
+
             snprintf(edited.stuck, sizeof edited.stuck, "%s", last_line(said));
             board_update(&edited);
         }
         board_free(cards, n);
-        // The whole of what it said is in the transcript; the card's own log
-        // wants the verdict.
+
         board_note(id, "board", last_line(said));
     }
     return 1;

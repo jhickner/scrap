@@ -7,8 +7,6 @@
 #include "tty.h"
 #include "ui.h"
 
-// A modal section: chrome.c paints it in place of the whole stack, so a resize
-// needs nothing but another paint.
 static void paint_question(void *ud)
 {
     const char *question = ud;
@@ -29,7 +27,7 @@ int confirm_run(const char *question)
     if (!question || !*question)
         return 0;
     if (!frontend_has_keyboard() || !tty_is_raw())
-        return 0;               // no keyboard to answer on: taken as "no"
+        return 0;
 
     chrome_modal(paint_question, (void *)question);
     for (;;) {

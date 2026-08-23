@@ -17,7 +17,7 @@ struct slot {
     int    fd;
     char  *buf;
     size_t len, cap;
-    int    done;        /* exited, and the last of its output is read */
+    int    done;
     int    ok;
 };
 
@@ -54,7 +54,7 @@ static struct slot *free_slot(const char *key)
 {
     for (int i = 0; i < CHILD_SLOTS; i++)
         if (slots[i].pid && !strcmp(slots[i].key, key))
-            return NULL;        /* already have one under that name */
+            return NULL;
     for (int i = 0; i < CHILD_SLOTS; i++)
         if (!slots[i].pid)
             return &slots[i];
@@ -76,8 +76,7 @@ static int spawn(struct slot *s, const char *key, char *const argv[],
     }
     if (pid == 0) {
         close(pipes[0]);
-        // Both streams: what a shell step says when it fails is on stderr, and
-        // that is exactly the part worth keeping.
+
         dup2(pipes[1], STDOUT_FILENO);
         dup2(pipes[1], STDERR_FILENO);
         if (pipes[1] > STDERR_FILENO)
@@ -156,7 +155,6 @@ int child_reap(char *key, size_t keysize, char **out, int *ok)
         if (went != s->pid)
             continue;
 
-        // Whatever it wrote between the last read and exiting.
         drain(s);
         s->done = 1;
         s->ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;

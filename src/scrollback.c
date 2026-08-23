@@ -13,7 +13,6 @@
 #include "viewport.h"
 #include "vendor/cJSON.h"
 
-// Every entry that can be rebuilt live. What is not here comes back as rows.
 static const struct {
     const char *kind;
     void      (*load)(const cJSON *st);

@@ -10,7 +10,6 @@ void bash_run(const char *line);
 
 char *bash_take_context(void);
 
-// Carried across a restart.
 #define BASH_RAN_KIND "bash"
 void bash_ran_load(const cJSON *st);
 

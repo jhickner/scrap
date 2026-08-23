@@ -24,8 +24,6 @@
 
 #define FAN_MAX MUX_MAX
 
-// The table needs room for a name beside a readable answer; under that it
-// falls back to one board after another.
 #define FAN_LABEL_MIN 8
 #define FAN_LABEL_MAX 22
 #define FAN_BODY_MIN  24
@@ -48,7 +46,6 @@ struct entry {
     int           painted_width;
 };
 
-// One laid-out line of a cell, pointing into an entry's painted text.
 struct cell {
     const char *text;
     size_t      bytes;
@@ -94,15 +91,14 @@ struct worker {
     int           laid;
 };
 
-// One transcript entry, redrawn in place while the turns run.
 struct board {
     struct worker w[FAN_MAX];
     int           n;
-    int           live;         /* still running: only the tail of a cell shows */
+    int           live;
 
     char          config[MUX_NAME];
     char         *prompt;
-    char         *head;         /* the prompt, painted at the body width */
+    char         *head;
     int           head_width;
     struct rowbuf head_rows;
 };
@@ -152,7 +148,6 @@ static void fan_event(void *ud, const backend_event *ev)
 
     pthread_mutex_lock(&board_lock);
     switch (ev->kind) {
-
     case BACKEND_EV_CWD:
     case BACKEND_EV_TRUST:
     case BACKEND_EV_WARNING:
@@ -286,7 +281,6 @@ static void rowbuf_split(struct rowbuf *rb, const char *painted, int width)
     }
 }
 
-// Called with the board locked: the workers are still writing to their logs.
 static void cell_lay(struct worker *w, int width)
 {
     if (w->rows_width != width) {
@@ -322,7 +316,6 @@ static void board_lay(struct board *b, int width)
         cell_lay(&b->w[i], width);
 }
 
-// The y axis: what answered, and how it was asked to.
 static int worker_labels(const struct worker *w, int live, char out[4][64],
                          enum ui_role *role)
 {
@@ -430,8 +423,6 @@ static void head_block(struct board *b, int labelw, int bodyw)
                   r < b->head_rows.n ? &b->head_rows.v[r] : NULL);
 }
 
-// What the row was told to always do, kept at the top of its cell: the answer
-// below it scrolls, this does not.
 static int standing_row(const struct worker *w, int bodyw, char *out, size_t cap,
                         struct cell *pin)
 {
@@ -482,7 +473,6 @@ static void worker_block(struct worker *w, int live, int labelw, int bodyw, int 
     }
 }
 
-// Too narrow for a table: one board after another, each under its own heading.
 static void board_stacked(struct board *b, int cols)
 {
     for (int i = 0; i < b->n; i++) {
@@ -511,7 +501,6 @@ static void board_stacked(struct board *b, int cols)
     }
 }
 
-// A cap, so a long turn does not push the rest of the transcript off screen.
 static int live_rows(void)
 {
     int rows = tty_rows() * 2 / 3;
@@ -522,10 +511,8 @@ static void board_render(void *ud, int cols)
 {
     struct board *b = ud;
 
-    // The workers are still writing to their logs.
     pthread_mutex_lock(&board_lock);
 
-    // The last column stays clear: a glyph there wraps on some terminals.
     int total = cols - 1;
     int labelw = label_width(b, b->live, total / 3);
     int bodyw = total - labelw - 7;
@@ -538,8 +525,6 @@ static void board_render(void *ud, int cols)
 
     board_lay(b, bodyw);
 
-    // While the turns run, each row shows only its tail, so a long answer
-    // cannot push the rest of the transcript off screen.
     int cap = 0;
     if (b->live) {
         cap = live_rows() / b->n;
@@ -643,7 +628,6 @@ int fanout_run(struct session *s, const char *prompt)
     if (!prompt || !*prompt)
         return 0;
 
-    // The board outlives this call: the transcript keeps it.
     struct board *b = calloc(1, sizeof *b);
     if (!b)
         return 0;
@@ -689,7 +673,6 @@ int fanout_run(struct session *s, const char *prompt)
         }
     }
 
-    // With no viewport, print it once at the end and free it here.
     unsigned mark = 0;
     int      kept = viewport_active();
     if (kept) {
@@ -735,7 +718,6 @@ int fanout_run(struct session *s, const char *prompt)
         if (b->w[i].started)
             pthread_join(b->w[i].thread, NULL);
 
-    // Done: the whole board, with what each turn cost under it.
     b->live = 0;
     if (kept) {
         viewport_item_update(mark);

@@ -5,9 +5,6 @@ struct session;
 
 #define WORKSPACE_MAX 12
 
-// The sessions this window holds. There is one workspace per process: the tab
-// on screen is the session the prompt talks to, and the others keep their own
-// screen, their own agent, and their own turn.
 int  workspace_begin(struct session *first, int safe_mode);
 void workspace_end(void);
 
@@ -17,76 +14,40 @@ int  workspace_count(void);
 int  workspace_index(void);
 int  workspace_index_of(const struct session *s);
 
-// Starts a session with this window's defaults and opens it as a tab. `id`
-// resumes a conversation when the backend can. Returns the new index or -1.
 int  workspace_spawn(const char *backend, const char *model, const char *effort,
                      const char *cwd, const char *id);
 
-// Adopts an already-started session as a tab. Any tab but the first is shown
-// as it opens, so this switches the tab in front as a side effect.
 int  workspace_open(struct session *s);
 
 void workspace_show(int index);
 
-// Runs `fn` with `index` holding the screen, so what it draws lands in that
-// tab's own screen rather than on the terminal. The tab in front draws where
-// it always does.
 void workspace_render(int index, void (*fn)(struct session *s, void *ud), void *ud);
 
-// The tab holding a conversation, by the backend's id for it.
 int  workspace_find_id(const char *id);
 
-// Dumps one tab's screen, whether or not it is the one showing.
 int  workspace_dump(int index, const char *path);
 
-// Frees the session and drops the tab. Zero when it was the last one, which is
-// the caller's cue to leave.
 int  workspace_close(int index);
 
-
-// Sends a line to a tab. A tab already running a turn takes it when that turn
-// ends, so a follow-up can be typed without waiting. `shown` is what the sticky
-// prompt says it is; NULL means the line itself.
 int  workspace_send(int index, const char *line, const char *shown);
 int  workspace_queued(int index);
 
-// One of those lines, in the order they will be sent, for a caller that shows
-// what is waiting. `i` runs to workspace_queued(index) - 1. What comes back is
-// what the sticky prompt would say it is, not always the line itself.
 const char *workspace_pending_at(int index, int i);
 
-// Takes the last of them back off the queue, for a prompt putting it back in
-// the editor to be fixed. What comes back is what was typed, and the caller
-// frees it; NULL when nothing is waiting.
 char *workspace_unqueue(int index);
 
-// Waits for a tab's turn to end, for a caller that has to run one of its own
-// on this thread. Its output goes to its own screen, as ever.
 void workspace_settle(struct session *s);
 
-// What runs when a tab's turn ends, whichever tab it was. Held back while a
-// modal is up, because what it does is run the commands that were typed at
-// that tab, and those want the screen.
 void workspace_on_finish(void (*fn)(struct session *s));
 
-// The same moment, for a caller that only wants to know. This one is not held
-// back: it is called as the turn ends whatever is on screen, so it must not
-// draw. A board watching its workers cannot wait for the list it is drawn in
-// to close before it hears that one finished.
 void workspace_on_settled(void (*fn)(struct session *s));
 
-// Idle work for every tab, each rendering into its own screen.
 int  workspace_fds(int *out, int max);
 int  workspace_pump(void);
 
-// The same, for a caller that owns the screen itself — a modal, say. The tabs
-// advance and what they draw joins their own transcript, but nothing reaches
-// the terminal, and a turn that ends waits for the screen back before its
-// deferred commands run.
 int  workspace_pump_quiet(void);
 int  workspace_busy(void);
 
-// working | errored | finished, as the registry spells it.
 const char *workspace_status(const struct session *s);
 
 #endif

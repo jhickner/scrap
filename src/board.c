@@ -18,8 +18,6 @@ static const char *const COL_NAMES[BOARD_COLS] = {
     "new", "unclear", "backlog", "active", "review", "audit", "merge", "done",
 };
 
-// What those columns were called before. A board written by an older build
-// still reads, rather than every card in it landing back in `new`.
 static const struct {
     const char    *was;
     enum board_col is;
@@ -48,7 +46,6 @@ enum board_col board_col_from_name(const char *name)
     return BOARD_NEW;
 }
 
-
 const char *board_path(void)
 {
     static char path[4200];
@@ -63,9 +60,6 @@ static int sidecar_path(char *out, size_t n, const char *suffix)
     return k > 0 && (size_t)k < n;
 }
 
-// The lock lives beside the store rather than on it: the store is replaced by
-// rename(), so a lock taken on its descriptor would be held on an unlinked
-// inode while the next writer locked the fresh one.
 static int store_lock(int op)
 {
     char lp[BOARD_PATH_MAX];
@@ -88,8 +82,6 @@ static void store_unlock(int fd)
         close(fd);
     }
 }
-
-/* ---- cards ------------------------------------------------------------ */
 
 static char *dup_or_empty(const char *s)
 {
@@ -132,8 +124,6 @@ struct board_card *board_find(struct board_card *cards, int n, const char *id)
     return NULL;
 }
 
-// A deep copy of everything but `created`, which belongs to the card already in
-// the store rather than to the one being written over it.
 static int card_adopt(struct board_card *dst, const struct board_card *src)
 {
     time_t created = dst->created;
@@ -278,8 +268,6 @@ static cJSON *card_to_json(const struct board_card *c)
     return o;
 }
 
-/* ---- the store -------------------------------------------------------- */
-
 static int by_created_desc(const void *a, const void *b)
 {
     const struct board_card *x = a, *y = b;
@@ -367,8 +355,6 @@ int board_load(struct board_card **out)
     return n;
 }
 
-// Short enough to type, long enough not to collide across a working set of
-// cards; the loaded array is what says whether it did.
 static void mint_id(const struct board_card *v, int n, char out[BOARD_ID_MAX])
 {
     static const char ALPHABET[] = "0123456789abcdefghijkmnpqrstuvwxyz";
@@ -392,8 +378,6 @@ static void mint_id(const struct board_card *v, int n, char out[BOARD_ID_MAX])
     }
 }
 
-// The first line of a capture, tidied. text_one_line() alone would fold the
-// whole card into the title, which for anything pasted is the whole of it.
 void board_title_of(const char *text, char *out, size_t size)
 {
     size_t n = strcspn(text, "\n");
@@ -449,8 +433,6 @@ int board_add(const char *text, const char *cwd, char id_out[BOARD_ID_MAX])
     return ok;
 }
 
-// Everything that changes a card in place: load under the lock, hand the card
-// to `fn`, write the lot back. Nothing else in the store is disturbed.
 static int with_card(const char *id, int (*fn)(struct board_card *c, void *ud), void *ud)
 {
     if (!id || !*id)
@@ -533,8 +515,6 @@ int board_move(const char *id, enum board_col col, const char *who, const char *
     return 1;
 }
 
-// Where finished work goes to stop being in the way. Never read by the board;
-// kept because a card is a record of what was decided and why.
 static const char *archive_path(void)
 {
     static char p[4200];
@@ -584,8 +564,6 @@ int board_archive(int days)
         moved++;
     }
 
-    // Written and flushed before the store loses them, or a card could be in
-    // neither file.
     if (out && fclose(out) != 0)
         moved = 0;
     if (moved)
@@ -601,8 +579,6 @@ int board_remove(const char *id)
     if (!id || !*id)
         return 0;
 
-    // A deleted card is one nobody wants a record of. An archived one keeps
-    // its transcript, because the point of archiving is that it happened.
     boardlog_remove(id);
 
     int lock = store_lock(LOCK_EX);

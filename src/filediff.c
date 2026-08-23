@@ -226,8 +226,6 @@ static void patch_add(struct patch *p, const char *s, size_t n)
     p->buf[p->len] = '\0';
 }
 
-// The ops as patch text: changed lines with context, hunks split at skips.
-// What to show is decided here; how wide, every time it is drawn.
 static char *patch_of_ops(const struct op *ops, int nops, const char *path)
 {
     char *show = calloc((size_t)nops, 1);
@@ -427,7 +425,7 @@ char *filediff_take_patch(void)
     char *after = text_slurp(snap.path, MAX_BYTES, &after_len);
     char *patch = NULL;
     if (after && !(after_len == snap.before_len && memcmp(after, snap.before, after_len) == 0))
-        // No file name: the tool call above it already says which file.
+
         patch = patch_diff(snap.before, snap.before_len, after, after_len, NULL);
 
     free(after);

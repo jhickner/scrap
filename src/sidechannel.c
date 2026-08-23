@@ -22,8 +22,6 @@
 
 #define SIDE_MAX 4
 
-// The asker never sees a prompt from this turn, so a question back is a dead
-// end on the screen.
 #define BTW_PREAMBLE                                                            \
     "Answer the question below as an aside in a conversation you are not part " \
     "of. The person asking cannot reply to you: you get one answer and the "    \
@@ -36,12 +34,11 @@ struct stream {
     size_t len, cap;
 };
 
-// An answered question: one entry, so the answer stays with what was asked.
 struct btw {
     char *question;
     char *answer;
     int   failed;
-    int   gap;                  /* asks for a blank row above */
+    int   gap;
 };
 
 struct side {
@@ -78,7 +75,6 @@ static const char *const SPIN[] = {"\u280b", "\u2819", "\u2839", "\u2838", "\u28
 #define BTW_DONE "\u2713 "
 #define BTW_FAIL "\u00d7 "
 
-// Every row carries the bar, which tells a side answer from the main turn.
 static void bar_rows(const char *painted, enum ui_role role)
 {
     size_t len = strlen(painted);
@@ -164,8 +160,6 @@ static void btw_free(void *ud)
     free(b);
 }
 
-// A question still waiting is chrome: it stays on screen instead of scrolling
-// away with the main turn. Answered, it becomes transcript.
 static int    spin_frame;
 static double spun_at;
 
@@ -207,8 +201,6 @@ void sidechannel_paint(int budget)
     }
 }
 
-// Advanced on the clock, not on the call: the abort check calls this at the
-// driver's poll rate, far faster than a frame.
 void sidechannel_tick(void)
 {
     if (!sidechannel_rows())
@@ -217,7 +209,6 @@ void sidechannel_tick(void)
     if (!spin_advance(&spin_frame, &spun_at))
         return;
 
-    // Asked for directly: status.c only paints while a main turn runs.
     chrome_paint();
 }
 
@@ -235,8 +226,6 @@ static struct side *free_slot(void)
     return NULL;
 }
 
-// A non-interactive mux resuming this conversation with --fork-session: it
-// reads the shared context but writes its turn to a session of its own.
 static int spawn(struct side *c, const struct session *s, const char *prompt)
 {
     int out_pipe[2], err_pipe[2];
@@ -460,7 +449,6 @@ void sidechannel_btw_load(const cJSON *st)
     viewport_item_persist(mark, SIDECHANNEL_BTW_KIND, btw_encode);
 }
 
-// Returns nonzero while the stream is still open.
 static int drain(struct stream *s)
 {
     if (s->fd < 0)
@@ -483,11 +471,10 @@ static int drain(struct stream *s)
             continue;
         }
         if (r == 0)
-            break;                      /* the child is gone: real EOF */
+            break;
         if (errno == EINTR)
             continue;
-        // SIGWINCH and SIGURG carry no SA_RESTART, so EINTR here is routine
-        // and is not the child finishing.
+
         if (errno == EAGAIN || errno == EWOULDBLOCK)
             return 1;
         break;
@@ -512,9 +499,6 @@ void sidechannel_poll(void)
         while (waitpid(c->pid, &status, 0) < 0 && errno == EINTR)
             ;
 
-        // Released before anything that might paint: a paint reaches back
-        // into this poll through the busy check, and a slot still holding a
-        // reaped pid emits again at every level it is re-entered.
         struct side done = *c;
         slot_init(c);
 

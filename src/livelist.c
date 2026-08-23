@@ -24,8 +24,6 @@ static char tmux_window[32];
 static char tmux_wname[64];
 static char tmux_pane_index[8];
 
-// A record is named for the process and the slot within it, so one window
-// holding several conversations publishes one file each.
 static const struct session *slots[MAX_SLOTS];
 
 static int slot_of(const struct session *s)
@@ -62,8 +60,6 @@ static void drop_all(void)
     }
 }
 
-// Where the records live. The override is for testing: a mux driven by a
-// script must not be able to see, or take, the windows someone is using.
 static int live_dir(char *out, size_t size)
 {
     const char *env = getenv("MUX_LIVE_DIR");
@@ -76,8 +72,6 @@ static int live_dir(char *out, size_t size)
     return (size_t)snprintf(out, size, "%s/live", base) < size;
 }
 
-// tmux is asked where we are at most once every few seconds: a window can be
-// renamed, and a pane moved to another window, while mux is running.
 static void tmux_where(void)
 {
     static long asked;
@@ -329,8 +323,6 @@ int livelist_load(struct live_session **out)
         copy_str(v->pane, sizeof v->pane, rec, "pane");
         cJSON_Delete(rec);
 
-        // A window that died without unlinking its records: nothing else will
-        // clean them up, so the first reader past them does.
         if (!livelist_alive(v->pid)) {
             unlink(path);
             continue;

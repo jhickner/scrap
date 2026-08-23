@@ -1,7 +1,3 @@
-// The viewport paints every cell of every row it owns, so what is on screen
-// after a paint is fully determined by what mux wrote — no guess about how the
-// terminal reflowed, and nothing left over from the paint before. This asserts
-// that, including across the resizes the old block model could not survive.
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -23,7 +19,6 @@ static void fail(const char *what)
 
 static int tap_read = -1;
 
-// What a paint cost, in bytes actually sent to the terminal.
 static size_t pumped;
 
 static void pump(struct screen *s)
@@ -37,24 +32,18 @@ static void pump(struct screen *s)
     }
 }
 
-
-
 static void say(const char *text)
 {
     viewport_write(text, strlen(text));
     viewport_write("\n", 1);
 }
 
-// A real terminal keeps what it was last sent, and the painter only sends what
-// changed, so the model has to persist across paints the way a screen does.
 static void redraw(struct screen *s)
 {
     viewport_paint();
     pump(s);
 }
 
-// The screen is blank and nothing on it is ours: the next paint sends all of
-// it. What a resize does, and what the test needs between cases.
 static void refresh(struct screen *s, int cols, int rows)
 {
     screen_init(s, rows, cols);
@@ -79,8 +68,6 @@ static void chrome(const char *a, const char *b)
     viewport_chrome(rows, b ? 2 : 1, 0, -1);
 }
 
-// The whole point: a resize cannot leave a copy of the chrome behind, because
-// the next paint writes every row of the screen from the transcript we hold.
 static void check_resize_strands_nothing(struct screen *s)
 {
     viewport_clear();
@@ -105,8 +92,6 @@ static void check_resize_strands_nothing(struct screen *s)
     }
 }
 
-// A transcript shorter than the window rests on the bottom of it, against the
-// chrome, rather than hanging from the top of an otherwise empty screen.
 static void check_bottom_up(struct screen *s)
 {
     viewport_clear();
@@ -118,8 +103,6 @@ static void check_bottom_up(struct screen *s)
 
     refresh(s, 80, 24);
 
-    // 24 rows, 1 of chrome: the chrome is row 24 and the three rows sit on
-    // 21, 22, 23 rather than 1, 2, 3.
     if (!strstr(row_text(s, 23), "CHROME-prompt"))
         fail("the chrome is on the last row");
     if (!strstr(row_text(s, 22), "third"))
@@ -131,8 +114,6 @@ static void check_bottom_up(struct screen *s)
             fail("nothing is painted at the top of an unfilled screen");
 }
 
-// Rows narrower than the screen are one screen row each, so the window shows
-// exactly the tail that fits above the chrome.
 static void check_tail(struct screen *s)
 {
     viewport_clear();
@@ -146,7 +127,6 @@ static void check_tail(struct screen *s)
 
     refresh(s, 80, 24);
 
-    // 24 rows, 1 of chrome, so the last 23 transcript rows: 77..99.
     if (count_on_screen(s, "row 99") != 1)
         fail("the newest row is shown");
     if (count_on_screen(s, "row 77") != 1)
@@ -180,7 +160,6 @@ static void check_scroll(struct screen *s)
     if (count_on_screen(s, "row 99") != 1)
         fail("scrolling back to the end shows the newest row again");
 
-    // Output arriving while scrolled up leaves the window where it is.
     viewport_scroll(10);
     pump(s);
     say("newest");
@@ -190,7 +169,6 @@ static void check_scroll(struct screen *s)
     if (count_on_screen(s, "row 89") != 1)
         fail("new output leaves a scrolled window where it was");
 
-    // At the end it follows the tail, the way it always did.
     viewport_scroll_end();
     pump(s);
     say("newer still");
@@ -199,8 +177,6 @@ static void check_scroll(struct screen *s)
         fail("output arriving at the tail is followed");
 }
 
-// The prompt and the sticky line are not fixtures on the screen. Scrolling
-// back walks them off the bottom a row at a time, the same as anything else.
 static void check_chrome_scrolls_off(struct screen *s)
 {
     viewport_clear();
@@ -230,7 +206,6 @@ static void check_chrome_scrolls_off(struct screen *s)
     if (row_with(s, "row 99") != 23)
         fail("the transcript has the bottom row to itself");
 
-    // Back at the end, the chrome is where it was.
     viewport_scroll_end();
     pump(s);
     if (row_with(s, "CHROME-prompt") != 23)
@@ -239,9 +214,6 @@ static void check_chrome_scrolls_off(struct screen *s)
         fail("returning to the end puts the whole chrome back");
 }
 
-// A screen full of long rows is what an image looks like from here: every row
-// is kilobytes of placeholder cells. Scrolling has to move what the terminal
-// already has rather than resend it, or a wheel tick costs the whole screen.
 static void check_scroll_is_cheap(struct screen *s)
 {
     viewport_clear();
@@ -256,7 +228,6 @@ static void check_scroll_is_cheap(struct screen *s)
 
     refresh(s, 80, 24);
 
-    // A full repaint is the cost to beat.
     viewport_forget();
     pumped = 0;
     redraw(s);
@@ -264,7 +235,6 @@ static void check_scroll_is_cheap(struct screen *s)
     if (full < 2000)
         fail("the screen under test is actually expensive to repaint");
 
-    // A repaint with nothing changed sends only the frame's own preamble.
     pumped = 0;
     redraw(s);
     if (pumped > full / 20)
@@ -277,15 +247,10 @@ static void check_scroll_is_cheap(struct screen *s)
     if (scrolled_cost >= full / 3)
         fail("scrolling costs a fraction of a full repaint");
 
-    // ...and it still lands on the right rows: the chrome is the end of the
-    // stream, so a scroll of three takes its one row off the bottom.
     if (count_on_screen(s, "CHROME-prompt") != 0)
         fail("a scroll takes the chrome off the bottom with everything else");
 }
 
-// A kept entry can be changed after it is printed: the payload is looked up by
-// mark, so a caller that holds the mark cannot be left pointing at an entry
-// that is gone. This is what a live spinner on a /btw question rides on.
 struct live {
     int  frame;
     int  done;
@@ -325,7 +290,6 @@ static void check_live_entry(struct screen *s)
     if (count_on_screen(s, "LIVE-spin-0") != 0)
         fail("the previous state of the entry is gone");
 
-    // Output after it does not disturb it, and it stays put.
     say("after");
     l->done = 1;
     viewport_item_update(mark);
@@ -335,16 +299,12 @@ static void check_live_entry(struct screen *s)
     if (count_on_screen(s, "after") != 1)
         fail("the later output is still there");
 
-    // Once the entry is gone the mark answers NULL rather than a stale pointer.
     viewport_clear();
     if (viewport_item_data(mark) != NULL)
         fail("a mark for a dropped entry reports nothing");
     viewport_item_update(mark);
 }
 
-// A kept entry is drawn again at the new width, so it lays out for the width
-// the screen has rather than keeping rows measured for a width the screen no
-// longer has. Raw output has no renderer and keeps the rows it arrived with.
 static int rendered_at;
 
 static void width_render(void *ud, int cols)
@@ -355,10 +315,6 @@ static void width_render(void *ud, int cols)
     ui_put("\n");
 }
 
-// One begin/end pair is one entry, whatever was already in hand when it
-// started. Anything that prints a block relies on this: an entry printed twice
-// is a block of transcript repeated, which is what a duplicate reply looks
-// like from the outside.
 static void check_item_counting(struct screen *s)
 {
     viewport_clear();
@@ -371,8 +327,6 @@ static void check_item_counting(struct screen *s)
     if (viewport_mark() - before != 1)
         fail("a begin/end pair makes exactly one entry");
 
-    // Unwrapped output already in hand is closed into an entry of its own
-    // rather than being swept into the one being opened.
     viewport_write("LOOSE\n", 6);
     viewport_write("PARTIAL", 7);
     before = viewport_mark();
@@ -391,10 +345,6 @@ static void check_item_counting(struct screen *s)
         fail("each entry is on screen once");
 }
 
-// An entry whose renderer captures on its own account. The viewport already
-// re-renders inside a capture, so this nests one — a side turn's answer does
-// exactly this, rendering its markdown at an inner width before putting a bar
-// down every row it came back with.
 static void nested_render(void *ud, int cols)
 {
     (void)ud;
@@ -407,8 +357,6 @@ static void nested_render(void *ud, int cols)
     ui_put("\n");
     char *painted = ui_capture_end();
 
-    // Every row of it gets a prefix, which is the part that goes missing when
-    // the inner capture takes the outer one down with it.
     for (char *p = painted; p && *p;) {
         char *nl = strchr(p, '\n');
         size_t len = nl ? (size_t)(nl - p) : strlen(p);
@@ -422,8 +370,6 @@ static void nested_render(void *ud, int cols)
     free(painted);
 }
 
-// What a caller asks before printing a blank row of its own above what it is
-// about to write. Getting it wrong is two blank rows where one was meant.
 static void check_ends_blank(void)
 {
     viewport_clear();
@@ -440,8 +386,6 @@ static void check_ends_blank(void)
     if (!viewport_ends_blank())
         fail("a transcript ending in a blank row is not owed another");
 
-    // Closed into entries, the answer has to come from the rows kept rather
-    // than from output still in hand.
     viewport_item_begin(&(struct viewport_entry){0});
     ui_put("in an entry\n");
     viewport_item_end();
@@ -470,8 +414,6 @@ static void check_nested_capture(struct screen *s)
     if (count_on_screen(s, "| INNER-78") != 2)
         fail("every row of the inner render is prefixed");
 
-    // The width change is what forces the re-render, and the re-render is what
-    // runs the renderer inside a capture of the viewport's own.
     set_size(60, 24);
     refresh(s, 60, 24);
     if (count_on_screen(s, "HEAD") != 1)
@@ -496,7 +438,6 @@ static void check_reflow(struct screen *s)
     if (count_on_screen(s, "WIDTH-80") != 1)
         fail("a kept entry shows what it rendered at the first width");
 
-    // Narrower: the entry is asked to render again rather than being chopped.
     set_size(48, 24);
     refresh(s, 48, 24);
     if (rendered_at != 48)
@@ -506,7 +447,6 @@ static void check_reflow(struct screen *s)
     if (count_on_screen(s, "WIDTH-80") != 0)
         fail("the entry laid out for the old width is gone");
 
-    // Raw output has no renderer, so it keeps the rows it was written with.
     viewport_clear();
     set_size(80, 24);
     say("RAW-row");
@@ -516,13 +456,11 @@ static void check_reflow(struct screen *s)
         fail("raw output survives a resize even without a renderer");
 }
 
-// A row wider than the screen is painted across several screen rows rather
-// than clipped, so narrowing the pane does not hide text.
 static void check_soft_wrap(struct screen *s)
 {
     viewport_clear();
     set_size(20, 24);
-    // Exactly three screen rows at this width, so each marker lands whole.
+
     say("aaaaaaaaaaaaaaaaaaaa"
         "bbbbbbbbbbbbbbbbbbbb"
         "cccccccccccccccccccc");
@@ -538,8 +476,6 @@ static void check_soft_wrap(struct screen *s)
         fail("the tail of a wrapped row is shown, not clipped");
 }
 
-// A restart dumps the entries, not the screen: one that can say what it is
-// travels as its own state, and anything else falls back to its rows.
 static char *fake_encode(void *ud)
 {
     (void)ud;
@@ -552,9 +488,6 @@ static char *no_encode(void *ud)
     return NULL;
 }
 
-// A window with more than one session gives each its own screen and swaps
-// them whole. What comes back has to be exactly what was left, and nothing of
-// the other screen may reach the terminal while it is held aside.
 static void check_stash(struct screen *s)
 {
     viewport_clear();
@@ -583,8 +516,6 @@ static void check_stash(struct screen *s)
     if (count_on_screen(s, "FIRST-session") != 0)
         fail("the screen held aside is off the terminal");
 
-    // Drawing for a session that is not in front reaches its rows and not the
-    // terminal.
     viewport_hold(1);
     viewport_stash(b);
     viewport_adopt(a);
@@ -675,9 +606,6 @@ static void check_dump(void)
     free(text);
 }
 
-// A mark is a promise that an entry exists to amend. With the screen handed to
-// a child nothing is kept, so the caller must be told there is no entry rather
-// than an id the next entry will take.
 static void check_suspended_mark(void)
 {
     viewport_clear();

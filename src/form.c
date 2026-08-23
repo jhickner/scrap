@@ -14,14 +14,12 @@
 
 #define FORM_FIELDS 12
 
-// Everything is drawn at this indent, labels and values alike, so the form
-// lines up with the lists it is opened from.
 #define FORM_INDENT 2
 
 struct slot {
-    Repl repl;          /* FORM_TEXT: the editor, the same one the prompt uses */
-    int  choice;        /* FORM_CHOICE: where in the list it sits */
-    int  rows;          /* FORM_TEXT: what it wrapped to when last laid out */
+    Repl repl;
+    int  choice;
+    int  rows;
 };
 
 struct state {
@@ -29,13 +27,11 @@ struct state {
     struct slot  slots[FORM_FIELDS];
     int          focus;
     int          label_width;
-    int          top;       /* the first laid-out row the window shows */
-    int          budget;    /* cells a value has, which is what it wraps to */
+    int          top;
+    int          budget;
 
-    // One field's cells at a time. Rows of a field are painted together, so a
-    // frame per field would be a frame per field held for one row's use.
     struct replframe frame;
-    int              framed;    /* the field in it, or -1 */
+    int              framed;
 };
 
 static struct form_field *field_at(struct state *st, int i)
@@ -75,20 +71,15 @@ static void focus_step(struct state *st, int delta)
         st->focus += n;
 }
 
-/* ---- drawing ---------------------------------------------------------- */
-
-// One painted row. A field wide enough to wrap owns several of them, and only
-// the first carries the label.
 struct line {
-    int         field;      /* -1 for a note or a blank row */
-    const char *text;       /* notes: the slice this row shows */
+    int         field;
+    const char *text;
     size_t      len;
-    int         row;        /* fields: which of the field's rows this is */
+    int         row;
 };
 
 #define LINES_MAX 512
 
-// Where a value starts, which is also what a wrapped row is indented to.
 static int value_column(const struct state *st)
 {
     return FORM_INDENT + st->label_width + 4;
@@ -100,9 +91,6 @@ static int value_budget(const struct state *st, int columns)
     return budget < 8 ? 8 : budget;
 }
 
-// The editor keeps two cells at the head of every row for its own prompt, and
-// wraps to what is left. The form draws its own label there instead, so it asks
-// for two more than it means to fill and paints from where the text starts.
 #define REPL_GUTTER 2
 
 static int repl_width(const struct state *st)
@@ -129,8 +117,6 @@ static int wrap_notes(struct line *out, int n, int max, const char *text,
     return n;
 }
 
-// Every row the form would paint, in order. The window over them is chosen
-// afterwards, so growing and scrolling are the same measurement.
 static int layout(struct state *st, int columns, struct line *out, int max)
 {
     const struct form *form = st->form;
@@ -175,8 +161,6 @@ static void put_label(const struct state *st, const char *label, int focused)
     ui_pad(pad > 1 ? pad : 1);
 }
 
-// Two cells before every value, whatever kind it is, so the values line up in
-// one column. A choice in hand spends them on the arrow that says it is one.
 static void put_gutter(const struct state *st, int i, int focused)
 {
     if (st->form->fields[i].kind == FORM_CHOICE && focused) {
@@ -208,7 +192,6 @@ static void put_codepoint(uint32_t cp)
     ui_putn(buf, text_utf8_encode(cp, buf));
 }
 
-// The field whose cells are wanted, drawn if it is not the one already there.
 static int framed(struct state *st, int i)
 {
     if (st->framed == i)
@@ -221,8 +204,6 @@ static int framed(struct state *st, int i)
     return 1;
 }
 
-// The terminal's own caret sits with the prompt below, so the cursor cell is
-// drawn in reverse rather than moved to.
 static void put_value_row(struct state *st, int i, int row, int focused)
 {
     if (!framed(st, i))
@@ -240,8 +221,7 @@ static void put_value_row(struct state *st, int i, int row, int focused)
 
         int on_cursor = c->style == REPL_STYLE_CURSOR && st->frame.have_cursor &&
                         st->frame.cursor_x == x && st->frame.cursor_y == row;
-        // The caret past the end of the text is a cell the editor invents. It
-        // belongs to the field in hand and to no other.
+
         if (on_cursor && hollow && !focused)
             continue;
 
@@ -265,7 +245,6 @@ static void put_value_row(struct state *st, int i, int row, int focused)
         ui_esc(ui_style(UI_RESET));
 }
 
-// What the window may show, once the title above and the hint below are out.
 static int room_for(void)
 {
     int rows = tty_rows() - 4 - chrome_gap();
@@ -283,7 +262,6 @@ static void paint(void *ud)
     int n = layout(st, columns, lines, LINES_MAX);
     int room = room_for();
 
-    // Short of the room it has, the form is drawn whole and nothing scrolls.
     if (n <= room) {
         st->top = 0;
     } else {
@@ -305,7 +283,7 @@ static void paint(void *ud)
             if (last >= st->top + room)
                 st->top = last - room + 1;
         }
-        // A field taller than the window keeps the caret rather than the label.
+
         if (caret >= 0) {
             if (caret < st->top)
                 st->top = caret;
@@ -376,8 +354,6 @@ static void paint(void *ud)
     ui_esc(ui_style(UI_RESET));
 }
 
-/* ---- the loop --------------------------------------------------------- */
-
 static void load(struct state *st)
 {
     st->framed = -1;
@@ -426,16 +402,12 @@ static int feed(struct state *st, ReplKey key, uint32_t cp, const char *text)
     struct slot *s = &st->slots[st->focus];
     ReplEvent    ev = {.key = key, .codepoint = cp, .text = text};
 
-    // The width it wraps to is the width it is drawn at, or up and down would
-    // walk rows that are not the rows on the screen.
     st->budget = value_budget(st, ui_columns());
     repl_set_width(&s->repl, repl_width(st));
     st->framed = -1;
     return repl_handle_input(&s->repl, &ev);
 }
 
-// Up and down belong to the field until the caret has nowhere left to go in
-// it, and then they belong to the form.
 static void step_or_leave(struct state *st, int delta)
 {
     struct slot *s = &st->slots[st->focus];
@@ -475,7 +447,7 @@ int form_run(struct form *form)
 
         switch (ev.key) {
         case TK_TEXT:
-            // Newlines survive a paste: a value is no longer one row.
+
             if (typing && ev.text) {
                 st.framed = -1;
                 repl_insert_text(&st.slots[st.focus].repl, ev.text);
@@ -484,16 +456,13 @@ int form_run(struct form *form)
             break;
 
         case TK_CHAR:
-            // Ctrl-C leaves; every other control code is the editor's, which
-            // is where the emacs bindings live.
+
             if (ev.cp == 3) {
                 chrome_modal(NULL, NULL);
                 unload(&st);
                 return 0;
             }
             if (!typing) {
-                // A choice takes the space bar as "the next one", so the
-                // field can be walked without reaching for the arrows.
                 if (ev.cp == ' ')
                     cycle(&st, st.focus, 1);
                 break;
@@ -549,7 +518,6 @@ int form_run(struct form *form)
                 else if (ev.key == TK_END)
                     feed(&st, REPL_KEY_CHAR, 5, NULL);
                 else if (ev.key == TK_DELETE) {
-                    // The editor has no forward delete of its own.
                     struct slot *s = &st.slots[st.focus];
                     if (s->repl.cursor < s->repl.len) {
                         feed(&st, REPL_KEY_RIGHT, 0, NULL);

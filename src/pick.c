@@ -20,18 +20,17 @@ struct view {
     const unsigned char *heading;
     int frame;
     double frame_at;
-    int n;          // every item offered
-    int *order;     // the ones the query kept, best first
+    int n;
+    int *order;
     int *score;
-    int count;      // how many of order are live
-    int sel;        // an index into order
-    int filter;     // typing narrows the list instead of jumping through it
-    int slash;      // the query waits behind '/', so letters can be shortcuts
-    int searching;  // '/' was pressed and the query is taking letters
+    int count;
+    int sel;
+    int filter;
+    int slash;
+    int searching;
     char query[64];
 };
 
-// How often a live list re-reads while nothing on it is spinning.
 #define LIVE_POLL_MS 500
 
 static const char *const SPIN[] = {"\xe2\xa0\x8b", "\xe2\xa0\x99", "\xe2\xa0\xb9",
@@ -39,33 +38,24 @@ static const char *const SPIN[] = {"\xe2\xa0\x8b", "\xe2\xa0\x99", "\xe2\xa0\xb9
                                   "\xe2\xa0\xa6", "\xe2\xa0\xa7", "\xe2\xa0\x87",
                                   "\xe2\xa0\x8f"};
 
-// Both kinds of row the highlight passes over: a group header, and a row that
-// is text rather than a choice.
 static int item_heading(const struct view *v, int i)
 {
     return v->heading &&
            (v->heading[i] == PICK_HEADING || v->heading[i] == PICK_TEXT);
 }
 
-// The stricter one: a header that owns the rows under it, and takes the blank
-// line that sets its group off from the one above.
 static int item_group(const struct view *v, int i)
 {
     return v->heading && v->heading[i] == PICK_HEADING;
 }
 
-// A row that is still a row, but wants the blank line a heading would get.
 static int item_apart(const struct view *v, int i)
 {
     return v->heading && v->heading[i] == PICK_APART;
 }
 
-// The share of the width a label may take before the details beside them stop
-// having room to say anything.
 #define LABEL_SHARE(cols) ((cols) * 3 / 5)
 
-// The width every label is padded out to, for a list that asked to line its
-// details up. Zero for one that did not.
 static size_t align_width(const struct view *v, int columns)
 {
     if (!v->live || !v->live->align)
@@ -89,7 +79,6 @@ static int item_spins(const struct view *v, int i)
     return v->live && v->live->spin && v->live->spin[i];
 }
 
-// Anything turning on screen, so the wait for a key knows to end on a frame.
 static int animating(const struct view *v)
 {
     for (int i = 0; i < v->count; i++)
@@ -113,8 +102,6 @@ static int row_apart(const struct view *v, int row)
     return item_apart(v, v->order[row]);
 }
 
-// Headings are passed over: the highlight only ever rests on something that
-// can be chosen.
 static void settle(struct view *v, int dir)
 {
     for (int i = 0; i < v->count; i++) {
@@ -140,8 +127,6 @@ static void step(struct view *v, int dir)
     settle(v, dir);
 }
 
-// As many rows as the window has room for, once the title, the count line and
-// every blank line that sets a row off from the one above it are taken out.
 static int visible_cap(const struct view *v)
 {
     int rows = tty_rows() - 3 - chrome_gap();
@@ -161,19 +146,13 @@ static int visible_cap(const struct view *v)
     return rows < 5 ? 5 : rows;
 }
 
-// Rebuild the visible rows for the current query, keeping the highlight on the
-// same item where the query still admits it.
 static void refilter(struct view *v)
 {
     int keep = (v->count && v->sel < v->count) ? v->order[v->sel] : -1;
-    int under = 0;      // the query names the heading these rows sit under
+    int under = 0;
 
     v->count = 0;
     for (int i = 0; i < v->n; i++) {
-        // A grouped list keeps its order, so every row stays under the
-        // heading that says where it lives. A heading matches for everything
-        // beneath it -- typing part of a directory keeps that whole group --
-        // and one whose group the query emptied goes with it.
         if (item_group(v, i)) {
             under = !v->query[0] || text_fuzzy_score(v->items[i].label, v->query) >= 0;
             int has = under;
@@ -186,8 +165,7 @@ static void refilter(struct view *v)
             v->score[v->count++] = 0;
             continue;
         }
-        // Text belongs to its group rather than to the query: it is not
-        // something to match against, and it goes when its group goes.
+
         if (item_heading(v, i)) {
             if (!under)
                 continue;
@@ -199,7 +177,7 @@ static void refilter(struct view *v)
         if (s < 0 && !under)
             continue;
         int at = v->count++;
-        // Ungrouped lists rank the best match first instead.
+
         while (!v->heading && at > 0 && v->score[at - 1] < s) {
             v->order[at] = v->order[at - 1];
             v->score[at] = v->score[at - 1];
@@ -228,7 +206,6 @@ static int run(const char *title, const struct pick_item *items, int count,
                int initial, const struct pick_live *live, const char *shortcuts,
                int *pressed, int filter, int slash);
 
-// A modal section: chrome.c paints it in place of the whole stack.
 static void paint(void *ud)
 {
     struct view *v = ud;
@@ -237,8 +214,6 @@ static void paint(void *ud)
     char title[192];
 
     if (v->filter && (v->searching || v->query[0])) {
-        // The keys the list offers step aside while it is being searched: what
-        // the query says is the only part that is changing.
         const char *rest = strstr(v->title, " \xc2\xb7 ");
         int lead = rest ? (int)(rest - v->title) : (int)strlen(v->title);
         snprintf(title, sizeof title, "%.*s \xc2\xb7 /%s", lead, v->title, v->query);
@@ -281,9 +256,6 @@ static void paint(void *ud)
     for (int row = v->top; row < end; row++) {
         int i = v->order ? v->order[row] : row;
         if (item_heading(v, i)) {
-            // A blank line sets each group off from the one above it. Text
-            // rows take none: consecutive lines of one paragraph would come
-            // out double spaced.
             if (item_group(v, i) && row > v->top) {
                 ui_put("\n");
                 rows++;
@@ -300,7 +272,7 @@ static void paint(void *ud)
             rows++;
             continue;
         }
-        // Set off from the group above it without being a heading of its own.
+
         if (row_apart(v, row) && row > v->top) {
             ui_put("\n");
             rows++;
@@ -309,7 +281,6 @@ static void paint(void *ud)
         ui_esc(ui_style(selected ? UI_ACCENT : UI_RESET));
         ui_put(selected ? "  \xe2\x86\x92 " : "    ");
 
-        // The status column: what the row is doing, ahead of what it is.
         size_t status = 0;
         if (v->live && (v->live->spin || v->live->mark)) {
             const char *mark = v->live->mark ? v->live->mark[i] : NULL;
@@ -332,8 +303,7 @@ static void paint(void *ud)
         }
 
         size_t label_budget = columns > 5 + (int)status ? (size_t)(columns - 5 - (int)status) : 1;
-        // Aligned, a label is cut at the column the details start on rather
-        // than running into them.
+
         if (pad_to && items[i].detail && *items[i].detail && label_budget > pad_to)
             label_budget = pad_to;
         size_t label_n = ui_fit_bytes(items[i].label, label_budget);
@@ -430,8 +400,6 @@ int pick_run_keys(const char *title, const struct pick_item *items, int count,
     return run(title, items, count, initial, NULL, shortcuts, pressed, 0, 0);
 }
 
-// Typed bytes go to the query in filter mode; everywhere else they are
-// shortcuts and jump-to-row digits.
 static int type_into(struct view *v, const char *s, size_t n)
 {
     size_t len = strlen(v->query);
@@ -457,8 +425,6 @@ static int run(const char *title, const struct pick_item *items, int count,
     if (count <= 0)
         return -1;
 
-    // Nothing to pick with: a front end that is not the terminal asked, or
-    // the terminal is not taking keys. Reads as a cancel.
     if (!frontend_has_keyboard() || !tty_is_raw())
         return -1;
 
@@ -491,8 +457,7 @@ static int run(const char *title, const struct pick_item *items, int count,
     for (;;) {
         tty_event ev;
         int turning = animating(&v);
-        // Nothing is turning, but a list that watches other windows still has
-        // to hear about a session that starts working while it sits idle.
+
         int watching = v.live && v.live->tick;
         int wait = turning ? SPIN_FRAME_MS : (watching ? LIVE_POLL_MS : -1);
         if (!tty_read(&ev, wait)) {
@@ -500,8 +465,7 @@ static int run(const char *title, const struct pick_item *items, int count,
                 goto done;
             if (!turning && !watching)
                 continue;
-            // A frame of the spinners, and a chance for the caller to say the
-            // rows have moved on.
+
             int moved = watching ? v.live->tick(v.live->ud) : 0;
             if (moved == PICK_TICK_REOPEN) {
                 result = PICK_REOPEN;
@@ -546,7 +510,6 @@ static int run(const char *title, const struct pick_item *items, int count,
             if (!typing)
                 break;
             if (!v.query[0]) {
-                // Backspacing out of an empty query leaves the search.
                 v.searching = 0;
                 break;
             }
@@ -556,9 +519,7 @@ static int run(const char *title, const struct pick_item *items, int count,
             break;
         }
         case TK_RIGHT:
-            // Right takes the highlighted row, the same as enter. A caller
-            // that asked for it as a shortcut of its own is told which of the
-            // two was pressed; the rest cannot tell them apart.
+
             if (!v.count || row_heading(&v, v.sel))
                 break;
             result = v.order[v.sel];
@@ -566,8 +527,7 @@ static int run(const char *title, const struct pick_item *items, int count,
                 *pressed = PICK_KEY_RIGHT;
             goto done;
         case TK_NEWLINE:
-            // Shift-enter, where the terminal reports it. Only a caller that
-            // asked for it hears about it.
+
             if (!shortcuts || !strchr(shortcuts, '\n'))
                 continue;
             if (!v.count || row_heading(&v, v.sel))
@@ -594,7 +554,7 @@ static int run(const char *title, const struct pick_item *items, int count,
         case TK_CHAR:
             if (ev.cp == 3 || ev.cp == 4)
                 goto done;
-            if (filter && ev.cp == 21) {   /* ctrl-u clears the query */
+            if (filter && ev.cp == 21) {
                 v.query[0] = '\0';
                 refilter(&v);
                 break;
@@ -604,8 +564,6 @@ static int run(const char *title, const struct pick_item *items, int count,
                 break;
             }
 
-            // While a query is taking letters only the control keys still
-            // reach the shortcuts: a letter means itself.
             if (shortcuts && ev.cp > 0 && ev.cp < 128 && !(typing && ev.cp >= 0x20) &&
                 strchr(shortcuts, (int)ev.cp)) {
                 if (!v.count || row_heading(&v, v.sel))

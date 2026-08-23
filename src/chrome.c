@@ -62,17 +62,12 @@ void chrome_modal(chrome_modal_fn fn, void *ud)
     chrome_paint();
 }
 
-// The sections above the input, in draw order. Dropped whole, cheapest first,
-// until what is left fits.
 struct above {
     int side;
     int sticky;
     int queued;
 };
 
-// Their heights, measured once a frame. Measuring is not cheap — the sticky
-// one walks the visible transcript — and dropping a section cannot change what
-// another one measures, so the fit reads these instead of asking again.
 struct heights {
     int side;
     int sticky;
@@ -88,7 +83,6 @@ static struct heights above_measure(int cols)
     return h;
 }
 
-// Each section that draws anything is set off from the one above it.
 static int above_height(const struct above *a, const struct heights *h)
 {
     int rows = 0;
@@ -116,8 +110,6 @@ static void fit_above(struct above *a, const struct heights *h, int room)
     a->side = 0;
 }
 
-// The block sits one blank row clear of the transcript, unless the transcript
-// already ends in one.
 int chrome_gap(void)
 {
     return viewport_active() && !viewport_ends_blank();
@@ -150,8 +142,6 @@ void chrome_paint(void)
     int cols = ui_columns();
     int spinning = status_spinning();
 
-    // The input is never dropped, so it is measured first and the rest fitted
-    // into what it leaves.
     int input_rows = prompt_input_rows(bound, cols);
     int gap = chrome_gap();
 
@@ -183,13 +173,11 @@ void chrome_paint(void)
         prompt_paint_queued(bound, chrome_rows_left());
     }
 
-    // A blank row under what is pinned above, off the spinner.
     if (ui_sink_rows() - gap > 0) {
         ui_esc(UI_ERASE_EOL);
         ui_put("\n");
     }
 
-    // Counted off what was painted, not what the fit predicted.
     above_rows = ui_sink_rows() - gap;
 
     if (spinning) {

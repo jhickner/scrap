@@ -51,14 +51,11 @@ static int row_identity(const struct session *s, int cols)
     snprintf(tail, sizeof tail, SEP "%s" SEP "%s%s%s", backend, model,
              effort ? SEP : "", effort ? effort : "");
 
-    // A second front end is attached: what is typed here is not the only way in,
-    // and what the agent does is being relayed. Worth seeing at a glance.
     const char *chat = tg_label();
     char attached[128] = "";
     if (chat)
         snprintf(attached, sizeof attached, SEP "%s", chat);
 
-    // Which of the window's sessions this is, when there is more than one.
     char sessions[32] = "";
     int count = workspace_count();
     if (count > 1)

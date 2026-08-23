@@ -60,10 +60,6 @@ int boardwork_tab(const char *id)
     return w ? workspace_index_of(w->session) : -1;
 }
 
-/* ---- git ---------------------------------------------------------------- */
-
-// The worktree of a card, and the branch that goes with it. The convention is
-// the one the repo already uses by hand.
 static void worktree_of(const char *root, const char *id, char *out, size_t size)
 {
     snprintf(out, size, "%s/.claude/worktrees/%s", root, id);
@@ -74,8 +70,6 @@ static void branch_of(const char *id, char *out, size_t size)
     snprintf(out, size, "worktree-%s", id);
 }
 
-// Adds the worktree, or adopts one already there: a card whose worker was
-// reaped and started again should land back where its work is.
 static int worktree_make(const char *root, const char *id, const char *path,
                          char *why, int size)
 {
@@ -99,7 +93,6 @@ static int worktree_make(const char *root, const char *id, const char *path,
     if (system(cmd) == 0)
         return 1;
 
-    // A branch of that name from a previous run: take it rather than refuse.
     snprintf(cmd, sizeof cmd,
              "git -C %s worktree add %s %s >/dev/null 2>&1", qroot, qpath, branch);
     if (system(cmd) == 0)
@@ -109,16 +102,6 @@ static int worktree_make(const char *root, const char *id, const char *path,
     return 0;
 }
 
-/* ---- what the worker is handed ------------------------------------------ */
-
-// CARD.md belongs to the worker, not to the repo. Left to itself it turns up
-// untracked in every status, and in every diff the work is reviewed by.
-//
-// The exclude has to go in the common directory: git reads info/exclude from
-// there and not from the per-worktree git dir, so writing the obvious place
-// does nothing. That makes it a repo-wide rule, which is why it is written
-// once and never repeated -- and info/exclude is not tracked, so it stays a
-// local matter.
 static void ignore_card_file(const char *path)
 {
     char common[4200];
@@ -153,8 +136,6 @@ static void ignore_card_file(const char *path)
     fclose(f);
 }
 
-// The spec, written where it survives what a long session does to its own
-// first turn: compaction, a restart, a context that rolled over.
 static void write_card_file(const char *path, const struct board_card *c)
 {
     char file[4300];
@@ -174,18 +155,8 @@ static void write_card_file(const char *path, const struct board_card *c)
     fclose(f);
 }
 
-// What the worker is told: the standing instructions for work that lands, then
-// whatever the kind itself asks for, then the card.
-//
-// A kind that does not land is not given the standing instructions at all --
-// they are about worktrees, branches and commits, and a note being filed has
-// none of those.
-// A card that could not land is not being built again: it is being got into a
-// state the queue can land, which is a different job and a different prompt.
 static char *landing_turn(const struct board_card *c)
 {
-    // The standing instructions first: getting a branch to land is still work
-    // on a branch, and the house rules apply to it the same way.
     const char *standing = boardcfg_for(BOARD_WHO_WORKER)->prompt;
     const char *head = boardcfg_for(BOARD_WHO_MERGE)->prompt;
     const char *body = c->body && *c->body ? c->body : c->title;
@@ -243,12 +214,6 @@ static char *first_turn(const struct board_card *c)
     return out;
 }
 
-/* ---- who can take it ---------------------------------------------------- */
-
-// A backend has room when it says how much is left and that is under the
-// ceiling. One that reports nothing is not one that is spent: only some
-// backends have a protocol for this at all, and those are the escape hatch
-// when everything measured is exhausted.
 static int has_room(const char *backend, int ceiling)
 {
     int percent = 0;
@@ -257,8 +222,6 @@ static int has_room(const char *backend, int ceiling)
     return percent < ceiling;
 }
 
-// The first backend in the chain with room, starting from the one the card
-// would otherwise use. Returns NULL when every one of them is spent.
 static const char *with_room(const char *first, const char *chain, int ceiling,
                              char *out, size_t size)
 {
@@ -282,9 +245,6 @@ static const char *with_room(const char *first, const char *chain, int ceiling,
     return NULL;
 }
 
-/* ---- starting and finishing --------------------------------------------- */
-
-// Which backend a card would run on, before anything is asked of it.
 static const char *wanted_backend(const struct board_card *c)
 {
     const struct board_profile *p = boardcfg_for(BOARD_WHO_WORKER);
@@ -321,8 +281,6 @@ int boardwork_blocked(const struct board_card *c, char *why, int size)
     if (has_room(wanted, cfg->usage_ceiling))
         return 0;
 
-    // Over the ceiling: either the window turns over soon enough to be worth
-    // waiting for, or somebody else in the chain takes it.
     int soon = quota_resets_in(wanted);
     if (soon >= 0 && soon <= cfg->reset_hold) {
         snprintf(why, (size_t)size, "%s resets in %d min", wanted, soon);
@@ -344,8 +302,6 @@ int boardwork_start(const struct board_card *c, char *why, int size)
 
     const struct board_cfg *cfg = boardcfg();
 
-    // A kind that lands gets a worktree and a branch to land from. One that
-    // does not works where the card points, and there is nothing to merge.
     int  lands = boardcfg_kind_takes(c->kind, BOARD_STEP_WORKTREE);
     char path[4200];
     char base[64] = {0};
@@ -360,8 +316,6 @@ int boardwork_start(const struct board_card *c, char *why, int size)
         if (!worktree_make(root, c->id, path, why, size))
             return 0;
 
-        // Asked of the worktree rather than of the repo: what the work is
-        // actually sitting on is the thing the diff and the rebase are against.
         gitcmd_line(path, "rev-parse --short HEAD", base, sizeof base);
 
         ignore_card_file(path);
@@ -380,12 +334,9 @@ int boardwork_start(const struct board_card *c, char *why, int size)
                                     took, sizeof took);
     if (!backend)
         backend = wanted;
-    // A card that ran somewhere other than where it was meant to should say so
-    // later, when the question is why it came out the way it did.
+
     int handed_on = strcmp(backend, wanted) != 0;
 
-    // Opening a tab brings it to the front, and the window is not the
-    // worker's -- it is parked in the board. Put back what was showing.
     int front = workspace_index();
 
     int at = workspace_spawn(backend,
@@ -415,7 +366,7 @@ int boardwork_start(const struct board_card *c, char *why, int size)
 
     struct board_card edited = *c;
     edited.col = BOARD_DOING;
-    // Somebody has it now, so it is no longer waiting for somebody.
+
     edited.stuck[0] = '\0';
     snprintf(edited.worktree, sizeof edited.worktree, "%s", lands ? path : "");
     snprintf(edited.base, sizeof edited.base, "%s", base);
@@ -441,8 +392,6 @@ void boardwork_finished(struct session *s)
     if (!w)
         return;
 
-    // The id only exists once the backend has answered at least once, and it
-    // is what reopens the conversation later.
     const char *sid = session_id(s);
     const char *reply = session_last_reply(s);
     const char *failed = session_last_error(s);
@@ -458,25 +407,17 @@ void boardwork_finished(struct session *s)
     struct board_card edited = *c;
     if (sid && *sid)
         snprintf(edited.session, sizeof edited.session, "%s", sid);
-    // A worker session is one card, so what the session has cost is what the
-    // card has cost.
+
     edited.cost_usd = session_cost(s);
 
-    // An errored turn is not a finished one: the card stays where it is,
-    // marked, because what is needed to fix it is the tab and not a field.
     boardlog_turn(w->id, "worker", NULL,
                   failed && *failed ? failed : reply);
 
-    // An empty diff means the turn achieved nothing, whatever it answered: a
-    // backend that is not logged in still answers. Not stuck[], which starts a
-    // worker -- this card has just shown one achieves nothing.
     int files = 0, lines = 0;
     int empty = boardcfg_kind_takes(c->kind, BOARD_STEP_WORKTREE) &&
                 c->worktree[0] && c->base[0] &&
                 !boardaudit_size(c, &files, &lines);
 
-    // Whatever the kind asks for next -- a person to look at it, or nothing at
-    // all, which is what filing a note wants.
     if ((!failed || !*failed) && !empty)
         edited.col = boardflow_from(c->kind, BOARD_STEP_REVIEW,
                                     boardaudit_wanted(c));
@@ -494,11 +435,6 @@ void boardwork_finished(struct session *s)
         board_note(w->id, "board", "nothing was committed, so it stays here");
 }
 
-// A worker whose tab has gone -- closed by hand, or lost with a restart --
-// leaves a card in `doing` that nothing is working on.
-// A card that could not land is waiting for a worker rather than being worked
-// on, and it waits in `doing` where that is not obvious. This is what makes
-// the difference go away.
 int boardwork_pump(void)
 {
     struct board_card *cards = NULL;
@@ -512,8 +448,7 @@ int boardwork_pump(void)
             continue;
 
         char why[256];
-        // Blocked on the worker cap or on quota is not a failure: it comes
-        // round again every turn of the board.
+
         started = boardwork_start(&cards[i], why, sizeof why);
     }
     board_free(cards, n);
@@ -543,8 +478,6 @@ int boardwork_poll(void)
     return changed;
 }
 
-/* ---- what happens to the work ------------------------------------------- */
-
 static void let_go(const char *id)
 {
     struct worker *w = slot_of(id);
@@ -563,8 +496,6 @@ int boardwork_approve(const struct board_card *c, int audit)
     let_go(c->id);
     board_note(c->id, "you", audit ? "approved, for audit" : "approved");
 
-    // Approving is not finishing: the work still has to land, and a card with
-    // no worktree has nothing to land.
     if (!c->worktree[0])
         return board_move(c->id, BOARD_DONE, "you", NULL);
     return board_move(c->id, boardflow_from(c->kind, BOARD_STEP_AUDIT, audit),

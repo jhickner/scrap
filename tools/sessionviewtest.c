@@ -45,7 +45,6 @@ int main(void)
         return fail("view_tool_call flattened the command", out);
     free(out);
 
-    /* The collapsed cluster line stays one line even for a multi-line arg. */
     struct turnview v = {0};
     ui_capture_begin(200);
     view_cluster_start(&v, "Bash", arg, 0);
@@ -55,8 +54,6 @@ int main(void)
         return fail("cluster line spans rows", out);
     free(out);
 
-    /* The whole row is kept: a narrow pane cuts it short when it draws it,
-       rather than the row having been cut short when it was first printed. */
     ui_capture_begin(40);
     view_cluster_paint(&v);
     char *cut = ui_capture_end();
@@ -73,7 +70,6 @@ int main(void)
     free(full);
     view_cluster_forget(&v);
 
-    /* Errors keep the head line and the tail, where the exception lives. */
     ui_capture_begin(80);
     view_tool_error("failed: Exit code 1\n"
                     "Traceback (most recent call last):\n"

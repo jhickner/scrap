@@ -1,13 +1,3 @@
-// The chrome is one painter composing one stack, in one order:
-//
-//   gap, pending side turns, sticky prompt, queued lines, blank, spinner, input
-//
-// Every /btw bug so far has been a section drawn twice, drawn by the wrong
-// painter, or left on screen after the thing it described was over. This
-// asserts the order and the membership rather than leaving them to be spotted.
-//
-// sidechannel is stubbed rather than linked: it would drag the session, the
-// agent drivers and the markdown renderer in behind it.
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -33,8 +23,6 @@ static void fail(const char *what)
     failures++;
 }
 
-/* --- the stubbed side channel -------------------------------------------- */
-
 static int pending;
 static int paint_calls;
 
@@ -57,8 +45,6 @@ int  sidechannel_fds(int *out, int max) { (void)out; (void)max; return 0; }
 
 void restart_shield_thread(void) {}
 
-/* ------------------------------------------------------------------------- */
-
 static int tap_read = -1;
 
 static void pump(struct screen *s)
@@ -70,8 +56,6 @@ static void pump(struct screen *s)
         feed(s, buf, (size_t)n);
 }
 
-// One build of the stack, onto a screen that shows nothing yet, so what is
-// counted and what is on screen both belong to this paint alone.
 static void repaint(struct screen *s)
 {
     screen_init(s, 24, 80);
@@ -90,8 +74,6 @@ static void paint_menu(void *ud)
     ui_put("  item\n");
 }
 
-// Queued the way the prompt queues one: typed at the live prompt and submitted
-// while a turn is running.
 static void queue_line(struct prompt *p, const char *text)
 {
     for (const char *c = text; *c; c++) {
@@ -102,8 +84,6 @@ static void queue_line(struct prompt *p, const char *text)
     prompt_live_key(p, &enter);
 }
 
-// A queued line is a reminder of what is waiting. A long one is cut short, and
-// consecutive ones are told apart by a blank row.
 static void check_queued(struct prompt *p, struct screen *s)
 {
     char lots[512];
@@ -124,7 +104,7 @@ static void check_queued(struct prompt *p, struct screen *s)
     if (first >= 0 && second >= 0) {
         if (first >= second)
             fail("queued lines are painted in the order they were typed");
-        // The first spends its cap, then one blank row, then the second.
+
         if (second - first != QUEUED_LINES + 1)
             fail("a long queued line is cut short and followed by a blank row");
         if (!row_blank(s, second - 1))
@@ -168,14 +148,12 @@ int main(void)
     struct screen s;
     screen_init(&s, 24, 80);
 
-    // The sticky prompt only shows once its echo has scrolled away.
     status_sticky_set(1);
     viewport_write("<echo>\n", 7);
     status_sticky_prompt("STICKYTEXT");
     for (int i = 0; i < 60; i++)
         viewport_write("filler\n", 7);
 
-    // A live turn with one question waiting: every section is in play.
     pending = 1;
     status_begin();
     repaint(&s);
@@ -201,7 +179,6 @@ int main(void)
     if (btw >= 0 && spin >= 0 && !row_blank(&s, spin - 1))
         fail("a blank row separates what is pinned above from the spinner");
 
-    // Answered: the row goes with it, on the very next paint.
     pending = 0;
     repaint(&s);
     if (paint_calls != 0)
@@ -211,22 +188,16 @@ int main(void)
     if (row_of(&s, "STICKYTEXT") < 0)
         fail("the sticky prompt outlives the side turn");
 
-    // Two waiting: a row each, and still one pass over the section.
     pending = 2;
     repaint(&s);
     if (paint_calls != 2)
         fail("each pending side turn gets a row of its own");
 
-    // Queued lines: nothing pending, so the section under test stands alone.
     pending = 0;
     check_queued(p, &s);
 
     status_end();
 
-    // Ending a turn must not leave a cursor-show escape in the retained
-    // transcript. A cursorless modal paints after the turn and owns no caret.
-    // Replaying such an escape would make the terminal cursor appear at the
-    // end of the last menu row it repainted.
     chrome_modal(paint_menu, NULL);
     pump(&s);
     if (s.cursor_visible)

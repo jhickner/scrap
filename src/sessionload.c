@@ -16,11 +16,7 @@
 #include "vendor/agents/backend.h"
 #include "vendor/cJSON.h"
 
-// The three CLIs that keep a transcript all write one JSON object per line with
-// a role and a list of content blocks; where they differ is only in what the
-// line is called and where the message sits inside it.
-
-#define TURNS_MAX  400      /* how far back a replayed conversation goes */
+#define TURNS_MAX  400
 #define LINE_MAX   (4 << 20)
 
 int sessionload_available(const char *backend)
@@ -35,7 +31,6 @@ static int is_file(const char *path)
     return stat(path, &st) == 0 && S_ISREG(st.st_mode);
 }
 
-// pi names its transcripts for the time they started, so the id is inside.
 static int pi_find(const char *dir, const char *id, char *out, size_t size)
 {
     DIR *d = opendir(dir);
@@ -74,8 +69,6 @@ int sessionload_path(const char *backend, const char *cwd, const char *id,
     return (size_t)snprintf(out, size, "%s/%s.jsonl", dir, id) < size && is_file(out);
 }
 
-/* --- what a line says ---------------------------------------------------- */
-
 enum role {
     ROLE_NONE,
     ROLE_USER,
@@ -96,8 +89,6 @@ static enum role role_of(const char *name)
     return ROLE_NONE;
 }
 
-// The message, and what it was: pi wraps every one in a "message" line, claude
-// names the line for the role, grok puts the role at the top level.
 static enum role line_message(const cJSON *ev, const cJSON **content)
 {
     *content = NULL;
@@ -115,9 +106,6 @@ static enum role line_message(const cJSON *ev, const cJSON **content)
     return *content ? role_of(role) : ROLE_NONE;
 }
 
-// What the user actually typed. The CLIs wrap it in context of their own —
-// grok in a <user_query>, all of them in system reminders — and none of that
-// was ever on screen.
 static int user_text(const char *text, char *out, size_t size)
 {
     if (!text || !*text)
@@ -170,9 +158,6 @@ static void draw_tool(const cJSON *block, const char *cwd)
     free(json);
 }
 
-// One message, drawn the way the session itself would have drawn it. Tool
-// results are left out: the call above them says what ran, and the output was
-// only ever worth the room while it was live.
 static int draw_message(enum role role, const cJSON *content, const char *cwd,
                         int thinking)
 {
@@ -228,8 +213,6 @@ static int draw_message(enum role role, const cJSON *content, const char *cwd,
     return drew;
 }
 
-// Counted first so a long conversation comes back from where it still fits,
-// rather than from a beginning nobody asked for.
 static int count_turns(const char *path)
 {
     FILE *f = fopen(path, "r");

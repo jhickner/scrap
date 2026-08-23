@@ -12,8 +12,6 @@
 #define QUOTA_MAX_BYTES (1u << 16)
 #define QUOTA_BACKENDS  8
 
-// A reading nobody has refreshed for this long says nothing useful about now:
-// the window may have turned over without us hearing.
 #define QUOTA_STALE_SECS (6 * 3600)
 
 struct reading {
@@ -51,8 +49,6 @@ static struct reading *slot_for(const char *backend)
 
 static void load(void)
 {
-    // Another window's session may be the one talking to a backend this one
-    // has never opened, so the file is re-read rather than read once.
     time_t now = time(NULL);
     if (read_at && now - read_at < 5)
         return;
@@ -73,7 +69,7 @@ static void load(void)
         if (!r)
             continue;
         const cJSON *at = cJSON_GetObjectItem(e, "at");
-        // What this process saw itself is never older than what it read.
+
         if (at && cJSON_IsNumber(at) && (time_t)at->valuedouble <= r->at)
             continue;
         const cJSON *p = cJSON_GetObjectItem(e, "percent");
@@ -157,7 +153,6 @@ int quota_get(const char *backend, int *percent, long *resets_at)
         if (!r->at || time(NULL) - r->at > QUOTA_STALE_SECS)
             return 0;
 
-        // Past the reset, what it said is about a window that has ended.
         int spent = r->percent;
         if (r->resets_at && time(NULL) >= r->resets_at)
             spent = 0;

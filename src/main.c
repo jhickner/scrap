@@ -63,10 +63,6 @@ static void restore_terminal(void)
     tty_raw_end();
 }
 
-// A session the window had before a restart, drawn into its own screen: it is
-// not the tab in front, so what it says goes to its stash rather than the
-// terminal. The screen it had comes back whole where the old build could dump
-// it, and off the transcript where it could not.
 static void replay_tab(struct session *s, void *ud)
 {
     const char *screen = ud;
@@ -79,16 +75,12 @@ static void replay_tab(struct session *s, void *ud)
     sessionload_into(s);
 }
 
-// One line per session, as restart.c wrote them: the screen it was holding,
-// then the argv that reopens it, tab separated.
 static void restore_tabs(const char *path)
 {
     FILE *f = fopen(path, "r");
     if (!f)
         return;
 
-    // Opening a tab puts it in front; the window belongs to the session that
-    // carried the screen, so it goes back there before the replay is drawn.
     int front = workspace_index();
 
     char line[6144];
@@ -155,8 +147,6 @@ static void usage(void)
             choices);
 }
 
-// Every tab is watched, not just the one on screen: a session left running
-// keeps streaming into its own screen while another is in front.
 static int idle_fds(void *ud, int *out, int max)
 {
     (void)ud;
@@ -182,8 +172,7 @@ static int idle_render(void *ud)
     (void)ud;
     sidechannel_poll();
     sidechannel_tick();
-    // A chat line waiting is something only the prompt can act on, so the read
-    // it is blocked in has to end.
+
     if (tg_pending())
         tty_wake();
     return workspace_pump();
@@ -197,8 +186,6 @@ static char *chat_line(void *ud)
 
 static int side_busy(void *ud)  { (void)ud; return sidechannel_busy() || workspace_busy(); }
 
-// A frame's worth of everything that moves while the prompt waits: the
-// spinner, the side turns, and whatever the tabs' own turns have produced.
 static void side_tick(void *ud)
 {
     (void)ud;
@@ -212,8 +199,7 @@ static int idle_busy(void *ud)   { (void)ud; return workspace_busy(); }
 static void replay(void *ud)      { (void)ud; session_replay(workspace_current()); }
 static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
 static void switcher(void *ud)    { (void)ud; sessionswitch_run(); }
-// Ctrl-B: an idle tab if this window already holds one, otherwise a new
-// session started the way the one in front was.
+
 static void another(void *ud)
 {
     (void)ud;
@@ -254,8 +240,6 @@ static void splitter(void *ud, int quiet)
     sessionfork_shell(workspace_current(), FORK_SPLIT_H, quiet);
 }
 
-// The same signal carries a restart and a request for one of this window's
-// sessions; which it is depends on whether a request is waiting.
 static int takeover_pending(void *ud)
 {
     (void)ud;
@@ -270,9 +254,6 @@ static void takeover_run(void *ud)
         prompt_stop(ud);
 }
 
-// A turn in flight anywhere in the window, or a line waiting behind one: the
-// exec would kill the CLI mid-answer and the successor would resume a
-// conversation that lost its last turn.
 static int window_working(void)
 {
     if (workspace_busy())
@@ -292,12 +273,10 @@ static int restart_pending(void *ud)
 static int idle_restart(void *ud)
 {
     (void)ud;
-    // Returns only when the new build could not be run at all, in which case
-    // this window keeps going on the old one.
+
     sidechannel_close_all();
     child_close_all();
-    // The whole window travels: the session in front carries the screen, and
-    // the rest are named in a file the new build opens a tab from.
+
     if (!restart_exec(workspace_current())) {
         viewport_item_begin(VIEWPORT_ROWS(1, 1));
         ui_error("could not restart: no runnable %s at %s or on PATH — "
@@ -314,15 +293,13 @@ static int echo_filter(void *ud, const char *line)
     (void)ud;
     if (cmd_self_echoes(line))
         return 0;
-    // A line typed behind a running turn is not sent yet, so it is echoed when
-    // it is: the transcript keeps the order the agent saw.
+
     if (session_turn_running(workspace_current()) && !cmd_is_command(line) &&
         !bash_is_command(line))
         return 0;
     return 1;
 }
 
-// Escape with nothing typed stops the turn the tab in front is running.
 static int cancel_turn(void *ud)
 {
     (void)ud;
@@ -333,14 +310,11 @@ static int cancel_turn(void *ud)
     return 1;
 }
 
-// What a turn leaves for the window to do, drawn into that turn's own screen.
 static void turn_done(struct session *s)
 {
     cmd_run_deferred(s);
 }
 
-// What is waiting behind the turn in flight: submitted lines wait at the tab
-// they were sent to, not at the prompt.
 static int tab_queued(void *ud)
 {
     (void)ud;
@@ -458,8 +432,6 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // Capture, and nothing else: no terminal, no agent, no session. What the
-    // card means is triage's problem, later.
     if (card) {
         if (optind >= argc) {
             fprintf(stderr, APP_NAME ": --card takes the text to file\n");
@@ -525,7 +497,6 @@ int main(int argc, char **argv)
         ui_raw(1);
         ui_cursor_plain();
 
-        // A restart: the alt screen is already up and holds the last frame.
         if (restore_arg) {
             viewport_inherit();
             scrollback_restore(restore_arg);
@@ -534,8 +505,6 @@ int main(int argc, char **argv)
             viewport_begin();
         }
 
-        // The terminal echoed whatever was typed before raw mode onto the row
-        // we are about to draw on. The bytes are queued and reach the prompt.
         if (tty_input_waiting()) {
             ui_esc("\r");
             ui_esc(UI_ERASE_BELOW);
@@ -560,8 +529,6 @@ int main(int argc, char **argv)
         session_adopt_id(session, session_arg);
     }
 
-    // Before the agent starts: the bridge has its own conventions to teach it,
-    // and they are part of the system prompt the process is opened with.
     if (telegram && session && !tg_start(session))
         telegram = 0;
 
@@ -600,8 +567,6 @@ int main(int argc, char **argv)
 
     status_sticky_set(settings_get_int(SETTING_STICKY, 0));
 
-    // From here on the window owns a set of sessions rather than one, and the
-    // session that was started above is simply the first of them.
     if (!workspace_begin(session, safe_mode)) {
         session_free(session);
         return 1;
@@ -635,7 +600,7 @@ int main(int argc, char **argv)
     prompt_set_another(prompt, another, NULL);
     prompt_set_cancel(prompt, cancel_turn, NULL);
     workspace_on_finish(turn_done);
-    // Not turn_done's job: that waits for an open modal, and the board is one.
+
     workspace_on_settled(boardwork_finished);
     livelist_on_card(boardwork_card_of);
     prompt_set_replay(prompt, replay, NULL);
@@ -652,9 +617,6 @@ int main(int argc, char **argv)
         unlink(tabs_arg);
     }
 
-    // Started on a conversation that already exists — a fork, or a window
-    // opened for one from the command line. What was said in it belongs on the
-    // screen; a restart brings its own, which is already up.
     if (!resume && session_arg && !restore_arg)
         sessionload_into(session);
 
@@ -671,8 +633,7 @@ int main(int argc, char **argv)
                 prompt_echo_message(line);
         } else {
             line = prompt_read(prompt);
-            // ctrl-d on an empty prompt closes this session; the window only
-            // goes away once it is holding the last one.
+
             if (!line && workspace_count() > 1) {
                 workspace_close(workspace_index());
                 continue;
@@ -681,8 +642,6 @@ int main(int argc, char **argv)
         if (!line)
             break;
 
-        // The switcher runs inside the read, so the tab this line was typed at
-        // is not necessarily the one the loop started on.
         session = workspace_current();
         if (!session) {
             free(line);
@@ -694,8 +653,6 @@ int main(int argc, char **argv)
             gitinfo_forget();
             char *text = bash_take_context();
             if (text) {
-                // The command is what the sticky prompt shows; what the agent
-                // is asked is its output.
                 workspace_send(workspace_index(), text, line);
                 free(text);
             }
@@ -704,19 +661,13 @@ int main(int argc, char **argv)
             continue;
         }
 
-        // A line the chat sent runs the same way, but its output has to go back
-        // there as well as onto the screen.
         if (prompt_line_was_external(prompt)) {
-            // The chat's line runs on this thread, so a turn already in flight
-            // at that session has to end first.
             workspace_settle(tg_session());
             tg_run_line(line);
             prompt_restart_check(prompt);
             continue;
         }
 
-        // A command typed behind a running turn either applies now or waits
-        // for it, the way one typed during a turn always has.
         if (session_turn_running(session) && cmd_runs_mid_turn(line)) {
             cmd_dispatch_live(session, line);
             free(line);

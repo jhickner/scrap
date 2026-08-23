@@ -83,10 +83,8 @@ struct session {
     int      idle_busy;
     int      trust_requested;
     int      interrupted;
-    int      unseen;        /* a turn ended behind whoever is holding this */
+    int      unseen;
 
-    // A turn running on its own thread. Everything it produces is copied into
-    // `queue` and drawn later by whoever owns the screen.
     pthread_t       thread;
     int             running;
     volatile int    finished;
@@ -102,7 +100,6 @@ struct session {
     struct turnview view;
 };
 
-// One queued event, with every string it borrowed copied.
 struct evcopy {
     backend_event  ev;
     char          *text, *name, *input_json, *arg, *diff, *id;
@@ -151,9 +148,6 @@ static void humanize(long n, char *out, size_t size)
         snprintf(out, size, "%.1fM", (double)n / 1000000.0);
 }
 
-// The session the drawing belongs to. One writer discipline: every setter
-// swaps it and puts back what it found, so a nested pump cannot leave the
-// screen owned by nobody.
 static struct session *live;
 
 struct session *session_set_drawing(struct session *s)
@@ -168,8 +162,6 @@ static int dir_alive(const char *path);
 static int ground_target(const char *gone, char *out, size_t size);
 static void await_model(struct session *s);
 
-// Drawing, and the state that goes with it. Only ever called by whoever owns
-// the screen: for a threaded turn that is the pump, not the turn.
 static void render_event(struct session *s, const backend_event *ev)
 {
     if (ev->kind == BACKEND_EV_INIT) {
@@ -188,8 +180,6 @@ static void render_event(struct session *s, const backend_event *ev)
         return;
     }
 
-    // Kept even when nothing is being drawn: a turn that ends without a reply
-    // still has this to fall back on.
     if (ev->kind == BACKEND_EV_ASSISTANT && ev->text && *ev->text)
         replace(&s->last_block, ev->text);
 
@@ -300,7 +290,6 @@ static void render_event(struct session *s, const backend_event *ev)
             status_pause();
             paused = 1;
 
-            // The patch is kept, not the rows it drew.
             char *patch;
             if (ev->diff) {
                 patch = strdup(ev->diff);
@@ -343,8 +332,6 @@ static void evcopy_free(struct evcopy *e)
     free(e);
 }
 
-// Called on the turn's thread: the event and its strings are borrowed for the
-// call, so what is kept is a copy.
 static void enqueue(struct session *s, const backend_event *ev)
 {
     struct evcopy *e = calloc(1, sizeof *e);
@@ -366,7 +353,6 @@ static void enqueue(struct session *s, const backend_event *ev)
     s->tail = e;
     pthread_mutex_unlock(&s->lock);
 
-    // Whatever the front end is waiting in has to come up for air.
     wake_write(s);
 }
 
@@ -412,8 +398,6 @@ int session_idle_fd(const struct session *s)
     return s->agent->idle_fd(s->agent);
 }
 
-// The two registries a status change goes to: the tmux tab record for the
-// window, and this session's entry in the list every mux can read.
 static void publish(const struct session *s, const char *status)
 {
     if (!strcmp(status, "working"))
@@ -441,8 +425,6 @@ int session_idle_pump(struct session *s)
     if (!s || !s->agent)
         return 0;
 
-    // A name asked for at the prompt lands here: nothing else polls for it
-    // between turns.
     name_poll(s);
 
     if (!s->agent->idle_pump || s->quiet)
@@ -489,14 +471,12 @@ static void quota_poll(struct session *s)
     s->agent->rate_limit(s->agent, &limit);
     if (limit.available) {
         agenttabs_usage(limit.used_percent, limit.resets_at, limit.window_minutes);
-        // Kept per backend as well, where a window with no session on one can
-        // still ask what is left of it.
+
         quota_note(s->backend, limit.used_percent, limit.resets_at,
                    limit.window_minutes);
     }
 }
 
-// Takes the cached name, unless it is the one a rename is replacing.
 static int adopt_title(struct session *s)
 {
     char found[sizeof s->title];
@@ -547,7 +527,7 @@ static void name_poll(struct session *s)
     if (now - s->named_at < 1.0)
         return;
     s->named_at = now;
-    // The name is what the other windows list this session by.
+
     adopt_title(s);
 }
 
@@ -641,7 +621,6 @@ int session_poll_input(void)
     int interrupt = 0;
     tty_event ev;
     while (tty_read(&ev, 0)) {
-
         status_touch();
         if (typeahead) {
             interrupt |= typeahead(typeahead_ud, &ev);
@@ -657,9 +636,6 @@ int session_poll_input(void)
     return interrupt;
 }
 
-// The turn a thread is running, so the one abort predicate the backend offers
-// can tell whose turn is asking. NULL on the main thread, which is where the
-// blocking turns still run.
 static __thread struct session *owner;
 
 static int abort_check(void)
@@ -731,7 +707,6 @@ void session_free(struct session *s)
         return;
     livelist_forget(s);
 
-    // A turn still running holds the agent this is about to close.
     if (s->running) {
         s->abort_request = 1;
         pthread_join(s->thread, NULL);
@@ -790,8 +765,6 @@ static Backend *agent(struct session *s)
           "a diagram, a photo the user asked about."
         : NULL;
 
-    // A front end other than the terminal has its own conventions to teach the
-    // agent, and they are appended to whatever this one already says.
     char *joined = NULL;
     if (note && s->system_extra) {
         size_t n = strlen(note) + strlen(s->system_extra) + 3;
@@ -847,7 +820,6 @@ int session_switch_backend(struct session *s, const char *backend)
     s->id[0] = '\0';
     const char *id = replacement->session_id(replacement);
     if (id) {
-
         snprintf(s->id, sizeof s->id, "%s", id);
         agenttabs_forget_hook(id);
     }
@@ -900,11 +872,9 @@ void session_set_fork(struct session *s, int on) { s->fork_session = on; }
 
 static void set_id(struct session *s, const char *id)
 {
-
     int changed = strcmp(s->id, id) != 0;
     snprintf(s->id, sizeof s->id, "%s", id);
     if (changed) {
-
         s->title[0] = '\0';
         s->stale_title[0] = '\0';
         s->announce_title = 0;
@@ -933,8 +903,6 @@ static int restart(struct session *s, const char *resume_id)
 
 int session_start(struct session *s)
 {
-    // The directory can be gone before the first turn — a session restored into
-    // a worktree that was merged away. Start somewhere that exists instead.
     char next[4096];
     if (!dir_alive(s->cwd) && ground_target(s->cwd, next, sizeof next))
         replace(&s->cwd, next);
@@ -1026,7 +994,7 @@ static const struct {
     {"plan", "read-only: research and propose, no changes"},
 };
 #define PERMISSION_COUNT (COUNT(PERMISSIONS))
-#define PERMISSION_DEFAULT 1     /* auto */
+#define PERMISSION_DEFAULT 1
 
 int session_permission_count(void) { return PERMISSION_COUNT; }
 int session_permission_default(void) { return PERMISSION_DEFAULT; }
@@ -1058,7 +1026,6 @@ const char *session_permission(const struct session *s)
 
 int session_set_permission(struct session *s, const char *mode)
 {
-
     if (!s->agent) {
         replace(&s->permission, mode);
         return 1;
@@ -1186,8 +1153,6 @@ static void update_title(struct session *s)
     adopt_title(s);
 }
 
-// What a turn cost, kept so a narrower pane lays it out again: whether the
-// title fits beside the numbers is a question about the width it is drawn at.
 struct footer {
     double elapsed;
     long   tokens;
@@ -1260,11 +1225,6 @@ static void print_footer(struct session *s, double elapsed)
     ui_flush();
 }
 
-// A session's directory can vanish underneath it — a worktree that was merged
-// and then cleaned up. The child is stranded: with no working directory it
-// cannot spawn a shell, so hooks and tools fail with errors that name /bin/sh
-// rather than the folder that went missing. Only a restart somewhere that
-// exists frees it.
 static int dir_alive(const char *path)
 {
     struct stat st;
@@ -1287,8 +1247,6 @@ static int nearest_live_dir(const char *path, char *out, size_t size)
     return 0;
 }
 
-// The repository a deleted worktree belonged to, which beats landing in
-// whatever container directory happens to survive above it.
 static int main_worktree(const char *near, char *out, size_t size)
 {
     char quoted[4200];
@@ -1311,7 +1269,7 @@ static int main_worktree(const char *near, char *out, size_t size)
         return 0;
     line[strcspn(line, "\n")] = '\0';
 
-    char *slash = strrchr(line, '/');       // .../<repo>/.git -> .../<repo>
+    char *slash = strrchr(line, '/');
     if (!slash || slash == line || strcmp(slash + 1, ".git") != 0)
         return 0;
     *slash = '\0';
@@ -1321,8 +1279,6 @@ static int main_worktree(const char *near, char *out, size_t size)
     return 1;
 }
 
-// Where a session whose directory went missing should carry on: the repository
-// the deleted worktree belonged to, else the nearest surviving ancestor.
 static int ground_target(const char *gone, char *out, size_t size)
 {
     char near[4096];
@@ -1363,8 +1319,6 @@ static void shorten(const char *dir, char *out, size_t size)
         snprintf(out, size, "%s", dir ? dir : "?");
 }
 
-// GROUND_OK: nothing to do. GROUND_MOVED: the child was restarted somewhere
-// that exists. GROUND_LOST: there was nowhere left to go.
 enum { GROUND_LOST, GROUND_OK, GROUND_MOVED };
 
 static int session_reground(struct session *s)
@@ -1377,8 +1331,6 @@ static int session_reground(struct session *s)
     snprintf(gone, sizeof gone, "%s", dir ? dir : "");
     shorten(gone, shown, sizeof shown);
 
-    // Only the worktree the agent had moved into is gone: the session's own
-    // directory still holds its history, so this one resumes.
     if (dir_alive(s->cwd)) {
         replace(&s->workdir, NULL);
         if (restart(s, s->id[0] ? s->id : NULL)) {
@@ -1408,7 +1360,6 @@ static int session_reground(struct session *s)
     return GROUND_LOST;
 }
 
-// No turn can start with the directory gone: the child would be stranded there.
 static int turn_ready(struct session *s, const char *text)
 {
     replace(&s->error_note, NULL);
@@ -1434,8 +1385,6 @@ static void turn_prepare(struct session *s, const char *text)
     publish(s, "working");
 }
 
-// Everything a turn leaves behind, once its stream has been drawn: the reply,
-// the accounting, the transcript entry, the footer. Takes `reply`.
 static int turn_finish(struct session *s, char *reply, const backend_result *meta,
                        double elapsed)
 {
@@ -1449,8 +1398,7 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
         replace(&s->failed_prompt, text);
         s->idle_busy = 0;
         publish(s, "errored");
-        // The directory can go away mid-turn; then the stderr tail is some
-        // downstream complaint about /bin/sh, not the reason.
+
         if (session_reground(s) == GROUND_MOVED)
             replace(&s->error_note,
                     "the working directory was deleted mid-turn; the session has "
@@ -1458,8 +1406,7 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
         const char *detail = session_last_error(s);
         if (s->silent)
             return 0;
-        // Quiet is a caller reading stdout for the answer: a reason written
-        // there would be taken for one.
+
         if (s->quiet) {
             if (detail)
                 fprintf(stderr, "%s: %s\n", s->backend, detail);
@@ -1480,14 +1427,9 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     int shown = (s->last_block && strcmp(reply, s->last_block) == 0) ||
                 (s->streamed && strcmp(reply, s->streamed) == 0);
     if (s->silent) {
-        // Nothing is drawn here: the front end that asked for the turn takes
-        // the answer from session_last_reply() and says it its own way.
         if (!*reply && s->last_block)
             replace(&reply, s->last_block);
     } else if (s->quiet) {
-        // A turn can end with no closing text — the last thing it said is the
-        // answer then, and if it never said anything the caller still needs a
-        // reason, which only stderr can carry once stdout is empty.
         const char *tail = *reply ? reply : (s->last_block ? s->last_block : "");
         if (*tail) {
             ui_put(tail);
@@ -1495,9 +1437,7 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
         } else {
             const char *detail = s->agent->last_error(s->agent);
             char why[128];
-            // The driver's own word for how the turn ended, when it has one and
-            // it is not the ordinary one: an empty answer is never expected, so
-            // whatever the backend can say about it is worth carrying out.
+
             if (m.subtype[0] && strcmp(m.subtype, "success") != 0)
                 snprintf(why, sizeof why, "the turn ended without a reply (%s)",
                          m.subtype);
@@ -1605,13 +1545,11 @@ static int wake_open(struct session *s)
     return 1;
 }
 
-// The turn itself. It draws nothing and touches nothing the screen owns: the
-// events go to the queue, and the reply waits here to be collected.
 static void *turn_thread(void *ud)
 {
     struct session *s = ud;
     owner = s;
-    // The restart signal is the main thread's to notice.
+
     restart_shield_thread();
 
     memset(&s->meta, 0, sizeof s->meta);
@@ -1655,9 +1593,6 @@ void session_interrupt(struct session *s)
         s->abort_request = 1;
 }
 
-// A turn that ended where nobody was looking. Set by the window, which is the
-// only thing that knows which of its sessions was in front at the time, and
-// republished so the other windows' lists say the same.
 void session_set_unseen(struct session *s, int on)
 {
     on = on ? 1 : 0;
@@ -1702,7 +1637,7 @@ int session_turn_pump(struct session *s)
 
     pthread_join(s->thread, NULL);
     s->running = 0;
-    // Anything the turn queued between the last drain and its own end.
+
     drain_events(s);
 
     char *reply = s->reply;
@@ -1854,8 +1789,6 @@ static int argv_pair(char **out, int n, int max, const char *flag, const char *v
     return n;
 }
 
-// The argv that opens this session again, for /restart, /fork and the note on
-// the way out. One builder: the four of them used to disagree.
 int session_argv(const struct session *s, char **out, int max, unsigned what)
 {
     int n = argv_pair(out, 0, max, "-b", session_backend(s));
@@ -1967,7 +1900,6 @@ void session_report(const struct session *s)
     int room = ui_columns() - 12;
     size_t cells = ui_cells(dir);
     if (room > 8 && cells > (size_t)room) {
-
         while (*dir && ui_cells(dir) > (size_t)room - 1)
             dir++;
         ui_note("  cwd      …%s", dir);

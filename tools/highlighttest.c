@@ -29,7 +29,6 @@ static void show(const char *command, const unsigned char *roles, size_t len)
     putchar('\n');
 }
 
-/* Asserts every byte of occurrence `nth` of `needle` carries role `want`. */
 static void role_nth(const char *command, const char *needle, int nth, char want)
 {
     unsigned char roles[4096];
@@ -64,7 +63,6 @@ static void role(const char *command, const char *needle, char want)
 
 int main(void)
 {
-
     role("ls -la src", "ls", 'c');
     role("ls -la src", "-la", 'f');
     role("ls -la src", "src", '.');

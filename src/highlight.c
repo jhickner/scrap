@@ -50,15 +50,12 @@ static int in_list(const char *const *list, int n, const char *word)
     return 0;
 }
 
-/* ---- shell ---------------------------------------------------------- */
-
 static const char *const SHELL_KEYWORDS[] = {
     "if",   "then", "else",  "elif",     "fi",     "for",    "while", "until",
     "do",   "done", "case",  "esac",     "in",     "function", "select",
     "return", "break", "continue", "!",
 };
 
-/* Words after which the next word names a variable, not a command. */
 static const char *const SHELL_NAMERS[] = {"for", "select"};
 
 static const char *const SHELL_NAMES[] = {"sh", "bash", "zsh", "dash", "ksh"};
@@ -86,7 +83,6 @@ static int ieq(const char *a, const char *b)
     return !*a && !*b;
 }
 
-/* Language implied by a file extension, e.g. the target of `cat > gen.py`. */
 static enum lang ext_lang(const char *word)
 {
     const char *dot = strrchr(word, '.');
@@ -100,7 +96,6 @@ static enum lang ext_lang(const char *word)
     return LANG_NONE;
 }
 
-/* Language implied by a heredoc tag, e.g. `<<'PY'`. */
 static enum lang tag_lang(const char *s, size_t len)
 {
     char tag[16];
@@ -174,7 +169,6 @@ static size_t scan_word(struct lex *L, size_t i, size_t to)
     return i;
 }
 
-/* Literal spelling of a word, or 0 when quoting or expansion hides it. */
 static int word_text(struct lex *L, size_t from, size_t to, char *out, size_t size)
 {
     size_t o = 0;
@@ -226,7 +220,6 @@ static size_t paint_dollar(struct lex *L, size_t i, size_t to, int depth)
     return j;
 }
 
-/* Paints a word as `base`, then overlays the quoted runs and expansions. */
 static void paint_word(struct lex *L, size_t from, size_t to, enum ui_role base, int depth)
 {
     const char *s = L->s;
@@ -289,7 +282,6 @@ static int numeric_word(const char *word)
     return 1;
 }
 
-/* An assignment prefix (FOO=bar cmd) or a plain `NAME=` word. */
 static int paint_assignment(struct lex *L, size_t from, size_t to, int depth)
 {
     size_t i = from;
@@ -306,7 +298,6 @@ static int paint_assignment(struct lex *L, size_t from, size_t to, int depth)
     return 1;
 }
 
-/* Paints inline code (python -c '…'), keeping the surrounding quotes visible. */
 static void paint_code(struct lex *L, size_t from, size_t to, enum lang lang, int depth)
 {
     char quote = from < to ? L->s[from] : 0;
@@ -416,7 +407,6 @@ static void shell_region(struct lex *L, size_t from, size_t to, int depth)
             continue;
         }
 
-        /* Heredoc: `<<TAG`, `<<-TAG`, `<< 'TAG'`. */
         if (c == '<' && i + 1 < to && s[i + 1] == '<' &&
             !(i + 2 < to && (s[i + 2] == '<' || s[i + 2] == '('))) {
             size_t j = i + 2;
@@ -518,8 +508,6 @@ static void shell_region(struct lex *L, size_t from, size_t to, int depth)
         i = end;
     }
 }
-
-/* ---- python --------------------------------------------------------- */
 
 static const char *const PY_KEYWORDS[] = {
     "and",    "as",     "assert", "async",  "await",    "break",  "class",

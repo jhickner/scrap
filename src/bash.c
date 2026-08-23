@@ -75,8 +75,6 @@ int bash_is_command(const char *line)
     return bash_body(line) != NULL;
 }
 
-// A tab is one byte but up to eight columns, so anything measuring the text
-// afterwards would read the line as shorter than it draws.
 #define TAB_STOP 8
 
 static char *plain_text(const char *raw, size_t len)
@@ -105,7 +103,6 @@ static char *plain_text(const char *raw, size_t len)
                         break;
                 }
             } else if (k == ']' || k == 'P' || k == 'X' || k == '^' || k == '_') {
-
                 while (++i < len) {
                     if ((unsigned char)raw[i] == 0x07)
                         break;
@@ -234,7 +231,6 @@ static void context_add(const char *cmd, const char *out, int status)
         bash_context_clear();
 }
 
-// A command's output. Not the command itself: its echo is the row above.
 struct ran {
     char *out;
 };
@@ -283,7 +279,6 @@ void bash_ran_load(const cJSON *st)
     viewport_item_persist(mark, BASH_RAN_KIND, ran_encode);
 }
 
-// Opens empty and is amended as the command writes.
 static unsigned keep_ran(void)
 {
     struct ran *r = calloc(1, sizeof *r);
@@ -310,7 +305,6 @@ static void ran_set(unsigned mark, const char *out)
     viewport_item_update(mark);
 }
 
-// A command asking for the alternate screen wants the terminal to itself.
 static int wants_screen(const char *p, size_t n)
 {
     static const char *const ASK[] = {"\x1b[?1049h", "\x1b[?1047h", "\x1b[?47h"};
@@ -325,7 +319,6 @@ static int wants_screen(const char *p, size_t n)
     return 0;
 }
 
-// Give up the screen, in the mode the command expects.
 static void hand_over(int was_raw)
 {
     viewport_suspend();
@@ -491,8 +484,7 @@ void bash_run(const char *line)
                 }
             }
             text = elide(text);
-            // A command that took the screen is not written down: a whole
-            // editing session flattened to text is not a record of anything.
+
             if (!handed)
                 ran_set(mark, text);
             context_add(cmd, text, status);

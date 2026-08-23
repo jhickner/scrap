@@ -5,7 +5,6 @@
 
 #include "text.h"
 
-// One line of a command's output, trimmed. Empty when it said nothing.
 int gitcmd_line(const char *dir, const char *args, char *out, size_t size)
 {
     char quoted[4200];
@@ -27,11 +26,6 @@ int gitcmd_line(const char *dir, const char *args, char *out, size_t size)
     return out[0] != '\0';
 }
 
-// The repo proper, not whichever worktree of it we happen to be standing in.
-// --show-toplevel answers with the worktree, so a board opened from inside one
-// would put its workers underneath it, on branches cut from it: nested trees
-// that go when that worktree is merged away, on bases the merge queue has no
-// way to rebase. The first line of `worktree list` is always the main one.
 int gitcmd_root(const char *cwd, char *out, size_t size)
 {
     char line[4200];
@@ -42,4 +36,3 @@ int gitcmd_root(const char *cwd, char *out, size_t size)
     }
     return gitcmd_line(cwd, "rev-parse --show-toplevel", out, size);
 }
-

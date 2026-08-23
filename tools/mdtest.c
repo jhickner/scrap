@@ -1,7 +1,3 @@
-// Nothing the markdown renderer draws may be wider than the width it was
-// asked for. A row a cell or two over is not a rendering detail: the caller
-// puts a gutter down the side of what comes back, and the screen then breaks
-// the overflow wherever it likes — mid-word, with no gutter on what is left.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,7 +15,6 @@ static void fail(const char *what, int width, size_t cells, const char *row, siz
     failures++;
 }
 
-// The widest row of `src` rendered at `width`, in cells.
 static void check_fits(const char *what, const char *src, int width)
 {
     ui_capture_begin(width);
@@ -40,8 +35,6 @@ static void check_fits(const char *what, const char *src, int width)
     free(out);
 }
 
-// Every width in a range, because an overflow only shows when a word happens
-// to land on the edge — one width proves nothing.
 static void check_widths(const char *what, const char *src)
 {
     for (int w = 20; w <= 120; w++)
@@ -58,8 +51,6 @@ int main(void)
                  "The generator already exists (tools/gen-testimages.sh) and has been run — "
                  "29 files are in testimages/ now, one per case.\n");
 
-    // A bullet, a number and a quote bar all put something on the first row
-    // before the text starts, and it is the first row that overflows.
     check_widths("a bulleted list",
                  "- PNG fast path (8): basic, wide, tall, strip-2000x40, strip-40x2000, "
                  "large-3000x2000, tiny-16, pixel-1x1\n"
@@ -80,7 +71,6 @@ int main(void)
                  "- Conversion path / non-PNG (8): photo.jpg, bmp, tiff, webp, ico\n"
                  "  - anim.gif, doc.pdf, vector.svg, and whatever else turns up here\n");
 
-    // Styling and links take no cells, so they cannot make a row too wide.
     check_widths("styled text",
                  "- **Conversion path** / *non-PNG* (8): `photo.jpg`, [bmp](https://x.test/b), "
                  "tiff, webp, ico, anim.gif\n");

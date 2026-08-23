@@ -21,13 +21,6 @@ const char *boardcfg_who_name(enum board_who who)
     return WHO_NAMES[who];
 }
 
-// Triage is told it may fail. A classifier given only a list of kinds will
-// always pick one, and a confident wrong kind costs more than an admitted
-// unknown: the first sends a worker somewhere, the second asks a question.
-// Triage may fail, and saying so is a result. But the bar for failing is
-// that the card names nothing to point at -- not that it leaves the work
-// open, which is what a card thrown down in a hurry always does. Asked to
-// flag anything ambiguous, a classifier asks how to build things.
 static const char TRIAGE_PROMPT[] =
     "You are sorting one card on a work board. Read it and answer with JSON only, no prose and no code fence.\n"
     "\n"
@@ -77,21 +70,8 @@ static const char TRIAGE_PROMPT[] =
     "When you ask, set confidence below 0.5. Otherwise set it above 0.7 and\n"
     "leave question empty";
 
-// "Do not commit to the main branch" reads as "do not commit" often enough to
-// matter: work left dirty in a worktree is work the merge queue cannot see, the
-// audit cannot measure, and a reaped worker loses.
-// The classes a card can fall into, and what a worker is told for each. All of
-// it is configuration: a board whose work does not divide this way says so in
-// board.json rather than in here.
-//
-// A wiki kind is a note to be filed, so it wants no branch and no review: the
-// worker writes it where it goes and the card is done. Work kinds go through
-// the gate.
 #define ALL_STEPS ((1u << BOARD_STEPS) - 1u)
 
-// Sent in when the queue could not land a card by itself: a rebase that
-// conflicted, a check that failed, a merge that would not go. It is not asked
-// to land the card -- the queue does that once the branch is clean again.
 static const char MERGE_PROMPT[] =
     "This branch could not be landed. What the attempt said is below.\n"
     "\n"
@@ -178,9 +158,6 @@ static const char WORKER_PROMPT[] =
     "and not an account of how you worked. No co-author trailers and no "
     "attribution to a tool.";
 
-// The audit is a gate, so it has to answer a question rather than write an
-// essay: findings are things that would stop a merge, and everything else is
-// clean.
 static const char AUDIT_PROMPT[] =
     "Review the change on this branch against the commit it branched from. "
     "Answer with JSON only, no prose and no code fence:\n"
@@ -204,9 +181,6 @@ static const char AUDIT_PROMPT[] =
     "there are none, say clean and mean it -- a gate that never opens is a "
     "gate nobody keeps.";
 
-// A sweep is looking for what no single card could show: each landed on its
-// own and made sense on its own, and the duplication is only visible across
-// them.
 static const char SWEEP_PROMPT[] =
     "Look over this repo for what incremental work leaves behind. Answer with "
     "JSON only, no prose and no code fence:\n"
@@ -227,7 +201,6 @@ static char *dup_or_null(const char *s)
 {
     return s ? strdup(s) : NULL;
 }
-
 
 static void defaults(struct board_cfg *c)
 {
@@ -256,7 +229,6 @@ static void defaults(struct board_cfg *c)
     for (int i = 0; i < BOARD_WHO; i++)
         snprintf(c->who[i].backend, sizeof c->who[i].backend, "claude");
 
-    // Triage is a classifier: it wants the cheap model and little thinking.
     snprintf(c->who[BOARD_WHO_TRIAGE].model, sizeof c->who[BOARD_WHO_TRIAGE].model, "haiku");
     snprintf(c->who[BOARD_WHO_TRIAGE].effort, sizeof c->who[BOARD_WHO_TRIAGE].effort, "low");
     snprintf(c->who[BOARD_WHO_AUDIT].effort, sizeof c->who[BOARD_WHO_AUDIT].effort, "high");
@@ -282,8 +254,6 @@ static void set_int(int *dst, const cJSON *o, const char *key)
         *dst = (int)j->valuedouble;
 }
 
-// The board.json this used to be kept in, read once so a board configured
-// before the files existed carries over. Nothing writes it any more.
 static void overlay(struct board_cfg *c, const cJSON *o)
 {
     set_int(&c->workers, o, "workers");
@@ -296,8 +266,6 @@ static void overlay(struct board_cfg *c, const cJSON *o)
     set_str(c->delegation, sizeof c->delegation, o, "delegation");
     set_str(c->verify, sizeof c->verify, o, "verify");
 
-    // Named in the file, the kinds replace the built-in list rather than
-    // adding to it: a board that drops a class means to be without it.
     const cJSON *kinds = cJSON_GetObjectItem((cJSON *)o, "kinds");
     if (cJSON_IsArray(kinds)) {
         for (int i = 0; i < c->kinds_n; i++) {
@@ -322,8 +290,6 @@ static void overlay(struct board_cfg *c, const cJSON *o)
             into->prompt = dup_or_null(prompt ? prompt : "");
             set_int(&into->priority, k, "priority");
 
-            // Absent, a kind takes every step: a class written by hand that
-            // forgot to say is a class that gets the careful treatment.
             const cJSON *steps = cJSON_GetObjectItem((cJSON *)k, "steps");
             if (!cJSON_IsArray(steps)) {
                 into->steps = ALL_STEPS;
@@ -357,17 +323,6 @@ static void overlay(struct board_cfg *c, const cJSON *o)
     }
 }
 
-/* ---- the files a person edits ------------------------------------------- */
-
-// One directory, and nothing in it a person cannot open in an editor:
-//
-//   board/settings.md          the numbers, the delegation order, the check
-//   board/roles/<who>.md       what runs each stage, and what it is told
-//   board/kinds/<name>.md      a class of card: what it means, what it takes
-//
-// Everything is written out, whether or not it differs from the built-in
-// default, because a file that is not there is a file nobody can edit.
-
 #define BOARD_DIR "board"
 
 static int board_path(char *out, size_t size, const char *leaf, const char *name)
@@ -378,8 +333,6 @@ static int board_path(char *out, size_t size, const char *leaf, const char *name
     return (size_t)snprintf(out, size, "%s/%s.md", dir, name) < size;
 }
 
-// "worktree, review, merge" -> a mask. An empty list is a kind that takes no
-// step at all, which is not the same as one that did not say.
 static unsigned steps_of(const char *list)
 {
     unsigned mask = 0;
@@ -437,7 +390,6 @@ static void read_settings(struct board_cfg *c)
 
     const char *chain = mdcfg_get(&m, "delegation");
     if (*chain) {
-        // Written with spaces because a person wrote it; stored without.
         size_t at = 0;
         for (const char *p = chain; *p && at + 1 < sizeof c->delegation; p++)
             if (*p != ' ')
@@ -487,8 +439,6 @@ static void read_kinds(struct board_cfg *c)
     if (!found)
         return;
 
-    // The files are the list: a kind whose file was deleted is a kind the
-    // board no longer has.
     for (int i = 0; i < c->kinds_n; i++) {
         free(c->kinds[i].means);
         free(c->kinds[i].prompt);
@@ -580,8 +530,6 @@ static int write_kinds(const struct board_cfg *c)
     if (!mdcfg_dir(dir, sizeof dir, BOARD_DIR "/kinds"))
         return 0;
 
-    // A kind edited into a different name leaves its old file behind, and a
-    // deleted one leaves all of it, so what is no longer configured goes.
     char names[BOARD_KINDS_MAX * 2][MDCFG_NAME];
     int  had = mdcfg_list(dir, names, BOARD_KINDS_MAX * 2);
     for (int i = 0; i < had; i++) {
@@ -635,8 +583,6 @@ static void load(void)
     loaded = 1;
     defaults(&cache);
 
-    // A board.json from before the files existed is read once, so what was
-    // configured then carries over, and then set aside.
     char old[4300];
     if (path_config_file(old, sizeof old, "board.json")) {
         char  *text = text_slurp(old, CFG_MAX_BYTES, NULL);
@@ -657,8 +603,6 @@ static void load(void)
     read_roles(&cache);
     read_kinds(&cache);
 
-    // Nothing there to read means nothing there to edit, so the defaults are
-    // written out the first time rather than waiting for a change.
     char seed[4300];
     if (board_path(seed, sizeof seed, BOARD_DIR, "settings") && access(seed, F_OK))
         write_out(&cache);
@@ -707,8 +651,6 @@ void boardcfg_kinds_block(char *out, size_t size)
     if (at < size)
         at += (size_t)snprintf(out + at, size - at, ".\n");
 
-    // The width the names line up to, so the list reads as a table rather
-    // than as a paragraph the model has to parse.
     int wide = 0;
     for (int i = 0; i < c->kinds_n; i++) {
         int n = (int)strlen(c->kinds[i].name);

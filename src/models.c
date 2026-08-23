@@ -13,8 +13,6 @@
 #define LABEL_BYTES  96
 #define DETAIL_BYTES 96
 
-// A catalog costs a file read, or a CLI call over the network, so each backend
-// is filled once and kept for the run.
 struct list {
     char              backend[32];
     int               n, cap;
@@ -93,7 +91,6 @@ static void fill_static(struct list *l, const struct pick_item *v, int n)
         push(l, v[i].label, v[i].detail);
 }
 
-// ~/.codex/models_cache.json: what the Codex picker itself offers.
 static void fill_codex(struct list *l)
 {
     char *text = home_slurp(".codex/models_cache.json");
@@ -114,7 +111,6 @@ static void fill_codex(struct list *l)
     free(text);
 }
 
-// "Z.AI: GLM 5.2 · 200K context"
 static void describe(char *out, size_t cap, const char *name, double context)
 {
     char ctx[32] = "";
@@ -129,8 +125,6 @@ static void describe(char *out, size_t cap, const char *name, double context)
         snprintf(out, cap, "%s", name && *name ? name : ctx);
 }
 
-// OpenRouter ids are namespaced by vendor ("z-ai/glm-5.2"); pi wants the
-// provider in front, except for its own routers, which already read that way.
 static void pi_model_id(char *out, size_t cap, const char *id)
 {
     if (!strncmp(id, "openrouter/", 11))
@@ -150,8 +144,6 @@ static void push_openrouter(struct list *l, const char *id, const char *name, do
     describe(detail, sizeof detail, name, context);
     push(l, label, detail);
 
-    // The routers take OpenRouter's routing suffixes; on a plain model they are
-    // a shortcut worth typing by hand, not 400 more rows.
     if (strncmp(id, "openrouter/", 11))
         return;
     static const char *const VARIANTS[] = {":nitro", ":floor"};
@@ -170,7 +162,6 @@ static void openrouter_json(struct list *l, const char *text, const char *key)
     cJSON *root = cJSON_Parse(text);
     cJSON *models = root ? cJSON_GetObjectItem(root, key) : NULL;
 
-    // Routers first: they are the ones worth scrolling to rather than typing.
     for (int routers = 1; routers >= 0; routers--) {
         cJSON *m;
         cJSON_ArrayForEach(m, models) {
@@ -184,15 +175,8 @@ static void openrouter_json(struct list *l, const char *text, const char *key)
     cJSON_Delete(root);
 }
 
-// Four hours, the same window pi revalidates its own catalogs on.
 #define CATALOG_MAX_AGE (4 * 60 * 60)
 
-// Refresh out of band, the way pi does: whatever is on disk is what this run
-// shows, and the fetch lands for the next time the picker opens. openrouter.ai
-// serves the catalog with no etag and no last-modified, so a conditional
-// request buys nothing and every refresh is a full body. A fetch that fails
-// leaves the mtime alone, so the next picker retries instead of sitting on a
-// stale catalog for the rest of the window.
 static void refresh_openrouter(const char *path)
 {
     char dest[4200], tmp[4300], quoted[4400];
@@ -213,9 +197,6 @@ static void refresh_openrouter(const char *path)
     (void)system(cmd);
 }
 
-// The full OpenRouter catalog, kept in ~/.config/mux. Routers like
-// openrouter/pareto-code are only in openrouter.ai's own list, not the mirror
-// pi caches, so this reads from the source.
 static int fill_openrouter_catalog(struct list *l)
 {
     char path[4096];
@@ -237,7 +218,6 @@ static int fill_openrouter_catalog(struct list *l)
     return l->n > before;
 }
 
-// ~/.pi/agent/models-store.json: the catalogs pi itself has cached.
 static void fill_pi_store(struct list *l)
 {
     char *text = home_slurp(".pi/agent/models-store.json");
@@ -255,8 +235,6 @@ static void fill_pi_store(struct list *l)
     free(text);
 }
 
-// ~/.pi/agent/models.json: the models pi has been configured with by hand.
-// They go first, since they are the ones already chosen.
 static void fill_pi_configured(struct list *l)
 {
     char *text = home_slurp(".pi/agent/models.json");
@@ -293,7 +271,6 @@ static void fill_pi(struct list *l)
         fill_pi_store(l);
 }
 
-// grok lists its own: "  * grok-4.6 (default)" or "  - grok-4.5".
 static void fill_grok(struct list *l)
 {
     FILE *f = popen("grok models 2>/dev/null", "r");

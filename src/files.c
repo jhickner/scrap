@@ -338,7 +338,6 @@ static int split_external(const char *token, const char *root, char *prefix, siz
         pre[n] = '\0';
         snprintf(base, base_sz, "%s", slash + 1);
     } else {
-
         snprintf(pre, sizeof pre, "%s/", token);
         base[0] = '\0';
     }

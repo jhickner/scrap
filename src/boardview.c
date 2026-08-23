@@ -29,8 +29,6 @@
 #include "session.h"
 #include "workspace.h"
 
-// The list holds letters for itself, so searching is behind '/' and a typed
-// letter means the key it stands for.
 #define KEY_NEW      'n'
 #define KEY_DELETE   'd'
 #define KEY_TRIAGE   't'
@@ -46,18 +44,14 @@
 
 #define BOARD_KEYS "ndtsgaArflc*"
 
-// Letters are shortcuts here rather than a search, so without a line saying
-// so the list gives no sign it has any keys at all.
 #define BOARD_HINT \
     "enter edit  ·  s start  ·  g worker  ·  "                                \
     "a approve  ·  f feedback  ·  r reject\n"                                 \
     "n new  ·  t triage  ·  l log  ·  d delete  ·  c config  ·  "               \
     "* all repos  ·  / search"
 
-/* ---- rows ------------------------------------------------------------- */
-
 struct vrow {
-    char          id[BOARD_ID_MAX];  /* empty for anything not a card */
+    char          id[BOARD_ID_MAX];
     char         *label;
     char         *detail;
     unsigned char heading;
@@ -109,8 +103,6 @@ static void row_heading(struct vlist *l, const char *text)
     }
 }
 
-// A row the highlight passes over, which is not the same as a row set apart:
-// PICK_APART rows are ordinary choices that merely want a gap above them.
 static int is_text(const struct vrow *r)
 {
     return r->heading == PICK_HEADING || r->heading == PICK_TEXT;
@@ -126,8 +118,6 @@ static void vlist_free(struct vlist *l)
     memset(l, 0, sizeof *l);
 }
 
-// Runs a built list through the picker, which wants its columns as separate
-// arrays. Returns the row that was chosen, or -1.
 static int vlist_run(const char *title, struct vlist *l, int initial,
                      const char *hint, const char *shortcuts, int *pressed,
                      int (*tick)(void *ud), void *tick_ud)
@@ -176,8 +166,6 @@ static int vlist_run(const char *title, struct vlist *l, int initial,
     return at;
 }
 
-/* ---- what a card looks like ------------------------------------------- */
-
 static void ago(time_t then, char *out, size_t size)
 {
     long gap = (long)(time(NULL) - then);
@@ -191,7 +179,6 @@ static void ago(time_t then, char *out, size_t size)
         snprintf(out, size, "%ldd", gap / 86400);
 }
 
-// The status column: what the card is doing, ahead of what it is.
 static void column_mark(enum board_col col, const char **mark, unsigned char *role)
 {
     switch (col) {
@@ -218,8 +205,6 @@ static void column_mark(enum board_col col, const char **mark, unsigned char *ro
     }
 }
 
-// A repo, short enough to sit beside a title. What identifies a worktree is
-// its tail, so that is the end that is kept.
 #define WHERE_MAX 26
 
 static void short_repo(const char *cwd, char *out, size_t size)
@@ -249,8 +234,6 @@ static void short_repo(const char *cwd, char *out, size_t size)
         snprintf(out, size, "…%s", strrchr(full, '/') ? strrchr(full, '/') : full);
 }
 
-// What a card in `unclear` is waiting for: the last thing triage asked. It
-// belongs on the row, because it is the whole reason the row is there.
 static const char *asked(const struct board_card *c)
 {
     for (int i = c->log_n - 1; i >= 0; i--)
@@ -264,8 +247,6 @@ static int shows(const struct board_card *c, const char *filter)
     return !filter || !*filter || !strcmp(c->cwd, filter);
 }
 
-// Every card in a column, in the order the board reads them: by priority, then
-// by how long they have been waiting.
 static int by_priority(const void *a, const void *b)
 {
     const struct board_card *const *x = a, *const *y = b;
@@ -276,8 +257,6 @@ static int by_priority(const void *a, const void *b)
     return strcmp((*x)->id, (*y)->id);
 }
 
-// Returns how many cards the filter let through, which is not `n` and is what
-// the title bar has to say.
 static int build_board(struct vlist *l, struct board_card *cards, int n,
                        const char *filter, int wide)
 {
@@ -324,8 +303,6 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             else
                 snprintf(when, sizeof when, "%s", ts);
 
-            // In one repo the directory is the title bar's job; across repos
-            // it is the first thing you need from a row.
             char where[256] = {0};
             if (wide)
                 short_repo(c->cwd, where, sizeof where);
@@ -337,15 +314,12 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             const char *question = c->col == BOARD_UNCLEAR ? asked(c) : NULL;
             if (question)
                 r->detail = dsprintf("%s", question);
-            // A card that could not land sits in `doing` looking like one being
-            // worked on. It says which it is until a worker takes it.
+
             else if (c->stuck[0])
                 r->detail = dsprintf("stuck · %s", c->stuck);
             else if (waiting[0])
                 r->detail = dsprintf("waiting · %s", waiting);
             else if (c->col == BOARD_REVIEW && c->worktree[0]) {
-                // What approving it will do, so pressing a is never a
-                // surprise: the size of the change, and which way it sends it.
                 int files = 0, lines = 0;
                 boardaudit_size(c, &files, &lines);
                 r->detail = dsprintf("%d file%s, %d line%s · %s", files,
@@ -355,8 +329,6 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
                                                           : "a lands it");
             } else if (c->cost_usd > 0 &&
                      (c->col == BOARD_REVIEW || c->col == BOARD_DONE)) {
-                // What it cost is the thing worth knowing about work that is
-                // finished, so it takes the place of the age.
                 char head[320] = "";
                 if (where[0] && c->kind[0])
                     snprintf(head, sizeof head, "%s · %s · ", where, c->kind);
@@ -392,10 +364,6 @@ static int row_of(const struct vlist *l, const char *id)
     return 0;
 }
 
-// Called on the spinner's frames while the list is open. Triage answers on
-// its own schedule; this is where those answers land on the rows.
-// Every child that has finished, offered to whoever asked for it. One place
-// asks, because one place is polling: the list that is open.
 static int board_reap(void)
 {
     int  changed = 0;
@@ -418,29 +386,19 @@ static int board_reap(void)
 static int board_tick(void *ud)
 {
     (void)ud;
-    // The window is parked in this list, so its own tabs only move on if the
-    // list moves them: a worker would otherwise sit still for as long as the
-    // board is open.
+
     workspace_pump_quiet();
 
-    // What triage and the workers decided moves cards between columns, which
-    // no redraw of the rows we built can show. The list has to be built again.
     int moved = board_reap();
     moved |= boardwork_poll();
     moved |= boardwork_pump();
-    // One card lands at a time, and the next one starts when it is done.
+
     moved |= boardmerge_pump();
     moved |= boardaudit_pump();
     moved |= boardsweep_pump();
     return moved ? PICK_TICK_REOPEN : 0;
 }
 
-// Everything sitting in `new` that nothing is already working on. A card is
-// triaged once on its own, and after that only when asked: a card that came
-// back unclear is waiting for a person, not another turn. Answering it is that
-// person, so an answered card is new again and gets its turn here -- which is
-// also what catches one that could not be started at the moment it was
-// answered because every triage slot was busy.
 static void triage_the_new(struct board_card *cards, int n)
 {
     for (int i = 0; i < n; i++)
@@ -464,8 +422,6 @@ static void note(const char *fmt, ...)
     ui_flush();
 }
 
-/* ---- the things the keys do ------------------------------------------- */
-
 static void do_new(const char *cwd, char *sel_id)
 {
     char *text = ask_run("new card", NULL);
@@ -486,8 +442,6 @@ static int do_delete(const struct board_card *c)
     return board_remove(c->id);
 }
 
-/* ---- the card, as a form --------------------------------------------- */
-
 static const char *const PRIORITIES[] = {"0", "1", "2", "3"};
 
 #define NOTES_MAX 48
@@ -502,8 +456,6 @@ static void note_line(const char **notes, int *n, char **owned, const char *text
     (*n)++;
 }
 
-// The parts of a card that are read rather than edited: what it says, and
-// what has happened to it.
 static int build_notes(const struct board_card *c, const char **notes, char **owned)
 {
     int n = 0;
@@ -525,15 +477,12 @@ static int build_notes(const struct board_card *c, const char **notes, char **ow
     return n;
 }
 
-// Everything a card can be changed to, on one screen, tab between them.
 static void card_form(const struct board_card *c)
 {
     const char *cols[BOARD_COLS];
     for (int i = 0; i < BOARD_COLS; i++)
         cols[i] = board_col_name((enum board_col)i);
 
-    // Empty leads, because a card that has not been sorted yet has no kind and
-    // saying so is not the same as guessing one.
     const struct board_cfg *cfg = boardcfg();
     const char             *kinds[BOARD_KINDS_MAX + 1];
     int                     kinds_n = 0;
@@ -572,8 +521,6 @@ static void card_form(const struct board_card *c)
     char       *owned[NOTES_MAX] = {0};
     int         notes_n = build_notes(c, notes, owned);
 
-    // The title only earns a place in the heading once triage has made it
-    // something other than the spec's first line.
     char heading[600];
     if (c->kind[0] && c->title[0] && strcmp(c->title, c->body ? c->body : ""))
         snprintf(heading, sizeof heading, "%s · %s · %s", c->id, c->kind, c->title);
@@ -595,10 +542,6 @@ static void card_form(const struct board_card *c)
     if (!kept)
         return;
 
-    // The card may have moved while the form was open -- triage answers on its
-    // own schedule. Merge onto what is in the store now rather than onto the
-    // copy the form was built from, or a turn that landed a second ago is
-    // written back out of existence.
     struct board_card *cards = NULL;
     int                n = board_load(&cards);
     struct board_card *live = board_find(cards, n, c->id);
@@ -612,9 +555,6 @@ static void card_form(const struct board_card *c)
     edited.col = board_col_from_name(column);
     edited.priority = atoi(priority);
 
-    // The spec is the card; the title is only how it reads in a list. Until
-    // triage has named it, that name follows the spec rather than drifting
-    // from it.
     int respec = strcmp(spec, live->body ? live->body : "") != 0;
     edited.body = spec;
     if (!live->kind[0])
@@ -625,9 +565,6 @@ static void card_form(const struct board_card *c)
         snprintf(edited.cwd, sizeof edited.cwd, "%s", full);
     free(full);
 
-    // Rewriting the spec of a card triage could not read is the answer to the
-    // question it asked. It goes round again rather than sitting there until
-    // someone remembers to ask for it.
     int answered = respec && live->col == BOARD_UNCLEAR &&
                    edited.col == BOARD_UNCLEAR;
     if (answered)
@@ -636,8 +573,6 @@ static void card_form(const struct board_card *c)
     int ok = board_update(&edited);
     board_free(cards, n);
 
-    // The note goes on before triage is asked for: it is what tells the board
-    // this card has been answered, and so what makes it eligible again.
     if (ok && answered) {
         board_note(c->id, "you", "answered, and sent back to triage");
         struct board_card *again = NULL;
@@ -648,8 +583,6 @@ static void card_form(const struct board_card *c)
         board_free(again, m);
     }
 }
-
-/* ---- the board -------------------------------------------------------- */
 
 int boardview_capture(const char *text, const char *cwd, char *id_out, int size)
 {
@@ -666,9 +599,6 @@ int boardview_run(const char *cwd)
     char here[4096];
     snprintf(here, sizeof here, "%s", cwd ? cwd : "");
 
-    // Where the board was left. Going to a worker and coming back is the
-    // ordinary way round the board, so coming back should land where it was
-    // rather than at the top of the list.
     static char filter[4096];
     static char sel_id[BOARD_ID_MAX];
     char        notice[256] = {0};
@@ -683,12 +613,8 @@ int boardview_run(const char *cwd)
         struct board_card *cards = NULL;
         int                n = board_load(&cards);
 
-        // A card that has never been looked at is looked at now, without being
-        // asked for: capture is meant to cost nothing, and this is the rest of
-        // that bargain.
         triage_the_new(cards, n);
 
-        // Work that finished a fortnight ago is not what the board is for.
         if (board_archive(boardcfg()->archive_after)) {
             board_free(cards, n);
             n = board_load(&cards);
@@ -700,8 +626,7 @@ int boardview_run(const char *cwd)
         if (!l.n) {
             vlist_free(&l);
             board_free(cards, n);
-            // A board with nothing in this repo but cards elsewhere is a
-            // filter, not an empty board; say which it was.
+
             if (filter[0]) {
                 filter[0] = '\0';
                 continue;
@@ -714,7 +639,6 @@ int boardview_run(const char *cwd)
         if (filter[0])
             path_home_relative(filter, where, sizeof where);
 
-        // What the board is holding back, and what is left to run it with.
         const struct board_cfg *cfg = boardcfg();
         char busy[64] = "";
         if (boardwork_running())
@@ -735,8 +659,6 @@ int boardview_run(const char *cwd)
             snprintf(title, sizeof title, "board · %s · %d of %d%s%s", where,
                      shown, n, busy, left);
 
-        // A refusal belongs under the list rather than in the transcript
-        // behind it: the board is what is being looked at.
         char hint[512];
         if (notice[0])
             snprintf(hint, sizeof hint, "%s\n%s", notice, BOARD_HINT);
@@ -751,8 +673,6 @@ int boardview_run(const char *cwd)
             snprintf(sel_id, sizeof sel_id, "%s", l.v[at].id);
         vlist_free(&l);
 
-        // Triage answered while the list was open, so the rows are stale: they
-        // are built again, with the highlight left where it was.
         if (at == PICK_REOPEN) {
             board_free(cards, n);
             continue;
@@ -783,8 +703,6 @@ int boardview_run(const char *cwd)
             }
             break;
         case KEY_GO: {
-            // The worker's tab is the worker: its whole transcript, its own
-            // prompt. There is no need for a smaller one inside a card.
             int tab = c ? boardwork_tab(c->id) : -1;
             if (tab >= 0) {
                 board_free(cards, n);
@@ -799,7 +717,7 @@ int boardview_run(const char *cwd)
                 boardwork_approve(c, boardaudit_wanted(c));
             break;
         case KEY_APPROVE_OTHER:
-            // The row says which way `a` goes; this is the other way.
+
             if (c && c->col == BOARD_REVIEW)
                 boardwork_approve(c, !boardaudit_wanted(c));
             break;

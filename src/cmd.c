@@ -206,10 +206,6 @@ static void note_identity(const struct session *s)
     ui_flush();
 }
 
-// A picker is a modal on the keyboard, so there has to be one and it has to be
-// free: not already inside a list, and not a front end with no keyboard behind
-// it. The modal layer refuses on its own too; this is the caller side, where
-// there is a usage line to say why.
 static int can_pick(const char *usage)
 {
     if (chrome_modal_active()) {
@@ -411,7 +407,7 @@ static void do_btw(struct session *s, const char *arg)
                    "conversation, without waiting for the current turn");
         return;
     }
-    // The child is asked the question alone; what is shown is what was typed.
+
     char label[4096];
     snprintf(label, sizeof label, "/btw %s", arg);
     sidechannel_start(s, arg, label);
@@ -495,7 +491,6 @@ static void do_image(struct session *s, const char *arg)
 
 int cmd_resume(struct session *s)
 {
-
     if (!sessionlist_available(session_backend(s))) {
         ui_note("%s keeps no transcripts to resume from", session_backend(s));
         return 0;
@@ -524,8 +519,7 @@ int cmd_resume(struct session *s)
     if (index >= 0) {
         if (session_resume(s, list[index].id)) {
             status_sticky_prompt(NULL);
-            // The screen was the conversation this one replaces; what belongs
-            // here now is what was said in the one being resumed.
+
             viewport_clear();
             hud_print(s);
             sessionload_into(s);
@@ -669,10 +663,9 @@ static int split_command(const char *line, char *name, size_t size, const char *
 enum {
     CMD_HIDDEN      = 1u << 0,
     CMD_QUITS       = 1u << 1,
-    // The command puts its own line in the transcript.
+
     CMD_SELF_ECHOES = 1u << 2,
-    // Touches only mux's display, so it may run while a turn is in flight.
-    // The rest reload or talk to the agent CLI, and wait for the turn to end.
+
     CMD_LIVE        = 1u << 3,
 };
 
@@ -697,8 +690,7 @@ static void do_settings(struct session *s, const char *arg)
 static void do_resume(struct session *s, const char *arg)
 {
     (void)arg;
-    // Only the command form is gated: cmd_resume is also the -r startup path,
-    // where the terminal is the front end and does have a keyboard.
+
     if (!can_pick("/resume"))
         return;
     cmd_resume(s);
@@ -822,7 +814,6 @@ static const struct cmd *cmd_named(const char *name)
     return NULL;
 }
 
-// The command the line names, if any, with the text after its name.
 static const struct cmd *cmd_for_line(const char *line, const char **arg)
 {
     char name[32];
@@ -863,7 +854,6 @@ int cmd_is_quit(const char *line)
     return c && (c->flags & CMD_QUITS);
 }
 
-// /btw shows the question itself, twice over; the echo would be a third copy.
 int cmd_self_echoes(const char *line)
 {
     const char *arg;
@@ -871,8 +861,6 @@ int cmd_self_echoes(const char *line)
     return c && (c->flags & CMD_SELF_ECHOES) && arg && *arg;
 }
 
-// Every command but a quit goes through cmd_dispatch_live() while a turn is
-// running: it either runs there and then or waits for the turn to end.
 int cmd_runs_mid_turn(const char *line)
 {
     const char *arg;
@@ -914,8 +902,6 @@ void cmd_dispatch_live(struct session *s, const char *line)
     reply_note("%s applies when this turn ends", c->name);
 }
 
-// Only the ones typed at this session: another tab's turn ending is not the
-// moment to change this one's model.
 void cmd_run_deferred(struct session *s)
 {
     char *mine[DEFERRED_MAX];
@@ -935,8 +921,6 @@ void cmd_run_deferred(struct session *s)
     }
 }
 
-// The session is going away: its held-back commands will never be drained by
-// cmd_run_deferred(), and a later session could land on the same address.
 void cmd_forget_session(struct session *s)
 {
     int kept = 0;
@@ -980,8 +964,7 @@ static void do_help(struct session *s, const char *arg)
     }
     ui_put("\n");
     help_heading("shortcuts");
-    // The shell escape is main.c's line dispatch, not a prompt key; the rest
-    // come from the prompt, which keeps them beside the code that acts on them.
+
     help_row("!cmd", "run cmd in $SHELL instead of sending it to the agent");
     int                      key_count = 0;
     const struct prompt_key *keys = prompt_shortcuts(&key_count);

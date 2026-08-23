@@ -16,13 +16,13 @@
 
 enum row_kind {
     ROW_HEAD,
-    ROW_COUNT,      /* a number, asked for */
-    ROW_PROFILE,    /* backend, model and effort, as a form */
-    ROW_PROMPT,     /* several paragraphs, in $EDITOR */
-    ROW_CHAIN,      /* the delegation order */
-    ROW_VERIFY,     /* the command a card must pass to land */
-    ROW_KIND,       /* one class of card, as a form */
-    ROW_KIND_NEW,   /* the row that adds another */
+    ROW_COUNT,
+    ROW_PROFILE,
+    ROW_PROMPT,
+    ROW_CHAIN,
+    ROW_VERIFY,
+    ROW_KIND,
+    ROW_KIND_NEW,
 };
 
 struct row {
@@ -30,12 +30,12 @@ struct row {
     const char   *label;
     const char   *about;
 
-    int *count;         /* ROW_COUNT */
+    int *count;
     int  low, high;
     const char *units;
 
-    enum board_who who; /* ROW_PROFILE, ROW_PROMPT */
-    int            kind_at;  /* ROW_KIND: which of them */
+    enum board_who who;
+    int            kind_at;
 };
 
 #define ROWS_MAX 64
@@ -118,7 +118,6 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
     (*n)++;
 }
 
-// What a row is set to, as the list shows it on the right.
 static void value_of(const struct row *r, const struct board_cfg *c,
                      char *out, size_t size)
 {
@@ -162,7 +161,6 @@ static void value_of(const struct row *r, const struct board_cfg *c,
         break;
     }
     case ROW_CHAIN: {
-        // Commas are how it is stored; arrows are what it means.
         char shown[256];
         snprintf(shown, sizeof shown, "%s", c->delegation);
         for (char *p = shown; *p; p++)
@@ -182,8 +180,6 @@ static void value_of(const struct row *r, const struct board_cfg *c,
         break;
     }
 }
-
-/* ---- changing one ------------------------------------------------------- */
 
 static void edit_count(struct row *r)
 {
@@ -272,7 +268,7 @@ static void edit_chain(struct board_cfg *c)
     char *said = ask_run("delegation order, comma separated", c->delegation);
     if (!said)
         return;
-    // Spaces are how it reads; commas are how it is stored.
+
     char packed[256];
     size_t at = 0;
     for (const char *p = said; *p && at + 1 < sizeof packed; p++)
@@ -286,8 +282,6 @@ static void edit_chain(struct board_cfg *c)
 static const char *const YES_NO[] = {"no", "yes"};
 static const char *const LEVELS[] = {"0", "1", "2", "3"};
 
-// A class of card: the name the classifier answers with, what it is told the
-// name means, and what a worker given one is told to do.
 static void edit_kind(struct board_cfg *c, int at)
 {
     struct board_kind *k = &c->kinds[at];
@@ -360,7 +354,7 @@ static void add_kind(struct board_cfg *c)
     c->kinds_n++;
 
     edit_kind(c, c->kinds_n - 1);
-    // Named nothing, it was never a kind: the row goes away again.
+
     if (!c->kinds[c->kinds_n - 1].name[0]) {
         free(c->kinds[c->kinds_n - 1].means);
         free(c->kinds[c->kinds_n - 1].prompt);
@@ -379,8 +373,6 @@ static void drop_kind(struct board_cfg *c, int at)
     c->kinds_n--;
     memset(&c->kinds[c->kinds_n], 0, sizeof c->kinds[c->kinds_n]);
 }
-
-/* ---- the screen --------------------------------------------------------- */
 
 void boardcfgui_run(void)
 {

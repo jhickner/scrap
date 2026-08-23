@@ -16,7 +16,6 @@ static void expect(int got, int want, const char *what)
 
 int main(void)
 {
-
     int fits = 40;
     expect(ui_reflow_rows(&fits, 1, 80), 1, "40 cells at 80 cols");
     expect(ui_reflow_rows(&fits, 1, 40), 1, "40 cells at 40 cols (exact fit)");

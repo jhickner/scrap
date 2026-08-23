@@ -12,8 +12,6 @@
 #include "livelist.h"
 #include "text.h"
 
-// How long the asker waits. A window mid-turn answers when the turn's stream
-// next comes up for air, which is why this is seconds rather than milliseconds.
 #define WAIT_MS   15000
 #define POLL_MS   30
 
@@ -27,8 +25,6 @@ static int dir_path(char *out, size_t size)
     return mkdir(out, 0700) == 0 || errno == EEXIST;
 }
 
-// A session id is a file name here, so anything that could leave the directory
-// disqualifies it.
 static int id_ok(const char *id)
 {
     if (!id || !*id || strlen(id) > 120)
@@ -109,8 +105,6 @@ int handoff_publish(const char *id)
     if (!handoff_screen_path(id, tmp, sizeof tmp) || !state_path(id, path, sizeof path))
         return 0;
 
-    // A handover with no screen to carry still has to be announced, so the
-    // marker is written either way.
     struct stat st;
     if (stat(tmp, &st) != 0) {
         FILE *f = fopen(tmp, "w");
@@ -135,7 +129,6 @@ int handoff_ask(long pid, const char *id, char *screen, size_t size,
         !state_path(id, state, sizeof state) || !refused_path(id, no, sizeof no))
         return 0;
 
-    // Anything left from an earlier attempt would read as an instant answer.
     unlink(state);
     unlink(no);
 
@@ -150,8 +143,6 @@ int handoff_ask(long pid, const char *id, char *screen, size_t size,
         return 0;
     }
 
-    // The same signal a restart travels on: the window tells the two apart by
-    // whether a request is waiting for it.
     if (kill((pid_t)pid, SIGURG) != 0) {
         unlink(req);
         return 0;
@@ -175,7 +166,7 @@ int handoff_ask(long pid, const char *id, char *screen, size_t size,
     }
 
     unlink(req);
-    // It may have let go as the wait ran out.
+
     if (stat(state, &st) == 0) {
         snprintf(screen, size, "%s", state);
         return 1;

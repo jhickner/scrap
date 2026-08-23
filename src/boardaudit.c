@@ -28,10 +28,6 @@ int boardaudit_running(const char *id)
     return child_running(key);
 }
 
-/* ---- how big the change is ---------------------------------------------- */
-
-// What will land, which is what is committed: work left dirty in the worktree
-// is not part of the diff being asked about.
 int boardaudit_size(const struct board_card *c, int *files, int *lines)
 {
     if (files)
@@ -48,7 +44,6 @@ int boardaudit_size(const struct board_card *c, int *files, int *lines)
     if (!gitcmd_line(c->worktree, args, out, sizeof out))
         return 0;
 
-    // " 3 files changed, 47 insertions(+), 6 deletions(-)"
     int changed = 0, added = 0, removed = 0;
     const char *p = out;
     while (*p) {
@@ -82,8 +77,7 @@ int boardaudit_size(const struct board_card *c, int *files, int *lines)
 int boardaudit_wanted(const struct board_card *c)
 {
     const struct board_cfg *cfg = boardcfg();
-    // Either threshold at zero turns that half of the test off; both off means
-    // nothing is ever audited unless it is asked for by hand.
+
     if (!cfg->audit_files && !cfg->audit_lines)
         return 0;
 
@@ -97,8 +91,6 @@ int boardaudit_wanted(const struct board_card *c)
         return 1;
     return 0;
 }
-
-/* ---- running one -------------------------------------------------------- */
 
 static char *build_prompt(const struct board_card *c)
 {
@@ -164,7 +156,7 @@ int boardaudit_pump(void)
         if (cards[i].col != BOARD_AUDIT || boardaudit_running(cards[i].id))
             continue;
         started = boardaudit_start(&cards[i]);
-        // A card that cannot be audited must not sit in the column forever.
+
         if (!started && !cards[i].worktree[0]) {
             board_move(cards[i].id,
                        boardflow_from(cards[i].kind, BOARD_STEP_MERGE, 0),
@@ -176,11 +168,6 @@ int boardaudit_pump(void)
     return started;
 }
 
-/* ---- what it found ------------------------------------------------------ */
-
-
-// The audit is behind it either way; what is left is whatever the kind still
-// asks for.
 static enum board_col next_after_audit(const char *id)
 {
     struct board_card *cards = NULL;
@@ -191,9 +178,6 @@ static enum board_col next_after_audit(const char *id)
     return col;
 }
 
-// Asked for a sentence, a model will as readily give an object with the
-// sentence in it. Either is the finding; dropping the ones that came back in
-// the wrong shape sent the card back with nothing on it saying why.
 static int finding_text(cJSON *f, char *out, size_t size)
 {
     const char *text = cJSON_GetStringValue(f);
@@ -234,8 +218,6 @@ int boardaudit_take(const char *key, const char *reply)
     const char *id = key + mark;
     cJSON      *o = replyjson_parse(reply);
     if (!o) {
-        // An audit that did not answer is not an audit that passed, but it is
-        // not a reason to hold the card either: it goes on, and says so.
         board_note(id, "audit", "the audit did not answer; going on without it");
         board_move(id, next_after_audit(id), "audit", NULL);
         return 1;

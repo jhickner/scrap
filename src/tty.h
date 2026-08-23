@@ -31,7 +31,7 @@ typedef enum {
     TK_EOF,
     TK_SCROLL_UP,
     TK_SCROLL_DOWN,
-    // Understood but not actionable: a mouse button, a wheel release.
+
     TK_NONE,
 } tty_key;
 
@@ -47,10 +47,8 @@ void tty_raw_end(void);
 
 int  tty_read(tty_event *ev, int timeout_ms);
 
-// `fds` fills out[] with up to max descriptors to wait on alongside stdin and
-// returns how many it wrote; `ready` runs whenever any of them wakes.
 #define TTY_WATCH_MAX 32
-// Called from a tty_watch handler: end the current wait instead of resuming it.
+
 void tty_wake(void);
 
 void tty_watch(int (*fds)(void *ud, int *out, int max), void (*ready)(void *ud),
@@ -66,18 +64,14 @@ int tty_input_waiting(void);
 
 unsigned tty_resize_epoch(void);
 
-// Where the terminal says the cursor is, 1-based; 0 when it does not answer.
 int tty_cursor_pos(int *row, int *col);
 
-// How long a resize is left alone before the frame that ends it is painted.
 #define TTY_RESIZE_SETTLE_MS 100
 
 #define TTY_MIN_COLUMNS 20
 
-// The width the layout is built for, floored at TTY_MIN_COLUMNS.
 int  tty_columns(void);
 
-// The width the screen actually has, however narrow.
 int  tty_screen_columns(void);
 
 int  tty_rows(void);

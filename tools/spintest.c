@@ -14,8 +14,6 @@
 
 void restart_shield_thread(void) {}
 
-// sidechannel is stubbed rather than linked: it would drag the session, the
-// agent drivers and the markdown renderer in behind it.
 int  sidechannel_rows(void) { return 0; }
 void sidechannel_paint(int budget) { (void)budget; }
 void sidechannel_tick(void) {}
@@ -23,7 +21,6 @@ void sidechannel_poll(void) {}
 int  sidechannel_busy(void) { return 0; }
 void sidechannel_close_all(void) {}
 int  sidechannel_fds(int *out, int max) { (void)out; (void)max; return 0; }
-
 
 int main(void)
 {

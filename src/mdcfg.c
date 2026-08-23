@@ -29,8 +29,7 @@ int mdcfg_load(struct mdcfg *m, const char *path)
         return 0;
 
     char *p = m->text;
-    // No frontmatter at all: the file is all body, which is what a prompt with
-    // nothing to configure about it looks like.
+
     if (strncmp(p, FENCE, 3) || (p[3] != '\n' && p[3] != '\r')) {
         m->body = m->text;
         return 1;
@@ -62,7 +61,6 @@ int mdcfg_load(struct mdcfg *m, const char *path)
         p = nl + 1;
     }
 
-    // The blank line that conventionally follows the fence is not body.
     while (*p == '\n' || *p == '\r')
         p++;
     m->body = p;
@@ -141,8 +139,6 @@ int mdcfg_list(const char *dir, char names[][MDCFG_NAME], int max)
         char name[MDCFG_NAME];
         snprintf(name, sizeof name, "%.*s", (int)(len - 3), e->d_name);
 
-        // Kept in order, so what the classifier is told and what the screen
-        // shows do not depend on how the directory happens to be laid out.
         int at = n++;
         while (at > 0 && strcmp(names[at - 1], name) > 0) {
             memcpy(names[at], names[at - 1], MDCFG_NAME);

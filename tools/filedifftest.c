@@ -24,7 +24,6 @@ static char *render(const char *patch, int width, int *drew)
     return out;
 }
 
-// A patch from the backend: file names, hunks, and the changed lines.
 static void check_supplied(void)
 {
     const char *patch =
@@ -47,9 +46,6 @@ static void check_supplied(void)
     free(out);
 }
 
-// A patch taken from a snapshot is text, so the same diff can be drawn again
-// at another width — the file it came from may have changed since, and the
-// rows it drew the first time belong to the width it drew them at.
 static void check_snapshot(void)
 {
     char path[] = "/tmp/mux-filedifftest-XXXXXX";
@@ -83,7 +79,6 @@ static void check_snapshot(void)
         return;
     }
 
-    // The file goes away: nothing may be read from it again.
     unlink(path);
 
     char *wide = render(patch, 100, NULL);
@@ -97,7 +92,6 @@ static void check_snapshot(void)
     if (wide && narrow && strlen(wide) == strlen(narrow))
         fail("the diff is laid out for the width it is drawn at", narrow);
 
-    // Context is kept, but only around the change.
     if (!wide || !strstr(wide, "keep two") || !strstr(wide, "keep three"))
         fail("the lines around the change are kept", wide);
 
@@ -106,7 +100,6 @@ static void check_snapshot(void)
     free(patch);
 }
 
-// Nothing changed: no patch, so the caller knows to show the output instead.
 static void check_unchanged(void)
 {
     char path[] = "/tmp/mux-filedifftest-XXXXXX";

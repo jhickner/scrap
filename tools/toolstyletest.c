@@ -18,7 +18,6 @@ static void acts(const char *command) { expect(toolstyle_shell_reads(command), 0
 
 int main(void)
 {
-
     reads("ls");
     reads("ls -la src");
     reads("pwd");

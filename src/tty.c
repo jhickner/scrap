@@ -13,8 +13,6 @@
 #define BRACKETED_PASTE_ON  "\x1b[?2004h"
 #define BRACKETED_PASTE_OFF "\x1b[?2004l"
 
-// Async-signal-safe: write(2) from on_fatal. 1002/1003 cover a child or tmux
-// leaving motion tracking on; 1049 leaves the alt screen.
 #define CRASH_RESTORE \
     "\x1b[?2026l" \
     "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" \
@@ -111,8 +109,6 @@ static int cpr_take(int *row, int *col)
     return 0;
 }
 
-// Everything read while waiting for the answer is typeahead, so it stays in the
-// pending buffer with only the report cut out of it.
 #define CPR_WAIT_MS 200
 
 int tty_cursor_pos(int *row, int *col)
@@ -152,8 +148,6 @@ int tty_cursor_pos(int *row, int *col)
     return cpr_take(row, col);
 }
 
-// No window size to read means output is not a terminal; COLUMNS and LINES are
-// then the only statement of how wide the caller wants it.
 static int env_size(const char *name, int fallback)
 {
     const char *v = getenv(name);
@@ -201,8 +195,7 @@ int tty_raw_begin(void)
     raw.c_lflag &= ~(unsigned long)(ECHO | ICANON | IEXTEN | ISIG);
     raw.c_cc[VMIN] = 1;
     raw.c_cc[VTIME] = 0;
-    // TCSANOW, not TCSAFLUSH: anything typed ahead of raw mode stays in the
-    // queue so the caller can render it at the prompt instead of losing it.
+
     if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0)
         return -1;
 
@@ -288,8 +281,6 @@ static int wait_readable(int timeout_ms)
             return 0;
         watch_ready(watch_ud);
 
-        // The handler took something the caller has to act on, so the wait ends
-        // here rather than going back to sleep until a key is pressed.
         if (woken) {
             woken = 0;
             return 0;
@@ -394,15 +385,13 @@ done:
     ev->text = body;
 }
 
-// SGR mouse: ESC [ < button ; col ; row M|m. Only the wheel is acted on; the
-// buttons are swallowed so a click cannot fall through as a keystroke.
 static void decode_mouse(tty_event *ev, const int *params, int nparams, int final)
 {
     if (final != 'M' || nparams < 1) {
         emit(ev, TK_NONE);
         return;
     }
-    switch (params[0] & ~0x1c) {        /* drop the shift/alt/ctrl bits */
+    switch (params[0] & ~0x1c) {
     case 64: emit(ev, TK_SCROLL_UP); return;
     case 65: emit(ev, TK_SCROLL_DOWN); return;
     default: emit(ev, TK_NONE); return;
@@ -445,15 +434,12 @@ static void decode_csi(tty_event *ev, const int *params, int nparams, int final)
         default:        emit(ev, TK_NONE); return;
         }
     default:
-        // Device reports land here — a cursor position or attribute answer the
-        // terminal sent us unasked. Not a key, so not a keystroke.
+
         emit(ev, TK_NONE);
         return;
     }
 }
 
-// OSC, DCS, APC, PM, SOS: a body of arbitrary bytes closed by ST or BEL. Read
-// to the close, or the whole thing arrives in the prompt as text.
 static void skip_string(tty_event *ev)
 {
     for (size_t i = 0; i < 64u << 10; i++) {
@@ -506,7 +492,7 @@ static void decode_escape(tty_event *ev)
                 private = c;
                 continue;
             }
-            // Intermediates sit between the parameters and the final byte.
+
             if (c >= 0x20 && c <= 0x2f)
                 continue;
             if (c < 0x40 || c > 0x7e) {
@@ -604,7 +590,7 @@ int tty_read(tty_event *ev, int timeout_ms)
     switch (b) {
     case 0x1b:
         decode_escape(ev);
-        // Nothing to act on: report it as no event rather than as a keystroke.
+
         return ev->key == TK_NONE ? 0 : 1;
     case '\r': emit(ev, TK_ENTER); return 1;
     case '\n': emit(ev, TK_NEWLINE); return 1;

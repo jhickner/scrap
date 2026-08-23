@@ -66,7 +66,6 @@ int ui_color(void);
 
 const char *ui_cycle(enum ui_group group, int delta);
 
-// The named colours a group can take, the one it has, and setting it by name.
 int         ui_swatches(const char *const **out);
 const char *ui_swatch(enum ui_group group);
 int         ui_swatch_set(enum ui_group group, const char *name);
@@ -99,8 +98,6 @@ size_t ui_fit_bytes(const char *s, size_t budget);
 
 size_t ui_cells_visible(const char *s, size_t n);
 
-// One escape sequence or one codepoint at `i`, classified. Returns the index
-// just past it.
 enum ui_esc_kind {
     UI_ESC_TEXT,
     UI_ESC_SGR,
@@ -110,8 +107,6 @@ enum ui_esc_kind {
 
 size_t ui_esc_span(const char *s, size_t n, size_t i, enum ui_esc_kind *kind);
 
-// ui_cells_visible over a stream: an escape or codepoint may be split between
-// writes, so the state outlives the call. Zero it to start a fresh stream.
 struct ui_cellstream {
     unsigned char state;
     unsigned char pending[4];
@@ -127,14 +122,10 @@ void ui_put_spans(const char *s, size_t n, const unsigned char *roles, enum ui_r
 void  ui_capture_begin(int columns);
 char *ui_capture_end(void);
 
-// Sinks nest; each end returns only what its own level took, leaving any
-// enclosing sink's buffer untouched.
 void  ui_sink_begin(void);
-// As ui_sink_begin, but what is written also passes outward — to the enclosing
-// sink if there is one, otherwise the terminal: a second front end wants a
-// copy, not the only copy.
+
 void  ui_sink_begin_tee(void);
-// Rows taken by the innermost open sink.
+
 int   ui_sink_rows(void);
 char *ui_sink_end(void);
 
@@ -166,8 +157,6 @@ __attribute__((format(printf, 2, 3))) void ui_bar(const char *style, const char 
 __attribute__((format(printf, 1, 2))) void ui_note(const char *fmt, ...);
 __attribute__((format(printf, 1, 2))) void ui_error(const char *fmt, ...);
 
-// Whether output is being captured or sunk rather than printed. The viewport
-// asks before opening an entry for it.
 int ui_diverted(void);
 
 #endif

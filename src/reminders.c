@@ -22,25 +22,12 @@ const char *reminders_path(void)
     return path;
 }
 
-/* "<store><suffix>" into `out`; 0 if it would not fit. */
 static int sidecar_path(char *out, size_t n, const char *suffix)
 {
     int k = snprintf(out, n, "%s%s", reminders_path(), suffix);
     return k > 0 && (size_t)k < n;
 }
 
-/*
- * Advisory lock for the store. The lock lives in a sidecar file rather than the
- * store itself: reminders_pop_due() replaces the store by rename(), so a lock
- * taken on the store's descriptor would end up held on an unlinked inode while
- * the next writer locked the fresh one. The sidecar is never renamed or
- * unlinked, so every participant agrees on one inode.
- *
- * This serializes mux against itself (poller thread vs. main thread, and a
- * second mux process). The agent appends with its own file tools and takes no
- * lock, so the rewrite path additionally re-reads the store under the lock and
- * carries over anything appended behind our back.
- */
 static int store_lock(int op)
 {
     char lp[REMINDERS_PATH_MAX];
@@ -87,9 +74,6 @@ int reminders_scheduled_count(void)
     return n;
 }
 
-/* ---- time helpers ----------------------------------------------------- */
-
-/* Parse "YYYY-MM-DD HH:MM[:SS]" (or 'T' separator) as local time; -1 on fail. */
 static time_t parse_at(const char *s)
 {
     struct tm   tm;
@@ -113,13 +97,12 @@ static void fmt_at(time_t t, char *out, size_t n)
 
 static void parse_hhmm(const char *s, int *h, int *m)
 {
-    *h = 8;                               /* default 08:00 */
+    *h = 8;
     *m = 0;
     if (s)
         sscanf(s, "%d:%d", h, m);
 }
 
-/* Day-of-week name/number -> tm_wday (Sun=0..Sat=6), or -1. */
 static int dow_num(const char *s)
 {
     if (!s)
@@ -136,9 +119,6 @@ static int dow_num(const char *s)
     return -1;
 }
 
-/* ---- recurrence rules ------------------------------------------------- */
-
-/* Does the calendar day of `t` satisfy the rule (ignores time-of-day)? */
 static int day_matches(cJSON *rule, const struct tm *t)
 {
     const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(rule, "kind"));
@@ -161,7 +141,7 @@ static int day_matches(cJSON *rule, const struct tm *t)
         int    nth = nj ? (int)nj->valuedouble : 1;
         if (t->tm_wday != dow)
             return 0;
-        if (nth == -1) {                 /* last <dow> of the month */
+        if (nth == -1) {
             struct tm x = *t;
             x.tm_mday += 7;
             x.tm_isdst = -1;
@@ -179,8 +159,6 @@ static int day_matches(cJSON *rule, const struct tm *t)
     return 0;
 }
 
-/* Smallest occurrence time >= `after` matching the rule, or -1. Scans forward
- * day by day (handles month/weekday math without edge cases). */
 static time_t next_occurrence(cJSON *rule, time_t after)
 {
     int hh, mm;
@@ -190,9 +168,9 @@ static time_t next_occurrence(cJSON *rule, time_t after)
     base.tm_hour = hh;
     base.tm_min = mm;
     base.tm_sec = 0;
-    for (int d = 0; d < 420; d++) {      /* ~14 months of lookahead */
+    for (int d = 0; d < 420; d++) {
         struct tm day = base;
-        day.tm_mday = base.tm_mday + d;  /* mktime normalizes overflow + wday */
+        day.tm_mday = base.tm_mday + d;
         day.tm_isdst = -1;
         time_t cand = mktime(&day);
         if (cand < after)
@@ -203,10 +181,6 @@ static time_t next_occurrence(cJSON *rule, time_t after)
     return (time_t)-1;
 }
 
-/* ---- store ------------------------------------------------------------ */
-
-/* The effective next-fire time of a reminder: its `at`, or (if absent) the next
- * occurrence of its `rule`, which is written back into the object (*normalized). */
 static time_t effective_at(cJSON *o, time_t now, int *normalized)
 {
     const char *at = cJSON_GetStringValue(cJSON_GetObjectItem(o, "at"));
@@ -227,8 +201,6 @@ static time_t effective_at(cJSON *o, time_t now, int *normalized)
     return ts;
 }
 
-/* Set the fired reminder's next `at` (from rule, else repeat_secs), or return 0
- * to drop it (one-shot). */
 static int reschedule(cJSON *o, time_t fired_ts, time_t now)
 {
     cJSON *rule = cJSON_GetObjectItem(o, "rule");
@@ -262,12 +234,6 @@ typedef struct {
     time_t at;
 } Ent;
 
-/*
- * Rewrite the store from `ents`. `orig`/`orig_len` are the exact bytes we
- * parsed; the store is re-read first so that lines the agent appended in the
- * meantime survive. If it no longer starts with what we parsed (the agent
- * rewrote or truncated it) the rewrite is skipped rather than clobbering it.
- */
 static void store_rewrite(const Ent *ents, int nent, const char *orig, size_t orig_len)
 {
     const char *path = reminders_path();
@@ -365,8 +331,6 @@ int reminders_pop_due(time_t now, char *out, size_t n)
     }
     free(buf);
 
-    /* A short parse (allocation failure) must not fire or be written back: the
-     * rewrite would drop every line past the failure. */
     if (oom) {
         free(orig);
         for (int i = 0; i < nobj; i++)
@@ -376,11 +340,9 @@ int reminders_pop_due(time_t now, char *out, size_t n)
         return 0;
     }
 
-    /* Compute each reminder's next-fire time (normalizing rule-only ones). */
     for (int i = 0; i < nobj; i++)
         ents[i].at = effective_at(ents[i].o, now, &dirty);
 
-    /* Fire the earliest that's due. */
     int    fired = -1;
     time_t fired_ts = 0;
     for (int i = 0; i < nobj; i++)

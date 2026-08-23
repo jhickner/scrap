@@ -185,7 +185,6 @@ int path_config_dir(char *out, size_t size)
     if ((size_t)snprintf(out, size, "%s/" APP_CONFIG, home) >= size)
         return 0;
 
-    // Every component: a fresh account has no ~/.config either.
     for (char *p = out + strlen(home) + 1; *p; p++) {
         if (*p != '/')
             continue;

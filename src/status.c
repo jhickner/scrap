@@ -32,12 +32,12 @@ static int   sticky_on;
 static char *sticky_text;
 static int   sticky_drawn;
 static int   sticky_tracking;
-static int   sticky_busy;       /* the session this prompt asked is still working */
+static int   sticky_busy;
 static unsigned sticky_mark;
 
 static unsigned resize_epoch;
 static double   resize_at;
-static int      resize_owed;    /* a settled repaint is still to come */
+static int      resize_owed;
 
 double status_elapsed(void)
 {
@@ -79,8 +79,7 @@ static int size_changing(void)
     }
     if (resize_owed && (now_seconds() - resize_at) * 1000.0 >= TTY_RESIZE_SETTLE_MS) {
         resize_owed = 0;
-        // tmux redraws a resizing pane from its own copy, so the frame that
-        // ends a resize is sent whole rather than diffed.
+
         viewport_forget();
         dirty = 1;
         return 0;
@@ -117,7 +116,6 @@ static void humanize(double seconds, char *out, size_t n)
         snprintf(out, n, "%ldh %ldm", total / 3600, (total % 3600) / 60);
 }
 
-// Exact: the viewport knows whether the echo's entry is still on screen.
 static int sticky_gone(void)
 {
     if (!sticky_tracking)
@@ -222,8 +220,6 @@ static int paint_spin_only(void)
 
 void status_begin(void) { status_begin_at(0); }
 
-// Elapsed is passed in because a turn can be adopted mid-flight, when its tab
-// comes to the front; the clock belongs to the turn, not to this block.
 void status_begin_at(double elapsed)
 {
     started = now_seconds() - elapsed;
@@ -281,17 +277,12 @@ void status_sticky_prompt(const char *text)
     sticky_text = text && *text ? strdup(text) : NULL;
     dirty = 1;
 
-    // The echo is the newest entry, and gone once it scrolls past the top.
     sticky_tracking = 1;
     sticky_mark = viewport_mark() - 1;
 
-    // Pinned busy as its turn is sent; status_sticky_busy() carries it from
-    // there. Reading it off whatever is busy now answers a different question.
     sticky_busy = 1;
 }
 
-// A prompt stays busy for as long as the session it asked is working — the
-// turn itself, and anything it left running behind it.
 void status_sticky_busy(int on)
 {
     on = on ? 1 : 0;

@@ -15,8 +15,7 @@ int boardlog_path(const char *id, char *out, size_t size)
     char dir[4096];
     if (!id || !*id || !mdcfg_dir(dir, sizeof dir, LOG_DIR))
         return 0;
-    // The id is the board's own, so there is nothing in it to escape; the
-    // check is against a caller that has not thought about it.
+
     for (const char *p = id; *p; p++)
         if (*p == '/' || *p == '.')
             return 0;
@@ -46,8 +45,6 @@ static FILE *open_for(const char *id, const char **stamp_out)
     return f;
 }
 
-// Fenced, because a prompt or a reply is nearly always several paragraphs and
-// often has markdown of its own in it.
 static void put_block(FILE *f, const char *title, const char *text)
 {
     if (!text || !*text)
@@ -78,8 +75,6 @@ void boardlog_note(const char *id, const char *who, const char *text)
     if (!f)
         return;
 
-    // A note of one line is a bullet; one of several would break out of the
-    // list, so it becomes a block with the rest of them.
     const char *nl = text ? strchr(text, '\n') : NULL;
     if (nl && nl[1]) {
         fprintf(f, "\n## %s \xc2\xb7 %s\n", stamp, who ? who : "board");

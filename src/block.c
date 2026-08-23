@@ -7,9 +7,6 @@
 #include "ui.h"
 #include "viewport.h"
 
-// The chrome under the transcript: renders into a buffer, splits it into rows,
-// hands them to the viewport. Nothing here touches the screen.
-
 #define ROWS_MAX 128
 
 static int row_edit = -1;
@@ -69,7 +66,6 @@ void block_row_begin(int row)
     ui_sink_begin();
 }
 
-// One chrome row in place: saves re-rendering the rest, not the paint.
 void block_row_end(void)
 {
     char *body = ui_sink_end();
@@ -93,7 +89,6 @@ void block_clear(void)
     viewport_paint();
 }
 
-// The rows named here stop being chrome and become transcript.
 void block_keep(int keep)
 {
     viewport_chrome_keep(keep);

@@ -85,7 +85,6 @@ static const struct {
     int         slot;
     const char *name;
 } SWATCH[] = {
-
     {COLOR_BASE6,  "base6"},   {COLOR_BASE7,  "base7"},
     {COLOR_BASE8,  "red"},     {COLOR_BASE9,  "orange"},
     {COLOR_BASE10, "yellow"},  {COLOR_BASE11, "green"},
@@ -129,7 +128,6 @@ static int saved_swatch(int group)
     return -1;
 }
 
-// Where the group sits in the swatch, found from the palette the first time.
 static int swatch_at(enum ui_group group)
 {
     if (!cursor[group]) {
@@ -190,7 +188,6 @@ const char *ui_cycle(enum ui_group group, int delta)
 
 void ui_init(void)
 {
-
     setlocale(LC_CTYPE, "");
 
     const char *no_color = getenv("NO_COLOR");
@@ -241,9 +238,6 @@ void ui_cursor_restore(void)
     fflush(stdout);
 }
 
-// The chrome renders into a buffer, so nothing written here reaches the
-// terminal and output tracking stops. Sinks nest: a second front end may hold
-// one open around a whole command while the chrome opens its own per frame.
 #define SINK_MAX 8
 
 struct sink {
@@ -263,12 +257,10 @@ static struct sink *sink_top(void)
     return &sinks[sink_depth - 1];
 }
 
-// A tee level passes what it took on outward — to the next sink out, or to the
-// terminal when it is the last one. A plain level stops there.
 static void out(const char *s, size_t n)
 {
     if (sink_depth > SINK_MAX)
-        return;                         /* nested past the limit: dropped */
+        return;
     for (int i = sink_depth - 1; i >= 0; i--) {
         if (sinks[i].f)
             fwrite(s, 1, n, sinks[i].f);
@@ -284,8 +276,6 @@ static void out(const char *s, size_t n)
 
 void ui_sink_begin(void)
 {
-    // Counted past the limit, so begin and end pair up and an overflow cannot
-    // close somebody else's sink.
     if (sink_depth < SINK_MAX) {
         struct sink *s = &sinks[sink_depth];
         s->tee = 0;
@@ -323,7 +313,7 @@ char *ui_sink_end(void)
         return NULL;
     sink_depth--;
     if (sink_depth >= SINK_MAX)
-        return NULL;                    /* nested past the limit: nothing kept */
+        return NULL;
 
     struct sink *s = &sinks[sink_depth];
     if (s->f) {
@@ -339,8 +329,6 @@ char *ui_sink_end(void)
 
 void ui_raw(int on) { raw_newlines = on; }
 
-// Captures nest: the viewport re-renders an entry inside one, and the entry's
-// renderer may capture on its own account.
 #define CAPTURE_MAX 8
 
 struct capture {
@@ -367,7 +355,7 @@ static void emit(const char *s, size_t n)
     }
     struct capture *c = capture_top();
     if (!c)
-        return;                         /* nested past the limit: dropped */
+        return;
     if (c->len + n + 1 > c->cap) {
         size_t cap = c->cap ? c->cap : 1024;
         while (cap < c->len + n + 1)
@@ -385,8 +373,6 @@ static void emit(const char *s, size_t n)
 
 void ui_capture_begin(int columns)
 {
-    // Counted past the limit, so begin and end pair up and an overflow cannot
-    // pop somebody else's buffer.
     if (capture_depth < CAPTURE_MAX) {
         struct capture *c = &captures[capture_depth];
         c->len = 0;
@@ -403,7 +389,7 @@ char *ui_capture_end(void)
         return NULL;
     capture_depth--;
     if (capture_depth >= CAPTURE_MAX)
-        return NULL;                    /* nested past the limit: nothing kept */
+        return NULL;
 
     struct capture *c = &captures[capture_depth];
     char *taken = c->len ? strdup(c->buf) : NULL;
@@ -418,7 +404,7 @@ void ui_putn(const char *s, size_t n)
         emit(s, n);
         return;
     }
-    // The viewport places every row absolutely, so no carriage return.
+
     if (!sink_depth && viewport_active()) {
         viewport_write(s, n);
         return;
@@ -476,7 +462,6 @@ void ui_esc(const char *s)
 
 void ui_pad(int cells)
 {
-    // Through ui_putn, not emit: the indent counts toward the width.
     for (int i = 0; i < cells; i++)
         ui_putn(" ", 1);
 }
@@ -505,7 +490,6 @@ void ui_flush(void)
     fflush(stdout);
 }
 
-// The width being rendered for: the innermost capture's, if one is open.
 static int capture_width(void)
 {
     struct capture *c = capture_top();
@@ -524,8 +508,6 @@ int ui_screen_columns(void)
     return cols > 0 ? cols : tty_screen_columns();
 }
 
-// The layout has a floor, so a narrower pane would get rows wider than the
-// screen. Draw nothing until it is wide enough for one.
 int ui_too_narrow(void) { return ui_screen_columns() < TTY_MIN_COLUMNS; }
 
 static unsigned decode(const char *s, size_t n, size_t *i)
@@ -589,7 +571,6 @@ size_t ui_cells_n(const char *s, size_t n)
 
 size_t ui_cells(const char *s) { return s ? ui_cells_n(s, strlen(s)) : 0; }
 
-// OSC, DCS, APC, PM and SOS: run to BEL or ST, and put no cell on screen.
 static int opens_string(unsigned char c)
 {
     return c == ']' || c == 'P' || c == '_' || c == '^' || c == 'X';
@@ -643,7 +624,6 @@ size_t ui_cells_visible(const char *s, size_t n)
     return ui_cells_stream(&st, s, n);
 }
 
-// Where the stream is between calls. TEXT covers a part-arrived codepoint too.
 enum { CS_TEXT, CS_ESC, CS_CSI, CS_STR, CS_STR_ESC };
 
 static size_t utf8_len(unsigned char c)
@@ -704,7 +684,6 @@ size_t ui_cells_stream(struct ui_cellstream *st, const char *s, size_t n)
             continue;
         }
 
-        // A width can only be asked of a whole codepoint.
         if (st->pending_n == 0 && c < 0x80) {
             cells += (size_t)cell_width(c);
             continue;
@@ -931,9 +910,6 @@ void ui_error(const char *fmt, ...)
     va_end(ap);
 }
 
-// Output on its way somewhere other than the transcript: a modal painting into
-// its block, or a renderer being measured. An entry opened for it would hold
-// no rows, so the viewport declines to open one.
 int ui_diverted(void)
 {
     return capture_depth || sink_depth;

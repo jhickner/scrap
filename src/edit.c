@@ -40,8 +40,6 @@ static int temp_path(char *out, size_t size, const char *suffix)
         return 0;
     close(fd);
 
-    // mkstemp cannot make the name end in .md, so the suffix is added after
-    // and the reservation is dropped: the name is still ours.
     if (suffix && *suffix) {
         char named[4200];
         if ((size_t)snprintf(named, sizeof named, "%s%s", out, suffix) < sizeof named &&
@@ -51,8 +49,6 @@ static int temp_path(char *out, size_t size, const char *suffix)
     return 1;
 }
 
-// The terminal goes to the editor whole and comes back the same way. Returns
-// what system() did, or -1.
 static int run_editor(const char *path)
 {
     char quoted[4200];
@@ -100,8 +96,7 @@ char *edit_run(const char *initial, const char *suffix)
     }
     if (initial && *initial)
         fputs(initial, f);
-    // A file that does not end in a newline is one the editor adds one to,
-    // which would count as a change every time it was opened.
+
     size_t len = initial ? strlen(initial) : 0;
     if (!len || initial[len - 1] != '\n')
         fputc('\n', f);

@@ -16,8 +16,6 @@
 #define SWEEP_KEY "sweep:"
 #define SWEEPS_MAX 4
 
-// A repo is named by a path too long to be a key, so it is named by a number
-// taken from the path, and the path is kept beside it.
 static struct {
     char key[CHILD_KEY_MAX];
     char cwd[4096];
@@ -37,8 +35,6 @@ int boardsweep_running(const char *cwd)
     sweep_key(cwd, key, sizeof key);
     return child_running(key);
 }
-
-/* ---- when one is due ---------------------------------------------------- */
 
 static const char *counts_path(void)
 {
@@ -105,11 +101,6 @@ int boardsweep_landed(const char *cwd)
     return n >= cfg->sweep_every;
 }
 
-/* ---- what it is asked --------------------------------------------------- */
-
-// What the audits have already said about this repo. A sweep that reads them
-// is looking at evidence rather than starting from nothing, and duplication is
-// exactly what an audit tends to catch one card at a time.
 static char *findings_for(const char *cwd)
 {
     struct board_card *cards = NULL;
@@ -206,8 +197,7 @@ int boardsweep_start(const char *cwd)
     if (ok) {
         snprintf(going[at].key, sizeof going[at].key, "%s", key);
         snprintf(going[at].cwd, sizeof going[at].cwd, "%s", cwd);
-        // The count starts again whether or not it finds anything: the point
-        // is a look every so often, not a look until it finds something.
+
         count_set(cwd, 0);
     }
     return ok;
@@ -234,8 +224,6 @@ int boardsweep_pump(void)
     return due[0] ? boardsweep_start(due) : 0;
 }
 
-/* ---- what it found ------------------------------------------------------ */
-
 int boardsweep_take(const char *key, const char *reply)
 {
     if (!key || strncmp(key, SWEEP_KEY, strlen(SWEEP_KEY)))
@@ -260,8 +248,7 @@ int boardsweep_take(const char *key, const char *reply)
         const char *text = cJSON_GetStringValue((cJSON *)e);
         if (!text || !*text)
             continue;
-        // Filed as an ordinary card, so triage sorts it like anything else and
-        // nothing here has to decide what it is.
+
         char id[BOARD_ID_MAX];
         if (board_add(text, cwd, id))
             board_note(id, "sweep", "found while looking over the repo");

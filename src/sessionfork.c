@@ -93,8 +93,6 @@ int sessionfork_run(const struct session *s, enum fork_where where)
         tmux[n++] = where == FORK_SPLIT_H ? "-h" : "-v";
     }
 
-    // tmux's own -c: where the pane starts, so the shell left behind when mux
-    // exits is in the right place. mux gets told separately, below.
     const char *cwd = session_cwd(s);
     if (cwd && *cwd) {
         tmux[n++] = "-c";
@@ -166,8 +164,6 @@ void sessionfork_exit_note(const struct session *s)
     if (!id || !*id || !session_can_resume(s))
         return;
 
-    // The directory is a cd in front rather than -C: this is a line the user
-    // reads and may run by hand, and it leaves the shell where the work was.
     char        here[4096];
     const char *dir = session_cwd(s);
     char        cmd[9000];

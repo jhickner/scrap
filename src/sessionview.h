@@ -15,7 +15,7 @@ struct turnview {
     unsigned char *spans;
     int   gap;
     int   onscreen;
-    unsigned mark;              /* the entry the cluster keeps amending */
+    unsigned mark;
 
     int   after_activity;
     int   after_tool;
@@ -44,18 +44,14 @@ void view_tool_output(const char *text, enum ui_role role);
 
 void view_tool_error(const char *text);
 
-// The same things as entries that redraw themselves. `gap` puts a blank row
-// above, inside the entry.
 void view_keep_activity(const char *marker, const char *text, enum ui_role role, int gap);
 
 void view_keep_tool_call(const char *name, const char *arg, int gap);
 
 void view_keep_output(const char *text, enum ui_role role, int error);
 
-// Takes the patch.
 void view_keep_diff(char *patch);
 
-// Carried across a restart.
 #define VIEW_KEEP_KIND "keep"
 void view_keep_load(const cJSON *st);
 
