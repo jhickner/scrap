@@ -62,6 +62,7 @@ struct session {
     size_t   streamed_len, streamed_cap;
     int      turns;
     double   cost_usd;
+    long     tokens_in, tokens_out;
     long     context_tokens;
     long     context_window;
     int      quiet;
@@ -137,16 +138,6 @@ static void stream_reset(struct session *s)
     free(s->streamed);
     s->streamed = NULL;
     s->streamed_len = s->streamed_cap = 0;
-}
-
-static void humanize(long n, char *out, size_t size)
-{
-    if (n < 1000)
-        snprintf(out, size, "%ld", n);
-    else if (n < 1000000)
-        snprintf(out, size, "%.1fk", (double)n / 1000.0);
-    else
-        snprintf(out, size, "%.1fM", (double)n / 1000000.0);
 }
 
 static struct session *live;
@@ -850,6 +841,7 @@ int session_switch_backend(struct session *s, const char *backend)
     }
     s->turns = 0;
     s->cost_usd = 0;
+    s->tokens_in = s->tokens_out = 0;
     s->context_tokens = 0;
     s->context_window = 0;
     if (previous)
@@ -1101,6 +1093,7 @@ int session_resume(struct session *s, const char *id)
         return 0;
     s->turns = 0;
     s->cost_usd = 0;
+    s->tokens_in = s->tokens_out = 0;
     s->context_tokens = 0;
     replace(&s->last_reply, NULL);
     replace(&s->failed_prompt, NULL);
@@ -1137,6 +1130,7 @@ int session_set_cwd(struct session *s, const char *path)
 
     s->turns = 0;
     s->cost_usd = 0;
+    s->tokens_in = s->tokens_out = 0;
     s->context_tokens = 0;
     replace(&s->workdir, NULL);
     replace(&s->last_reply, NULL);
@@ -1165,6 +1159,7 @@ int session_clear(struct session *s)
         return 0;
     s->turns = 0;
     s->cost_usd = 0;
+    s->tokens_in = s->tokens_out = 0;
     s->context_tokens = 0;
     replace(&s->last_reply, NULL);
     replace(&s->failed_prompt, NULL);
@@ -1210,8 +1205,8 @@ static void footer_render(void *ud, int cols)
     const struct footer *f = ud;
 
     char used[32], window[32];
-    humanize(f->tokens, used, sizeof used);
-    humanize(f->window, window, sizeof window);
+    text_humanize(f->tokens, used, sizeof used);
+    text_humanize(f->window, window, sizeof window);
 
     char line[384];
     size_t n = 0;
@@ -1517,6 +1512,8 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     s->turns++;
     if (m.cost_usd > 0)
         s->cost_usd = m.cost_usd;
+    s->tokens_in += m.input_tokens + m.cache_read_tokens + m.cache_creation_tokens;
+    s->tokens_out += m.output_tokens;
 
     if (m.context_window > 0)
         s->context_window = m.context_window;
@@ -1878,6 +1875,16 @@ double session_cost(const struct session *s)
     return s ? s->cost_usd : 0;
 }
 
+long session_tokens_in(const struct session *s)
+{
+    return s ? s->tokens_in : 0;
+}
+
+long session_tokens_out(const struct session *s)
+{
+    return s ? s->tokens_out : 0;
+}
+
 int session_context_percent(const struct session *s)
 {
     long used = s->context_tokens, window = s->context_window;
@@ -1915,8 +1922,8 @@ void session_spin_word(const struct session *s)
 void session_report(const struct session *s)
 {
     char used[32], window[32];
-    humanize(s->context_tokens, used, sizeof used);
-    humanize(s->context_window, window, sizeof window);
+    text_humanize(s->context_tokens, used, sizeof used);
+    text_humanize(s->context_window, window, sizeof window);
 
     const char *auth = auth_description(s);
     viewport_item_begin(VIEWPORT_ROWS(1, 1));

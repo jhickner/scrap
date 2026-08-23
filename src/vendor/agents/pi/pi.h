@@ -58,6 +58,10 @@ typedef struct {
     int interrupted;    /* the abort predicate ended the operation            */
     double cost_usd;    /* cumulative for the session, summed over the turns  */
     long context_tokens;/* the newest request, as pi counted it               */
+    long input_tokens;  /* this turn, summed over its assistant messages      */
+    long output_tokens;
+    long cache_read_tokens;
+    long cache_creation_tokens;
 } pi_result;
 
 /* As pi_send, but also fills *meta (zeroed first). `meta` may be NULL. */
@@ -154,6 +158,7 @@ struct pi_client {
      * ours to keep. A reset starts it over, the way a new session should. */
     double cost_usd;
     long context_tokens;
+    long input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens;
 };
 
 void pi_set_verbose(pi_client *c, int on) { if (c) c->verbose = on; }
@@ -268,6 +273,11 @@ static const char *pi_text(cJSON *result) {
     return NULL;
 }
 
+static long pi_usage_long(cJSON *usage, const char *key) {
+    cJSON *j = cJSON_GetObjectItemCaseSensitive(usage, key);
+    return cJSON_IsNumber(j) ? (long)j->valuedouble : 0;
+}
+
 /* Consume display-worthy RPC events. settled is set for agent_settled. */
 static void pi_consume_event(pi_client *c, cJSON *ev, char **acc, int *settled) {
     cJSON *type = cJSON_GetObjectItemCaseSensitive(ev, "type");
@@ -300,6 +310,10 @@ static void pi_consume_event(pi_client *c, cJSON *ev, char **acc, int *settled) 
             if (cJSON_IsNumber(total)) c->cost_usd += total->valuedouble;
             cJSON *tokens = cJSON_GetObjectItemCaseSensitive(usage, "totalTokens");
             if (cJSON_IsNumber(tokens)) c->context_tokens = (long)tokens->valuedouble;
+            c->input_tokens += pi_usage_long(usage, "input");
+            c->output_tokens += pi_usage_long(usage, "output");
+            c->cache_read_tokens += pi_usage_long(usage, "cacheRead");
+            c->cache_creation_tokens += pi_usage_long(usage, "cacheWrite");
         }
     } else if (!strcmp(type->valuestring, "tool_execution_start")) {
         const char *name = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(ev, "toolName"));
@@ -478,6 +492,9 @@ char *pi_send_ex(pi_client *c, const char *user_text, pi_result *meta) {
         if (!full) return NULL;
         snprintf(full, n, "%s\n\n---\n\n%s", c->sys, user_text);
     }
+    c->input_tokens = c->output_tokens = 0;
+    c->cache_read_tokens = c->cache_creation_tokens = 0;
+
     cJSON *params = cJSON_CreateObject();
     cJSON_AddStringToObject(params, "message", full ? full : user_text);
     int id = pi_command(c, "prompt", params);
@@ -504,7 +521,14 @@ char *pi_send_ex(pi_client *c, const char *user_text, pi_result *meta) {
     }
     if (!accepted) { free(answer); return NULL; }
     if (!c->session_id[0]) pi_refresh_id(c);
-    if (meta) { meta->cost_usd = c->cost_usd; meta->context_tokens = c->context_tokens; }
+    if (meta) {
+        meta->cost_usd = c->cost_usd;
+        meta->context_tokens = c->context_tokens;
+        meta->input_tokens = c->input_tokens;
+        meta->output_tokens = c->output_tokens;
+        meta->cache_read_tokens = c->cache_read_tokens;
+        meta->cache_creation_tokens = c->cache_creation_tokens;
+    }
     return answer ? answer : strdup("");
 }
 
@@ -518,6 +542,8 @@ int pi_reset(pi_client *c) {
     if (!id || !pi_wait_response(c, id)) return 0;
     c->cost_usd = 0;
     c->context_tokens = 0;
+    c->input_tokens = c->output_tokens = 0;
+    c->cache_read_tokens = c->cache_creation_tokens = 0;
     c->session_id[0] = '\0';
     pi_refresh_id(c);
     return 1;
@@ -623,6 +649,10 @@ static char *pi_backend_ask_ex(Backend *b, const char *user, backend_result *met
         meta->interrupted = pr.interrupted;
         meta->cost_usd = pr.cost_usd;
         meta->context_tokens = pr.context_tokens;
+        meta->input_tokens = pr.input_tokens;
+        meta->output_tokens = pr.output_tokens;
+        meta->cache_read_tokens = pr.cache_read_tokens;
+        meta->cache_creation_tokens = pr.cache_creation_tokens;
     }
     return reply;
 }

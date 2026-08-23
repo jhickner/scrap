@@ -22,6 +22,8 @@ int text_fuzzy_score(const char *name, const char *q);
 
 size_t text_utf8_encode(uint32_t cp, char out[4]);
 
+void text_humanize(long n, char *out, size_t size);
+
 double now_seconds(void);
 
 int path_config_dir(char *out, size_t size);

@@ -173,6 +173,16 @@ size_t text_utf8_encode(uint32_t cp, char out[4])
     return 4;
 }
 
+void text_humanize(long n, char *out, size_t size)
+{
+    if (n < 1000)
+        snprintf(out, size, "%ld", n);
+    else if (n < 1000000)
+        snprintf(out, size, "%.1fk", (double)n / 1000.0);
+    else
+        snprintf(out, size, "%.1fM", (double)n / 1000000.0);
+}
+
 int text_shell_quote(const char *s, char *out, size_t size)
 {
     size_t n = 0;

@@ -61,6 +61,11 @@ char *grok_send(grok_client *c, const char *user_text);
 /* Accounting from a turn. Fields a driver cannot fill stay 0. */
 typedef struct {
     int interrupted;   /* the abort predicate ended the turn */
+    double cost_usd;   /* cumulative for the session, summed over the turns */
+    long input_tokens; /* this turn, from the prompt response's own usage */
+    long output_tokens;
+    long cache_read_tokens;
+    long cache_creation_tokens;
 } grok_result;
 
 /* As grok_send, but also fills *meta (zeroed first). `meta` may be NULL. */
@@ -202,6 +207,7 @@ struct grok_client {
     int   cancelling;         /* session/cancel has been sent this turn     */
     int   tools_since_text;   /* a tool ran since the last assistant chunk  */
     grok_result *meta;
+    double cost_usd;          /* the session total; the CLI prices per turn */
     char *buf;                /* line-assembly buffer for out_fd            */
     size_t len, cap;
     char  tool_id[GK_TOOL_CAP][GK_TOOL_ID];
@@ -749,6 +755,8 @@ static const char *gk_title_arg(const char *title, const char *name)
     return title;
 }
 
+static void gk_note_usage(grok_client *c, cJSON *meta);
+
 static void gk_tool_update(grok_client *c, cJSON *u) {
     const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(u, "toolCallId"));
     int slot = gk_tool_slot(c, id);
@@ -920,10 +928,38 @@ static int gk_handle(grok_client *c, cJSON *ev, int want_id, char **acc, int *ok
             const char *stop = cJSON_GetStringValue(cJSON_GetObjectItem(res, "stopReason"));
             if (stop && !strcmp(stop, "cancelled") && c->meta)
                 c->meta->interrupted = 1;
+            gk_note_usage(c, cJSON_GetObjectItem(res, "_meta"));
         }
         return 1;
     }
     return 0;
+}
+
+static long gk_usage_long(cJSON *o, const char *key) {
+    cJSON *j = cJSON_GetObjectItem(o, key);
+    return cJSON_IsNumber(j) ? (long)cJSON_GetNumberValue(j) : 0;
+}
+
+/* The prompt response carries the turn's own usage under _meta. inputTokens
+ * counts the cached reads too, so the fresh input is the difference. Cost is
+ * quoted in ticks of a nanodollar. */
+static void gk_note_usage(grok_client *c, cJSON *meta) {
+    cJSON *usage = meta ? cJSON_GetObjectItem(meta, "usage") : NULL;
+    if (!usage) return;
+
+    long cached = gk_usage_long(usage, "cachedReadTokens");
+    long input = gk_usage_long(usage, "inputTokens");
+    long created = gk_usage_long(usage, "cacheCreationTokens");
+    long output = gk_usage_long(usage, "outputTokens");
+    double cost = (double)gk_usage_long(usage, "costUsdTicks") / 1e9;
+    c->cost_usd += cost;
+
+    if (!c->meta) return;
+    c->meta->cache_read_tokens = cached;
+    c->meta->cache_creation_tokens = created;
+    c->meta->input_tokens = input > cached ? input - cached : input;
+    c->meta->output_tokens = output;
+    c->meta->cost_usd = c->cost_usd;
 }
 
 /* Remember the model line-up from a handshake result. initialize reports it

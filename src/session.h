@@ -149,6 +149,9 @@ int         session_last_interrupted(const struct session *s);
 
 double session_cost(const struct session *s);
 
+long session_tokens_in(const struct session *s);
+long session_tokens_out(const struct session *s);
+
 int session_context_percent(const struct session *s);
 
 long session_context_window(const struct session *s);

@@ -93,6 +93,10 @@ static int mock_server(int argc, char **argv)
                        "\"result\":{\"content\":[{\"type\":\"text\","
                        "\"text\":\"Successfully replaced 1 block(s)\"}]},"
                        "\"isError\":false}\n");
+                printf("{\"type\":\"message_end\",\"message\":{"
+                       "\"role\":\"assistant\",\"usage\":{\"input\":31,"
+                       "\"output\":7,\"cacheRead\":120,\"cacheWrite\":9,"
+                       "\"totalTokens\":167,\"cost\":{\"total\":0.25}}}}\n");
                 printf("{\"type\":\"agent_settled\"}\n");
             }
             fflush(stdout);
@@ -140,7 +144,8 @@ int main(int argc, char **argv)
     free(reply);
 
     abort_turn = 0;
-    reply = pi_send(client, "continue");
+    memset(&meta, 0, sizeof meta);
+    reply = pi_send_ex(client, "continue", &meta);
     if (!reply || strcmp(reply, "done")) {
         fprintf(stderr, "pitest: process was not reusable after abort\n");
         free(reply);
@@ -148,6 +153,13 @@ int main(int argc, char **argv)
         return 1;
     }
     free(reply);
+    if (meta.input_tokens != 31 || meta.output_tokens != 7 ||
+        meta.cache_read_tokens != 120 || meta.cache_creation_tokens != 9 ||
+        meta.cost_usd != 0.25) {
+        fprintf(stderr, "pitest: the turn's usage was not reported\n");
+        pi_stop(client);
+        return 1;
+    }
     if (tool_starts != 1 || tool_ends != 1 || strcmp(tool_name, "edit") ||
         strcmp(tool_input,
                "{\"path\":\"src/session.c\",\"oldText\":\"old\",\"newText\":\"new\"}") ||

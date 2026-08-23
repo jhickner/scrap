@@ -50,6 +50,10 @@ typedef struct {
     int interrupted;   /* the abort predicate ended the turn */
     long context_tokens; /* latest model request, including output */
     long context_window;
+    long input_tokens;   /* this turn, from the thread totals it moved */
+    long output_tokens;
+    long cache_read_tokens;
+    long cache_creation_tokens;
 } codex_result;
 
 typedef struct {
@@ -153,6 +157,10 @@ struct codex_client {
     char resolved_model[64];   /* the model id the app-server picked          */
     char cwd[4096];            /* the working directory it reported last      */
     long context_tokens, context_window;
+    /* app-server reports thread totals; a turn's own usage is what they moved
+       by, so each send takes a mark before it starts. */
+    long total_input, total_output, total_cache_read, total_cache_write;
+    long mark_input, mark_output, mark_cache_read, mark_cache_write;
     codex_rate_limit rate_limit;
     char *buf;
     size_t len, cap;
@@ -782,11 +790,20 @@ void codex_reset(codex_client *c) {
         if (!cx_await_ready(c)) return;
         c->session_id[0] = '\0';
         c->context_tokens = c->context_window = 0;
+        c->total_input = c->total_output = 0;
+        c->total_cache_read = c->total_cache_write = 0;
+        c->mark_input = c->mark_output = 0;
+        c->mark_cache_read = c->mark_cache_write = 0;
     }
 }
 
 /* `total` accumulates every request in the thread. `last` is the most recent
  * model request and therefore the amount occupying the context window. */
+static long cx_usage_long(cJSON *o, const char *key) {
+    cJSON *j = cJSON_GetObjectItemCaseSensitive(o, key);
+    return cJSON_IsNumber(j) ? (long)j->valuedouble : 0;
+}
+
 static void cx_note_usage(codex_client *c, cJSON *params) {
     cJSON *usage = params ? cJSON_GetObjectItemCaseSensitive(params, "tokenUsage") : NULL;
     cJSON *last = usage ? cJSON_GetObjectItemCaseSensitive(usage, "last") : NULL;
@@ -796,6 +813,15 @@ static void cx_note_usage(codex_client *c, cJSON *params) {
         c->context_tokens = (long)used->valuedouble;
     if (cJSON_IsNumber(window) && window->valuedouble > 0)
         c->context_window = (long)window->valuedouble;
+
+    cJSON *total = usage ? cJSON_GetObjectItemCaseSensitive(usage, "total") : NULL;
+    if (!total) return;
+    long cached = cx_usage_long(total, "cachedInputTokens");
+    long input = cx_usage_long(total, "inputTokens");
+    c->total_cache_read = cached;
+    c->total_cache_write = cx_usage_long(total, "cacheWriteInputTokens");
+    c->total_input = input > cached ? input - cached : 0;
+    c->total_output = cx_usage_long(total, "outputTokens");
 }
 
 /* The generic renderer expects a command under `command`, and a file edit's
@@ -1157,6 +1183,10 @@ char *codex_send_ex(codex_client *c, const char *user_text, codex_result *meta) 
         cJSON_AddStringToObject(p, "effort", c->effort);
     else if (c->effort_changed)
         cJSON_AddNullToObject(p, "effort");
+    c->mark_input = c->total_input;
+    c->mark_output = c->total_output;
+    c->mark_cache_read = c->total_cache_read;
+    c->mark_cache_write = c->total_cache_write;
     int id = cx_request(c, "turn/start", p);
     cJSON *response = id ? cx_wait_response(c, id) : NULL;
     if (!response) return NULL;
@@ -1223,6 +1253,10 @@ char *codex_send_ex(codex_client *c, const char *user_text, codex_result *meta) 
     if (meta) {
         meta->context_tokens = c->context_tokens;
         meta->context_window = c->context_window;
+        meta->input_tokens = c->total_input - c->mark_input;
+        meta->output_tokens = c->total_output - c->mark_output;
+        meta->cache_read_tokens = c->total_cache_read - c->mark_cache_read;
+        meta->cache_creation_tokens = c->total_cache_write - c->mark_cache_write;
     }
     return answer ? answer : strdup("");
 }

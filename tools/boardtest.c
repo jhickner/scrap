@@ -147,6 +147,8 @@ static void test_update_preserves_created(void)
     snprintf(c->base, sizeof c->base, "b519936");
     c->priority = 2;
     c->cost_usd = 0.42;
+    c->tokens_in = 12345;
+    c->tokens_out = 678;
     c->col = BOARD_REVIEW;
     expect(board_update(c), "update writes back");
     board_free(v, n);
@@ -163,6 +165,7 @@ static void test_update_preserves_created(void)
     expect(!strcmp(c->base, "b519936"), "base sha round-trips");
     expect(c->priority == 2, "priority round-trips");
     expect(c->cost_usd > 0.41 && c->cost_usd < 0.43, "cost round-trips");
+    expect(c->tokens_in == 12345 && c->tokens_out == 678, "tokens round-trip");
     expect(c->col == BOARD_REVIEW, "column round-trips");
     expect(c->created == created, "update leaves created alone");
     board_free(v, n);

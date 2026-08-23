@@ -26,6 +26,8 @@ struct worker {
     int              done;
     int              checked;
     int              handover;
+    double           charged_usd;
+    long             charged_in, charged_out;
 };
 
 static struct worker workers[WORKSPACE_MAX];
@@ -44,6 +46,36 @@ static struct worker *slot_by_session(const struct session *s)
         if (workers[i].session == s)
             return &workers[i];
     return NULL;
+}
+
+/* Sessions report their own running totals; a card outlives several of them,
+ * so what it takes on is what this slot's session has added since last time. */
+static void charge(struct worker *w, const struct session *s,
+                   struct board_card *c)
+{
+    double usd = session_cost(s);
+    long   in = session_tokens_in(s), out = session_tokens_out(s);
+
+    c->cost_usd += usd - w->charged_usd;
+    c->tokens_in += in - w->charged_in;
+    c->tokens_out += out - w->charged_out;
+
+    w->charged_usd = usd;
+    w->charged_in = in;
+    w->charged_out = out;
+}
+
+static void charge_card(struct worker *w, const struct session *s)
+{
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    struct board_card *c = board_find(cards, n, w->id);
+    if (c) {
+        struct board_card edited = *c;
+        charge(w, s, &edited);
+        board_update(&edited);
+    }
+    board_free(cards, n);
 }
 
 int boardwork_running(void)
@@ -624,6 +656,7 @@ void boardwork_finished(struct session *s)
 
     if (w->role == BOARD_ROLE_AUDIT) {
         w->done = 1;
+        charge_card(w, s);
         if (failed && *failed)
             board_note(w->id, "audit", failed);
         boardaudit_finished(w->id, failed && *failed ? NULL : reply);
@@ -631,6 +664,7 @@ void boardwork_finished(struct session *s)
     }
 
     if (w->role == BOARD_ROLE_SWEEP) {
+        charge_card(w, s);
         if (failed && *failed)
             board_note(w->id, "sweep", failed);
         boardsweep_finished(w->id, failed && *failed ? NULL : reply);
@@ -649,7 +683,7 @@ void boardwork_finished(struct session *s)
     if (sid && *sid)
         snprintf(edited.session, sizeof edited.session, "%s", sid);
 
-    edited.cost_usd = session_cost(s);
+    charge(w, s, &edited);
 
     boardlog_turn(w->id, "worker", NULL,
                   failed && *failed ? failed : reply);

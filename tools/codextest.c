@@ -168,9 +168,12 @@ static int mock_server(void)
             printf("{\"method\":\"thread/tokenUsage/updated\",\"params\":{"
                    "\"threadId\":\"thread-1\",\"turnId\":\"turn-%d\","
                    "\"tokenUsage\":{\"last\":{\"totalTokens\":%d},"
-                   "\"total\":{\"totalTokens\":9999},"
+                   "\"total\":{\"totalTokens\":9999,\"inputTokens\":%d,"
+                   "\"cachedInputTokens\":%d,\"cacheWriteInputTokens\":%d,"
+                   "\"outputTokens\":%d},"
                    "\"modelContextWindow\":1000}}}\n",
-                   turns, turns == 1 ? 120 : 240);
+                   turns, turns == 1 ? 120 : 240,
+                   turns * 100, turns * 40, turns * 5, turns * 10);
             printf("{\"method\":\"item/agentMessage/delta\","
                    "\"params\":{\"delta\":\"%s\"}}\n",
                    turns == 1 ? "partial" : turns == 2 ? "done" : "reset");
@@ -277,7 +280,9 @@ int main(int argc, char **argv)
     char *reply = codex_send_ex(client, "interrupt me", &meta);
     if (!reply || strcmp(reply, "partial") || !meta.interrupted ||
         meta.context_tokens != 120 || meta.context_window != 1000 ||
-        live_tokens != 120 || live_window != 1000) {
+        live_tokens != 120 || live_window != 1000 ||
+        meta.input_tokens != 60 || meta.cache_read_tokens != 40 ||
+        meta.cache_creation_tokens != 5 || meta.output_tokens != 10) {
         fprintf(stderr, "codextest: interrupted turn was reported as a failure\n");
         free(reply);
         codex_stop(client);

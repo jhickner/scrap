@@ -641,6 +641,10 @@ static char *backend_codex_ask_ex(Backend *b, const char *user, backend_result *
         meta->context_tokens = cr.context_tokens;
         meta->context_window = cr.context_window;
         meta->interrupted = cr.interrupted;
+        meta->input_tokens = cr.input_tokens;
+        meta->output_tokens = cr.output_tokens;
+        meta->cache_read_tokens = cr.cache_read_tokens;
+        meta->cache_creation_tokens = cr.cache_creation_tokens;
     }
     return reply;
 }
@@ -845,7 +849,14 @@ static char *backend_grok_ask_ex(Backend *b, const char *user, backend_result *m
     grok_result gr = {0};
     char *reply = grok_send_ex(x->client, user, &gr);
     backend_flush(&x->st);
-    if (meta) meta->interrupted = gr.interrupted;
+    if (meta) {
+        meta->interrupted = gr.interrupted;
+        meta->cost_usd = gr.cost_usd;
+        meta->input_tokens = gr.input_tokens;
+        meta->output_tokens = gr.output_tokens;
+        meta->cache_read_tokens = gr.cache_read_tokens;
+        meta->cache_creation_tokens = gr.cache_creation_tokens;
+    }
     return reply;
 }
 

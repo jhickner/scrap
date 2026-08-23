@@ -208,7 +208,10 @@ static int mock_server(int argc, char **argv)
                        "\"text\":\"%s\"}}}}\n",
                        pinned_model ? "A useful title" : "model was not pinned");
             }
-            respond(id, "{\"stopReason\":\"end_turn\"}");
+            respond(id, "{\"stopReason\":\"end_turn\",\"_meta\":{\"usage\":{"
+                        "\"inputTokens\":900,\"outputTokens\":40,"
+                        "\"cachedReadTokens\":300,\"cacheCreationTokens\":12,"
+                        "\"totalTokens\":940,\"costUsdTicks\":1500000}}}");
         } else if (idj) {
             printf("{\"jsonrpc\":\"2.0\",\"id\":%d,\"error\":{"
                    "\"code\":-32601,\"message\":\"unhandled method: %s\"}}\n",
@@ -234,7 +237,8 @@ int main(int argc, char **argv)
     }
     grok_set_event_cb(client, on_event, NULL);
 
-    char *reply = grok_send(client, "name this conversation");
+    grok_result meta = {0};
+    char *reply = grok_send_ex(client, "name this conversation", &meta);
     if (!reply || strcmp(reply, "A useful title")) {
         fputs("groktest: ephemeral title turn failed\n", stderr);
         free(reply);
@@ -242,6 +246,14 @@ int main(int argc, char **argv)
         return 1;
     }
     free(reply);
+
+    if (meta.input_tokens != 600 || meta.output_tokens != 40 ||
+        meta.cache_read_tokens != 300 || meta.cache_creation_tokens != 12 ||
+        meta.cost_usd != 0.0015) {
+        fputs("groktest: the turn's usage was not reported\n", stderr);
+        grok_stop(client);
+        return 1;
+    }
 
     const char *logged = grok_last_error(client);
     if (!logged || !strstr(logged, "tool_output_error")) {

@@ -741,6 +741,25 @@ static void build_stages(const struct board_card *c, struct notes *notes)
     }
 }
 
+static void build_spend(const struct board_card *c, struct notes *notes)
+{
+    char cost[32] = "";
+    if (c->cost_usd > 0)
+        snprintf(cost, sizeof cost, "$%.2f", c->cost_usd);
+
+    if (!c->tokens_in && !c->tokens_out) {
+        if (cost[0])
+            note_line(notes, dsprintf("  %-8s %s", "spend", cost));
+        return;
+    }
+
+    char in[32], out[32];
+    text_humanize(c->tokens_in, in, sizeof in);
+    text_humanize(c->tokens_out, out, sizeof out);
+    note_line(notes, dsprintf("  %-8s %s in · %s out%s%s", "spend", in, out,
+                              cost[0] ? " · " : "", cost));
+}
+
 #define NOTE_LEAD 14 /* the width of "HH:MM  who    " */
 
 /* Strip escapes and control characters, keeping the line structure: the card
@@ -805,6 +824,7 @@ static void note_entry(struct notes *notes, const char *stamp, const char *who,
 static void build_notes(const struct board_card *c, struct notes *notes)
 {
     build_stages(c, notes);
+    build_spend(c, notes);
 
     for (int i = 0; i < c->log_n; i++) {
         if (i == 0)
