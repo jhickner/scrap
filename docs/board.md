@@ -155,17 +155,18 @@ never a surprise. A card sitting in a step is skipped with `k`, which stops
 whatever is running for it and moves it on to whatever its kind takes next.
 
 Which steps that works on is configuration, not code. Roles are the files in
-`board/roles/`: one file is one role, and the file says everything about it —
-`does` is the job it performs, `tier` how much model it gets, `step` the stage
-of the flow it stands in, `skippable` whether a person may step over that
-stage, and the body is its prompt. What a file leaves out follows from its
-name: `audit.md` does `audit`, and a job named after a step stands in it.
+`board/roles/`, one file to a role, and the file carries the whole definition:
+`job` is the work it performs, `tier` how much model it is given, `step` the
+stage of the flow it stands in, `skippable` whether that stage may be passed
+by hand, and the body is its prompt. A field left out follows from the file
+name — `audit.md` takes the `audit` job, and a job named after a step stands
+in that step.
 
-Nothing in the board holds a list of roles. `boardcfg_doing("audit")` asks
-which role's file says it does the audit, so renaming `audit.md` to
-`reviewer.md` with `does: audit` changes who audits, and a file added to
-`roles/` is a role on the same terms as the ones that shipped. A job no file
-claims simply does not run.
+No list of roles exists in the board. `boardcfg_for_job("audit")` returns the
+role whose file claims that job, so `audit.md` renamed to `reviewer.md` with
+`job: audit` audits exactly as before, and a file dropped into `roles/` is a
+role on the same terms as the ones that shipped. A job no file claims does not
+run.
 
 An audit is a worker in the same worktree running the review skills already
 installed, scoped to architecture, duplicated mechanisms, memory, and security.

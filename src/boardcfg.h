@@ -28,7 +28,7 @@ struct board_backend {
 
 struct board_profile {
     char  name[32];
-    char  does[32];
+    char  job[32];
     char  tier[8];
     char  step[16];
     int   skippable;
@@ -96,12 +96,12 @@ void              boardcfg_free(struct board_cfg *c);
 
 int boardcfg_set(const struct board_cfg *c);
 
-const struct board_profile *boardcfg_doing(const char *job);
+const struct board_profile *boardcfg_for_job(const char *job);
 
 const struct board_profile *boardcfg_for_step(enum board_step step);
 
-const struct board_profile *boardcfg_doing_on(const char *job,
-                                              const char *backend);
+const struct board_profile *boardcfg_for_backend(const char *job,
+                                                 const char *backend);
 
 #define BOARDCFG_ARGV_MAX 9
 

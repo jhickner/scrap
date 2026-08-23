@@ -27,7 +27,7 @@ static void triage_key(const char *id, char *out, size_t size)
 
 static char *build_prompt(const struct board_card *c)
 {
-    const struct board_profile *p = boardcfg_doing("triage");
+    const struct board_profile *p = boardcfg_for_job("triage");
     const char                 *head = p && p->prompt ? p->prompt : "";
     const char                 *body = c->body && *c->body ? c->body : c->title;
 
@@ -151,7 +151,7 @@ int boardtriage_start(const struct board_card *c)
         return 0;
 
     char *argv[BOARDCFG_ARGV_MAX];
-    if (!boardcfg_argv(boardcfg_doing("triage"), prompt, argv, COUNT(argv))) {
+    if (!boardcfg_argv(boardcfg_for_job("triage"), prompt, argv, COUNT(argv))) {
         free(prompt);
         return 0;
     }

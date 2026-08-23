@@ -59,7 +59,7 @@
     "enter edit  ·  s start  ·  S start max  ·  g worker  ·  "                \
     "a approve  ·  A approve all  ·  i audit\n"                               \
     "f feedback  ·  r send back  ·  x cancel start  ·  u undo  ·  "          \
-    "k skip the step\n"                                                       \
+    "k skip step\n"                                                            \
     "n new  ·  t triage  ·  l log  ·  d delete  ·  c config  ·  "               \
     "b backend  ·  * all repos  ·  / search"
 
@@ -1267,7 +1267,7 @@ int boardview_run(const char *cwd)
             if (c) {
                 enum board_step step = boardflow_step_at(c->col);
                 if (step >= BOARD_STEPS)
-                    snprintf(notice, sizeof notice, "nothing to skip here");
+                    snprintf(notice, sizeof notice, "no step to skip here");
                 else if (!boardflow_skippable(c))
                     snprintf(notice, sizeof notice, "%s is not skippable",
                              boardcfg_step_name(step));

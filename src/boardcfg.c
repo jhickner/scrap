@@ -98,17 +98,16 @@ static void backend_defaults(struct board_backend *b, const char *name)
     }
 }
 
-/* What a role's file leaves unsaid: it does the job it is named after, stands
- * in the step of that name if there is one, and a step a role stands in may be
- * stepped over by hand. */
+/* Fields a role file omits: job is the file's own name, step is the job when
+ * the job names one, and a role that stands in a step is skippable. */
 static void role_defaults(struct board_profile *p)
 {
-    if (!p->does[0])
-        snprintf(p->does, sizeof p->does, "%s", p->name);
+    if (!p->job[0])
+        snprintf(p->job, sizeof p->job, "%s", p->name);
     if (!p->tier[0])
         snprintf(p->tier, sizeof p->tier, "%s", boardcfg_tier_name(BOARD_TIER_MED));
-    if (!p->step[0] && boardcfg_step_from_name(p->does) < BOARD_STEPS)
-        snprintf(p->step, sizeof p->step, "%s", p->does);
+    if (!p->step[0] && boardcfg_step_from_name(p->job) < BOARD_STEPS)
+        snprintf(p->step, sizeof p->step, "%s", p->job);
     p->skippable = p->step[0] != '\0';
 }
 
@@ -298,7 +297,7 @@ static int read_roles(struct board_cfg *c)
 
         struct board_profile *p = &c->roles[c->roles_n++];
         snprintf(p->name, sizeof p->name, "%s", names[i]);
-        snprintf(p->does, sizeof p->does, "%s", mdcfg_get(&m, "does"));
+        snprintf(p->job, sizeof p->job, "%s", mdcfg_get(&m, "job"));
         snprintf(p->step, sizeof p->step, "%s", mdcfg_get(&m, "step"));
 
         const char *tier = mdcfg_get(&m, "tier");
@@ -433,9 +432,9 @@ static int write_roles(const struct board_cfg *c)
         int         n = 0;
         keys[n] = "tier";
         vals[n++] = p->tier;
-        if (strcmp(p->does, p->name)) {
-            keys[n] = "does";
-            vals[n++] = p->does;
+        if (strcmp(p->job, p->name)) {
+            keys[n] = "job";
+            vals[n++] = p->job;
         }
         if (p->step[0]) {
             keys[n] = "step";
@@ -637,9 +636,9 @@ int boardcfg_missing(char *out, size_t size)
 
     for (int i = 0; i < cache.roles_n; i++)
         for (int j = i + 1; j < cache.roles_n; j++)
-            if (!strcmp(cache.roles[i].does, cache.roles[j].does)) {
+            if (!strcmp(cache.roles[i].job, cache.roles[j].job)) {
                 snprintf(out, size, "%s and %s both do %s", cache.roles[i].name,
-                         cache.roles[j].name, cache.roles[i].does);
+                         cache.roles[j].name, cache.roles[i].job);
                 return 1;
             }
 
@@ -705,13 +704,13 @@ void boardcfg_kinds_block(char *out, size_t size)
                                c->kinds[i].means ? c->kinds[i].means : "");
 }
 
-const struct board_profile *boardcfg_doing(const char *job)
+const struct board_profile *boardcfg_for_job(const char *job)
 {
     load();
     if (!job || !*job)
         return NULL;
     for (int i = 0; i < cache.roles_n; i++)
-        if (!strcmp(serving_roles[i].does, job))
+        if (!strcmp(serving_roles[i].job, job))
             return &serving_roles[i];
     return NULL;
 }
@@ -728,12 +727,12 @@ const struct board_profile *boardcfg_for_step(enum board_step step)
     return NULL;
 }
 
-const struct board_profile *boardcfg_doing_on(const char *job,
-                                              const char *backend)
+const struct board_profile *boardcfg_for_backend(const char *job,
+                                                 const char *backend)
 {
     static struct board_profile out;
 
-    const struct board_profile *p = boardcfg_doing(job);
+    const struct board_profile *p = boardcfg_for_job(job);
     if (!p || !backend || !*backend || !strcmp(backend, cache.serving))
         return p;
 

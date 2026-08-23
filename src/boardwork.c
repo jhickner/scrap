@@ -114,7 +114,7 @@ static int side_start(const struct board_card *c, const char *job,
                       enum board_role role, const char *cwd, char *prompt,
                       const char *label)
 {
-    const struct board_profile *p = boardcfg_doing(job);
+    const struct board_profile *p = boardcfg_for_job(job);
     if (!prompt || !p) {
         free(prompt);
         return 0;
@@ -255,7 +255,7 @@ static const struct board_profile *worker_profile(const struct worker *w)
     char pin[32] = "";
     if (w->role == BOARD_ROLE_WORKER)
         card_pin(w->id, pin, sizeof pin);
-    return boardcfg_doing_on(job_of(w->role), pin);
+    return boardcfg_for_backend(job_of(w->role), pin);
 }
 
 static int handover(struct worker *w)
@@ -455,7 +455,7 @@ static void show_card(int at, const struct board_card *c)
 
 static const char *prompt_of(const char *job)
 {
-    const struct board_profile *p = boardcfg_doing(job);
+    const struct board_profile *p = boardcfg_for_job(job);
     return p && p->prompt ? p->prompt : "";
 }
 
@@ -520,7 +520,7 @@ static const char *wanted_backend(const struct board_card *c)
 {
     if (c->backend_pin[0])
         return c->backend_pin;
-    const struct board_profile *p = boardcfg_doing("worker");
+    const struct board_profile *p = boardcfg_for_job("worker");
     const char                 *b = c->backend[0] ? c->backend
                                                   : (p ? p->backend : "");
     return b[0] ? b : "claude";
@@ -654,7 +654,7 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
         return 0;
 
     const char *backend = wanted_backend(c);
-    const struct board_profile *p = boardcfg_doing_on("worker", backend);
+    const struct board_profile *p = boardcfg_for_backend("worker", backend);
     const char *model = c->model[0] ? c->model : (p ? p->model : "");
     const char *effort = c->effort[0] ? c->effort : (p ? p->effort : "");
 

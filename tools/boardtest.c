@@ -530,15 +530,15 @@ static int skip_card(const char *id)
     return did;
 }
 
-static void role_add(struct board_cfg *cfg, const char *name, const char *does,
+static void role_add(struct board_cfg *cfg, const char *name, const char *job,
                      const char *prompt)
 {
     struct board_profile *r = &cfg->roles[cfg->roles_n++];
     memset(r, 0, sizeof *r);
     snprintf(r->name, sizeof r->name, "%s", name);
-    snprintf(r->does, sizeof r->does, "%s", does);
+    snprintf(r->job, sizeof r->job, "%s", job);
     snprintf(r->tier, sizeof r->tier, "high");
-    snprintf(r->step, sizeof r->step, "%s", does);
+    snprintf(r->step, sizeof r->step, "%s", job);
     r->skippable = 1;
     r->prompt = strdup(prompt);
 }
@@ -554,13 +554,13 @@ static void test_roles_are_what_the_files_say(void)
 
     boardcfg_reload();
 
-    const struct board_profile *p = boardcfg_doing("audit");
-    expect(p != NULL, "a role is found by the job its file says it does");
+    const struct board_profile *p = boardcfg_for_job("audit");
+    expect(p != NULL, "a role is found by the job its file names");
     expect(p && !strcmp(p->name, "auditor"),
-           "and the file it came from names it, whatever the job");
+           "and takes its own name from that file");
     expect(p && p->prompt && strstr(p->prompt, "read the diff"),
            "the body of the file is its prompt");
-    expect(boardcfg_doing("triage") == NULL, "a job no role does has no role");
+    expect(boardcfg_for_job("triage") == NULL, "a job no role does has no role");
     expect(boardcfg_for_step(BOARD_STEP_AUDIT) == p,
            "the step it stands in is its own");
 }
