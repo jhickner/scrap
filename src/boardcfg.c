@@ -241,11 +241,15 @@ static void backend_defaults(struct board_backend *b, const char *name)
     snprintf(b->level[BOARD_TIER_MED].effort, sizeof b->level[0].effort, "medium");
     snprintf(b->level[BOARD_TIER_HIGH].effort, sizeof b->level[0].effort, "high");
 
-    if (strcmp(name, "claude"))
-        return;
-    snprintf(b->level[BOARD_TIER_LOW].model, sizeof b->level[0].model, "haiku");
-    snprintf(b->level[BOARD_TIER_MED].model, sizeof b->level[0].model, "opus");
-    snprintf(b->level[BOARD_TIER_HIGH].model, sizeof b->level[0].model, "opus");
+    if (!strcmp(name, "claude")) {
+        snprintf(b->level[BOARD_TIER_LOW].model, sizeof b->level[0].model, "haiku");
+        snprintf(b->level[BOARD_TIER_MED].model, sizeof b->level[0].model, "opus[1m]");
+        snprintf(b->level[BOARD_TIER_HIGH].model, sizeof b->level[0].model, "opus[1m]");
+    } else if (!strcmp(name, "codex")) {
+        snprintf(b->level[BOARD_TIER_LOW].model, sizeof b->level[0].model, "terra");
+        snprintf(b->level[BOARD_TIER_MED].model, sizeof b->level[0].model, "sol");
+        snprintf(b->level[BOARD_TIER_HIGH].model, sizeof b->level[0].model, "sol");
+    }
 }
 
 static void defaults(struct board_cfg *c)
