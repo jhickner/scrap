@@ -39,7 +39,17 @@ static const char *const SPIN[] = {"\xe2\xa0\x8b", "\xe2\xa0\x99", "\xe2\xa0\xb9
                                   "\xe2\xa0\xa6", "\xe2\xa0\xa7", "\xe2\xa0\x87",
                                   "\xe2\xa0\x8f"};
 
+// Both kinds of row the highlight passes over: a group header, and a row that
+// is text rather than a choice.
 static int item_heading(const struct view *v, int i)
+{
+    return v->heading &&
+           (v->heading[i] == PICK_HEADING || v->heading[i] == PICK_TEXT);
+}
+
+// The stricter one: a header that owns the rows under it, and takes the blank
+// line that sets its group off from the one above.
+static int item_group(const struct view *v, int i)
 {
     return v->heading && v->heading[i] == PICK_HEADING;
 }
@@ -48,6 +58,30 @@ static int item_heading(const struct view *v, int i)
 static int item_apart(const struct view *v, int i)
 {
     return v->heading && v->heading[i] == PICK_APART;
+}
+
+// The share of the width a label may take before the details beside them stop
+// having room to say anything.
+#define LABEL_SHARE(cols) ((cols) * 3 / 5)
+
+// The width every label is padded out to, for a list that asked to line its
+// details up. Zero for one that did not.
+static size_t align_width(const struct view *v, int columns)
+{
+    if (!v->live || !v->live->align)
+        return 0;
+
+    size_t width = 0;
+    for (int row = 0; row < v->count; row++) {
+        int i = v->order[row];
+        if (item_heading(v, i) || !v->items[i].detail || !*v->items[i].detail)
+            continue;
+        size_t cells = ui_cells(v->items[i].label);
+        if (cells > width)
+            width = cells;
+    }
+    size_t cap = (size_t)LABEL_SHARE(columns);
+    return width > cap ? cap : width;
 }
 
 static int item_spins(const struct view *v, int i)
@@ -67,6 +101,11 @@ static int animating(const struct view *v)
 static int row_heading(const struct view *v, int row)
 {
     return item_heading(v, v->order[row]);
+}
+
+static int row_group(const struct view *v, int row)
+{
+    return item_group(v, v->order[row]);
 }
 
 static int row_apart(const struct view *v, int row)
@@ -106,10 +145,15 @@ static void step(struct view *v, int dir)
 static int visible_cap(const struct view *v)
 {
     int rows = tty_rows() - 3 - chrome_gap();
+    if (v->live && v->live->hint && *v->live->hint) {
+        rows -= 2;
+        for (const char *p = v->live->hint; (p = strchr(p, '\n')); p++)
+            rows--;
+    }
     if (v->heading) {
         int breaks = 0;
         for (int i = 0; i < v->count; i++)
-            if (row_heading(v, i) || row_apart(v, i))
+            if (row_group(v, i) || row_apart(v, i))
                 breaks++;
         if (breaks > 1)
             rows -= breaks - 1;
@@ -130,13 +174,22 @@ static void refilter(struct view *v)
         // heading that says where it lives. A heading matches for everything
         // beneath it -- typing part of a directory keeps that whole group --
         // and one whose group the query emptied goes with it.
-        if (item_heading(v, i)) {
+        if (item_group(v, i)) {
             under = !v->query[0] || text_fuzzy_score(v->items[i].label, v->query) >= 0;
             int has = under;
-            for (int j = i + 1; !has && j < v->n && !item_heading(v, j); j++)
+            for (int j = i + 1; !has && j < v->n && !item_group(v, j); j++)
                 if (text_fuzzy_score(v->items[j].label, v->query) >= 0)
                     has = 1;
             if (!has)
+                continue;
+            v->order[v->count] = i;
+            v->score[v->count++] = 0;
+            continue;
+        }
+        // Text belongs to its group rather than to the query: it is not
+        // something to match against, and it goes when its group goes.
+        if (item_heading(v, i)) {
+            if (!under)
                 continue;
             v->order[v->count] = i;
             v->score[v->count++] = 0;
@@ -202,8 +255,9 @@ static void paint(void *ud)
     if (v->top < 0)
         v->top = 0;
 
-    int columns = ui_columns();
-    int rows = 0;
+    int    columns = ui_columns();
+    int    rows = 0;
+    size_t pad_to = align_width(v, columns);
 
     ui_esc(ui_style(UI_CHROME));
     ui_put(UI_BAR);
@@ -227,8 +281,10 @@ static void paint(void *ud)
     for (int row = v->top; row < end; row++) {
         int i = v->order ? v->order[row] : row;
         if (item_heading(v, i)) {
-            // A blank line sets each group off from the one above it.
-            if (row > v->top) {
+            // A blank line sets each group off from the one above it. Text
+            // rows take none: consecutive lines of one paragraph would come
+            // out double spaced.
+            if (item_group(v, i) && row > v->top) {
                 ui_put("\n");
                 rows++;
             }
@@ -276,14 +332,24 @@ static void paint(void *ud)
         }
 
         size_t label_budget = columns > 5 + (int)status ? (size_t)(columns - 5 - (int)status) : 1;
+        // Aligned, a label is cut at the column the details start on rather
+        // than running into them.
+        if (pad_to && items[i].detail && *items[i].detail && label_budget > pad_to)
+            label_budget = pad_to;
         size_t label_n = ui_fit_bytes(items[i].label, label_budget);
         ui_putn(items[i].label, label_n);
         if (items[i].label[label_n])
             ui_put("…");
         ui_esc(ui_style(UI_RESET));
 
-        size_t used = 4 + status + ui_cells_n(items[i].label, label_n) +
-                      (items[i].label[label_n] ? 1 : 0);
+        size_t shown = ui_cells_n(items[i].label, label_n) +
+                       (items[i].label[label_n] ? 1 : 0);
+        if (pad_to && items[i].detail && *items[i].detail && shown < pad_to) {
+            ui_pad((int)(pad_to - shown));
+            shown = pad_to;
+        }
+
+        size_t used = 4 + status + shown;
 
         if (items[i].detail && *items[i].detail) {
             int budget = columns - (int)used - 4;
@@ -317,6 +383,24 @@ static void paint(void *ud)
         ui_esc(ui_style(UI_RESET));
         ui_put("\n");
         rows++;
+    }
+
+    if (v->live && v->live->hint && *v->live->hint) {
+        ui_put("\n");
+        size_t budget = columns > 6 ? (size_t)(columns - 6) : 1;
+        for (const char *p = v->live->hint; p;) {
+            const char *nl = strchr(p, '\n');
+            size_t      n = nl ? (size_t)(nl - p) : strlen(p);
+            ui_esc(ui_style(UI_DIM));
+            ui_put("    ");
+            ui_putn(p, ui_fit_visible(p, n, budget));
+            ui_esc(ui_style(UI_RESET));
+            if (!nl)
+                break;
+            ui_put("\n");
+            p = nl + 1;
+        }
+        rows += 2;
     }
 
     (void)rows;
@@ -418,7 +502,11 @@ static int run(const char *title, const struct pick_item *items, int count,
                 continue;
             // A frame of the spinners, and a chance for the caller to say the
             // rows have moved on.
-            int moved = watching && v.live->tick(v.live->ud);
+            int moved = watching ? v.live->tick(v.live->ud) : 0;
+            if (moved == PICK_TICK_REOPEN) {
+                result = PICK_REOPEN;
+                goto done;
+            }
             if (moved)
                 refilter(&v);
             if ((turning && spin_advance(&v.frame, &v.frame_at)) || moved)

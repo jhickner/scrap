@@ -14,6 +14,7 @@
 #include "cmd.h"
 #include "handoff.h"
 #include "hud.h"
+#include "boardwork.h"
 #include "livelist.h"
 #include "pick.h"
 #include "scrollback.h"
@@ -37,6 +38,10 @@
 
 #define KEY_CTRL(c) ((c) & 0x1f)
 
+// A session the board started, rather than one started by hand. They are not
+// the same thing to come back to: one has a card behind it.
+#define WORKER_MARK "\xe2\x97\x86 "   /* a filled diamond */
+
 #define MAX_ROWS 128
 
 enum row_kind {
@@ -52,6 +57,7 @@ struct row {
     int  at;            /* index into whichever list the kind names */
     int  spin;          /* a turn is running: the status column turns */
     char mark[4];       /* what the status column says when it does not */
+    char card[16];      /* the board card behind it, where there is one */
     char id[128];
     char cwd[512];      /* what the row is grouped under */
     char label[256];
@@ -101,10 +107,14 @@ static void tab_rows(struct row *rows, int *n)
 
         // The directory is the row's group, printed once above it.
         path_home_relative(session_cwd(s), r->cwd, sizeof r->cwd);
-        snprintf(r->label, sizeof r->label, "%s %s%s",
+        const char *card = boardwork_card_of(s);
+        snprintf(r->label, sizeof r->label, "%s %s%s%s",
                  i == workspace_index() ? "\xe2\x96\xb8" : "\xc2\xb7",
+                 card ? WORKER_MARK : "",
                  title && *title ? title : "untitled",
                  i == workspace_index() ? " (here)" : "");
+        if (card)
+            snprintf(r->card, sizeof r->card, "%s", card);
         snprintf(r->id, sizeof r->id, "%s", session_id(s) ? session_id(s) : "");
         snprintf(r->detail, sizeof r->detail, "%s %s",
                  session_backend(s),
@@ -185,13 +195,21 @@ static void fill_live(struct row *r, const struct live_session *v)
     // The arrow says another mux is holding this one: a dot is this window's
     // own, which only switches. Of the two arrows, one is a pane in sight in
     // this same tmux window and the other is off in a window elsewhere.
-    snprintf(r->label, sizeof r->label, "%s %s",
+    snprintf(r->label, sizeof r->label, "%s %s%s",
              near ? "\xe2\x86\x92" : "\xe2\x87\x84",
+             v->card[0] ? WORKER_MARK : "",
              v->title[0] ? v->title : "untitled");
-    snprintf(r->detail, sizeof r->detail, "%s %s \xc2\xb7 %s%s",
-             v->backend,
-             short_model(v->backend, v->label[0] ? v->label : v->model),
-             where, when);
+    snprintf(r->card, sizeof r->card, "%s", v->card);
+    if (v->card[0])
+        snprintf(r->detail, sizeof r->detail, "card %s \xc2\xb7 %s %s \xc2\xb7 %s%s",
+                 v->card, v->backend,
+                 short_model(v->backend, v->label[0] ? v->label : v->model),
+                 where, when);
+    else
+        snprintf(r->detail, sizeof r->detail, "%s %s \xc2\xb7 %s%s",
+                 v->backend,
+                 short_model(v->backend, v->label[0] ? v->label : v->model),
+                 where, when);
     row_status(r, v->status);
 }
 

@@ -7,6 +7,9 @@
 
 #include "agenttabs.h"
 #include "app.h"
+#include "boardview.h"
+#include "child.h"
+#include "boardwork.h"
 #include "bash.h"
 #include "chrome.h"
 #include "cmd.h"
@@ -138,6 +141,7 @@ static void usage(void)
             "  -e effort  reasoning/thinking effort (default: the last /effort pick, else the CLI's own)\n"
             "  -C dir     working directory for the agent's tools\n"
             "  -s         safe mode: skip skills, CLAUDE.md, MCP servers, hooks\n"
+            "  --card     put the rest of the line on the board and leave\n"
             "  --telegram also answer over Telegram, in the same session\n"
             "  --connect telegram   the same thing, spelled out\n"
             "  -r         --resume: pick a past conversation to continue\n"
@@ -291,6 +295,7 @@ static int idle_restart(void *ud)
     // Returns only when the new build could not be run at all, in which case
     // this window keeps going on the old one.
     sidechannel_close_all();
+    child_close_all();
     // The whole window travels: the session in front carries the screen, and
     // the rest are named in a file the new build opens a tab from.
     if (!restart_exec(workspace_current())) {
@@ -380,6 +385,7 @@ int main(int argc, char **argv)
         {"fork",    no_argument,       NULL, 'F'},
         {"restore", required_argument, NULL, 'R'},
         {"tabs",    required_argument, NULL, 'B'},
+        {"card",    no_argument,       NULL, 'K'},
         {"telegram", no_argument,      NULL, 'T'},
         {"connect", required_argument, NULL, 'N'},
         {"help",    no_argument,       NULL, 'h'},
@@ -394,6 +400,7 @@ int main(int argc, char **argv)
     const char *restore_arg = NULL;
     const char *tabs_arg = NULL;
     int telegram = 0;
+    int card = 0;
     int fork_session = 0;
     int safe_mode = 0;
     int resume = 0;
@@ -411,6 +418,7 @@ int main(int argc, char **argv)
         case 'F': fork_session = 1; break;
         case 'R': restore_arg = optarg; break;
         case 'B': tabs_arg = optarg; break;
+        case 'K': card = 1; break;
         case 'T': telegram = 1; break;
         case 'N':
             if (strcmp(optarg, "telegram")) {
@@ -448,6 +456,38 @@ int main(int argc, char **argv)
     } else if (!getcwd(cwd, sizeof cwd)) {
         fprintf(stderr, APP_NAME ": cannot determine the working directory\n");
         return 1;
+    }
+
+    // Capture, and nothing else: no terminal, no agent, no session. What the
+    // card means is triage's problem, later.
+    if (card) {
+        if (optind >= argc) {
+            fprintf(stderr, APP_NAME ": --card takes the text to file\n");
+            return 2;
+        }
+        size_t need = 1;
+        for (int i = optind; i < argc; i++)
+            need += strlen(argv[i]) + 1;
+        char *text = malloc(need);
+        if (!text) {
+            fprintf(stderr, APP_NAME ": out of memory\n");
+            return 1;
+        }
+        text[0] = '\0';
+        for (int i = optind; i < argc; i++) {
+            if (i > optind)
+                strcat(text, " ");
+            strcat(text, argv[i]);
+        }
+        char id[16] = {0};
+        int  ok = boardview_capture(text, cwd, id, sizeof id);
+        free(text);
+        if (!ok) {
+            fprintf(stderr, APP_NAME ": could not write to the board\n");
+            return 1;
+        }
+        printf("%s\n", id);
+        return 0;
     }
 
     char config[4096];
@@ -594,6 +634,9 @@ int main(int argc, char **argv)
     prompt_set_another(prompt, another, NULL);
     prompt_set_cancel(prompt, cancel_turn, NULL);
     workspace_on_finish(turn_done);
+    // Not turn_done's job: that waits for an open modal, and the board is one.
+    workspace_on_settled(boardwork_finished);
+    livelist_on_card(boardwork_card_of);
     prompt_set_replay(prompt, replay, NULL);
     prompt_set_blank(prompt, blank_line, NULL);
     prompt_set_animate(prompt, side_busy, side_tick, NULL);
@@ -692,6 +735,7 @@ int main(int argc, char **argv)
     }
 
     sidechannel_close_all();
+    child_close_all();
     tg_stop();
     session_set_typeahead(NULL, NULL);
     chrome_bind(NULL);

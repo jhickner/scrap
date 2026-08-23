@@ -306,7 +306,7 @@ static void check_live_entry(struct screen *s)
 
     struct live *l = calloc(1, sizeof *l);
     unsigned mark = viewport_mark();
-    viewport_item_begin(live_render, l, free);
+    viewport_item_begin(&(struct viewport_entry){.render = live_render, .ud = l, .free_ud = free, .reflow = 1});
     live_render(l, 80);
     viewport_item_end();
 
@@ -365,7 +365,7 @@ static void check_item_counting(struct screen *s)
     set_size(80, 24);
 
     unsigned before = viewport_mark();
-    viewport_item_begin(width_render, NULL, NULL);
+    viewport_item_begin(&(struct viewport_entry){.render = width_render, .reflow = 1});
     width_render(NULL, 80);
     viewport_item_end();
     if (viewport_mark() - before != 1)
@@ -376,7 +376,7 @@ static void check_item_counting(struct screen *s)
     viewport_write("LOOSE\n", 6);
     viewport_write("PARTIAL", 7);
     before = viewport_mark();
-    viewport_item_begin(width_render, NULL, NULL);
+    viewport_item_begin(&(struct viewport_entry){.render = width_render, .reflow = 1});
     width_render(NULL, 80);
     viewport_item_end();
     if (viewport_mark() - before != 2)
@@ -442,13 +442,13 @@ static void check_ends_blank(void)
 
     // Closed into entries, the answer has to come from the rows kept rather
     // than from output still in hand.
-    viewport_item_begin(NULL, NULL, NULL);
+    viewport_item_begin(&(struct viewport_entry){0});
     ui_put("in an entry\n");
     viewport_item_end();
     if (viewport_ends_blank())
         fail("an entry ending in text is owed a blank row");
 
-    viewport_item_begin(NULL, NULL, NULL);
+    viewport_item_begin(&(struct viewport_entry){0});
     ui_put("styled\n\x1b[2m\x1b[0m\n");
     viewport_item_end();
     if (!viewport_ends_blank())
@@ -460,7 +460,7 @@ static void check_nested_capture(struct screen *s)
     viewport_clear();
     set_size(80, 24);
 
-    viewport_item_begin(nested_render, NULL, NULL);
+    viewport_item_begin(&(struct viewport_entry){.render = nested_render, .reflow = 1});
     nested_render(NULL, 80);
     viewport_item_end();
 
@@ -488,7 +488,7 @@ static void check_reflow(struct screen *s)
     set_size(80, 24);
 
     rendered_at = 0;
-    viewport_item_begin(width_render, NULL, NULL);
+    viewport_item_begin(&(struct viewport_entry){.render = width_render, .reflow = 1});
     width_render(NULL, 80);
     viewport_item_end();
 
@@ -622,12 +622,12 @@ static void check_dump(void)
 
     viewport_write("RAW\n", 4);
 
-    unsigned live = viewport_item_begin(width_render, NULL, NULL);
+    unsigned live = viewport_item_begin(&(struct viewport_entry){.render = width_render, .reflow = 1});
     width_render(NULL, 80);
     viewport_item_end();
     viewport_item_persist(live, "fake", fake_encode);
 
-    unsigned mute = viewport_item_begin(width_render, NULL, NULL);
+    unsigned mute = viewport_item_begin(&(struct viewport_entry){.render = width_render, .reflow = 1});
     width_render(NULL, 80);
     viewport_item_end();
     viewport_item_persist(mute, "fake", no_encode);
@@ -684,12 +684,12 @@ static void check_suspended_mark(void)
     set_size(80, 24);
 
     viewport_suspend();
-    unsigned muted = viewport_item_begin(width_render, NULL, NULL);
+    unsigned muted = viewport_item_begin(&(struct viewport_entry){.render = width_render, .reflow = 1});
     width_render(NULL, 80);
     viewport_item_end();
     viewport_resume();
 
-    unsigned next = viewport_item_begin(width_render, NULL, NULL);
+    unsigned next = viewport_item_begin(&(struct viewport_entry){.render = width_render, .reflow = 1});
     width_render(NULL, 80);
     viewport_item_end();
 

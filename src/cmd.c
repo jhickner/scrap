@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "app.h"
+#include "boardview.h"
 #include "chrome.h"
 #include "fanout.h"
 #include "frontend.h"
@@ -25,6 +26,7 @@
 #include "sessionload.h"
 #include "sessionswitch.h"
 #include "viewport.h"
+#include "workspace.h"
 #include "sidechannel.h"
 #include "settings.h"
 #include "settingsui.h"
@@ -711,6 +713,29 @@ static void do_sessions(struct session *s, const char *arg)
     sessionswitch_run();
 }
 
+static void do_card(struct session *s, const char *arg)
+{
+    if (!arg || !*arg) {
+        reply_error("/card <text> \xe2\x80\x94 nothing to put on the board");
+        return;
+    }
+    char id[16] = {0};
+    if (boardview_capture(arg, session_cwd(s), id, sizeof id))
+        reply_note("card %s", id);
+    else
+        reply_error("could not write to the board");
+}
+
+static void do_board(struct session *s, const char *arg)
+{
+    (void)arg;
+    if (!can_pick("/board"))
+        return;
+    int tab = boardview_run(session_cwd(s));
+    if (tab >= 0)
+        workspace_show(tab);
+}
+
 static void do_status(struct session *s, const char *arg)
 {
     (void)arg;
@@ -769,12 +794,14 @@ static const struct cmd COMMANDS[] = {
     {"/settings", "show and change every setting", NULL, 0, do_settings},
     {"/resume", "resume a past conversation", NULL, 0, do_resume},
     {"/sessions", "every session: this window's, other windows', past ones", NULL,
-     0, do_sessions},
+     CMD_LIVE, do_sessions},
     {"/fh", "fork into a horizontal tmux split", NULL, CMD_LIVE, do_fork_h},
     {"/fs", "alias for /fh", NULL, CMD_LIVE, do_fork_h},
     {"/fv", "fork into a vertical tmux split", NULL, CMD_LIVE, do_fork_v},
     {"/fw", "fork into a tmux window", NULL, CMD_LIVE, do_fork_w},
     {"/split", "a shell split here, in this directory", "[h|v|w]", 0, do_split},
+    {"/card", "put a thought on the board, unsorted", "<text>", CMD_LIVE, do_card},
+    {"/board", "the cards, by column", NULL, CMD_LIVE, do_board},
     {"/status", "reprint the status bar", NULL, CMD_LIVE, do_status},
     {"/session", "show this session's info and totals", NULL, CMD_LIVE, do_session},
     {"/rename", "name this session, or ask the model to name it again", "[name]",

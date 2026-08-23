@@ -174,6 +174,10 @@ const char *session_last_reply(const struct session *s);
 const char *session_last_error(const struct session *s);
 int         session_last_interrupted(const struct session *s);
 
+// What this conversation has cost so far, as the CLI reports it. Cumulative,
+// so for a session given one job it is what that job cost.
+double session_cost(const struct session *s);
+
 int session_context_percent(const struct session *s);
 
 long session_context_window(const struct session *s);

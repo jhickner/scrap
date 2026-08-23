@@ -38,12 +38,18 @@ static int        ntabs;
 static int        cur;
 static int        safe;
 static void     (*on_finish)(struct session *s);
+static void     (*on_settled)(struct session *s);
 
 static void follow(const struct session *s);
 
 void workspace_on_finish(void (*fn)(struct session *s))
 {
     on_finish = fn;
+}
+
+void workspace_on_settled(void (*fn)(struct session *s))
+{
+    on_settled = fn;
 }
 
 // The spinner belongs to the tab in front: a turn running behind it is shown
@@ -420,6 +426,8 @@ static int pump(int hold)
 
         if (running && !session_turn_running(s)) {
             tabs[i].finished = 1;
+            if (on_settled)
+                on_settled(s);
             // Ended behind the tab in front: worth a mark in the list until
             // somebody comes and looks at it.
             if (i != cur)

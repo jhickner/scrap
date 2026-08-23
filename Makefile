@@ -46,25 +46,25 @@ tests: $(TOOLS)
 $(BUILD)/palette: tools/palette.c src/vendor/colors.h | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ tools/palette.c
 
-$(BUILD)/spintest: tools/spintest.c src/status.o src/chrome.o src/block.o src/prompt.o src/files.o src/paste.o src/settings.o src/tty.o src/ui.o src/viewport.o src/bash.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)
+$(BUILD)/spintest: tools/spintest.c src/status.o src/chrome.o src/block.o src/prompt.o src/replframe.o src/files.o src/paste.o src/settings.o src/tty.o src/ui.o src/viewport.o src/bash.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
-$(BUILD)/statustest: tools/statustest.c src/status.o src/chrome.o src/prompt.o src/files.o src/paste.o src/bash.o src/block.o src/tty.o src/ui.o src/viewport.o src/settings.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)
+$(BUILD)/statustest: tools/statustest.c src/status.o src/chrome.o src/prompt.o src/replframe.o src/files.o src/paste.o src/bash.o src/block.o src/tty.o src/ui.o src/viewport.o src/settings.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
-$(BUILD)/chrometest: tools/chrometest.c src/status.o src/chrome.o src/block.o src/prompt.o src/files.o src/paste.o src/settings.o src/tty.o src/ui.o src/viewport.o src/bash.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)
+$(BUILD)/chrometest: tools/chrometest.c src/status.o src/chrome.o src/block.o src/prompt.o src/replframe.o src/files.o src/paste.o src/settings.o src/tty.o src/ui.o src/viewport.o src/bash.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
 $(BUILD)/imagerowtest: tools/imagerowtest.c src/image.o src/viewport.o src/ui.o src/tty.o src/settings.o src/scrollback.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
-$(BUILD)/viewporttest: tools/viewporttest.c src/viewport.o src/ui.o src/tty.o src/settings.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
+$(BUILD)/viewporttest: tools/viewporttest.c src/viewport.o src/ui.o src/tty.o src/settings.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
 $(BUILD)/imagefittest: tools/imagefittest.c src/image.o src/ui.o src/viewport.o src/block.o src/settings.o src/tty.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
-$(BUILD)/reflowtest: tools/reflowtest.c src/ui.o src/viewport.o src/block.o src/settings.o src/tty.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
+$(BUILD)/reflowtest: tools/reflowtest.c src/ui.o src/viewport.o src/block.o src/settings.o src/tty.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
 $(BUILD)/toolstyletest: tools/toolstyletest.c src/toolstyle.o src/vendor/cJSON.o | $(BUILD)
@@ -112,12 +112,15 @@ $(BUILD)/muxcfgtest: tools/muxcfgtest.c src/muxcfg.o src/settings.o src/text.o s
 $(BUILD)/telegramtest: tools/telegramtest.c src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
+$(BUILD)/boardtest: tools/boardtest.c src/board.o src/boardtriage.o src/boardaudit.o src/boardcfg.o src/boardflow.o src/boardlog.o src/mdcfg.o src/replyjson.o src/child.o src/gitcmd.o src/text.o src/vendor/cJSON.o | $(BUILD)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
+
 $(BUILD)/highlighttest: tools/highlighttest.c src/highlight.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
 CHECKS  := viewporttest imagerowtest chrometest imagefittest mdtest reflowtest toolstyletest sessionlisttest claudetest codextest \
            groktest filedifftest pitest agenttabstest statustest transcripttest \
-           sessionviewtest highlighttest muxcfgtest telegramtest
+           sessionviewtest highlighttest muxcfgtest telegramtest boardtest
 
 check: $(addprefix $(BUILD)/,$(CHECKS))
 	@for t in $^; do echo "$$t"; ./$$t || exit 1; done
