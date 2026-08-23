@@ -1,108 +1,124 @@
 #include "ask.h"
 
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "chrome.h"
 #include "frontend.h"
-#include "text.h"
+#include "replframe.h"
 #include "tty.h"
 #include "ui.h"
 
-#define ASK_MAX 1024
+#define ASK_INDENT 2
+#define ASK_GUTTER 2
 
 struct field {
     const char *title;
-    char        text[ASK_MAX];
-    size_t      len;
-    size_t      at;
+    Repl        repl;
+
+    struct replframe frame;
+    int              rows;
+    int              top;
 };
 
-static int lead_byte(const char *s, size_t at)
+static int width_of(void)
 {
-    return ((unsigned char)s[at] & 0xC0) != 0x80;
+    int budget = ui_columns() - ASK_INDENT - 2;
+    if (budget < 8)
+        budget = 8;
+    return budget + ASK_GUTTER;
 }
 
-static size_t step_left(const struct field *f, size_t at)
+static int room_for(void)
 {
-    while (at > 0 && !lead_byte(f->text, --at))
-        ;
-    return at;
+    int rows = tty_rows() - 3 - chrome_gap();
+    return rows < 1 ? 1 : rows;
 }
 
-static size_t step_right(const struct field *f, size_t at)
+static int framed(struct field *f)
 {
-    while (at < f->len && !lead_byte(f->text, ++at))
-        ;
-    return at;
+    int width = width_of();
+    f->rows = repl_input_rows(&f->repl, width);
+    if (f->rows < 1)
+        f->rows = 1;
+    return replframe_render(&f->frame, &f->repl, f->rows, width, 1);
 }
 
-static void cut(struct field *f, size_t from, size_t to)
+static void scroll_to_caret(struct field *f, int room)
 {
-    memmove(f->text + from, f->text + to, f->len - to);
-    f->len -= to - from;
-    f->text[f->len] = '\0';
-    f->at = from;
-}
-
-static void insert(struct field *f, const char *s, size_t n)
-{
-    if (!n || f->len + n >= sizeof f->text)
+    if (f->rows <= room) {
+        f->top = 0;
         return;
-    memmove(f->text + f->at + n, f->text + f->at, f->len - f->at);
-    memcpy(f->text + f->at, s, n);
-    f->len += n;
-    f->at += n;
-    f->text[f->len] = '\0';
-}
-
-static void insert_codepoint(struct field *f, uint32_t cp)
-{
-    char buf[4];
-    insert(f, buf, text_utf8_encode(cp, buf));
+    }
+    int caret = f->frame.have_cursor ? f->frame.cursor_y : f->rows - 1;
+    if (caret < f->top)
+        f->top = caret;
+    if (caret >= f->top + room)
+        f->top = caret - room + 1;
+    if (f->top > f->rows - room)
+        f->top = f->rows - room;
+    if (f->top < 0)
+        f->top = 0;
 }
 
 static void paint(void *ud)
 {
     struct field *f = ud;
     int           columns = ui_columns();
-    int           budget = columns > 8 ? columns - 4 : 4;
+
+    if (!framed(f))
+        return;
+
+    int room = room_for();
+    scroll_to_caret(f, room);
 
     ui_esc(ui_style(UI_CHROME));
     ui_put(UI_BAR);
     ui_esc(ui_style(UI_RESET));
     ui_put(" ");
     ui_esc(ui_style(UI_DIM));
-    ui_putn(f->title, ui_fit_bytes(f->title, (size_t)(columns > 3 ? columns - 3 : 1)));
+    {
+        char        said[256];
+        const char *title = f->title ? f->title : "";
+        if (f->rows > room)
+            snprintf(said, sizeof said, "%s \xc2\xb7 %d\xe2\x80\x93%d of %d", title,
+                     f->top + 1, f->top + room, f->rows);
+        else
+            snprintf(said, sizeof said, "%s", title);
+        ui_putn(said, ui_fit_bytes(said, (size_t)(columns > 3 ? columns - 3 : 1)));
+    }
     ui_esc(ui_style(UI_RESET));
     ui_put("\n");
 
-    size_t from = 0;
-    while (ui_cells_n(f->text + from, f->at - from) > (size_t)budget - 1)
-        from = step_right(f, from);
-
-    ui_put("  ");
-    ui_esc(ui_style(UI_TEXT));
-    ui_putn(f->text + from, f->at - from);
-
-    size_t next = step_right(f, f->at);
-    ui_esc("\x1b[7m");
-    if (next > f->at)
-        ui_putn(f->text + f->at, next - f->at);
-    else
-        ui_put(" ");
-    ui_esc("\x1b[27m");
-
-    if (next < f->len)
-        ui_putn(f->text + next, ui_fit_bytes(f->text + next, (size_t)budget));
-    ui_esc(ui_style(UI_RESET));
-    ui_put("\n");
+    int end = f->rows <= room ? f->rows : f->top + room;
+    for (int y = f->top; y < end; y++) {
+        ui_pad(ASK_INDENT);
+        replframe_paint_row(&f->frame, y, ASK_GUTTER, 1,
+                            f->repl.cursor >= f->repl.len ||
+                                f->repl.buf[f->repl.cursor] == '\n');
+        ui_put("\n");
+    }
 
     ui_esc(ui_style(UI_DIM));
-    ui_put("  enter to keep, esc to leave it alone");
+    ui_pad(ASK_INDENT);
+    ui_put("shift-enter for a new line, enter to keep, esc to leave it alone");
     ui_esc(ui_style(UI_RESET));
+}
+
+static void feed(struct field *f, ReplKey key, uint32_t cp, const char *text)
+{
+    ReplEvent ev = {.key = key, .codepoint = cp, .text = text};
+    repl_set_width(&f->repl, width_of());
+    repl_handle_input(&f->repl, &ev);
+}
+
+static char *leave(struct field *f, char *out)
+{
+    chrome_modal(NULL, NULL);
+    repl_free(&f->repl);
+    replframe_free(&f->frame);
+    return out;
 }
 
 char *ask_run(const char *title, const char *initial)
@@ -111,10 +127,10 @@ char *ask_run(const char *title, const char *initial)
         return NULL;
 
     struct field f = {.title = title ? title : ""};
-    if (initial) {
-        snprintf(f.text, sizeof f.text, "%s", initial);
-        f.len = f.at = strlen(f.text);
-    }
+    repl_init(&f.repl, NULL, 0);
+    repl_set_width(&f.repl, width_of());
+    if (initial && *initial)
+        repl_insert_text(&f.repl, initial);
 
     chrome_modal(paint, &f);
     for (;;) {
@@ -122,67 +138,60 @@ char *ask_run(const char *title, const char *initial)
         if (!tty_read(&ev, -1)) {
             if (!chrome_modal_interrupted())
                 continue;
-            chrome_modal(NULL, NULL);
-            return NULL;
+            return leave(&f, NULL);
         }
 
         switch (ev.key) {
         case TK_TEXT:
-
-            for (char *p = ev.text; p && *p; p++)
-                if (*p == '\n' || *p == '\r')
-                    *p = ' ';
-            insert(&f, ev.text, ev.text ? strlen(ev.text) : 0);
+            if (ev.text)
+                repl_insert_text(&f.repl, ev.text);
             free(ev.text);
             break;
+
         case TK_CHAR:
-            if (ev.cp == 3 || ev.cp == 4) {
-                chrome_modal(NULL, NULL);
-                return NULL;
-            }
-            if (ev.cp == 21) {
-                cut(&f, 0, f.at);
-            } else if (ev.cp == 23) {
-                size_t to = f.at;
-                while (f.at && f.text[f.at - 1] == ' ')
-                    f.at--;
-                while (f.at && f.text[f.at - 1] != ' ')
-                    f.at--;
-                cut(&f, f.at, to);
-            } else if (ev.cp >= 0x20) {
-                insert_codepoint(&f, ev.cp);
-            }
+            if (ev.cp == 3 || ev.cp == 4)
+                return leave(&f, NULL);
+            feed(&f, REPL_KEY_CHAR, ev.cp, NULL);
             break;
-        case TK_BACKSPACE:
-            if (f.at)
-                cut(&f, step_left(&f, f.at), f.at);
-            break;
+
         case TK_DELETE:
-            if (f.at < f.len)
-                cut(&f, f.at, step_right(&f, f.at));
+            if (f.repl.cursor < f.repl.len) {
+                feed(&f, REPL_KEY_RIGHT, 0, NULL);
+                feed(&f, REPL_KEY_BACKSPACE, 0, NULL);
+            }
             break;
-        case TK_LEFT:
-            f.at = step_left(&f, f.at);
+
+        case TK_NEWLINE:
+            feed(&f, REPL_KEY_NEWLINE, 0, NULL);
             break;
-        case TK_RIGHT:
-            f.at = step_right(&f, f.at);
-            break;
-        case TK_HOME:
-            f.at = 0;
-            break;
-        case TK_END:
-            f.at = f.len;
-            break;
+
         case TK_ENTER: {
-            chrome_modal(NULL, NULL);
-            return strdup(f.text);
+            const char *line = repl_line(&f.repl);
+            return leave(&f, strdup(line ? line : ""));
         }
+
         case TK_ESCAPE:
         case TK_EOF:
-            chrome_modal(NULL, NULL);
-            return NULL;
-        default:
+            return leave(&f, NULL);
+
+        default: {
+            static const ReplKey MAP[] = {
+                [TK_BACKSPACE] = REPL_KEY_BACKSPACE,
+                [TK_LEFT] = REPL_KEY_LEFT,
+                [TK_RIGHT] = REPL_KEY_RIGHT,
+                [TK_UP] = REPL_KEY_UP,
+                [TK_DOWN] = REPL_KEY_DOWN,
+                [TK_WORD_LEFT] = REPL_KEY_WORD_LEFT,
+                [TK_WORD_RIGHT] = REPL_KEY_WORD_RIGHT,
+            };
+            if (ev.key == TK_HOME)
+                feed(&f, REPL_KEY_CHAR, 1, NULL);
+            else if (ev.key == TK_END)
+                feed(&f, REPL_KEY_CHAR, 5, NULL);
+            else if ((size_t)ev.key < sizeof MAP / sizeof *MAP && MAP[ev.key])
+                feed(&f, MAP[ev.key], 0, NULL);
             break;
+        }
         }
         chrome_paint();
     }

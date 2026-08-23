@@ -1,6 +1,5 @@
 #include "form.h"
 
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,7 +7,6 @@
 #include "chrome.h"
 #include "frontend.h"
 #include "replframe.h"
-#include "text.h"
 #include "tty.h"
 #include "ui.h"
 
@@ -186,12 +184,6 @@ static void put_choice(const struct state *st, int i, int focused)
     }
 }
 
-static void put_codepoint(uint32_t cp)
-{
-    char buf[4];
-    ui_putn(buf, text_utf8_encode(cp, buf));
-}
-
 static int framed(struct state *st, int i)
 {
     if (st->framed == i)
@@ -210,39 +202,8 @@ static void put_value_row(struct state *st, int i, int row, int focused)
         return;
 
     const Repl *r = &st->slots[i].repl;
-    int         hollow = r->cursor >= r->len || r->buf[r->cursor] == '\n';
-    int         extent = replframe_extent(&st->frame, row);
-    const char *open = "";
-
-    for (int x = REPL_GUTTER; x < extent; x++) {
-        const struct replframe_cell *c = replframe_at(&st->frame, row, x);
-        if (!c)
-            break;
-
-        int on_cursor = c->style == REPL_STYLE_CURSOR && st->frame.have_cursor &&
-                        st->frame.cursor_x == x && st->frame.cursor_y == row;
-
-        if (on_cursor && hollow && !focused)
-            continue;
-
-        int         caret = on_cursor && focused;
-        uint32_t    cp = caret && hollow && c->cp == '_' ? ' ' : c->cp;
-        const char *seq = caret || c->style == REPL_STYLE_CURSOR
-                              ? ui_style(UI_TEXT) : replframe_style(c->style);
-
-        if (seq != open) {
-            ui_esc(ui_style(UI_RESET));
-            ui_esc(seq);
-            open = seq;
-        }
-        if (caret)
-            ui_esc("\x1b[7m");
-        put_codepoint(cp);
-        if (caret)
-            ui_esc("\x1b[27m");
-    }
-    if (*open)
-        ui_esc(ui_style(UI_RESET));
+    replframe_paint_row(&st->frame, row, REPL_GUTTER, focused,
+                        r->cursor >= r->len || r->buf[r->cursor] == '\n');
 }
 
 static int room_for(void)

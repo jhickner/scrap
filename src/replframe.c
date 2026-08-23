@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <stdlib.h>
 
+#include "text.h"
 #include "ui.h"
 
 static void size_to(struct replframe *f, int rows, int cols)
@@ -90,6 +91,49 @@ const char *replframe_style(signed char style)
     case REPL_STYLE_SELECTED: return ui_style(UI_ACCENT);
     default:                  return "";
     }
+}
+
+static void put_codepoint(uint32_t cp)
+{
+    char buf[4];
+    ui_putn(buf, text_utf8_encode(cp, buf));
+}
+
+void replframe_paint_row(const struct replframe *f, int y, int from_x, int focused,
+                         int hollow)
+{
+    int         extent = replframe_extent(f, y);
+    const char *open = "";
+
+    for (int x = from_x; x < extent; x++) {
+        const struct replframe_cell *c = replframe_at(f, y, x);
+        if (!c)
+            break;
+
+        int on_cursor = c->style == REPL_STYLE_CURSOR && f->have_cursor &&
+                        f->cursor_x == x && f->cursor_y == y;
+
+        if (on_cursor && hollow && !focused)
+            continue;
+
+        int         caret = on_cursor && focused;
+        uint32_t    cp = caret && hollow && c->cp == '_' ? ' ' : c->cp;
+        const char *seq = caret || c->style == REPL_STYLE_CURSOR
+                              ? ui_style(UI_TEXT) : replframe_style(c->style);
+
+        if (seq != open) {
+            ui_esc(ui_style(UI_RESET));
+            ui_esc(seq);
+            open = seq;
+        }
+        if (caret)
+            ui_esc("\x1b[7m");
+        put_codepoint(cp);
+        if (caret)
+            ui_esc("\x1b[27m");
+    }
+    if (*open)
+        ui_esc(ui_style(UI_RESET));
 }
 
 void replframe_free(struct replframe *f)
