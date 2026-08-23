@@ -58,6 +58,8 @@ int boardwork_send_back(const struct board_card *c, const char *why);
 
 int boardwork_reject(const struct board_card *c, const char *why);
 
+void boardwork_spoke_to(struct session *s);
+
 int boardwork_feedback(const struct board_card *c, const char *text);
 
 #endif

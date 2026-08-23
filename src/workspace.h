@@ -42,6 +42,8 @@ void workspace_on_finish(void (*fn)(struct session *s));
 
 void workspace_on_settled(void (*fn)(struct session *s));
 
+void workspace_on_turn(void (*fn)(struct session *s));
+
 int  workspace_fds(int *out, int max);
 int  workspace_pump(void);
 

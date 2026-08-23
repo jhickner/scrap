@@ -614,6 +614,7 @@ int main(int argc, char **argv)
     workspace_on_finish(turn_done);
 
     workspace_on_settled(boardwork_finished);
+    workspace_on_turn(boardwork_spoke_to);
     livelist_on_card(boardwork_card_of);
     prompt_set_replay(prompt, replay, NULL);
     prompt_set_blank(prompt, blank_line, NULL);

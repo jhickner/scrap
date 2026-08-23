@@ -38,6 +38,7 @@ static int        cur;
 static int        safe;
 static void     (*on_finish)(struct session *s);
 static void     (*on_settled)(struct session *s);
+static void     (*on_turn)(struct session *s);
 
 static void follow(const struct session *s);
 
@@ -49,6 +50,11 @@ void workspace_on_finish(void (*fn)(struct session *s))
 void workspace_on_settled(void (*fn)(struct session *s))
 {
     on_settled = fn;
+}
+
+void workspace_on_turn(void (*fn)(struct session *s))
+{
+    on_turn = fn;
 }
 
 static void spin_follow(void)
@@ -461,6 +467,8 @@ static void send_next(int index, int hold)
     sticky_set(index, p.shown ? p.shown : p.line);
 
     prompt_echo_message(p.shown ? p.shown : p.line);
+    if (on_turn)
+        on_turn(t->s);
     session_turn_begin(t->s, p.line);
     leave();
     free(p.line);
@@ -489,6 +497,8 @@ int workspace_send(int index, const char *line, const char *shown)
 
     sticky_set(index, shown ? shown : line);
     enter(index);
+    if (on_turn)
+        on_turn(t->s);
     int ok = session_turn_begin(t->s, line);
     leave();
     spin_follow();

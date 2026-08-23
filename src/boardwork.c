@@ -964,6 +964,20 @@ int boardwork_reject(const struct board_card *c, const char *why)
                       why && *why ? why : "rejected");
 }
 
+void boardwork_spoke_to(struct session *s)
+{
+    struct worker *w = slot_by_session(s);
+    if (!w || w->role != BOARD_ROLE_WORKER)
+        return;
+
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    struct board_card *c = board_find(cards, n, w->id);
+    if (c && c->col == BOARD_REVIEW && board_move(w->id, BOARD_DOING, "you", NULL))
+        w->checked = 0;
+    board_free(cards, n);
+}
+
 int boardwork_feedback(const struct board_card *c, const char *text)
 {
     if (!c || !text || !*text)
@@ -974,6 +988,7 @@ int boardwork_feedback(const struct board_card *c, const char *text)
         return 0;
 
     board_note(c->id, "you", text);
+    int moved = board_move(c->id, BOARD_DOING, "you", NULL);
     workspace_send(at, text, NULL);
-    return board_move(c->id, BOARD_DOING, "you", NULL);
+    return moved;
 }
