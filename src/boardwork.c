@@ -375,7 +375,7 @@ static void card_write(FILE *f, const struct board_card *c)
     if (c->kind[0])
         fprintf(f, "\nkind: %s\n", c->kind);
     if (c->log_n) {
-        fprintf(f, "\n## What has been said about it\n\n");
+        fprintf(f, "\n## Notes\n\n");
         for (int i = 0; i < c->log_n; i++)
             fprintf(f, "- %s: %s\n", c->log[i].who,
                     c->log[i].text ? c->log[i].text : "");
