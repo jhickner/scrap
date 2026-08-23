@@ -506,26 +506,9 @@ static int build_notes(const struct board_card *c, const char **notes, char **ow
 {
     int n = 0;
 
-    if (!spec_is_field(c) && c->body && *c->body && strcmp(c->body, c->title)) {
-        size_t budget = (size_t)ui_columns() - 6;
-        if ((int)budget < 8)
-            budget = 8;
-        const char *p = c->body;
-        size_t      left = strlen(c->body);
-        while (left && n < NOTES_MAX - 2) {
-            size_t skip = 0;
-            size_t take = ui_wrap_row(p, left, budget, &skip, NULL);
-            if (!take && !skip)
-                break;
-            char line[1024];
-            size_t k = take < sizeof line - 1 ? take : sizeof line - 1;
-            memcpy(line, p, k);
-            line[k] = '\0';
-            note_line(notes, &n, owned, line);
-            p += take + skip;
-            left -= take + skip;
-        }
-    }
+    // Handed over whole: the form wraps it, at the width the fields use.
+    if (!spec_is_field(c) && c->body && *c->body && strcmp(c->body, c->title))
+        note_line(notes, &n, owned, c->body);
 
     for (int i = 0; i < c->log_n && n < NOTES_MAX; i++) {
         if (i == 0)

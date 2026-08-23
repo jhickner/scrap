@@ -30,6 +30,7 @@ struct state {
     struct slot  slots[FORM_FIELDS];
     int          focus;
     int          label_width;
+    int          top;       /* the first laid-out row the window shows */
 };
 
 static int lead_byte(const char *s, size_t at)
@@ -109,6 +110,100 @@ static void focus_step(struct state *st, int delta)
 
 /* ---- drawing ---------------------------------------------------------- */
 
+// One painted row. A field wide enough to wrap owns several of them, and only
+// the first carries the label.
+struct line {
+    int         field;      /* -1 for a note or a blank row */
+    const char *text;       /* the slice this row shows */
+    size_t      len;
+    size_t      caret;      /* byte offset into the slice, or NO_CARET */
+};
+
+#define NO_CARET ((size_t)-1)
+#define LINES_MAX 512
+
+static int lead(const char *s, size_t at)
+{
+    return ((unsigned char)s[at] & 0xC0) != 0x80;
+}
+
+// Where a value starts, which is also what a wrapped row is indented to.
+static int value_column(const struct state *st)
+{
+    return FORM_INDENT + st->label_width + 4;
+}
+
+static int value_budget(const struct state *st, int columns)
+{
+    int budget = columns - value_column(st) - 2;
+    return budget < 4 ? 4 : budget;
+}
+
+static int wrap_into(struct line *out, int n, int max, int field,
+                     const char *text, int budget)
+{
+    size_t rest = text ? strlen(text) : 0;
+    if (!rest) {
+        if (n < max)
+            out[n++] = (struct line){field, text ? text : "", 0, NO_CARET};
+        return n;
+    }
+    while (rest && n < max) {
+        size_t skip = 0;
+        size_t got = ui_wrap_row(text, rest, (size_t)budget, &skip, NULL);
+        out[n++] = (struct line){field, text, got, NO_CARET};
+        text += got + skip;
+        rest -= got + skip;
+    }
+    return n;
+}
+
+// Every row the form would paint, in order. The window over them is chosen
+// afterwards, so growing and scrolling are the same measurement.
+static int layout(const struct state *st, int columns, struct line *out, int max)
+{
+    const struct form *form = st->form;
+    int                n = 0;
+
+    int note_budget = columns - FORM_INDENT - 2;
+    if (note_budget < 8)
+        note_budget = 8;
+
+    for (int i = 0; i < form->notes_n; i++)
+        n = wrap_into(out, n, max, -1, form->notes[i] ? form->notes[i] : "",
+                      note_budget);
+    if (form->notes_n && n < max)
+        out[n++] = (struct line){-1, "", 0, NO_CARET};
+
+    int budget = value_budget(st, columns);
+
+    for (int i = 0; i < form->fields_n && n < max; i++) {
+        int at = n;
+
+        if (form->fields[i].kind == FORM_CHOICE) {
+            out[n++] = (struct line){i, NULL, 0, NO_CARET};
+            continue;
+        }
+
+        const struct slot *s = &st->slots[i];
+        n = wrap_into(out, n, max, i, s->text, budget);
+
+        if (i != st->focus)
+            continue;
+
+        // The row the caret falls on is the last one starting at or before it,
+        // which puts a caret sitting on a wrap onto the row it wrapped out of.
+        for (int r = n - 1; r >= at; r--) {
+            size_t from = (size_t)(out[r].text - s->text);
+            if (from > s->at)
+                continue;
+            out[r].caret = s->at - from > out[r].len ? out[r].len : s->at - from;
+            break;
+        }
+    }
+    return n;
+}
+
 static void put_label(const struct state *st, const char *label, int focused)
 {
     ui_pad(FORM_INDENT);
@@ -119,51 +214,13 @@ static void put_label(const struct state *st, const char *label, int focused)
     ui_pad(pad > 1 ? pad : 1);
 }
 
-// The value scrolls under a fixed caret rather than wrapping: every field is
-// one row, however long what is in it grows.
-static void put_text(const struct state *st, int i, int focused, int budget)
-{
-    const struct slot *s = &st->slots[i];
-
-    if (!focused) {
-        ui_esc(ui_style(UI_TEXT));
-        size_t fit = ui_fit_bytes(s->text, (size_t)budget);
-        ui_putn(s->text, fit);
-        if (s->text[fit])
-            ui_put("…");
-        ui_esc(ui_style(UI_RESET));
-        return;
-    }
-
-    size_t from = 0;
-    while (ui_cells_n(s->text + from, s->at - from) > (size_t)(budget > 1 ? budget - 1 : 1))
-        from = step_right(s, from);
-
-    ui_esc(ui_style(UI_TEXT));
-    ui_putn(s->text + from, s->at - from);
-
-    // The terminal's own caret sits with the prompt below, so this one is
-    // drawn rather than moved.
-    size_t next = step_right(s, s->at);
-    ui_esc("\x1b[7m");
-    if (next > s->at)
-        ui_putn(s->text + s->at, next - s->at);
-    else
-        ui_put(" ");
-    ui_esc("\x1b[27m");
-
-    if (next < s->len)
-        ui_putn(s->text + next, ui_fit_bytes(s->text + next, (size_t)budget));
-    ui_esc(ui_style(UI_RESET));
-}
-
 // Two cells before every value, whatever kind it is, so the values line up in
 // one column. A choice in hand spends them on the arrow that says it is one.
 static void put_gutter(const struct state *st, int i, int focused)
 {
     if (st->form->fields[i].kind == FORM_CHOICE && focused) {
         ui_esc(ui_style(UI_ACCENT));
-        ui_put("‹ ");
+        ui_put("\xe2\x80\xb9 ");
         ui_esc(ui_style(UI_RESET));
         return;
     }
@@ -175,13 +232,48 @@ static void put_choice(const struct state *st, int i, int focused)
     const char *shown = slot_shown(st, i);
 
     ui_esc(ui_style(UI_TEXT));
-    ui_put(shown && *shown ? shown : "—");
+    ui_put(shown && *shown ? shown : "\xe2\x80\x94");
     ui_esc(ui_style(UI_RESET));
     if (focused) {
         ui_esc(ui_style(UI_ACCENT));
-        ui_put(" ›");
+        ui_put(" \xe2\x80\xba");
         ui_esc(ui_style(UI_RESET));
     }
+}
+
+// The terminal's own caret sits with the prompt below, so this one is drawn
+// rather than moved.
+static void put_slice(const struct line *l)
+{
+    ui_esc(ui_style(UI_TEXT));
+    if (l->caret == NO_CARET) {
+        ui_putn(l->text, l->len);
+        ui_esc(ui_style(UI_RESET));
+        return;
+    }
+
+    size_t at = l->caret, next = at;
+    if (next < l->len)
+        while (next < l->len && !lead(l->text, ++next))
+            ;
+
+    ui_putn(l->text, at);
+    ui_esc("\x1b[7m");
+    if (next > at)
+        ui_putn(l->text + at, next - at);
+    else
+        ui_put(" ");
+    ui_esc("\x1b[27m");
+    if (next < l->len)
+        ui_putn(l->text + next, l->len - next);
+    ui_esc(ui_style(UI_RESET));
+}
+
+// What the window may show, once the title above and the hint below are out.
+static int room_for(void)
+{
+    int rows = tty_rows() - 4 - chrome_gap();
+    return rows < 3 ? 3 : rows;
 }
 
 static void paint(void *ud)
@@ -190,50 +282,92 @@ static void paint(void *ud)
     struct form  *form = st->form;
     int           columns = ui_columns();
 
+    static struct line lines[LINES_MAX];
+    int                n = layout(st, columns, lines, LINES_MAX);
+    int                room = room_for();
+
+    // Short of the room it has, the form is drawn whole and nothing scrolls.
+    if (n <= room) {
+        st->top = 0;
+    } else {
+        int first = -1, last = -1, caret = -1;
+        for (int i = 0; i < n; i++) {
+            if (lines[i].field != st->focus)
+                continue;
+            if (first < 0)
+                first = i;
+            last = i;
+            if (lines[i].caret != NO_CARET)
+                caret = i;
+        }
+        if (first >= 0) {
+            if (first < st->top)
+                st->top = first;
+            if (last >= st->top + room)
+                st->top = last - room + 1;
+        }
+        // A field taller than the window keeps the caret rather than the label.
+        if (caret >= 0) {
+            if (caret < st->top)
+                st->top = caret;
+            if (caret >= st->top + room)
+                st->top = caret - room + 1;
+        }
+        if (st->top > n - room)
+            st->top = n - room;
+        if (st->top < 0)
+            st->top = 0;
+    }
+
     ui_esc(ui_style(UI_CHROME));
     ui_put(UI_BAR);
     ui_esc(ui_style(UI_RESET));
     ui_put(" ");
     ui_esc(ui_style(UI_DIM));
     {
+        char        said[256];
         const char *title = form->title ? form->title : "";
-        size_t      fit = ui_fit_bytes(title, (size_t)(columns > 3 ? columns - 3 : 1));
-        ui_putn(title, fit);
+        if (n > room)
+            snprintf(said, sizeof said, "%s \xc2\xb7 %d\xe2\x80\x93%d of %d",
+                     title, st->top + 1, st->top + room, n);
+        else
+            snprintf(said, sizeof said, "%s", title);
+        size_t fit = ui_fit_bytes(said, (size_t)(columns > 3 ? columns - 3 : 1));
+        ui_putn(said, fit);
     }
     ui_esc(ui_style(UI_RESET));
     ui_put("\n");
 
-    for (int i = 0; i < form->notes_n; i++) {
-        const char *line = form->notes[i] ? form->notes[i] : "";
-        if (*line) {
-            ui_pad(FORM_INDENT);
-            ui_esc(ui_style(UI_DIM));
-            size_t fit = ui_fit_bytes(line, (size_t)(columns > 4 ? columns - 4 : 1));
-            ui_putn(line, fit);
-            ui_esc(ui_style(UI_RESET));
+    int end = n <= room ? n : st->top + room;
+    for (int i = st->top; i < end; i++) {
+        const struct line *l = &lines[i];
+
+        if (l->field < 0) {
+            if (l->len) {
+                ui_pad(FORM_INDENT);
+                ui_esc(ui_style(UI_DIM));
+                ui_putn(l->text, l->len);
+                ui_esc(ui_style(UI_RESET));
+            }
+            ui_put("\n");
+            continue;
         }
-        ui_put("\n");
-    }
-    if (form->notes_n)
-        ui_put("\n");
 
-    for (int i = 0; i < form->fields_n; i++) {
-        struct form_field *f = field_at(st, i);
-        int                focused = i == st->focus;
+        struct form_field *f = field_at(st, l->field);
+        int                focused = l->field == st->focus;
+        int                heads = i == st->top || lines[i - 1].field != l->field;
 
-        put_label(st, f->label ? f->label : "", focused);
-
-        put_gutter(st, i, focused);
-
-        int used = FORM_INDENT + st->label_width + 4;
-        int budget = columns - used - 2;
-        if (budget < 4)
-            budget = 4;
+        if (heads) {
+            put_label(st, f->label ? f->label : "", focused);
+            put_gutter(st, l->field, focused);
+        } else {
+            ui_pad(value_column(st));
+        }
 
         if (f->kind == FORM_CHOICE)
-            put_choice(st, i, focused);
+            put_choice(st, l->field, focused);
         else
-            put_text(st, i, focused, budget);
+            put_slice(l);
         ui_put("\n");
     }
 
