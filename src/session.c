@@ -69,6 +69,8 @@ struct session {
     char    *system_extra;
     session_event_fn observer;
     void    *observer_ud;
+    char     recent[SESSION_RECENT][SESSION_RECENT_MAX];
+    int      recent_n;
     int    (*abort_hook)(void *ud);
     void    *abort_ud;
     int      skip_naming;
@@ -161,6 +163,29 @@ static int dir_alive(const char *path);
 static int ground_target(const char *gone, char *out, size_t size);
 static void await_model(struct session *s);
 
+static void note_recent(struct session *s, const backend_event *ev)
+{
+    char line[SESSION_RECENT_MAX];
+
+    if (ev->kind == BACKEND_EV_TOOL) {
+        char what[1024] = "";
+        view_tool_argument(ev, s->cwd, what, sizeof what);
+        snprintf(line, sizeof line, "%s%s%s", ev->name ? ev->name : "tool",
+                 what[0] ? "  " : "", what);
+    } else if (ev->kind == BACKEND_EV_ASSISTANT && ev->text && *ev->text) {
+        snprintf(line, sizeof line, "%s", ev->text);
+    } else {
+        return;
+    }
+
+    for (char *p = line; *p; p++)
+        if (*p == '\n' || *p == '\r' || *p == '\t')
+            *p = ' ';
+
+    snprintf(s->recent[s->recent_n % SESSION_RECENT], SESSION_RECENT_MAX, "%s", line);
+    s->recent_n++;
+}
+
 static void render_event(struct session *s, const backend_event *ev)
 {
     if (ev->kind == BACKEND_EV_INIT) {
@@ -181,6 +206,8 @@ static void render_event(struct session *s, const backend_event *ev)
 
     if (ev->kind == BACKEND_EV_ASSISTANT && ev->text && *ev->text)
         replace(&s->last_block, ev->text);
+
+    note_recent(s, ev);
 
     if (s->observer)
         s->observer(s->observer_ud, ev);
@@ -459,6 +486,7 @@ void session_set_typeahead(session_key_fn fn, void *ud)
     typeahead = fn;
     typeahead_ud = ud;
 }
+
 
 static void set_id(struct session *s, const char *id);
 
@@ -834,6 +862,25 @@ int session_switch_backend(struct session *s, const char *backend)
 void session_set_quiet(struct session *s, int quiet) { s->quiet = quiet; }
 
 void session_set_silent(struct session *s, int silent) { s->silent = silent; }
+
+int session_recent_seq(const struct session *s)
+{
+    return s ? s->recent_n : 0;
+}
+
+int session_recent(const struct session *s, const char **out, int max)
+{
+    if (!s || max <= 0)
+        return 0;
+    int have = s->recent_n < SESSION_RECENT ? s->recent_n : SESSION_RECENT;
+    if (have > max)
+        have = max;
+
+    int n = 0;
+    for (int i = have; i > 0; i--)
+        out[n++] = s->recent[(s->recent_n - i) % SESSION_RECENT];
+    return n;
+}
 
 void session_set_observer(struct session *s, session_event_fn fn, void *ud)
 {

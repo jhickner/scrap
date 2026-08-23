@@ -42,6 +42,8 @@
 
 #define BOARD_KEYS "ndtsgarflc*"
 
+#define BOARD_RECENT 3
+
 #define BOARD_HINT \
     "enter edit  ·  s start  ·  g worker  ·  "                                \
     "a approve  ·  f feedback  ·  r reject\n"                                 \
@@ -342,6 +344,18 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
                 r->detail = dsprintf("%s · %s", c->kind, when);
             else
                 r->detail = dsprintf("%s", when);
+
+            if (tab >= 0) {
+                const char *said[BOARD_RECENT];
+                int         k = session_recent(workspace_at(tab), said, BOARD_RECENT);
+                for (int j = 0; j < k; j++) {
+                    struct vrow *t = row_add(l);
+                    if (!t)
+                        break;
+                    t->heading = PICK_TEXT;
+                    t->label = dsprintf("    %s", said[j]);
+                }
+            }
         }
     }
     free(in);
@@ -392,6 +406,15 @@ static int board_tick(void *ud)
     moved |= boardmerge_pump();
     moved |= boardaudit_pump();
     moved |= boardsweep_pump();
+
+    static int seen;
+    int        now = 0;
+    for (int i = 0; i < WORKSPACE_MAX; i++)
+        now += session_recent_seq(workspace_at(i));
+    if (now != seen) {
+        seen = now;
+        moved = 1;
+    }
     return moved ? PICK_TICK_REOPEN : 0;
 }
 

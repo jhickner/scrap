@@ -25,6 +25,12 @@ void session_set_silent(struct session *s, int silent);
 typedef void (*session_event_fn)(void *ud, const backend_event *ev);
 void session_set_observer(struct session *s, session_event_fn fn, void *ud);
 
+#define SESSION_RECENT     4
+#define SESSION_RECENT_MAX 160
+
+int session_recent(const struct session *s, const char **out, int max);
+int session_recent_seq(const struct session *s);
+
 void session_set_system_extra(struct session *s, const char *text);
 
 void session_set_abort_hook(struct session *s, int (*fn)(void *ud), void *ud);
