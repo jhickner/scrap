@@ -156,6 +156,7 @@ static void overlay(struct board_cfg *c, const cJSON *o)
         for (int i = 0; i < c->kinds_n; i++) {
             free(c->kinds[i].means);
             free(c->kinds[i].prompt);
+            free(c->kinds[i].approval_prompt);
         }
         memset(c->kinds, 0, sizeof c->kinds);
         c->kinds_n = 0;
@@ -370,6 +371,7 @@ static void read_kinds(struct board_cfg *c)
         snprintf(k->name, sizeof k->name, "%s", names[i]);
         k->means = dup_or_null(mdcfg_get(&m, "means"));
         k->prompt = dup_or_null(m.body ? m.body : "");
+        k->approval_prompt = dup_or_null(mdcfg_get(&m, "approval prompt"));
         k->priority = mdcfg_int(&m, "priority", 0);
         k->steps = steps_of(mdcfg_get(&m, "steps"));
         mdcfg_free(&m);
@@ -507,10 +509,11 @@ static int write_kinds(const struct board_cfg *c)
         steps_str(c->kinds[i].steps, steps, sizeof steps);
         snprintf(priority, sizeof priority, "%d", c->kinds[i].priority);
 
-        const char *keys[] = {"means", "priority", "steps"};
+        const char *keys[] = {"means", "priority", "steps", "approval prompt"};
         const char *vals[] = {c->kinds[i].means ? c->kinds[i].means : "",
-                              priority, steps};
-        if (!mdcfg_write(path, keys, vals, 3, c->kinds[i].prompt))
+                              priority, steps,
+                              c->kinds[i].approval_prompt ? c->kinds[i].approval_prompt : ""};
+        if (!mdcfg_write(path, keys, vals, 4, c->kinds[i].prompt))
             ok = 0;
     }
     return ok;
@@ -559,6 +562,7 @@ static void cache_free(void)
     for (int i = 0; i < cache.kinds_n; i++) {
         free(cache.kinds[i].means);
         free(cache.kinds[i].prompt);
+        free(cache.kinds[i].approval_prompt);
     }
 }
 
@@ -810,6 +814,7 @@ struct board_cfg *boardcfg_copy(void)
     for (int i = 0; i < c->kinds_n; i++) {
         c->kinds[i].means = dup_or_null(cache.kinds[i].means);
         c->kinds[i].prompt = dup_or_null(cache.kinds[i].prompt);
+        c->kinds[i].approval_prompt = dup_or_null(cache.kinds[i].approval_prompt);
     }
     return c;
 }
@@ -823,6 +828,7 @@ void boardcfg_free(struct board_cfg *c)
     for (int i = 0; i < c->kinds_n; i++) {
         free(c->kinds[i].means);
         free(c->kinds[i].prompt);
+        free(c->kinds[i].approval_prompt);
     }
     free(c);
 }
@@ -852,6 +858,7 @@ int boardcfg_set(const struct board_cfg *c)
     for (int i = 0; i < cache.kinds_n; i++) {
         free(cache.kinds[i].means);
         free(cache.kinds[i].prompt);
+        free(cache.kinds[i].approval_prompt);
     }
     memset(cache.kinds, 0, sizeof cache.kinds);
     cache.kinds_n = c->kinds_n;
@@ -859,6 +866,7 @@ int boardcfg_set(const struct board_cfg *c)
         cache.kinds[i] = c->kinds[i];
         cache.kinds[i].means = dup_or_null(c->kinds[i].means);
         cache.kinds[i].prompt = dup_or_null(c->kinds[i].prompt);
+        cache.kinds[i].approval_prompt = dup_or_null(c->kinds[i].approval_prompt);
     }
 
     snprintf(cache.verify, sizeof cache.verify, "%s", c->verify);

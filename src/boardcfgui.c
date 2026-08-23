@@ -343,7 +343,7 @@ static void edit_kind(struct board_cfg *c, int at)
 {
     struct board_kind *k = &c->kinds[at];
 
-    char name[32], means[256], priority[8];
+    char name[32], means[256], priority[8], approval[512];
     char steps[BOARD_STEPS][8];
     char *prompt = calloc(1, 8192);
     if (!prompt)
@@ -353,11 +353,12 @@ static void edit_kind(struct board_cfg *c, int at)
     snprintf(means, sizeof means, "%s", k->means ? k->means : "");
     snprintf(priority, sizeof priority, "%d", k->priority);
     snprintf(prompt, 8192, "%s", k->prompt ? k->prompt : "");
+    snprintf(approval, sizeof approval, "%s", k->approval_prompt ? k->approval_prompt : "");
     for (int i = 0; i < BOARD_STEPS; i++)
         snprintf(steps[i], sizeof steps[i], "%s",
                  k->steps & (1u << i) ? "yes" : "no");
 
-    struct form_field fields[3 + BOARD_STEPS + 1];
+    struct form_field fields[4 + BOARD_STEPS + 1];
     int               fields_n = 0;
     fields[fields_n++] = (struct form_field){"name", FORM_TEXT, name, sizeof name, NULL, 0};
     fields[fields_n++] = (struct form_field){"means", FORM_TEXT, means, sizeof means, NULL, 0};
@@ -367,6 +368,8 @@ static void edit_kind(struct board_cfg *c, int at)
         fields[fields_n++] = (struct form_field){
             boardcfg_step_name((enum board_step)i), FORM_CHOICE, steps[i],
             sizeof steps[i], YES_NO, 2};
+    fields[fields_n++] = (struct form_field){"approval prompt", FORM_TEXT, approval,
+                                             sizeof approval, NULL, 0};
     fields[fields_n++] = (struct form_field){"prompt", FORM_TEXT, prompt, 8192, NULL, 0};
 
     static const char *const NOTES[] = {
@@ -374,9 +377,11 @@ static void edit_kind(struct board_cfg *c, int at)
         "prompt is what a worker given one is told, before the card.",
         "the steps a card of this kind takes once a worker has had it.",
         "none of them: the worker writes it and the card is done.",
+        "approval prompt is what a worker is told when you approve one in",
+        "review; empty finishes the card there instead.",
     };
 
-    struct form f = {.title = "kind", .notes = NOTES, .notes_n = 4,
+    struct form f = {.title = "kind", .notes = NOTES, .notes_n = 6,
                      .fields = fields, .fields_n = fields_n};
     if (!form_run(&f) || !name[0]) {
         free(prompt);
@@ -394,6 +399,11 @@ static void edit_kind(struct board_cfg *c, int at)
     if (kept_means) {
         free(k->means);
         k->means = kept_means;
+    }
+    char *kept_approval = strdup(approval);
+    if (kept_approval) {
+        free(k->approval_prompt);
+        k->approval_prompt = kept_approval;
     }
     free(k->prompt);
     k->prompt = prompt;
@@ -415,6 +425,7 @@ static void add_kind(struct board_cfg *c)
     if (!c->kinds[c->kinds_n - 1].name[0]) {
         free(c->kinds[c->kinds_n - 1].means);
         free(c->kinds[c->kinds_n - 1].prompt);
+        free(c->kinds[c->kinds_n - 1].approval_prompt);
         c->kinds_n--;
     }
 }
@@ -425,6 +436,7 @@ static void drop_kind(struct board_cfg *c, int at)
         return;
     free(c->kinds[at].means);
     free(c->kinds[at].prompt);
+    free(c->kinds[at].approval_prompt);
     for (int i = at; i + 1 < c->kinds_n; i++)
         c->kinds[i] = c->kinds[i + 1];
     c->kinds_n--;

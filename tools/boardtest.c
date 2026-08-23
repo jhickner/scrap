@@ -12,6 +12,7 @@
 #include "boardsweep.h"
 #include "boardtriage.h"
 #include "gitcmd.h"
+#include "mdcfg.h"
 #include "replyjson.h"
 #include "sessionfork.h"
 
@@ -426,6 +427,49 @@ static void test_reply_json(void)
 
     expect(!replyjson_parse("no json at all"), "prose alone is nothing");
     expect(!replyjson_parse(NULL), "nothing is nothing");
+}
+
+static void write_kind(const char *name, const char *const *keys,
+                       const char *const *vals, int n, const char *body)
+{
+    char dir[4096], path[4300];
+    expect(mdcfg_dir(dir, sizeof dir, "board/kinds"), "kinds dir");
+    snprintf(path, sizeof path, "%s/%s.md", dir, name);
+    expect(mdcfg_write(path, keys, vals, n, body), "kind file is written");
+}
+
+static void test_a_kind_file_carries_its_approval_prompt(void)
+{
+    const char *keys[] = {"means", "priority", "steps", "approval prompt"};
+    const char *vals[] = {"something the person wants to buy", "1", "review",
+                          "Order it, and say what was ordered."};
+    write_kind("buy", keys, vals, 4, "Search Amazon with the web skill.\n");
+    boardcfg_reload();
+
+    const struct board_kind *k = boardcfg_kind("buy");
+    if (!k) {
+        fail("a kind is whatever its file says");
+        return;
+    }
+    expect(k->priority == 1, "priority comes off the file");
+    expect(boardcfg_kind_takes("buy", BOARD_STEP_REVIEW), "so does the step it stops at");
+    expect(!boardcfg_kind_takes("buy", BOARD_STEP_WORKTREE), "and the ones it skips");
+    expect(boardflow_from("buy", BOARD_STEP_REVIEW, 1) == BOARD_REVIEW,
+           "the card waits in review");
+    expect(k->approval_prompt && !strcmp(k->approval_prompt, vals[3]),
+           "the approval prompt is read whole");
+
+    char block[4096];
+    boardcfg_kinds_block(block, sizeof block);
+    expect(strstr(block, "buy") != NULL, "the classifier is told about it");
+
+    struct board_cfg *c = boardcfg_copy();
+    expect(boardcfg_set(c), "the config writes back");
+    boardcfg_free(c);
+    boardcfg_reload();
+    k = boardcfg_kind("buy");
+    expect(k && k->approval_prompt && !strcmp(k->approval_prompt, vals[3]),
+           "and survives a write and a reload");
 }
 
 static void test_kinds(void)
@@ -927,6 +971,7 @@ int main(void)
     test_sweep_files_against_the_repo();
     test_reply_json();
     test_kinds();
+    test_a_kind_file_carries_its_approval_prompt();
     test_archive();
     test_empty_and_missing();
     test_done_lists_newest_first();

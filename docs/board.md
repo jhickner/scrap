@@ -64,10 +64,10 @@ number on top of everything else. A card can still be given one by hand.
 
 Kinds are configuration, not code. `board.json` holds the list: each has a
 name, what the classifier is told it means, a priority, the prompt a worker
-gets, and the steps a card of that kind takes once a worker has had it --
-`worktree`, `review`, `audit`, `merge`. The triage prompt is written with a
-`{kinds}` mark where the list goes, so editing the kinds edits what the
-classifier is told.
+gets, the steps a card of that kind takes once a worker has had it --
+`worktree`, `review`, `audit`, `merge` -- and the prompt approving one in
+review sends. The triage prompt is written with a `{kinds}` mark where the list goes,
+so editing the kinds edits what the classifier is told.
 
 Every card goes to `backlog` and waits for a worker; nothing is filed without
 one. What differs is what the worker is told and what happens after it stops.
@@ -76,6 +76,15 @@ into the wiki with the `w` skill and the card is done. `feature`, `bug` and
 `chore` take all four, so they get a worktree, stop for a person, may be
 audited, and land through the queue. A kind between the two -- landing without
 a human stop, say -- is a matter of which steps it lists.
+
+`prompt` is what a worker is told when it takes the card; `approval prompt` is
+what it is told when you approve one in review. A kind that carries the second
+is not finished by `a`: the worker is sent it, the card goes back to `active`,
+and it stops in `review` again with what the worker did, where `a` finishes it.
+`buy.md` is that shape -- `steps: review`, a prompt that searches Amazon with
+the `web` skill and stops on a shortlist, and `approval prompt: Order it, and
+say what was ordered.` -- so buying something is a file in `kinds/` rather than
+a branch in the board.
 
 The third outcome is the important one. A cheap classifier told only to pick a
 kind will always pick one, so the prompt licenses "I don't know" explicitly:
