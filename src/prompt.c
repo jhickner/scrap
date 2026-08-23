@@ -640,7 +640,7 @@ static const struct prompt_key SHORTCUTS[] = {
     {"ctrl-_", "undo the last edit"},
     {"ctrl-g", "edit the prompt in $EDITOR"},
     {"ctrl-v", "paste text, or a clipboard image as a file path"},
-    {"tab", "accept the completion, else ask the line as an aside"},
+    {"tab", "accept the completion, ask the line as an aside, else open the board"},
     {"@", "complete a file path from the working directory"},
     {"up / down", "move through the completion list, else browse history"},
     {"ctrl-r", "search history"},
@@ -765,10 +765,14 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             viewport_scroll_end();
             return KEY_SUBMIT;
         }
-        if (!live && p->board && p->repl.len == 0 && !overlay_open(p)) {
+        if (p->board && p->repl.len == 0 && !overlay_open(p)) {
+            if (live)
+                status_pause();
             viewport_defer();
             chrome_clear();
             p->board(p->board_ud);
+            if (live)
+                status_resume();
         }
         return KEY_OK;
 
