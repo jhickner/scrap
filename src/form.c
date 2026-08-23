@@ -7,6 +7,7 @@
 #include "chrome.h"
 #include "frontend.h"
 #include "replframe.h"
+#include "replkeys.h"
 #include "tty.h"
 #include "ui.h"
 
@@ -359,15 +360,14 @@ static void store(struct state *st)
     }
 }
 
-static int feed(struct state *st, ReplKey key, uint32_t cp, const char *text)
+static int feed(struct state *st, const ReplEvent *ev)
 {
     struct slot *s = &st->slots[st->focus];
-    ReplEvent    ev = {.key = key, .codepoint = cp, .text = text};
 
     st->budget = value_budget(st, ui_columns());
     repl_set_width(&s->repl, repl_width(st));
     st->framed = -1;
-    return repl_handle_input(&s->repl, &ev);
+    return repl_handle_input(&s->repl, ev);
 }
 
 static void step_or_leave(struct state *st, int delta)
@@ -377,8 +377,9 @@ static void step_or_leave(struct state *st, int delta)
         focus_step(st, delta);
         return;
     }
-    int was = s->repl.cursor;
-    feed(st, delta < 0 ? REPL_KEY_UP : REPL_KEY_DOWN, 0, NULL);
+    int       was = s->repl.cursor;
+    ReplEvent ev = {.key = delta < 0 ? REPL_KEY_UP : REPL_KEY_DOWN};
+    feed(st, &ev);
     if (s->repl.cursor == was)
         focus_step(st, delta);
 }
@@ -407,39 +408,13 @@ int form_run(struct form *form)
         struct form_field *f = field_at(&st, st.focus);
         int                typing = f->kind == FORM_TEXT;
 
+        if (ev.key == TK_CHAR && ev.cp == 3) {
+            chrome_modal(NULL, NULL);
+            unload(&st);
+            return 0;
+        }
+
         switch (ev.key) {
-        case TK_TEXT:
-
-            if (typing && ev.text) {
-                st.framed = -1;
-                repl_insert_text(&st.slots[st.focus].repl, ev.text);
-            }
-            free(ev.text);
-            break;
-
-        case TK_CHAR:
-
-            if (ev.cp == 3) {
-                chrome_modal(NULL, NULL);
-                unload(&st);
-                return 0;
-            }
-            if (!typing) {
-                if (ev.cp == ' ')
-                    cycle(&st, st.focus, 1);
-                break;
-            }
-            feed(&st, REPL_KEY_CHAR, ev.cp, NULL);
-            break;
-
-        case TK_LEFT:
-        case TK_RIGHT:
-            if (typing)
-                feed(&st, ev.key == TK_LEFT ? REPL_KEY_LEFT : REPL_KEY_RIGHT, 0, NULL);
-            else
-                cycle(&st, st.focus, ev.key == TK_LEFT ? -1 : 1);
-            break;
-
         case TK_UP:
             step_or_leave(&st, -1);
             break;
@@ -449,11 +424,6 @@ int form_run(struct form *form)
 
         case TK_TAB:
             focus_step(&st, 1);
-            break;
-
-        case TK_NEWLINE:
-            if (typing)
-                feed(&st, REPL_KEY_NEWLINE, 0, NULL);
             break;
 
         case TK_ENTER:
@@ -468,28 +438,21 @@ int form_run(struct form *form)
             unload(&st);
             return 0;
 
-        default:
-            if (typing) {
-                static const ReplKey MAP[] = {
-                    [TK_BACKSPACE] = REPL_KEY_BACKSPACE,
-                    [TK_WORD_LEFT] = REPL_KEY_WORD_LEFT,
-                    [TK_WORD_RIGHT] = REPL_KEY_WORD_RIGHT,
-                };
-                if (ev.key == TK_HOME)
-                    feed(&st, REPL_KEY_CHAR, 1, NULL);
-                else if (ev.key == TK_END)
-                    feed(&st, REPL_KEY_CHAR, 5, NULL);
-                else if (ev.key == TK_DELETE) {
-                    struct slot *s = &st.slots[st.focus];
-                    if (s->repl.cursor < s->repl.len) {
-                        feed(&st, REPL_KEY_RIGHT, 0, NULL);
-                        feed(&st, REPL_KEY_BACKSPACE, 0, NULL);
-                    }
-                }
-                else if ((size_t)ev.key < sizeof MAP / sizeof *MAP && MAP[ev.key])
-                    feed(&st, MAP[ev.key], 0, NULL);
+        default: {
+            if (!typing) {
+                if (ev.key == TK_CHAR && ev.cp == ' ')
+                    cycle(&st, st.focus, 1);
+                else if (ev.key == TK_LEFT || ev.key == TK_RIGHT)
+                    cycle(&st, st.focus, ev.key == TK_LEFT ? -1 : 1);
+                free(ev.text);
+                break;
             }
+            ReplEvent re;
+            if (replkeys_map(&ev, &re))
+                feed(&st, &re);
+            free(ev.text);
             break;
+        }
         }
         chrome_paint();
     }

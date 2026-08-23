@@ -22,6 +22,7 @@
 #include "viewport.h"
 #include "vendor/cJSON.h"
 #include "replframe.h"
+#include "replkeys.h"
 #include "text.h"
 
 struct prompt {
@@ -438,20 +439,17 @@ void prompt_free(struct prompt *p)
     free(p);
 }
 
+static int feed_event(struct prompt *p, const ReplEvent *ev)
+{
+    repl_set_width(&p->repl, ui_columns());
+    p->frame_ok = 0;
+    return repl_handle_input(&p->repl, ev);
+}
+
 static int feed(struct prompt *p, ReplKey key, uint32_t cp, const char *text)
 {
     ReplEvent ev = {.key = key, .codepoint = cp, .text = text};
-    repl_set_width(&p->repl, ui_columns());
-    p->frame_ok = 0;
-    return repl_handle_input(&p->repl, &ev);
-}
-
-static void delete_forward(struct prompt *p)
-{
-    if (p->repl.dropdown_open || p->repl.cursor >= p->repl.len)
-        return;
-    feed(p, REPL_KEY_RIGHT, 0, NULL);
-    feed(p, REPL_KEY_BACKSPACE, 0, NULL);
+    return feed_event(p, &ev);
 }
 
 static void paste_clipboard(struct prompt *p, int live)
@@ -694,6 +692,16 @@ static int overlay_open(const struct prompt *p)
 
 static int recall_queued(struct prompt *p);
 
+static enum key_result edit_key(struct prompt *p, tty_event *ev)
+{
+    ReplEvent re;
+    if (replkeys_map(ev, &re))
+        feed_event(p, &re);
+    free(ev->text);
+    ev->text = NULL;
+    return KEY_OK;
+}
+
 static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
 {
     switch (ev->key) {
@@ -704,19 +712,13 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
         return KEY_OK;
 
     case TK_TEXT:
-        if (ev->text) {
-            p->frame_ok = 0;
-            repl_insert_text(&p->repl, ev->text);
-            free(ev->text);
-            ev->text = NULL;
-        }
-        return KEY_OK;
+        return edit_key(p, ev);
 
     case TK_CHAR:
         if (ev->cp == KEY_CTRL('D')) {
             if (p->repl.len == 0 && !overlay_open(p))
                 return KEY_EOF;
-            delete_forward(p);
+            feed(p, REPL_KEY_DELETE, 0, NULL);
             return KEY_OK;
         }
         if (ev->cp == KEY_CTRL('C') && p->repl.len == 0 && !overlay_open(p)) {
@@ -761,8 +763,7 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             block_cleared();
             return KEY_OK;
         }
-        feed(p, REPL_KEY_CHAR, ev->cp, NULL);
-        return KEY_OK;
+        return edit_key(p, ev);
 
     case TK_TAB:
 
@@ -778,10 +779,6 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             viewport_scroll_end();
             return KEY_SUBMIT;
         }
-        return KEY_OK;
-
-    case TK_DELETE:
-        delete_forward(p);
         return KEY_OK;
 
     case TK_ESCAPE:
@@ -841,20 +838,7 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             recall_queued(p))
             return KEY_OK;
 
-        static const ReplKey MAP[] = {
-            [TK_NEWLINE] = REPL_KEY_NEWLINE,   [TK_BACKSPACE] = REPL_KEY_BACKSPACE,
-            [TK_LEFT] = REPL_KEY_LEFT,         [TK_RIGHT] = REPL_KEY_RIGHT,
-            [TK_UP] = REPL_KEY_UP,             [TK_DOWN] = REPL_KEY_DOWN,
-            [TK_WORD_LEFT] = REPL_KEY_WORD_LEFT,
-            [TK_WORD_RIGHT] = REPL_KEY_WORD_RIGHT,
-        };
-        if (ev->key == TK_HOME)
-            feed(p, REPL_KEY_CHAR, 1, NULL);
-        else if (ev->key == TK_END)
-            feed(p, REPL_KEY_CHAR, 5, NULL);
-        else if ((size_t)ev->key < sizeof MAP / sizeof *MAP)
-            feed(p, MAP[ev->key], 0, NULL);
-        return KEY_OK;
+        return edit_key(p, ev);
     }
     }
 }

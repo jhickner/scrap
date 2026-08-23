@@ -70,6 +70,7 @@ typedef enum {
     REPL_KEY_ENTER,
     REPL_KEY_NEWLINE,     // insert a literal '\n' (Shift+Enter / Ctrl-J)
     REPL_KEY_BACKSPACE,
+    REPL_KEY_DELETE,      // remove the codepoint under the cursor
     REPL_KEY_LEFT,
     REPL_KEY_RIGHT,
     REPL_KEY_UP,
@@ -728,6 +729,21 @@ static int wrap_segments(const Repl *r, int text_cols, int *seg, int seg_cap) {
     return n;
 }
 
+// True when the caret sits past the end of a row that already fills the width.
+// It has no column of its own there, so it needs a row of its own; without one
+// render_row would scroll the row sideways to make room.
+static bool caret_owns_row(const Repl *r, int text_cols) {
+    if (r->searching || r->cursor < r->len) return false;
+    if (text_cols < 1) text_cols = 1;
+    int n = wrap_segments(r, text_cols, NULL, 0);
+    int *seg = malloc(sizeof(int) * (size_t)(n + 1));
+    if (!seg) return false;
+    wrap_segments(r, text_cols, seg, n + 1);
+    bool owns = disp_width(r->buf, seg[n - 1], r->len) >= text_cols;
+    free(seg);
+    return owns;
+}
+
 // Move the cursor one wrapped visual row up/down, preserving display column.
 // Falls back to logical lines when the render width is unknown. Returns false
 // when already on the first/last row (caller falls back to history).
@@ -1108,6 +1124,11 @@ ReplResult repl_handle_input(Repl *r, const ReplEvent *ev) {
             if (r->cursor > 0) delete_range(r, utf8_prev(r->buf, r->cursor), r->cursor);
             return REPL_CONSUMED;
 
+        case REPL_KEY_DELETE:
+            if (r->cursor < r->len)
+                delete_range(r, r->cursor, utf8_next(r->buf, r->len, r->cursor));
+            return REPL_CONSUMED;
+
         case REPL_KEY_LEFT:
             if (r->cursor > 0) cursor_left(r);
             return REPL_CONSUMED;
@@ -1211,7 +1232,8 @@ static void put_str(ReplDraw draw, void *ctx, int x, int y, int max_x,
 
 int repl_input_rows(const Repl *r, int width) {
     if (r->searching) return 1;                    // the single search prompt row
-    return wrap_segments(r, width - 2, NULL, 0);   // width minus the 2-char prefix
+    int text_cols = width - 2;                     // width minus the 2-char prefix
+    return wrap_segments(r, text_cols, NULL, 0) + (caret_owns_row(r, text_cols) ? 1 : 0);
 }
 
 // Render the reverse-search prompt: (reverse-i-search)`query`: <match>
@@ -1296,6 +1318,7 @@ void repl_render(const Repl *r, int x, int y, int width, bool focused,
     int *seg = malloc(sizeof(int) * (size_t)(row_count + 1));
     if (!seg) return;
     wrap_segments(r, width - 2, seg, row_count + 1);
+    bool caret_row = caret_owns_row(r, width - 2);
 
     for (int li = 0; li < row_count; li++) {
         int ls  = seg[li];
@@ -1305,18 +1328,23 @@ void repl_render(const Repl *r, int x, int y, int width, bool focused,
         // The cursor belongs to this row up to (but not including) the next
         // row's start; the last row also owns the end-of-buffer caret position.
         int next = (li + 1 < row_count) ? seg[li + 1] : r->len + 1;
-        bool cursor_here = focused && r->cursor >= ls && r->cursor < next;
+        bool cursor_here =
+            focused && !caret_row && r->cursor >= ls && r->cursor < next;
         render_row(r, draw, ctx, x, y + li, width,
                    li == 0 ? "> " : "  ", focused, cursor_here, ls, end);
     }
+    int input_rows = row_count + (caret_row ? 1 : 0);
+    if (caret_row)
+        render_row(r, draw, ctx, x, y + row_count, width, "  ", focused, true,
+                   r->len, r->len);
 
     // --- Ghost text after the prompt: history autosuggestion wins over the
     // command usage hint. The suggestion's first cell shows the cursor (so the
     // tail reads as a continuation of the word); the usage hint trails the caret.
     if (focused && row_count > 0) {
         const char *sugg = repl_suggestion(r);
-        int li = row_count - 1;
-        int col = disp_width(r->buf, seg[li], r->len);   // cursor sits at end
+        int li = input_rows - 1;
+        int col = caret_row ? 0 : disp_width(r->buf, seg[li], r->len);
         if (sugg && sugg[0]) {
             int px = x + 2 + col;
             int slen = (int)strlen(sugg), si = 0;
@@ -1348,7 +1376,7 @@ void repl_render(const Repl *r, int x, int y, int width, bool focused,
     int start = window_start(r, rows);
     for (int i = 0; i < rows; i++) {
         int ci = start + i;
-        int row_y = y + row_count + i;
+        int row_y = y + input_rows + i;
         const ReplCandidate *cand = &r->cands[ci];
         bool selected = (ci == r->sel);
         ReplStyle name_style = selected ? REPL_STYLE_SELECTED : REPL_STYLE_TYPED;

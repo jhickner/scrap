@@ -7,6 +7,7 @@
 #include "chrome.h"
 #include "frontend.h"
 #include "replframe.h"
+#include "replkeys.h"
 #include "tty.h"
 #include "ui.h"
 
@@ -106,11 +107,10 @@ static void paint(void *ud)
     ui_esc(ui_style(UI_RESET));
 }
 
-static void feed(struct field *f, ReplKey key, uint32_t cp, const char *text)
+static void feed(struct field *f, const ReplEvent *ev)
 {
-    ReplEvent ev = {.key = key, .codepoint = cp, .text = text};
     repl_set_width(&f->repl, width_of());
-    repl_handle_input(&f->repl, &ev);
+    repl_handle_input(&f->repl, ev);
 }
 
 static char *leave(struct field *f, char *out)
@@ -142,29 +142,6 @@ char *ask_run(const char *title, const char *initial)
         }
 
         switch (ev.key) {
-        case TK_TEXT:
-            if (ev.text)
-                repl_insert_text(&f.repl, ev.text);
-            free(ev.text);
-            break;
-
-        case TK_CHAR:
-            if (ev.cp == 3 || ev.cp == 4)
-                return leave(&f, NULL);
-            feed(&f, REPL_KEY_CHAR, ev.cp, NULL);
-            break;
-
-        case TK_DELETE:
-            if (f.repl.cursor < f.repl.len) {
-                feed(&f, REPL_KEY_RIGHT, 0, NULL);
-                feed(&f, REPL_KEY_BACKSPACE, 0, NULL);
-            }
-            break;
-
-        case TK_NEWLINE:
-            feed(&f, REPL_KEY_NEWLINE, 0, NULL);
-            break;
-
         case TK_ENTER: {
             const char *line = repl_line(&f.repl);
             return leave(&f, strdup(line ? line : ""));
@@ -175,21 +152,12 @@ char *ask_run(const char *title, const char *initial)
             return leave(&f, NULL);
 
         default: {
-            static const ReplKey MAP[] = {
-                [TK_BACKSPACE] = REPL_KEY_BACKSPACE,
-                [TK_LEFT] = REPL_KEY_LEFT,
-                [TK_RIGHT] = REPL_KEY_RIGHT,
-                [TK_UP] = REPL_KEY_UP,
-                [TK_DOWN] = REPL_KEY_DOWN,
-                [TK_WORD_LEFT] = REPL_KEY_WORD_LEFT,
-                [TK_WORD_RIGHT] = REPL_KEY_WORD_RIGHT,
-            };
-            if (ev.key == TK_HOME)
-                feed(&f, REPL_KEY_CHAR, 1, NULL);
-            else if (ev.key == TK_END)
-                feed(&f, REPL_KEY_CHAR, 5, NULL);
-            else if ((size_t)ev.key < sizeof MAP / sizeof *MAP && MAP[ev.key])
-                feed(&f, MAP[ev.key], 0, NULL);
+            if (ev.key == TK_CHAR && (ev.cp == 3 || ev.cp == 4))
+                return leave(&f, NULL);
+            ReplEvent re;
+            if (replkeys_map(&ev, &re))
+                feed(&f, &re);
+            free(ev.text);
             break;
         }
         }
