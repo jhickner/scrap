@@ -455,10 +455,6 @@ int boardwork_pump(void)
     return started;
 }
 
-// A card in backlog has not been started, so it must not still be holding the
-// worktree and branch of a run that is over. Dropping them is what makes the
-// next start a fresh one: worktree_make adopts whatever is already there, and
-// would otherwise hand the worker back a tree branched off a stale commit.
 int boardwork_release(const struct board_card *c)
 {
     if (!c || !c->worktree[0] || boardwork_tab(c->id) >= 0)
@@ -509,9 +505,6 @@ int boardwork_poll(void)
         memset(&workers[i], 0, sizeof workers[i]);
     }
 
-    // Enforced here rather than on each way back to backlog: rejecting, a
-    // worker vanishing, and changing the column by hand all land there, and
-    // only one of them was a transition anything could hook.
     struct board_card *cards = NULL;
     int                n = board_load(&cards);
     for (int i = 0; i < n; i++) {
