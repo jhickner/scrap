@@ -40,6 +40,8 @@ struct pick_live {
     void  *ud;
 
     int *cursor;
+
+    int keep;
 };
 
 int pick_run_live(const char *title, const struct pick_item *items, int count,

@@ -597,7 +597,7 @@ static int run(const char *title, const struct pick_item *items, int count,
 done:
     if (live && live->cursor)
         *live->cursor = (v.count && v.sel < v.count) ? v.order[v.sel] : -1;
-    if (result == PICK_REOPEN)
+    if (result == PICK_REOPEN || (live && live->keep))
         chrome_modal_keep();
     else
         chrome_modal(NULL, NULL);

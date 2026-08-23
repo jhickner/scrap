@@ -19,6 +19,7 @@
 #include "boardtriage.h"
 #include "boardwork.h"
 #include "child.h"
+#include "chrome.h"
 #include "confirm.h"
 #include "form.h"
 #include "pick.h"
@@ -157,6 +158,7 @@ static int vlist_run(const char *title, struct vlist *l, int initial,
         .tick = tick,
         .ud = tick_ud,
         .cursor = cursor,
+        .keep = 1,
     };
     int at = pick_run_live(title, items, l->n, initial, &live, PICK_SEARCH_SLASH,
                            shortcuts, pressed);
@@ -692,6 +694,11 @@ int boardview_capture(const char *text, const char *cwd, char *id_out, int size)
     return 1;
 }
 
+static void close_list(void)
+{
+    chrome_modal(NULL, NULL);
+}
+
 int boardview_run(const char *cwd)
 {
     char here[4096];
@@ -729,6 +736,7 @@ int boardview_run(const char *cwd)
                 filter[0] = '\0';
                 continue;
             }
+            close_list();
             note("the board is empty — /card <text> puts something on it");
             return -1;
         }
@@ -782,6 +790,7 @@ int boardview_run(const char *cwd)
             continue;
         }
         if (at < 0) {
+            close_list();
             board_free(cards, n);
             return -1;
         }
@@ -789,10 +798,13 @@ int boardview_run(const char *cwd)
         struct board_card *c = board_find(cards, n, sel_id);
         switch (pressed) {
         case 0:
-            if (c)
+            if (c) {
+                close_list();
                 card_form(c);
+            }
             break;
         case KEY_NEW:
+            close_list();
             do_new(filter[0] ? filter : here, sel_id);
             break;
         case KEY_TRIAGE:
@@ -809,10 +821,12 @@ int boardview_run(const char *cwd)
         case KEY_GO: {
             int tab = c ? boardwork_tab(c->id) : -1;
             if (tab >= 0) {
+                close_list();
                 board_free(cards, n);
                 return tab;
             }
             if (c) {
+                close_list();
                 const char *step = step_of(c->id);
                 if (step)
                     note("%s in the background — no tab", step);
@@ -826,6 +840,7 @@ int boardview_run(const char *cwd)
                 boardwork_let_go(c->id);
                 boardsweep_approve(c);
             } else if (c && c->col == BOARD_REVIEW) {
+                close_list();
                 int files = 0, lines = 0;
                 boardaudit_size(c, &files, &lines);
                 char ask[256];
@@ -839,6 +854,7 @@ int boardview_run(const char *cwd)
                 boardwork_let_go(c->id);
                 boardsweep_reject(c);
             } else if (c && (c->col == BOARD_REVIEW || c->col == BOARD_DOING)) {
+                close_list();
                 char *why = ask_run("why is it going back?", NULL);
                 if (why) {
                     boardwork_reject(c, why);
@@ -848,6 +864,7 @@ int boardview_run(const char *cwd)
             break;
         case KEY_FEEDBACK:
             if (c && boardwork_tab(c->id) >= 0) {
+                close_list();
                 char *say = ask_run("what should it do?", NULL);
                 if (say) {
                     if (!boardwork_feedback(c, say))
@@ -857,16 +874,23 @@ int boardview_run(const char *cwd)
             }
             break;
         case KEY_DELETE:
-            if (c && do_delete(c))
-                sel_id[0] = '\0';
+            if (c) {
+                close_list();
+                if (do_delete(c))
+                    sel_id[0] = '\0';
+            }
             break;
         case KEY_LOG: {
             char path[4300];
-            if (c && boardlog_path(c->id, path, sizeof path) && !edit_open(path))
-                note("nothing has happened to this card yet");
+            if (c) {
+                close_list();
+                if (boardlog_path(c->id, path, sizeof path) && !edit_open(path))
+                    note("nothing has happened to this card yet");
+            }
             break;
         }
         case KEY_CONFIG:
+            close_list();
             boardcfgui_run();
             break;
         case KEY_ALL:
