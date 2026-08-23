@@ -38,6 +38,8 @@ typedef struct {
     int ephemeral;              /* do not persist this helper conversation             */
     int disable_tools;          /* helper needs text generation, not machine access    */
     int allow_customizations;   /* claude: load skills, CLAUDE.md, MCP servers, ...   */
+    int no_browser_login;       /* claude: report expired auth instead of opening the
+                                   browser, for runs with nobody watching it        */
 } backend_opts;
 
 /* One interesting event from a turn's stream. Only the fields a kind documents
@@ -228,6 +230,7 @@ int backend_run_pool(const char *name, const char *model, const char *system,
 typedef struct {
     char *model, *effort, *system, *cwd, *resume, *permission, *session_name;
     int   allow_customizations, ephemeral, disable_tools, fork_session;
+    int   no_browser_login;
     void (*on_event)(void *ud, const backend_event *ev);
     void *event_ud;
     int (*abort)(void);
@@ -257,6 +260,7 @@ static void backend_state_init(backend_state *st, const backend_opts *o) {
     st->disable_tools = o->disable_tools;
     st->allow_customizations = o->allow_customizations;
     st->fork_session = o->fork_session;
+    st->no_browser_login = o->no_browser_login;
 }
 
 static void backend_state_free(backend_state *st) {
@@ -393,6 +397,16 @@ static char *backend_claude_ask_ex(Backend *b, const char *user, backend_result 
             .kind = BACKEND_EV_WARNING,
             .text = "Claude login expired; signing in again in your browser..."
         };
+
+        /* A browser login needs someone at the browser. A run nobody is
+         * watching would wait on a login page forever, and a fleet of them
+         * opens a page apiece, so it reports the expiry and returns it. */
+        if (x->st.no_browser_login) {
+            notice.text = "Claude login expired; run: claude auth login";
+            backend_emit(&x->st, &notice);
+            goto done;
+        }
+
         backend_emit(&x->st, &notice);
 
         char resume[128] = {0};
@@ -421,6 +435,7 @@ static char *backend_claude_ask_ex(Backend *b, const char *user, backend_result 
             backend_emit(&x->st, &notice);
         }
     }
+done:
     if (meta) {
         meta->cost_usd = cr->cost_usd;
         meta->input_tokens = cr->input_tokens;

@@ -549,6 +549,7 @@ int main(int argc, char **argv)
     struct session *session = session_new(backend, cwd, model, effort);
     if (session) {
         session_set_customizations(session, !safe_mode);
+        session_set_browser_login(session, interactive);
         session_set_fork(session, fork_session && session_arg);
         session_set_thinking(session, settings_get_int(SETTING_THINKING, 1));
         session_set_compact(session, settings_get_int(SETTING_COMPACT, 0));

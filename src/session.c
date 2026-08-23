@@ -76,6 +76,7 @@ struct session {
     int      thinking;
     int      compact;
     int      customizations;
+    int      no_browser_login;
     int      fork_session;
     char    *permission;
     char    *error_note;
@@ -778,6 +779,7 @@ static Backend *agent(struct session *s)
     o.allow_customizations = s->customizations;
     o.permission_mode = s->permission;
     o.fork_session = s->fork_session;
+    o.no_browser_login = s->no_browser_login;
 
     const char *note = image_available()
         ? "This conversation is displayed in a terminal that renders images inline. "
@@ -823,6 +825,7 @@ int session_switch_backend(struct session *s, const char *backend)
     o.cwd = s->cwd;
     o.allow_customizations = s->customizations;
     o.permission_mode = s->permission;
+    o.no_browser_login = s->no_browser_login;
     Backend *replacement = backend_open_ex(&o);
     free(handoff);
     if (!replacement)
@@ -891,6 +894,7 @@ void session_set_compact(struct session *s, int on) { s->compact = on; }
 int session_compact(const struct session *s) { return s->compact; }
 
 void session_set_customizations(struct session *s, int on) { s->customizations = on; }
+void session_set_browser_login(struct session *s, int on) { s->no_browser_login = !on; }
 
 void session_set_fork(struct session *s, int on) { s->fork_session = on; }
 

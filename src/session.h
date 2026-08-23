@@ -47,6 +47,7 @@ void session_set_compact(struct session *s, int on);
 int  session_compact(const struct session *s);
 
 void session_set_customizations(struct session *s, int on);
+void session_set_browser_login(struct session *s, int on);
 
 void session_set_fork(struct session *s, int on);
 

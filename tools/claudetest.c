@@ -231,6 +231,29 @@ int main(int argc, char **argv)
     setenv("CLAUDETEST_AUTH_MARKER", marker, 1);
     setenv("ANTHROPIC_API_KEY", "must not reach auth login", 1);
 
+    backend_opts unattended_options = {
+        .name = "claude",
+        .session_name = "title helper",
+        .ephemeral = 1,
+        .disable_tools = 1,
+        .no_browser_login = 1,
+    };
+    Backend *unattended = backend_open_ex(&unattended_options);
+    backend_result unattended_meta = {0};
+    char *refused = unattended ? unattended->ask_ex(unattended, "reauth", &unattended_meta)
+                               : NULL;
+    if (!refused || !unattended_meta.is_error || access(marker, F_OK) == 0) {
+        fputs("claudetest: an unattended run opened the browser login\n", stderr);
+        free(refused);
+        if (unattended) unattended->close(unattended);
+        free(test_path);
+        unlink(marker); unlink(cli_link); rmdir(auth_root);
+        claude_stop(client);
+        return 1;
+    }
+    free(refused);
+    unattended->close(unattended);
+
     backend_opts backend_options = {
         .name = "claude",
         .session_name = "title helper",
