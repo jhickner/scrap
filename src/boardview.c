@@ -495,20 +495,9 @@ static void note_line(const char **notes, int *n, char **owned, const char *text
 
 // The parts of a card that are read rather than edited: what it says, and
 // what has happened to it.
-// A spec of one line is edited here like anything else. One of several is
-// left to be read: flattening it into a field would lose the shape of it.
-static int spec_is_field(const struct board_card *c)
-{
-    return !c->body || !strchr(c->body, '\n');
-}
-
 static int build_notes(const struct board_card *c, const char **notes, char **owned)
 {
     int n = 0;
-
-    // Handed over whole: the form wraps it, at the width the fields use.
-    if (!spec_is_field(c) && c->body && *c->body && strcmp(c->body, c->title))
-        note_line(notes, &n, owned, c->body);
 
     for (int i = 0; i < c->log_n && n < NOTES_MAX; i++) {
         if (i == 0)
@@ -538,7 +527,7 @@ static void card_form(const struct board_card *c)
     for (int i = 0; i < BOARD_KINDS; i++)
         kinds[i] = board_kind_name((enum board_kind)i);
 
-    char spec[1024];
+    char spec[8192];
     char kind[16];
     char column[16];
     char where[4096];
@@ -553,9 +542,8 @@ static void card_form(const struct board_card *c)
     struct form_field fields[6];
     int               fields_n = 0;
 
-    if (spec_is_field(c))
-        fields[fields_n++] = (struct form_field){"spec", FORM_TEXT, spec,
-                                                 sizeof spec, NULL, 0};
+    fields[fields_n++] = (struct form_field){"spec", FORM_TEXT, spec,
+                                             sizeof spec, NULL, 0};
     fields[fields_n++] = (struct form_field){"kind", FORM_CHOICE, kind,
                                              sizeof kind, kinds, BOARD_KINDS};
     fields[fields_n++] = (struct form_field){"column", FORM_CHOICE, column,
@@ -613,13 +601,10 @@ static void card_form(const struct board_card *c)
     // The spec is the card; the title is only how it reads in a list. Until
     // triage has named it, that name follows the spec rather than drifting
     // from it.
-    int respec = 0;
-    if (spec_is_field(c)) {
-        respec = strcmp(spec, live->body ? live->body : "") != 0;
-        edited.body = spec;
-        if (!live->kind[0])
-            board_title_of(spec, edited.title, sizeof edited.title);
-    }
+    int respec = strcmp(spec, live->body ? live->body : "") != 0;
+    edited.body = spec;
+    if (!live->kind[0])
+        board_title_of(spec, edited.title, sizeof edited.title);
 
     char *full = path_expand_home(where);
     if (full && *full)

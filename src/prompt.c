@@ -21,26 +21,12 @@
 #include "ui.h"
 #include "viewport.h"
 #include "vendor/cJSON.h"
+#include "replframe.h"
 #include "text.h"
-
-#define REPL_STYLE_NONE ((signed char)-1)
-
-
-struct cell {
-    uint32_t    cp;
-    signed char style;
-};
-
-struct frame {
-    struct cell *cells;
-    int          rows, cols, cap;
-    int          cursor_x, cursor_y;
-    int          have_cursor;
-};
 
 struct prompt {
     Repl         repl;
-    struct frame frame;
+    struct replframe frame;
     int          painted_cols;
     int          above_painted;
     char        *history_path;
@@ -122,59 +108,8 @@ void prompt_history_open(struct prompt *p, const char *path)
     fclose(f);
 }
 
-static void frame_size(struct frame *f, int rows, int cols)
-{
-    if (rows < 0 || cols < 0 || (cols > 0 && rows > INT_MAX / cols)) {
-        f->rows = f->cols = 0;
-        return;
-    }
-    int need = rows * cols;
-    if (need > f->cap) {
-        struct cell *grown = realloc(f->cells, (size_t)need * sizeof *grown);
-        if (!grown) {
 
-            f->rows = f->cols = 0;
-            return;
-        }
-        f->cells = grown;
-        f->cap = need;
-    }
-    f->rows = rows;
-    f->cols = cols;
-    for (int i = 0; i < need; i++) {
-        f->cells[i].cp = ' ';
-        f->cells[i].style = REPL_STYLE_NONE;
-    }
-    f->have_cursor = 0;
-    f->cursor_x = f->cursor_y = 0;
-}
 
-static void draw_cell(void *ctx, int x, int y, uint32_t cp, ReplStyle style)
-{
-    struct frame *f = ctx;
-    if (x < 0 || y < 0 || x >= f->cols || y >= f->rows)
-        return;
-    if (style == REPL_STYLE_CURSOR) {
-        f->cursor_x = x;
-        f->cursor_y = y;
-        f->have_cursor = 1;
-    }
-    struct cell *c = &f->cells[y * f->cols + x];
-    c->cp = cp;
-    c->style = (signed char)style;
-}
-
-static const char *style_open(ReplStyle style)
-{
-    switch (style) {
-    case REPL_STYLE_PROMPT:   return ui_style(UI_CHROME);
-    case REPL_STYLE_TYPED:    return ui_style(UI_TEXT);
-    case REPL_STYLE_DIM:      return ui_style(UI_DIM);
-    case REPL_STYLE_CURSOR:   return ui_style(UI_ACCENT);
-    case REPL_STYLE_SELECTED: return ui_style(UI_ACCENT);
-    }
-    return "";
-}
 
 static void put_codepoint(uint32_t cp)
 {
@@ -182,19 +117,6 @@ static void put_codepoint(uint32_t cp)
     ui_putn(buf, text_utf8_encode(cp, buf));
 }
 
-static int row_extent(const struct frame *f, int y)
-{
-    int last = -1;
-    for (int x = 0; x < f->cols; x++) {
-        const struct cell *c = &f->cells[y * f->cols + x];
-        int blank = (c->cp == ' ' &&
-                     (c->style == REPL_STYLE_NONE || c->style == REPL_STYLE_TYPED ||
-                      c->style == REPL_STYLE_DIM));
-        if (!blank)
-            last = x;
-    }
-    return last + 1;
-}
 
 static size_t queued_budget(int cols)
 {
@@ -279,13 +201,12 @@ static void emit_input(struct prompt *p, int rows)
 
     for (int y = 0; y < rows; y++) {
         ui_esc(UI_ERASE_EOL);
-        int extent = row_extent(&p->frame, y);
+        int extent = replframe_extent(&p->frame, y);
         const char *open = "";
         for (int x = 0; x < extent; x++) {
-            struct cell *c = &p->frame.cells[y * p->frame.cols + x];
+            const struct replframe_cell *c = replframe_at(&p->frame, y, x);
             uint32_t cp = c->cp;
-            const char *seq = c->style == REPL_STYLE_NONE
-                                  ? "" : style_open((ReplStyle)c->style);
+            const char *seq = replframe_style(c->style);
 
             if (c->style == REPL_STYLE_PROMPT && x == 0 && cp == '>') {
                 cp = 0x276F;
@@ -320,13 +241,11 @@ int prompt_input_rows(struct prompt *p, int cols)
     if (rows < 1)
         rows = 1;
 
-    frame_size(&p->frame, rows, cols);
     p->painted_cols = cols;
-    if (!p->frame.cells || p->frame.rows < rows || p->frame.cols < cols) {
+    if (!replframe_render(&p->frame, &p->repl, rows, cols, 1)) {
         p->frame_ok = 0;
         return 1;
     }
-    repl_render(&p->repl, 0, 0, cols, true, draw_cell, &p->frame);
     p->frame_ok = 1;
     return rows;
 }
@@ -488,7 +407,7 @@ void prompt_free(struct prompt *p)
         completion_owner = NULL;
     repl_free(&p->repl);
     files_forget();
-    free(p->frame.cells);
+    replframe_free(&p->frame);
     free(p->file_root);
     free(p->history_path);
     for (int i = 0; i < p->queued_count; i++)
