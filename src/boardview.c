@@ -174,6 +174,24 @@ static int vlist_run(const char *title, struct vlist *l, int initial,
     return at;
 }
 
+static time_t stamp_due;
+
+static void stamp_next(time_t then)
+{
+    long gap = (long)(time(NULL) - then);
+    if (gap < 0)
+        gap = 0;
+    time_t next;
+    if (gap < 3600)
+        next = then + (gap / 60 + 1) * 60;
+    else if (gap < 86400)
+        next = then + (gap / 3600 + 1) * 3600;
+    else
+        next = then + (gap / 86400 + 1) * 86400;
+    if (!stamp_due || next < stamp_due)
+        stamp_due = next;
+}
+
 static void ago(time_t then, char *out, size_t size)
 {
     long gap = (long)(time(NULL) - then);
@@ -282,6 +300,8 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
         return 0;
     int shown = 0;
 
+    stamp_due = 0;
+
     for (int col = 0; col < BOARD_COLS; col++) {
         int k = 0;
         for (int i = 0; i < n; i++)
@@ -314,10 +334,13 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
                 snprintf(when, sizeof when, "%s · tab %d", step, tab + 1);
             else if (step)
                 snprintf(when, sizeof when, "%s…", step);
-            else if (tab >= 0)
-                snprintf(when, sizeof when, "tab %d · %s", tab + 1, ts);
-            else
-                snprintf(when, sizeof when, "%s", ts);
+            else {
+                stamp_next(c->updated ? c->updated : c->created);
+                if (tab >= 0)
+                    snprintf(when, sizeof when, "tab %d · %s", tab + 1, ts);
+                else
+                    snprintf(when, sizeof when, "%s", ts);
+            }
 
             char where[256] = {0};
             if (wide)
@@ -497,6 +520,9 @@ static int board_tick(void *ud)
     }
 
     if (board_revision() != shown_rev)
+        moved = 1;
+
+    if (stamp_due && time(NULL) >= stamp_due)
         moved = 1;
 
     return moved ? PICK_TICK_REOPEN : 0;
