@@ -82,11 +82,20 @@ static const char TRIAGE_PROMPT[] =
     "When you ask, set confidence below 0.5. Otherwise set it above 0.7 and\n"
     "leave question empty";
 
+// "Do not commit to the main branch" reads as "do not commit" often enough to
+// matter: work left dirty in a worktree is work the merge queue cannot see, the
+// audit cannot measure, and a reaped worker loses.
 static const char WORKER_PROMPT[] =
-    "You are working one card from a board, alone, in a worktree of your own. "
-    "Reach a state someone else can test, then stop and say how to test it. "
-    "Do not merge, do not commit to the main branch, and do not start work "
-    "the card does not ask for.";
+    "You are working one card from a board, alone, in a worktree of your own "
+    "and on a branch of its own.\n"
+    "\n"
+    "Reach a state someone else can test, commit it to the branch you are "
+    "already on, and then stop and say how to test it. Commit even when the "
+    "work is unfinished: uncommitted work does not exist to anything "
+    "downstream.\n"
+    "\n"
+    "Do not merge, do not switch branches, do not touch the main branch, and "
+    "do not start work the card does not ask for.";
 
 static const char AUDIT_PROMPT[] =
     "Review the diff on this branch for problems worth a second pass: "

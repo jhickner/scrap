@@ -143,6 +143,48 @@ static int worktree_make(const char *root, const char *id, const char *path,
 
 /* ---- what the worker is handed ------------------------------------------ */
 
+// CARD.md belongs to the worker, not to the repo. Left to itself it turns up
+// untracked in every status, and in every diff the work is reviewed by.
+//
+// The exclude has to go in the common directory: git reads info/exclude from
+// there and not from the per-worktree git dir, so writing the obvious place
+// does nothing. That makes it a repo-wide rule, which is why it is written
+// once and never repeated -- and info/exclude is not tracked, so it stays a
+// local matter.
+static void ignore_card_file(const char *path)
+{
+    char common[4200];
+    if (!git_line(path, "rev-parse --path-format=absolute --git-common-dir",
+                  common, sizeof common))
+        return;
+
+    char info[4300];
+    snprintf(info, sizeof info, "%s/info", common);
+    mkdir(info, 0700);
+
+    char exclude[4400];
+    snprintf(exclude, sizeof exclude, "%s/exclude", info);
+
+    FILE *f = fopen(exclude, "r");
+    if (f) {
+        char line[256];
+        while (fgets(line, sizeof line, f)) {
+            text_chomp(line);
+            if (!strcmp(line, "CARD.md")) {
+                fclose(f);
+                return;
+            }
+        }
+        fclose(f);
+    }
+
+    f = fopen(exclude, "a");
+    if (!f)
+        return;
+    fprintf(f, "CARD.md\n");
+    fclose(f);
+}
+
 // The spec, written where it survives what a long session does to its own
 // first turn: compaction, a restart, a context that rolled over.
 static void write_card_file(const char *path, const struct board_card *c)
@@ -222,6 +264,7 @@ int boardwork_start(const struct board_card *c, char *why, int size)
     char base[64] = {0};
     git_line(path, "rev-parse --short HEAD", base, sizeof base);
 
+    ignore_card_file(path);
     write_card_file(path, c);
 
     const struct board_profile *p = boardcfg_for(BOARD_WHO_WORKER);
