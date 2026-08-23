@@ -8,6 +8,8 @@
 #include "agenttabs.h"
 #include "app.h"
 #include "boardview.h"
+#include "boardtriage.h"
+#include "boardwork.h"
 #include "bash.h"
 #include "chrome.h"
 #include "cmd.h"
@@ -293,6 +295,7 @@ static int idle_restart(void *ud)
     // Returns only when the new build could not be run at all, in which case
     // this window keeps going on the old one.
     sidechannel_close_all();
+    boardtriage_close_all();
     // The whole window travels: the session in front carries the screen, and
     // the rest are named in a file the new build opens a tab from.
     if (!restart_exec(workspace_current())) {
@@ -610,6 +613,9 @@ int main(int argc, char **argv)
     prompt_set_another(prompt, another, NULL);
     prompt_set_cancel(prompt, cancel_turn, NULL);
     workspace_on_finish(turn_done);
+    // Not turn_done's job: that waits for an open modal, and the board is one.
+    workspace_on_settled(boardwork_finished);
+    livelist_on_card(boardwork_card_of);
     prompt_set_replay(prompt, replay, NULL);
     prompt_set_blank(prompt, blank_line, NULL);
     prompt_set_animate(prompt, side_busy, side_tick, NULL);
@@ -708,6 +714,7 @@ int main(int argc, char **argv)
     }
 
     sidechannel_close_all();
+    boardtriage_close_all();
     tg_stop();
     session_set_typeahead(NULL, NULL);
     chrome_bind(NULL);

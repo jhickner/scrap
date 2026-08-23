@@ -17,6 +17,7 @@ struct live_session {
     char id[128];
     char title[200];
     char status[16];    /* working | finished | errored */
+    char card[16];      /* the board card it is working, where it is a worker */
     int  unseen;        /* its turn ended with the window showing another */
     char pane[32];
     char window[32];    /* tmux window id, "@3": which window holds it */
@@ -28,6 +29,11 @@ struct live_session {
 
 // Starts publishing; the records this process wrote go when it exits.
 void livelist_begin(void);
+
+// Asked, as each record is written, whether that session is a board worker and
+// which card it holds. A session started by hand and one the board started
+// look alike otherwise, and they are not the same thing to come back to.
+void livelist_on_card(const char *(*fn)(const struct session *s));
 
 void livelist_publish(const struct session *s, const char *status);
 

@@ -54,8 +54,16 @@ int  workspace_queued(int index);
 // on this thread. Its output goes to its own screen, as ever.
 void workspace_settle(struct session *s);
 
-// What runs when a tab's turn ends, whichever tab it was.
+// What runs when a tab's turn ends, whichever tab it was. Held back while a
+// modal is up, because what it does is run the commands that were typed at
+// that tab, and those want the screen.
 void workspace_on_finish(void (*fn)(struct session *s));
+
+// The same moment, for a caller that only wants to know. This one is not held
+// back: it is called as the turn ends whatever is on screen, so it must not
+// draw. A board watching its workers cannot wait for the list it is drawn in
+// to close before it hears that one finished.
+void workspace_on_settled(void (*fn)(struct session *s));
 
 // Idle work for every tab, each rendering into its own screen.
 int  workspace_fds(int *out, int max);

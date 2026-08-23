@@ -10,26 +10,36 @@
 #include "ask.h"
 #include "board.h"
 #include "boardtriage.h"
+#include "boardwork.h"
 #include "confirm.h"
 #include "form.h"
 #include "pick.h"
 #include "text.h"
 #include "ui.h"
 #include "viewport.h"
+#include "session.h"
+#include "workspace.h"
 
 // The list holds letters for itself, so searching is behind '/' and a typed
 // letter means the key it stands for.
-#define KEY_NEW    'n'
-#define KEY_DELETE 'd'
-#define KEY_TRIAGE 't'
-#define KEY_ALL    '*'
+#define KEY_NEW      'n'
+#define KEY_DELETE   'd'
+#define KEY_TRIAGE   't'
+#define KEY_START    's'
+#define KEY_GO       'g'
+#define KEY_APPROVE  'a'
+#define KEY_REJECT   'r'
+#define KEY_FEEDBACK 'f'
+#define KEY_ALL      '*'
 
-#define BOARD_KEYS "ndt*"
+#define BOARD_KEYS "ndtsgarf*"
 
 // Letters are shortcuts here rather than a search, so without a line saying
 // so the list gives no sign it has any keys at all.
 #define BOARD_HINT \
-    "enter edit  ·  n new  ·  t triage  ·  d delete  ·  * all repos  ·  / search"
+    "enter edit  ·  s start a worker  ·  g go to it  ·  "                     \
+    "a approve  ·  f feedback  ·  r reject\n"                                 \
+    "n new  ·  t triage  ·  d delete  ·  * all repos  ·  / search"
 
 // How wide a card's title may grow before the meta beside it stops lining up.
 #define TITLE_SHARE(cols) ((cols) * 3 / 5)
@@ -284,12 +294,18 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             snprintf(r->id, sizeof r->id, "%s", c->id);
             r->label = dsprintf("%s", c->title[0] ? c->title : "(untitled)");
             column_mark(c->col, &r->mark, &r->mark_role);
-            r->spin = (unsigned char)boardtriage_running(c->id);
+            int tab = boardwork_tab(c->id);
+            r->spin = (unsigned char)(boardtriage_running(c->id) ||
+                                      (tab >= 0 && session_busy(workspace_at(tab))));
 
-            char when[32];
-            ago(c->updated ? c->updated : c->created, when, sizeof when);
-            if (r->spin)
+            char ts[32], when[64];
+            ago(c->updated ? c->updated : c->created, ts, sizeof ts);
+            if (boardtriage_running(c->id))
                 snprintf(when, sizeof when, "triaging…");
+            else if (tab >= 0)
+                snprintf(when, sizeof when, "tab %d · %s", tab + 1, ts);
+            else
+                snprintf(when, sizeof when, "%s", ts);
 
             // In one repo the directory is the title bar's job; across repos
             // it is the first thing you need from a row.
@@ -384,9 +400,16 @@ static int row_of(const struct vlist *l, const char *id)
 static int board_tick(void *ud)
 {
     (void)ud;
-    // What triage decided moves cards between columns, which no redraw of the
-    // rows we built can show. The list has to be built again.
-    return boardtriage_poll() ? PICK_TICK_REOPEN : 0;
+    // The window is parked in this list, so its own tabs only move on if the
+    // list moves them: a worker would otherwise sit still for as long as the
+    // board is open.
+    workspace_pump_quiet();
+
+    // What triage and the workers decided moves cards between columns, which
+    // no redraw of the rows we built can show. The list has to be built again.
+    int moved = boardtriage_poll();
+    moved |= boardwork_poll();
+    return moved ? PICK_TICK_REOPEN : 0;
 }
 
 // Everything sitting in `new` that nothing is already working on. A card is
@@ -639,7 +662,7 @@ int boardview_capture(const char *text, const char *cwd, char *id_out, int size)
     return 1;
 }
 
-void boardview_run(const char *cwd)
+int boardview_run(const char *cwd)
 {
     char here[4096];
     snprintf(here, sizeof here, "%s", cwd ? cwd : "");
@@ -672,7 +695,7 @@ void boardview_run(const char *cwd)
                 continue;
             }
             note("the board is empty — /card <text> puts something on it");
-            return;
+            return -1;
         }
 
         char where[512] = "all repos";
@@ -701,7 +724,7 @@ void boardview_run(const char *cwd)
         }
         if (at < 0) {
             board_free(cards, n);
-            return;
+            return -1;
         }
 
         struct board_card *c = board_find(cards, n, sel_id);
@@ -716,6 +739,48 @@ void boardview_run(const char *cwd)
         case KEY_TRIAGE:
             if (c)
                 boardtriage_start(c);
+            break;
+        case KEY_START:
+            if (c) {
+                char why[512];
+                if (!boardwork_start(c, why, sizeof why) && why[0])
+                    note("%s", why);
+            }
+            break;
+        case KEY_GO: {
+            // The worker's tab is the worker: its whole transcript, its own
+            // prompt. There is no need for a smaller one inside a card.
+            int tab = c ? boardwork_tab(c->id) : -1;
+            if (tab >= 0) {
+                board_free(cards, n);
+                return tab;
+            }
+            if (c)
+                note("no worker has that card");
+            break;
+        }
+        case KEY_APPROVE:
+            if (c && c->col == BOARD_REVIEW)
+                boardwork_approve(c);
+            break;
+        case KEY_REJECT:
+            if (c && (c->col == BOARD_REVIEW || c->col == BOARD_DOING)) {
+                char *why = ask_run("why is it going back?", NULL);
+                if (why) {
+                    boardwork_reject(c, why);
+                    free(why);
+                }
+            }
+            break;
+        case KEY_FEEDBACK:
+            if (c && boardwork_tab(c->id) >= 0) {
+                char *say = ask_run("what should it do?", NULL);
+                if (say) {
+                    if (!boardwork_feedback(c, say))
+                        note("the worker did not take it");
+                    free(say);
+                }
+            }
             break;
         case KEY_DELETE:
             if (c && do_delete(c))

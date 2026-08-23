@@ -26,6 +26,7 @@
 #include "sessionload.h"
 #include "sessionswitch.h"
 #include "viewport.h"
+#include "workspace.h"
 #include "sidechannel.h"
 #include "settings.h"
 #include "settingsui.h"
@@ -730,7 +731,9 @@ static void do_board(struct session *s, const char *arg)
     (void)arg;
     if (!can_pick("/board"))
         return;
-    boardview_run(session_cwd(s));
+    int tab = boardview_run(session_cwd(s));
+    if (tab >= 0)
+        workspace_show(tab);
 }
 
 static void do_status(struct session *s, const char *arg)

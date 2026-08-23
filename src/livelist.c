@@ -153,6 +153,13 @@ void livelist_begin(void)
     atexit(drop_all);
 }
 
+static const char *(*card_of)(const struct session *s);
+
+void livelist_on_card(const char *(*fn)(const struct session *s))
+{
+    card_of = fn;
+}
+
 void livelist_publish(const struct session *s, const char *status)
 {
     if (!publishing || !s || !status)
@@ -192,6 +199,9 @@ void livelist_publish(const struct session *s, const char *status)
     cJSON_AddStringToObject(rec, "title", name);
     cJSON_AddStringToObject(rec, "status", status);
     cJSON_AddNumberToObject(rec, "unseen", session_unseen(s) ? 1 : 0);
+    const char *card = card_of ? card_of(s) : NULL;
+    if (card && *card)
+        cJSON_AddStringToObject(rec, "card", card);
     cJSON_AddNumberToObject(rec, "ts", (double)time(NULL));
     const char *pane = getenv("TMUX_PANE");
     if (pane && *pane)
@@ -311,6 +321,7 @@ int livelist_load(struct live_session **out)
         copy_str(v->id, sizeof v->id, rec, "id");
         copy_str(v->title, sizeof v->title, rec, "title");
         copy_str(v->status, sizeof v->status, rec, "status");
+        copy_str(v->card, sizeof v->card, rec, "card");
         v->unseen = (int)number(rec, "unseen");
         copy_str(v->window, sizeof v->window, rec, "window");
         copy_str(v->wname, sizeof v->wname, rec, "wname");

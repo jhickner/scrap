@@ -10,7 +10,10 @@ struct session;
 //
 // `cwd` is what the list is filtered to when it opens, which is the directory
 // the session works in; '*' widens it to every repo. NULL opens it wide.
-void boardview_run(const char *cwd);
+// Returns the tab to bring to the front -- a worker the board was asked to go
+// to -- or -1. Showing it is the caller's job: the board is a modal, and the
+// tab is what is behind it.
+int boardview_run(const char *cwd);
 
 // Capture. The first line becomes the title, the whole of it the body, and
 // nothing is classified: that is triage's job, later and elsewhere.
