@@ -531,6 +531,61 @@ void boardwork_finished(struct session *s)
         board_note(w->id, "board", "no commit on the branch");
 }
 
+static char pull_failed[BOARD_ID_MAX];
+
+static int pull_priority(const struct board_card *c)
+{
+    return c->priority ? c->priority : boardcfg_priority(c->kind);
+}
+
+static const struct board_card *pull_next(const struct board_card *cards, int n)
+{
+    const struct board_card *best = NULL;
+    int                      best_p = 0;
+
+    for (int i = 0; i < n; i++) {
+        const struct board_card *c = &cards[i];
+        if (c->col != BOARD_BACKLOG)
+            continue;
+        /* a card that has already had a worker is back here because a person
+           sent it back; pulling it again would undo that */
+        if (c->session[0] || c->worktree[0])
+            continue;
+        if (!strcmp(c->id, pull_failed))
+            continue;
+
+        char why[256];
+        if (boardwork_blocked(c, why, sizeof why))
+            continue;
+
+        int p = pull_priority(c);
+        if (best && p <= best_p && (p != best_p || c->created >= best->created))
+            continue;
+        best = c;
+        best_p = p;
+    }
+    return best;
+}
+
+static int pull_pump(const struct board_card *cards, int n)
+{
+    const struct board_cfg *cfg = boardcfg();
+    if (!cfg->auto_pull || boardwork_running() >= cfg->workers)
+        return 0;
+
+    const struct board_card *c = pull_next(cards, n);
+    if (!c)
+        return 0;
+
+    char why[256];
+    if (boardwork_start(c, why, sizeof why))
+        return 1;
+
+    snprintf(pull_failed, sizeof pull_failed, "%s", c->id);
+    board_note(c->id, "board", why[0] ? why : "could not start it");
+    return 1;
+}
+
 int boardwork_pump(void)
 {
     struct board_card *cards = NULL;
@@ -547,6 +602,8 @@ int boardwork_pump(void)
 
         started = boardwork_start(&cards[i], why, sizeof why);
     }
+    if (!started)
+        started = pull_pump(cards, n);
     board_free(cards, n);
     return started;
 }
@@ -716,6 +773,7 @@ int boardwork_feedback(const struct board_card *c, const char *text)
 void boardwork_begin(void)
 {
     memset(workers, 0, sizeof workers);
+    pull_failed[0] = '\0';
 }
 
 void boardwork_close_all(void)

@@ -46,6 +46,7 @@ struct board_kind {
 
 struct board_cfg {
     int workers;
+    int auto_pull;
     int audit_files;
     int audit_lines;
     int sweep_every;

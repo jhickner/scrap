@@ -17,6 +17,7 @@
 enum row_kind {
     ROW_HEAD,
     ROW_COUNT,
+    ROW_TOGGLE,
     ROW_PROFILE,
     ROW_PROMPT,
     ROW_VERIFY,
@@ -58,12 +59,21 @@ static void count_row(struct row *rows, int *n, const char *label, int *value,
     (*n)++;
 }
 
+static void toggle_row(struct row *rows, int *n, const char *label, int *value)
+{
+    rows[*n].kind = ROW_TOGGLE;
+    rows[*n].label = label;
+    rows[*n].count = value;
+    (*n)++;
+}
+
 static void build(struct row *rows, int *n, struct board_cfg *c)
 {
     *n = 0;
 
     head(rows, n, "workers");
     count_row(rows, n, "concurrency", &c->workers, 1, 11, NULL);
+    toggle_row(rows, n, "auto pull", &c->auto_pull);
 
     head(rows, n, "audit");
     count_row(rows, n, "file threshold", &c->audit_files, 0, 500, NULL);
@@ -123,6 +133,9 @@ static void value_of(const struct row *r, const struct board_cfg *c,
                      r->units[0] == '%' ? "" : " ", r->units);
         else
             snprintf(out, size, "%d", *r->count);
+        break;
+    case ROW_TOGGLE:
+        snprintf(out, size, "%s", *r->count ? "yes" : "no");
         break;
     case ROW_PROFILE: {
         const struct board_profile *p = &c->who[r->who];
@@ -379,6 +392,7 @@ void boardcfgui_run(void)
 
         switch (rows[at].kind) {
         case ROW_COUNT:   edit_count(&rows[at]); touched = 1; break;
+        case ROW_TOGGLE:  *rows[at].count = !*rows[at].count; touched = 1; break;
         case ROW_PROFILE: edit_profile(c, rows[at].who); touched = 1; break;
         case ROW_PROMPT:  edit_prompt(c, rows[at].who); touched = 1; break;
         case ROW_VERIFY:  edit_verify(c); touched = 1; break;

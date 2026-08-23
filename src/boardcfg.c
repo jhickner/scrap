@@ -255,6 +255,7 @@ static void set_int(int *dst, const cJSON *o, const char *key)
 static void overlay(struct board_cfg *c, const cJSON *o)
 {
     set_int(&c->workers, o, "workers");
+    set_int(&c->auto_pull, o, "auto_pull");
     set_int(&c->audit_files, o, "audit_files");
     set_int(&c->audit_lines, o, "audit_lines");
     set_int(&c->sweep_every, o, "sweep_every");
@@ -376,6 +377,7 @@ static void read_settings(struct board_cfg *c)
         return;
 
     c->workers = mdcfg_int(&m, "workers", c->workers);
+    c->auto_pull = mdcfg_int(&m, "auto pull", c->auto_pull);
     c->audit_files = mdcfg_int(&m, "audit files", c->audit_files);
     c->audit_lines = mdcfg_int(&m, "audit lines", c->audit_lines);
     c->sweep_every = mdcfg_int(&m, "sweep every", c->sweep_every);
@@ -456,19 +458,23 @@ static int write_settings(const struct board_cfg *c)
     if (!board_path(path, sizeof path, BOARD_DIR, "settings"))
         return 0;
 
-    char nums[5][32];
+    char nums[6][32];
     snprintf(nums[0], sizeof nums[0], "%d", c->workers);
-    snprintf(nums[1], sizeof nums[1], "%d", c->audit_files);
-    snprintf(nums[2], sizeof nums[2], "%d", c->audit_lines);
-    snprintf(nums[3], sizeof nums[3], "%d", c->sweep_every);
-    snprintf(nums[4], sizeof nums[4], "%d", c->archive_after);
+    snprintf(nums[1], sizeof nums[1], "%d", c->auto_pull);
+    snprintf(nums[2], sizeof nums[2], "%d", c->audit_files);
+    snprintf(nums[3], sizeof nums[3], "%d", c->audit_lines);
+    snprintf(nums[4], sizeof nums[4], "%d", c->sweep_every);
+    snprintf(nums[5], sizeof nums[5], "%d", c->archive_after);
 
-    const char *keys[] = {"workers", "audit files", "audit lines",
+    const char *keys[] = {"workers", "auto pull", "audit files", "audit lines",
                           "sweep every", "archive after", "check"};
-    const char *vals[] = {nums[0], nums[1], nums[2], nums[3], nums[4], c->verify};
+    const char *vals[] = {nums[0], nums[1], nums[2], nums[3], nums[4], nums[5],
+                          c->verify};
 
-    return mdcfg_write(path, keys, vals, 6,
+    return mdcfg_write(path, keys, vals, 7,
         "workers is how many may run at once.\n"
+        "auto pull is 1 to start backlog cards on a free worker, 0 to wait to\n"
+        "be told; a card in review keeps its worker until you take it.\n"
         "A diff over either audit threshold is read before it lands; zero turns\n"
         "that half off.\n"
         "sweep every is cards landed in a repo before a sweep of it; zero never.\n"
@@ -682,6 +688,7 @@ int boardcfg_set(const struct board_cfg *c)
         cache.who[i].prompt = kept;
     }
     cache.workers = c->workers;
+    cache.auto_pull = c->auto_pull;
     cache.audit_files = c->audit_files;
     cache.audit_lines = c->audit_lines;
     cache.sweep_every = c->sweep_every;
