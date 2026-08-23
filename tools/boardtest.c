@@ -477,11 +477,11 @@ static int sweep_mark_count(const char *cwd)
     return marked;
 }
 
-static int sweep_due(char *id, char *root, size_t rootsize)
+static int sweep_due(char *cwd, size_t size)
 {
     struct board_card *v = NULL;
     int                n = board_load(&v);
-    int                due = boardsweep_due(v, n, id, BOARD_ID_MAX, root, rootsize);
+    int                due = boardsweep_due(v, n, cwd, size);
     board_free(v, n);
     return due;
 }
@@ -496,70 +496,107 @@ static int card_titled(const char *text, const char *cwd)
     return found;
 }
 
+static void land_cards(const char *cwd, int count, const char *what)
+{
+    for (int i = 0; i < count; i++) {
+        char id[BOARD_ID_MAX] = {0}, text[64];
+        snprintf(text, sizeof text, "%s %d", what, i);
+        expect(board_add(text, cwd, id), "capture");
+        expect(board_move(id, BOARD_DONE, "board", NULL), "landed");
+    }
+}
+
 static void test_sweep_counts_landed_cards(void)
 {
     const char *cwd = "/tmp/sweeprepo";
     int         every = boardcfg()->sweep_every;
+    char        due[4096];
 
-    char host[BOARD_ID_MAX], root[4096];
+    land_cards(cwd, every - 1, "landed card");
+    expect(!sweep_due(due, sizeof due), "one short of the interval is not due");
 
-    for (int i = 0; i < every - 1; i++) {
-        char id[BOARD_ID_MAX] = {0}, text[64];
-        snprintf(text, sizeof text, "landed card %d", i);
-        expect(board_add(text, cwd, id), "capture");
-        expect(board_move(id, BOARD_DONE, "board", NULL), "landed");
-    }
-    expect(!sweep_due(host, root, sizeof root), "one short of the interval is not due");
+    land_cards(cwd, 1, "the card that trips it");
+    expect(sweep_due(due, sizeof due) && !strcmp(due, cwd),
+           "the interval makes the repo due");
 
-    char last[BOARD_ID_MAX] = {0};
-    expect(board_add("the card that trips it", cwd, last), "capture");
-    expect(board_move(last, BOARD_DONE, "board", NULL), "landed");
-    expect(sweep_due(host, root, sizeof root), "the interval makes a sweep due");
-
-    expect(!boardsweep_finished("", "{}"), "a sweep needs a card");
-    expect(boardsweep_finished(host, "{\"cards\":[\"two ways to spell a worktree\"]}"),
-           "the sweep's cards are taken");
-
+    char id[BOARD_ID_MAX] = {0};
+    expect(boardsweep_open(cwd, id, sizeof id), "a sweep card is minted");
     expect(sweep_mark_count(cwd) == every,
            "every landed card is marked, so the count is on the board");
-    expect(!sweep_due(host, root, sizeof root), "and a restart does not sweep them twice");
+    expect(!sweep_due(due, sizeof due), "and a restart does not sweep them twice");
 
-    expect(boardsweep_proposed() == 1, "what it raised waits for review");
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    expect(c && c->col == BOARD_DOING, "the sweep card starts in doing");
+    expect(c && boardsweep_is(c), "and is a sweep");
+    board_free(v, n);
+
+    expect(!boardsweep_finished("", "{}"), "a sweep needs a card");
+    expect(boardsweep_finished(id, "{\"cards\":[\"two ways to spell a worktree\"]}"),
+           "the sweep's cards are taken");
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && c->col == BOARD_REVIEW, "what it raised goes to review");
+    expect(c && boardsweep_proposed(c) == 1, "with the proposal on it");
     expect(!card_titled("two ways to spell a worktree", cwd),
-           "and is not on the board yet");
+           "and nothing on the board yet");
 
-    expect(boardsweep_accept(0, NULL), "accepting one files it");
-    expect(boardsweep_proposed() == 0, "and takes it out of the review");
+    expect(boardsweep_approve(c), "approving files them");
+    board_free(v, n);
+
     expect(card_titled("two ways to spell a worktree", cwd) == 1,
-           "the sweep files what was kept");
+           "the sweep files what was approved");
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && c->col == BOARD_DONE, "and the sweep card is done");
+    board_free(v, n);
 }
 
-static void test_sweep_review_drops_what_is_not_wanted(void)
+static void test_sweep_review_can_refuse(void)
 {
-    const char *cwd = "/tmp/dropsweep";
-    int         every = boardcfg()->sweep_every;
+    const char *cwd = "/tmp/refusedsweep";
+    char        due[4096], id[BOARD_ID_MAX] = {0};
 
-    char host[BOARD_ID_MAX], root[4096];
-    for (int i = 0; i < every; i++) {
-        char id[BOARD_ID_MAX] = {0}, text[64];
-        snprintf(text, sizeof text, "dropped card %d", i);
-        expect(board_add(text, cwd, id), "capture");
-        expect(board_move(id, BOARD_DONE, "board", NULL), "landed");
-    }
-    expect(sweep_due(host, root, sizeof root), "the interval makes a sweep due");
-    expect(boardsweep_finished(host, "{\"cards\":[\"keep this one\",\"drop this one\"]}"),
+    land_cards(cwd, boardcfg()->sweep_every, "dropped card");
+    expect(sweep_due(due, sizeof due), "the interval makes the repo due");
+    expect(boardsweep_open(cwd, id, sizeof id), "a sweep card is minted");
+    expect(boardsweep_finished(id, "{\"cards\":[\"keep this one\",\"drop this one\"]}"),
            "the sweep's cards are taken");
-    expect(boardsweep_proposed() == 2, "both wait for review");
 
-    expect(!strcmp(boardsweep_proposal(1), "drop this one"), "the second is the one to drop");
-    boardsweep_drop(1);
-    expect(boardsweep_proposed() == 1, "dropping leaves the other");
-    expect(boardsweep_accept(0, "keep this one, reworded"), "an edit is filed instead");
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    expect(c && boardsweep_proposed(c) == 2, "both wait on the card");
+    expect(boardsweep_reject(c), "rejecting drops them");
+    board_free(v, n);
 
-    expect(!card_titled("drop this one", cwd), "what was dropped is not on the board");
-    expect(card_titled("keep this one, reworded", cwd) == 1, "the edit is");
+    expect(!card_titled("keep this one", cwd) && !card_titled("drop this one", cwd),
+           "nothing was filed");
 
-    boardsweep_drop_all();
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && c->col == BOARD_DONE, "and the sweep card is done");
+    board_free(v, n);
+}
+
+static void test_sweep_with_nothing_to_raise(void)
+{
+    const char *cwd = "/tmp/quietsweep";
+    char        due[4096], id[BOARD_ID_MAX] = {0};
+
+    land_cards(cwd, boardcfg()->sweep_every, "quiet card");
+    expect(sweep_due(due, sizeof due), "the interval makes the repo due");
+    expect(boardsweep_open(cwd, id, sizeof id), "a sweep card is minted");
+    expect(boardsweep_finished(id, "{\"cards\":[]}"), "an empty sweep is taken");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    expect(c && c->col == BOARD_DONE, "a sweep with nothing to raise skips review");
+    board_free(v, n);
 }
 
 static int make_repo_with_worktree(char *root, size_t rsize, char *tree, size_t tsize)
@@ -591,21 +628,24 @@ static void test_sweep_files_against_the_repo(void)
         return;
     }
 
-    int every = boardcfg()->sweep_every;
-    for (int i = 0; i < every; i++) {
-        char id[BOARD_ID_MAX] = {0}, text[64];
-        snprintf(text, sizeof text, "worktree card %d", i);
-        expect(board_add(text, tree, id), "capture");
-        expect(board_move(id, BOARD_DONE, "board", NULL), "landed");
-    }
+    land_cards(tree, boardcfg()->sweep_every, "worktree card");
 
-    char host[BOARD_ID_MAX], where[4096];
-    expect(sweep_due(host, where, sizeof where), "the interval makes a sweep due");
-    expect(!strcmp(where, root), "a sweep runs on the main repo, not the worktree");
+    char id[BOARD_ID_MAX] = {0};
+    expect(boardsweep_open(tree, id, sizeof id), "a sweep card is minted");
 
-    expect(boardsweep_finished(host, "{\"cards\":[\"a finding from the worktree\"]}"),
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    expect(c && !strcmp(c->cwd, root), "a sweep sits on the main repo");
+    board_free(v, n);
+
+    expect(boardsweep_finished(id, "{\"cards\":[\"a finding from the worktree\"]}"),
            "the sweep's cards are taken");
-    expect(boardsweep_accept(0, NULL), "the finding is kept");
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(boardsweep_approve(c), "approving files them");
+    board_free(v, n);
 
     expect(card_titled("a finding from the worktree", root) == 1,
            "a finding is filed against the main repo");
@@ -631,7 +671,8 @@ int main(void)
     test_attempts_reset_when_answered();
     test_audit_verdict();
     test_sweep_counts_landed_cards();
-    test_sweep_review_drops_what_is_not_wanted();
+    test_sweep_review_can_refuse();
+    test_sweep_with_nothing_to_raise();
     test_sweep_files_against_the_repo();
     test_reply_json();
     test_kinds();

@@ -6,23 +6,20 @@
 
 struct board_card;
 
-int boardsweep_due(const struct board_card *cards, int n, char *id, size_t idsize,
-                   char *root, size_t rootsize);
+int boardsweep_due(const struct board_card *cards, int n, char *cwd, size_t size);
 
 char *boardsweep_prompt(const struct board_card *cards, int n, const char *cwd);
 
+int boardsweep_open(const char *cwd, char *id, size_t size);
+
+int boardsweep_is(const struct board_card *c);
+
+int boardsweep_proposed(const struct board_card *c);
+
 int boardsweep_finished(const char *id, const char *reply);
 
-int boardsweep_proposed(void);
+int boardsweep_approve(const struct board_card *c);
 
-const char *boardsweep_proposal(int at);
-
-const char *boardsweep_proposal_repo(int at);
-
-int boardsweep_accept(int at, const char *text);
-
-void boardsweep_drop(int at);
-
-void boardsweep_drop_all(void);
+int boardsweep_reject(const struct board_card *c);
 
 #endif

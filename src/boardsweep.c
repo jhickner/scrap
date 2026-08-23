@@ -9,24 +9,21 @@
 #include "boardlog.h"
 #include "gitcmd.h"
 #include "replyjson.h"
+#include "text.h"
 #include "vendor/cJSON.h"
 
+#define SWEEP_KIND "sweep"
 #define SWEEP_MARK "swept"
-
-#define SWEEP_PROPOSALS_MAX 16
-
-struct proposal {
-    char *text;
-    char  repo[4096];
-};
-
-static struct proposal proposals[SWEEP_PROPOSALS_MAX];
-static int             proposals_n;
 
 static void sweep_root(const char *cwd, char *out, size_t size)
 {
     if (!cwd || !*cwd || !gitcmd_root(cwd, out, size))
         snprintf(out, size, "%s", cwd ? cwd : "");
+}
+
+int boardsweep_is(const struct board_card *c)
+{
+    return c && !strcmp(c->kind, SWEEP_KIND);
 }
 
 static int swept(const struct board_card *c)
@@ -40,7 +37,7 @@ static int swept(const struct board_card *c)
 
 static int unswept(const struct board_card *c)
 {
-    return c->col == BOARD_DONE && c->cwd[0] && !swept(c);
+    return c->col == BOARD_DONE && c->cwd[0] && !boardsweep_is(c) && !swept(c);
 }
 
 static int landed_since(const struct board_card *cards, int n, const char *cwd)
@@ -60,14 +57,6 @@ static void mark_swept(const char *cwd)
         if (unswept(&cards[i]) && !strcmp(cards[i].cwd, cwd))
             board_note(cards[i].id, "sweep", SWEEP_MARK);
     board_free(cards, n);
-}
-
-static int newest_landed(const struct board_card *cards, int at)
-{
-    for (int i = 0; i < at; i++)
-        if (unswept(&cards[i]) && !strcmp(cards[i].cwd, cards[at].cwd))
-            return 0;
-    return 1;
 }
 
 static char *findings_for(const struct board_card *cards, int n, const char *cwd)
@@ -94,19 +83,17 @@ static char *findings_for(const struct board_card *cards, int n, const char *cwd
     return out;
 }
 
-int boardsweep_due(const struct board_card *cards, int n, char *id, size_t idsize,
-                   char *root, size_t rootsize)
+int boardsweep_due(const struct board_card *cards, int n, char *cwd, size_t size)
 {
     const struct board_cfg *cfg = boardcfg();
     if (cfg->sweep_every <= 0)
         return 0;
 
     for (int i = 0; i < n; i++) {
-        if (!unswept(&cards[i]) || !newest_landed(cards, i) ||
+        if (!unswept(&cards[i]) ||
             landed_since(cards, n, cards[i].cwd) < cfg->sweep_every)
             continue;
-        snprintf(id, idsize, "%s", cards[i].id);
-        sweep_root(cards[i].cwd, root, rootsize);
+        snprintf(cwd, size, "%s", cards[i].cwd);
         return 1;
     }
     return 0;
@@ -134,17 +121,71 @@ char *boardsweep_prompt(const struct board_card *cards, int n, const char *cwd)
     return out;
 }
 
-static void propose(const char *text, const char *repo)
+int boardsweep_open(const char *cwd, char *id, size_t size)
 {
-    if (proposals_n >= SWEEP_PROPOSALS_MAX)
-        return;
-    char *copy = strdup(text);
-    if (!copy)
-        return;
-    proposals[proposals_n].text = copy;
-    snprintf(proposals[proposals_n].repo, sizeof proposals[proposals_n].repo,
-             "%s", repo);
-    proposals_n++;
+    char root[4096];
+    sweep_root(cwd, root, sizeof root);
+
+    char where[4096];
+    path_home_relative(root, where, sizeof where);
+
+    char text[4200];
+    snprintf(text, sizeof text, "sweep of %s", where);
+
+    char minted[BOARD_ID_MAX];
+    if (!board_add(text, root, minted))
+        return 0;
+
+    mark_swept(cwd);
+
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    struct board_card *c = board_find(cards, n, minted);
+    int                ok = 0;
+    if (c) {
+        struct board_card edited = *c;
+        edited.col = BOARD_DOING;
+        edited.body = NULL;
+        snprintf(edited.kind, sizeof edited.kind, "%s", SWEEP_KIND);
+        ok = board_update(&edited);
+    }
+    board_free(cards, n);
+
+    if (!ok) {
+        board_remove(minted);
+        return 0;
+    }
+    snprintf(id, size, "%s", minted);
+    return 1;
+}
+
+static const char *next_line(const char *at, char *out, size_t size)
+{
+    while (*at == '\n' || *at == ' ')
+        at++;
+    if (!*at)
+        return NULL;
+
+    const char *end = strchr(at, '\n');
+    size_t      len = end ? (size_t)(end - at) : strlen(at);
+    if (len >= size)
+        len = size - 1;
+    memcpy(out, at, len);
+    out[len] = '\0';
+    return end ? end + 1 : at + strlen(at);
+}
+
+int boardsweep_proposed(const struct board_card *c)
+{
+    if (!boardsweep_is(c) || !c->body)
+        return 0;
+
+    int         k = 0;
+    char        line[BOARD_TITLE_MAX];
+    const char *at = c->body;
+    while ((at = next_line(at, line, sizeof line)))
+        k++;
+    return k;
 }
 
 int boardsweep_finished(const char *id, const char *reply)
@@ -154,87 +195,74 @@ int boardsweep_finished(const char *id, const char *reply)
 
     boardlog_turn(id, "sweep", NULL, reply);
 
-    struct board_card *cards = NULL;
-    int                n = board_load(&cards);
-    struct board_card *c = board_find(cards, n, id);
-    char               cwd[4096] = "";
-    if (c)
-        snprintf(cwd, sizeof cwd, "%s", c->cwd);
-    board_free(cards, n);
-    if (!cwd[0])
-        return 1;
+    size_t cap = 8192, len = 0;
+    char  *body = malloc(cap);
+    if (!body)
+        return 0;
+    body[0] = '\0';
 
-    mark_swept(cwd);
-
-    char root[4096];
-    sweep_root(cwd, root, sizeof root);
-
+    int    raised = 0;
     cJSON *o = replyjson_parse(reply);
-    if (!o)
-        return 1;
-
-    const cJSON *raised = cJSON_GetObjectItem(o, "cards"), *e = NULL;
-    int          was = proposals_n;
-    cJSON_ArrayForEach(e, raised) {
-        const char *text = cJSON_GetStringValue((cJSON *)e);
-        if (text && *text)
-            propose(text, root);
+    if (o) {
+        const cJSON *cards = cJSON_GetObjectItem(o, "cards"), *e = NULL;
+        cJSON_ArrayForEach(e, cards) {
+            const char *text = cJSON_GetStringValue((cJSON *)e);
+            if (!text || !*text || len + strlen(text) + 2 >= cap)
+                continue;
+            len += (size_t)snprintf(body + len, cap - len, "%s\n", text);
+            raised++;
+        }
+        cJSON_Delete(o);
     }
-    cJSON_Delete(o);
+
+    if (!raised) {
+        free(body);
+        board_note(id, "sweep", "nothing to raise");
+        return board_move(id, BOARD_DONE, "sweep", NULL);
+    }
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    if (c) {
+        struct board_card edited = *c;
+        edited.body = body;
+        board_update(&edited);
+    }
+    board_free(v, n);
+    free(body);
 
     char said[64];
-    snprintf(said, sizeof said, "proposed %d card%s", proposals_n - was,
-             proposals_n - was == 1 ? "" : "s");
+    snprintf(said, sizeof said, "proposed %d card%s", raised, raised == 1 ? "" : "s");
     board_note(id, "sweep", said);
-    return 1;
+    return board_move(id, BOARD_REVIEW, "sweep", NULL);
 }
 
-int boardsweep_proposed(void)
+int boardsweep_approve(const struct board_card *c)
 {
-    return proposals_n;
-}
-
-const char *boardsweep_proposal(int at)
-{
-    if (at < 0 || at >= proposals_n)
-        return NULL;
-    return proposals[at].text;
-}
-
-const char *boardsweep_proposal_repo(int at)
-{
-    if (at < 0 || at >= proposals_n)
-        return NULL;
-    return proposals[at].repo;
-}
-
-void boardsweep_drop(int at)
-{
-    if (at < 0 || at >= proposals_n)
-        return;
-    free(proposals[at].text);
-    for (int i = at; i < proposals_n - 1; i++)
-        proposals[i] = proposals[i + 1];
-    proposals_n--;
-}
-
-void boardsweep_drop_all(void)
-{
-    while (proposals_n)
-        boardsweep_drop(proposals_n - 1);
-}
-
-int boardsweep_accept(int at, const char *text)
-{
-    if (at < 0 || at >= proposals_n)
+    if (!boardsweep_is(c))
         return 0;
-    if (!text || !*text)
-        text = proposals[at].text;
 
-    char id[BOARD_ID_MAX];
-    int  ok = board_add(text, proposals[at].repo, id);
-    if (ok)
+    int         raised = 0;
+    char        line[BOARD_TITLE_MAX];
+    const char *at = c->body ? c->body : "";
+    while ((at = next_line(at, line, sizeof line))) {
+        char id[BOARD_ID_MAX];
+        if (!board_add(line, c->cwd, id))
+            continue;
         board_note(id, "sweep", "raised by a sweep");
-    boardsweep_drop(at);
-    return ok;
+        raised++;
+    }
+
+    char said[64];
+    snprintf(said, sizeof said, "raised %d card%s", raised, raised == 1 ? "" : "s");
+    board_note(c->id, "you", said);
+    return board_move(c->id, BOARD_DONE, "you", NULL);
+}
+
+int boardsweep_reject(const struct board_card *c)
+{
+    if (!boardsweep_is(c))
+        return 0;
+    return board_move(c->id, BOARD_DONE, "you", "proposals dropped");
 }

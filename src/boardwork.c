@@ -146,21 +146,38 @@ static int sweeping_any(void)
 
 int boardwork_sweep_pump(void)
 {
-    if (boardsweep_proposed() || sweeping_any())
+    if (sweeping_any())
         return 0;
 
     struct board_card *cards = NULL;
     int                n = board_load(&cards);
-
-    char id[BOARD_ID_MAX], root[4096];
-    int  started = 0;
-    if (boardsweep_due(cards, n, id, sizeof id, root, sizeof root)) {
-        const struct board_card *c = board_find(cards, n, id);
-        if (c)
-            started = side_start(c, BOARD_WHO_SWEEP, BOARD_ROLE_SWEEP, root,
-                                 boardsweep_prompt(cards, n, c->cwd), "sweep");
-    }
+    char               cwd[4096];
+    char              *prompt = NULL;
+    if (boardsweep_due(cards, n, cwd, sizeof cwd))
+        prompt = boardsweep_prompt(cards, n, cwd);
     board_free(cards, n);
+    if (!prompt)
+        return 0;
+
+    char id[BOARD_ID_MAX];
+    if (!boardsweep_open(cwd, id, sizeof id)) {
+        free(prompt);
+        return 0;
+    }
+
+    cards = NULL;
+    n = board_load(&cards);
+    const struct board_card *c = board_find(cards, n, id);
+    int started = 0;
+    if (c)
+        started = side_start(c, BOARD_WHO_SWEEP, BOARD_ROLE_SWEEP, c->cwd,
+                             prompt, "sweep");
+    else
+        free(prompt);
+    board_free(cards, n);
+
+    if (!started)
+        board_remove(id);
     return started;
 }
 
@@ -348,6 +365,11 @@ int boardwork_blocked(const struct board_card *c, char *why, int size)
     if (!c)
         return 1;
 
+    if (boardsweep_is(c)) {
+        snprintf(why, (size_t)size, "a sweep starts itself");
+        return 1;
+    }
+
     if (!c->cwd[0]) {
         snprintf(why, (size_t)size, "no repo on the card");
         return 1;
@@ -457,7 +479,6 @@ void boardwork_finished(struct session *s)
     }
 
     if (w->role == BOARD_ROLE_SWEEP) {
-        w->done = 1;
         if (failed && *failed)
             board_note(w->id, "sweep", failed);
         boardsweep_finished(w->id, failed && *failed ? NULL : reply);
@@ -581,8 +602,6 @@ static int at_role(enum board_role role, enum board_col col)
     switch (role) {
     case BOARD_ROLE_AUDIT:
         return col == BOARD_AUDIT;
-    case BOARD_ROLE_SWEEP:
-        return col == BOARD_DONE;
     default:
         return col == BOARD_DOING || col == BOARD_REVIEW;
     }

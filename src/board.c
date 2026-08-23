@@ -358,8 +358,10 @@ int board_load(struct board_card **out)
 static void mint_id(const struct board_card *v, int n, char out[BOARD_ID_MAX])
 {
     static const char ALPHABET[] = "0123456789abcdefghijkmnpqrstuvwxyz";
-    unsigned long seed = (unsigned long)time(NULL) * 1099511628211UL ^
-                         (unsigned long)getpid();
+    static unsigned long minted;
+    unsigned long        seed = (unsigned long)time(NULL) * 1099511628211UL ^
+                                (unsigned long)getpid() ^
+                                (minted++ * 2654435761UL);
 
     for (int attempt = 0; attempt < 64; attempt++) {
         seed = seed * 6364136223846793005UL + 1442695040888963407UL;
