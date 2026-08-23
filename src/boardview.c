@@ -782,6 +782,22 @@ static void build_stages(const struct board_card *c, struct notes *notes)
     }
 }
 
+/* The live session is the truth while a tab is up: a handover switches the
+   backend under a running card before the card records it. */
+static void build_backend(const struct board_card *c, struct notes *notes)
+{
+    int             tab = boardwork_tab(c->id);
+    struct session *s = tab >= 0 ? workspace_at(tab) : NULL;
+    const char     *live = s ? session_backend(s) : NULL;
+    const char     *name = live && *live ? live : c->backend;
+
+    if (!name || !*name)
+        return;
+
+    note_line(notes, dsprintf("  %-8s %s · %s", "backend", name,
+                              s ? "working" : "worked"));
+}
+
 static void build_spend(const struct board_card *c, struct notes *notes)
 {
     char cost[32] = "";
@@ -865,6 +881,7 @@ static void note_entry(struct notes *notes, const char *stamp, const char *who,
 static void build_notes(const struct board_card *c, struct notes *notes)
 {
     build_stages(c, notes);
+    build_backend(c, notes);
     build_spend(c, notes);
 
     for (int i = 0; i < c->log_n; i++) {
