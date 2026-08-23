@@ -6,6 +6,7 @@
 
 #include "board.h"
 #include "boardcfg.h"
+#include "boardsweep.h"
 #include "child.h"
 #include "gitcmd.h"
 #include "text.h"
@@ -170,8 +171,14 @@ int boardmerge_take(const char *key, const char *out, int ok)
             edited.worktree[0] = '\0';
             board_update(&edited);
         }
+        char landed_in[4096] = "";
+        if (c)
+            snprintf(landed_in, sizeof landed_in, "%s", c->cwd);
         board_free(cards, n);
         board_note(id, "board", "landed");
+        // Another card down in that repo, and every so often that is the one
+        // that brings a look over the whole of it due.
+        boardsweep_landed(landed_in);
     } else {
         board_move(id, BOARD_DOING, "board", said);
     }

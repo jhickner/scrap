@@ -10,7 +10,8 @@
 
 #define CFG_MAX_BYTES (1u << 20)
 
-static const char *const WHO_NAMES[BOARD_WHO] = {"triage", "worker", "audit"};
+static const char *const WHO_NAMES[BOARD_WHO] = {"triage", "worker", "audit",
+                                                 "sweep"};
 
 const char *boardcfg_who_name(enum board_who who)
 {
@@ -115,6 +116,25 @@ static const char AUDIT_PROMPT[] =
     "there are none, say clean and mean it -- a gate that never opens is a "
     "gate nobody keeps.";
 
+// A sweep is looking for what no single card could show: each landed on its
+// own and made sense on its own, and the duplication is only visible across
+// them.
+static const char SWEEP_PROMPT[] =
+    "Look over this repo for what incremental work leaves behind. Answer with "
+    "JSON only, no prose and no code fence:\n"
+    "\n"
+    "  {\"cards\":[\"...\",\"...\"]}\n"
+    "\n"
+    "Each card is one sentence: what should change, and where. Look for two "
+    "mechanisms doing one job, a thing done three different ways, a helper "
+    "copied instead of shared, and structure that has drifted from what the "
+    "code around it does.\n"
+    "\n"
+    "Only what you would actually spend an afternoon on. Not style, not "
+    "naming, not anything you would call a nitpick. Five at the very most, "
+    "and an empty list is a fine answer -- a sweep that always finds "
+    "something is one nobody will read twice.";
+
 static char *dup_or_null(const char *s)
 {
     return s ? strdup(s) : NULL;
@@ -130,6 +150,7 @@ static const char *default_prompt(enum board_who who)
     switch (who) {
     case BOARD_WHO_WORKER: return WORKER_PROMPT;
     case BOARD_WHO_AUDIT:  return AUDIT_PROMPT;
+    case BOARD_WHO_SWEEP:  return SWEEP_PROMPT;
     default:               return TRIAGE_PROMPT;
     }
 }
@@ -158,6 +179,7 @@ static void defaults(struct board_cfg *c)
     c->who[BOARD_WHO_TRIAGE].prompt = dup_or_null(TRIAGE_PROMPT);
     c->who[BOARD_WHO_WORKER].prompt = dup_or_null(WORKER_PROMPT);
     c->who[BOARD_WHO_AUDIT].prompt = dup_or_null(AUDIT_PROMPT);
+    c->who[BOARD_WHO_SWEEP].prompt = dup_or_null(SWEEP_PROMPT);
 }
 
 static const char *path(void)

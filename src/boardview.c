@@ -13,6 +13,7 @@
 #include "boardaudit.h"
 #include "boardcfgui.h"
 #include "boardmerge.h"
+#include "boardsweep.h"
 #include "boardtriage.h"
 #include "boardwork.h"
 #include "child.h"
@@ -400,6 +401,7 @@ static int board_reap(void)
         changed |= boardtriage_take(key, out);
         changed |= boardmerge_take(key, out, ok);
         changed |= boardaudit_take(key, out);
+        changed |= boardsweep_take(key, out);
         free(out);
     }
     return changed;
@@ -420,6 +422,7 @@ static int board_tick(void *ud)
     // One card lands at a time, and the next one starts when it is done.
     moved |= boardmerge_pump();
     moved |= boardaudit_pump();
+    moved |= boardsweep_pump();
     return moved ? PICK_TICK_REOPEN : 0;
 }
 
