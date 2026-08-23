@@ -27,6 +27,11 @@ enum pick_search {
 #define PICK_HEADING 1   /* a group header: dim, never selectable, dropped by
                             a query that empties its group */
 #define PICK_APART   2   /* an ordinary row, set off by a blank line above */
+#define PICK_TEXT    3   /* text rather than a choice: dim and never
+                            selectable, like a heading, but with no blank line
+                            above it, so a wrapped paragraph reads as one. It
+                            belongs to the group it sits under and goes when
+                            that group goes. */
 
 //
 // A list whose rows say what they are doing while it is open.

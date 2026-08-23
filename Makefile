@@ -112,12 +112,15 @@ $(BUILD)/muxcfgtest: tools/muxcfgtest.c src/muxcfg.o src/settings.o src/text.o s
 $(BUILD)/telegramtest: tools/telegramtest.c src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
+$(BUILD)/boardtest: tools/boardtest.c src/board.o src/text.o src/vendor/cJSON.o | $(BUILD)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
+
 $(BUILD)/highlighttest: tools/highlighttest.c src/highlight.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
 CHECKS  := viewporttest imagerowtest chrometest imagefittest mdtest reflowtest toolstyletest sessionlisttest claudetest codextest \
            groktest filedifftest pitest agenttabstest statustest transcripttest \
-           sessionviewtest highlighttest muxcfgtest telegramtest
+           sessionviewtest highlighttest muxcfgtest telegramtest boardtest
 
 check: $(addprefix $(BUILD)/,$(CHECKS))
 	@for t in $^; do echo "$$t"; ./$$t || exit 1; done

@@ -1,0 +1,258 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "board.h"
+
+static int failures;
+
+static void fail(const char *what)
+{
+    fprintf(stderr, "FAIL %s\n", what);
+    failures++;
+}
+
+static void expect(int ok, const char *what)
+{
+    if (!ok)
+        fail(what);
+}
+
+// The store is found through HOME, so a throwaway one is enough to keep the
+// test off the real board.
+static char home[] = "/tmp/boardtest.XXXXXX";
+
+static void cleanup(void)
+{
+    char cmd[256];
+    snprintf(cmd, sizeof cmd, "rm -rf %s", home);
+    if (system(cmd) != 0)
+        fprintf(stderr, "could not clean %s\n", home);
+}
+
+static int count_in(struct board_card *v, int n, enum board_col col)
+{
+    int k = 0;
+    for (int i = 0; i < n; i++)
+        k += v[i].col == col;
+    return k;
+}
+
+static void test_capture(void)
+{
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("fix the tab strip\nit wraps at 80 columns", "/tmp/repo", id),
+           "capture returns");
+    expect(id[0] != '\0', "capture mints an id");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    expect(n == 1, "one card in the store");
+
+    struct board_card *c = board_find(v, n, id);
+    if (!c) {
+        fail("card is found by its id");
+        board_free(v, n);
+        return;
+    }
+    expect(c->col == BOARD_NEW, "capture lands in new");
+    expect(!strcmp(c->title, "fix the tab strip"), "title is the first line");
+    expect(strstr(c->body, "80 columns") != NULL, "body keeps the rest");
+    expect(!strcmp(c->cwd, "/tmp/repo"), "cwd is recorded");
+    expect(c->kind[0] == '\0', "kind waits for triage");
+    expect(c->created > 0 && c->updated > 0, "card is stamped");
+    board_free(v, n);
+}
+
+static void test_ids_are_distinct(void)
+{
+    char seen[32][BOARD_ID_MAX];
+    for (int i = 0; i < 32; i++) {
+        char text[64];
+        snprintf(text, sizeof text, "card number %d", i);
+        if (!board_add(text, "/tmp/repo", seen[i])) {
+            fail("bulk capture");
+            return;
+        }
+        for (int j = 0; j < i; j++)
+            if (!strcmp(seen[i], seen[j])) {
+                fail("ids collide");
+                return;
+            }
+    }
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    expect(n == 33, "every captured card survives");
+    board_free(v, n);
+}
+
+static void test_note_and_move(void)
+{
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("worktree cleanup after approve", "/tmp/repo", id), "capture");
+
+    expect(board_note(id, "triage", "feature, mux, priority 0"), "note appends");
+    expect(board_move(id, BOARD_BACKLOG, "triage", "classified as feature"),
+           "move with a reason");
+    expect(board_move(id, BOARD_DOING, "you", NULL), "move without a reason");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    if (!c) {
+        fail("card survives its notes");
+        board_free(v, n);
+        return;
+    }
+    expect(c->col == BOARD_DOING, "column follows the last move");
+    expect(c->log_n == 2, "a move with no reason logs nothing");
+    expect(!strcmp(c->log[0].who, "triage"), "note records who");
+    expect(strstr(c->log[1].text, "classified") != NULL, "move logs its reason");
+    expect(c->log[0].ts > 0, "note is stamped");
+    board_free(v, n);
+}
+
+static void test_update_preserves_created(void)
+{
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("telegram menus lose the cancel row", "/tmp/repo", id), "capture");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    if (!c) {
+        fail("card to update");
+        board_free(v, n);
+        return;
+    }
+
+    time_t created = c->created;
+    snprintf(c->kind, sizeof c->kind, "bug");
+    snprintf(c->model, sizeof c->model, "opus");
+    snprintf(c->base, sizeof c->base, "b519936");
+    c->priority = 2;
+    c->cost_usd = 0.42;
+    c->col = BOARD_REVIEW;
+    expect(board_update(c), "update writes back");
+    board_free(v, n);
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    if (!c) {
+        fail("updated card is still there");
+        board_free(v, n);
+        return;
+    }
+    expect(!strcmp(c->kind, "bug"), "kind round-trips");
+    expect(!strcmp(c->model, "opus"), "model round-trips");
+    expect(!strcmp(c->base, "b519936"), "base sha round-trips");
+    expect(c->priority == 2, "priority round-trips");
+    expect(c->cost_usd > 0.41 && c->cost_usd < 0.43, "cost round-trips");
+    expect(c->col == BOARD_REVIEW, "column round-trips");
+    expect(c->created == created, "update leaves created alone");
+    board_free(v, n);
+}
+
+static void test_update_leaves_others_alone(void)
+{
+    struct board_card *before = NULL;
+    int                n_before = board_load(&before);
+
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("a card to touch", "/tmp/repo", id), "capture");
+    expect(board_note(id, "you", "touched"), "note");
+
+    struct board_card *after = NULL;
+    int                n_after = board_load(&after);
+    expect(n_after == n_before + 1, "only the new card was added");
+
+    int intact = 1;
+    for (int i = 0; i < n_before; i++) {
+        struct board_card *c = board_find(after, n_after, before[i].id);
+        if (!c || c->col != before[i].col || strcmp(c->title, before[i].title) ||
+            c->log_n != before[i].log_n)
+            intact = 0;
+    }
+    expect(intact, "every other card is untouched");
+
+    board_free(before, n_before);
+    board_free(after, n_after);
+}
+
+static void test_remove(void)
+{
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("delete me", "/tmp/repo", id), "capture");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    int                had = n;
+    expect(board_find(v, n, id) != NULL, "card is there before");
+    board_free(v, n);
+
+    expect(board_remove(id), "remove reports success");
+    expect(!board_remove(id), "removing twice fails");
+    expect(!board_remove("nope"), "removing a stranger fails");
+
+    n = board_load(&v);
+    expect(n == had - 1, "one fewer card");
+    expect(board_find(v, n, id) == NULL, "card is gone");
+    board_free(v, n);
+}
+
+static void test_columns(void)
+{
+    expect(board_col_from_name("merging") == BOARD_MERGING, "column by name");
+    expect(board_col_from_name("unclear") == BOARD_UNCLEAR, "unclear by name");
+    expect(board_col_from_name("nonsense") == BOARD_NEW, "unknown falls back to new");
+    expect(!strcmp(board_col_name(BOARD_REVIEW), "review"), "column to name");
+
+    for (int i = 0; i < BOARD_COLS; i++)
+        if ((int)board_col_from_name(board_col_name((enum board_col)i)) != i) {
+            fail("every column round-trips");
+            break;
+        }
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    expect(count_in(v, n, BOARD_NEW) > 0, "cards sit in new");
+    board_free(v, n);
+}
+
+static void test_empty_and_missing(void)
+{
+    struct board_card *v = (struct board_card *)1;
+    unlink(board_path());
+    int n = board_load(&v);
+    expect(n == 0 && v == NULL, "a missing store loads as empty");
+    expect(!board_add("", "/tmp/repo", NULL), "empty text is not a card");
+    expect(!board_note("ghost", "you", "hi"), "a note needs a card");
+    board_free(v, n);
+}
+
+int main(void)
+{
+    if (!mkdtemp(home)) {
+        perror("mkdtemp");
+        return 1;
+    }
+    setenv("HOME", home, 1);
+
+    test_capture();
+    test_ids_are_distinct();
+    test_note_and_move();
+    test_update_preserves_created();
+    test_update_leaves_others_alone();
+    test_remove();
+    test_columns();
+    test_empty_and_missing();
+
+    cleanup();
+    if (failures)
+        fprintf(stderr, "%d failure(s)\n", failures);
+    else
+        printf("ok\n");
+    return failures ? 1 : 0;
+}

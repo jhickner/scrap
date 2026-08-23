@@ -39,7 +39,17 @@ static const char *const SPIN[] = {"\xe2\xa0\x8b", "\xe2\xa0\x99", "\xe2\xa0\xb9
                                   "\xe2\xa0\xa6", "\xe2\xa0\xa7", "\xe2\xa0\x87",
                                   "\xe2\xa0\x8f"};
 
+// Both kinds of row the highlight passes over: a group header, and a row that
+// is text rather than a choice.
 static int item_heading(const struct view *v, int i)
+{
+    return v->heading &&
+           (v->heading[i] == PICK_HEADING || v->heading[i] == PICK_TEXT);
+}
+
+// The stricter one: a header that owns the rows under it, and takes the blank
+// line that sets its group off from the one above.
+static int item_group(const struct view *v, int i)
 {
     return v->heading && v->heading[i] == PICK_HEADING;
 }
@@ -67,6 +77,11 @@ static int animating(const struct view *v)
 static int row_heading(const struct view *v, int row)
 {
     return item_heading(v, v->order[row]);
+}
+
+static int row_group(const struct view *v, int row)
+{
+    return item_group(v, v->order[row]);
 }
 
 static int row_apart(const struct view *v, int row)
@@ -109,7 +124,7 @@ static int visible_cap(const struct view *v)
     if (v->heading) {
         int breaks = 0;
         for (int i = 0; i < v->count; i++)
-            if (row_heading(v, i) || row_apart(v, i))
+            if (row_group(v, i) || row_apart(v, i))
                 breaks++;
         if (breaks > 1)
             rows -= breaks - 1;
@@ -130,13 +145,22 @@ static void refilter(struct view *v)
         // heading that says where it lives. A heading matches for everything
         // beneath it -- typing part of a directory keeps that whole group --
         // and one whose group the query emptied goes with it.
-        if (item_heading(v, i)) {
+        if (item_group(v, i)) {
             under = !v->query[0] || text_fuzzy_score(v->items[i].label, v->query) >= 0;
             int has = under;
-            for (int j = i + 1; !has && j < v->n && !item_heading(v, j); j++)
+            for (int j = i + 1; !has && j < v->n && !item_group(v, j); j++)
                 if (text_fuzzy_score(v->items[j].label, v->query) >= 0)
                     has = 1;
             if (!has)
+                continue;
+            v->order[v->count] = i;
+            v->score[v->count++] = 0;
+            continue;
+        }
+        // Text belongs to its group rather than to the query: it is not
+        // something to match against, and it goes when its group goes.
+        if (item_heading(v, i)) {
+            if (!under)
                 continue;
             v->order[v->count] = i;
             v->score[v->count++] = 0;
@@ -227,8 +251,10 @@ static void paint(void *ud)
     for (int row = v->top; row < end; row++) {
         int i = v->order ? v->order[row] : row;
         if (item_heading(v, i)) {
-            // A blank line sets each group off from the one above it.
-            if (row > v->top) {
+            // A blank line sets each group off from the one above it. Text
+            // rows take none: consecutive lines of one paragraph would come
+            // out double spaced.
+            if (item_group(v, i) && row > v->top) {
                 ui_put("\n");
                 rows++;
             }
