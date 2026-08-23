@@ -78,6 +78,17 @@ static size_t align_width(const struct view *v, int columns)
     return width > cap ? cap : width;
 }
 
+/* the ellipsis has to sit inside the budget: a label that spends the whole
+   budget and then trails a mark pushes its detail a cell right of the rest. */
+static size_t fit_bytes(const char *s, size_t budget, int *cut)
+{
+    size_t fit = ui_fit_bytes(s, budget);
+    *cut = s[fit] != '\0';
+    if (*cut)
+        fit = ui_fit_bytes(s, budget ? budget - 1 : 0);
+    return fit;
+}
+
 static int item_spins(const struct view *v, int i)
 {
     return v->live && v->live->spin && v->live->spin[i];
@@ -317,14 +328,14 @@ static void paint(void *ud)
 
         if (pad_to && items[i].detail && *items[i].detail && label_budget > pad_to)
             label_budget = pad_to;
-        size_t label_n = ui_fit_bytes(items[i].label, label_budget);
+        int    cut = 0;
+        size_t label_n = fit_bytes(items[i].label, label_budget, &cut);
         ui_putn(items[i].label, label_n);
-        if (items[i].label[label_n])
+        if (cut)
             ui_put("…");
         ui_esc(ui_style(UI_RESET));
 
-        size_t shown = ui_cells_n(items[i].label, label_n) +
-                       (items[i].label[label_n] ? 1 : 0);
+        size_t shown = ui_cells_n(items[i].label, label_n) + (cut ? 1 : 0);
         if (pad_to && items[i].detail && *items[i].detail && shown < pad_to) {
             ui_pad((int)(pad_to - shown));
             shown = pad_to;
