@@ -39,7 +39,7 @@
 // Letters are shortcuts here rather than a search, so without a line saying
 // so the list gives no sign it has any keys at all.
 #define BOARD_HINT \
-    "enter edit  ·  s start a worker  ·  g go to it  ·  "                     \
+    "enter edit  ·  s start  ·  g worker  ·  "                                \
     "a approve  ·  f feedback  ·  r reject\n"                                 \
     "n new  ·  t triage  ·  d delete  ·  c config  ·  * all repos  ·  / search"
 

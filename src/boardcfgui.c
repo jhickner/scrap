@@ -12,7 +12,7 @@
 #include "pick.h"
 #include "vendor/agents/backend.h"
 
-#define CFG_HINT "enter change  ·  esc done"
+#define CFG_HINT "enter edit  ·  esc done"
 
 enum row_kind {
     ROW_HEAD,
@@ -60,18 +60,18 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
     *n = 0;
 
     head(rows, n, "workers");
-    count_row(rows, n, "how many at once", &c->workers, 1, 11, NULL);
-    count_row(rows, n, "do not start above", &c->usage_ceiling, 1, 100, "% of quota");
-    count_row(rows, n, "wait if quota resets within", &c->reset_hold, 0, 240, "min");
+    count_row(rows, n, "concurrency", &c->workers, 1, 11, NULL);
+    count_row(rows, n, "usage ceiling", &c->usage_ceiling, 1, 100, "%");
+    count_row(rows, n, "reset hold", &c->reset_hold, 0, 240, "min");
 
     head(rows, n, "audit");
-    count_row(rows, n, "audit a diff over", &c->audit_files, 0, 500, "files");
-    count_row(rows, n, "audit a diff over", &c->audit_lines, 0, 100000, "lines");
+    count_row(rows, n, "file threshold", &c->audit_files, 0, 500, NULL);
+    count_row(rows, n, "line threshold", &c->audit_lines, 0, 100000, NULL);
 
     head(rows, n, "sweep");
-    count_row(rows, n, "look for duplication every", &c->sweep_every, 0, 500, "cards done");
+    count_row(rows, n, "interval", &c->sweep_every, 0, 500, "cards");
 
-    head(rows, n, "who runs what");
+    head(rows, n, "models");
     for (int i = 0; i < BOARD_WHO; i++) {
         rows[*n].kind = ROW_PROFILE;
         rows[*n].label = boardcfg_who_name((enum board_who)i);
@@ -79,7 +79,7 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
         (*n)++;
     }
 
-    head(rows, n, "what they are told");
+    head(rows, n, "prompts");
     for (int i = 0; i < BOARD_WHO; i++) {
         rows[*n].kind = ROW_PROMPT;
         rows[*n].label = boardcfg_who_name((enum board_who)i);
@@ -87,9 +87,9 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
         (*n)++;
     }
 
-    head(rows, n, "when quota runs out");
+    head(rows, n, "delegation");
     rows[*n].kind = ROW_CHAIN;
-    rows[*n].label = "hand the card on to";
+    rows[*n].label = "order";
     (*n)++;
 }
 
@@ -189,10 +189,10 @@ static void edit_profile(struct board_cfg *c, enum board_who who)
     };
 
     char title[128];
-    snprintf(title, sizeof title, "%s · what runs it", boardcfg_who_name(who));
+    snprintf(title, sizeof title, "%s model", boardcfg_who_name(who));
 
     static const char *const NOTES[] = {
-        "an empty model or effort is whatever the backend does by default",
+        "empty = the backend's own default",
     };
 
     struct form f = {
@@ -221,7 +221,7 @@ static void edit_prompt(struct board_cfg *c, enum board_who who)
 
 static void edit_chain(struct board_cfg *c)
 {
-    char *said = ask_run("backends in order, comma separated", c->delegation);
+    char *said = ask_run("delegation order, comma separated", c->delegation);
     if (!said)
         return;
     // Spaces are how it reads; commas are how it is stored.
