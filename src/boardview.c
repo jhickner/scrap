@@ -39,9 +39,10 @@
 #define KEY_FEEDBACK 'f'
 #define KEY_LOG      'l'
 #define KEY_CONFIG   'c'
+#define KEY_SERVE    'b'
 #define KEY_ALL      '*'
 
-#define BOARD_KEYS "ndtsgarflc*"
+#define BOARD_KEYS "ndtsgarflcb*"
 
 #define BOARD_RECENT 3
 
@@ -51,7 +52,7 @@
     "enter edit  ·  s start  ·  g worker  ·  "                                \
     "a approve  ·  f feedback  ·  r reject\n"                                 \
     "n new  ·  t triage  ·  l log  ·  d delete  ·  c config  ·  "               \
-    "* all repos  ·  / search"
+    "b backend  ·  * all repos  ·  / search"
 
 struct vrow {
     char          id[BOARD_ID_MAX];
@@ -531,6 +532,53 @@ static void do_new(const char *cwd, char *sel_id)
     free(text);
 }
 
+static void do_serve(char *notice, size_t size)
+{
+    const struct board_cfg *cfg = boardcfg();
+
+    struct pick_item items[BOARD_BACKENDS_MAX];
+    char             details[BOARD_BACKENDS_MAX][160];
+    int              at = 0;
+
+    for (int i = 0; i < cfg->backends_n; i++) {
+        const struct board_backend *b = &cfg->backends[i];
+        size_t                      used = 0;
+        details[i][0] = '\0';
+        for (int t = 0; t < BOARD_TIERS; t++)
+            used += (size_t)snprintf(details[i] + used, sizeof details[i] - used,
+                                     "%s%s", t ? " · " : "",
+                                     b->level[t].model[0] ? b->level[t].model
+                                                          : "default");
+        items[i] = (struct pick_item){b->name, details[i]};
+        if (!strcmp(b->name, boardcfg_serving()))
+            at = i;
+    }
+    if (!cfg->backends_n)
+        return;
+
+    int chosen = pick_run("serving the board", items, cfg->backends_n, at);
+    if (chosen < 0)
+        return;
+
+    char name[32];
+    snprintf(name, sizeof name, "%s", cfg->backends[chosen].name);
+    if (!boardcfg_set_serving(name)) {
+        snprintf(notice, size, "could not switch to %s", name);
+        return;
+    }
+
+    int waiting = 0;
+    int moved = boardwork_serve(&waiting);
+
+    size_t used = (size_t)snprintf(notice, size, "%s is serving", name);
+    if (moved)
+        used += (size_t)snprintf(notice + used, size - used,
+                                 " · %d worker%s switched", moved,
+                                 moved == 1 ? "" : "s");
+    if (waiting)
+        snprintf(notice + used, size - used, " · %d after its turn", waiting);
+}
+
 static int do_delete(const struct board_card *c)
 {
     char question[280];
@@ -961,9 +1009,16 @@ int boardview_run(const char *cwd)
             }
             break;
         }
-        case KEY_CONFIG:
+        case KEY_CONFIG: {
             close_list();
             boardcfgui_run();
+            int waiting = 0;
+            boardwork_serve(&waiting);
+            break;
+        }
+        case KEY_SERVE:
+            close_list();
+            do_serve(notice, sizeof notice);
             break;
         case KEY_ALL:
             if (filter[0])

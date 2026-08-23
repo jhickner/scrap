@@ -19,6 +19,8 @@ enum row_kind {
     ROW_COUNT,
     ROW_TOGGLE,
     ROW_PROFILE,
+    ROW_SERVING,
+    ROW_BACKEND,
     ROW_PROMPT,
     ROW_VERIFY,
     ROW_KIND,
@@ -36,6 +38,7 @@ struct row {
 
     enum board_who who;
     int            kind_at;
+    int            backend_at;
 };
 
 #define ROWS_MAX 64
@@ -98,6 +101,17 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
     head(rows, n, "archive");
     count_row(rows, n, "after", &c->archive_after, 0, 3650, "days");
 
+    head(rows, n, "backends");
+    rows[*n].kind = ROW_SERVING;
+    rows[*n].label = "serving";
+    (*n)++;
+    for (int i = 0; i < c->backends_n && *n < ROWS_MAX - 1; i++) {
+        rows[*n].kind = ROW_BACKEND;
+        rows[*n].label = c->backends[i].name;
+        rows[*n].backend_at = i;
+        (*n)++;
+    }
+
     head(rows, n, "models");
     for (int i = 0; i < BOARD_WHO; i++) {
         rows[*n].kind = ROW_PROFILE;
@@ -139,9 +153,29 @@ static void value_of(const struct row *r, const struct board_cfg *c,
         break;
     case ROW_PROFILE: {
         const struct board_profile *p = &c->who[r->who];
+        enum board_tier             tier = boardcfg_tier_from_name(p->tier);
+        if (tier < BOARD_TIERS) {
+            const struct board_backend *b = boardcfg_backend(c, c->serving);
+            const char                 *model = b ? b->level[tier].model : "";
+            snprintf(out, size, "%s · %s · %s", p->tier, c->serving,
+                     model[0] ? model : "default");
+            break;
+        }
         snprintf(out, size, "%s · %s%s%s", p->backend[0] ? p->backend : "claude",
                  p->model[0] ? p->model : "default",
                  p->effort[0] ? " · " : "", p->effort);
+        break;
+    }
+    case ROW_SERVING:
+        snprintf(out, size, "%s", c->serving);
+        break;
+    case ROW_BACKEND: {
+        const struct board_backend *b = &c->backends[r->backend_at];
+        size_t                      at = 0;
+        out[0] = '\0';
+        for (int t = 0; t < BOARD_TIERS && at < size; t++)
+            at += (size_t)snprintf(out + at, size - at, "%s%s", t ? " · " : "",
+                                   b->level[t].model[0] ? b->level[t].model : "default");
         break;
     }
     case ROW_PROMPT: {
@@ -190,25 +224,30 @@ static void edit_count(struct row *r)
     *r->count = (int)want;
 }
 
+static const char *const EFFORTS[] = {
+    "", "low", "medium", "high", "xhigh", "max",
+};
+
+static const char *const TIERS[] = {"", "low", "med", "high"};
+
 static void edit_profile(struct board_cfg *c, enum board_who who)
 {
     struct board_profile *p = &c->who[who];
 
-    const char *backends[8];
+    const char *backends[BOARD_BACKENDS_MAX];
     int         nbackends = 0;
-    for (const char *const *b = backend_names(); *b && nbackends < 8; b++)
+    for (const char *const *b = backend_names();
+         *b && nbackends < BOARD_BACKENDS_MAX; b++)
         backends[nbackends++] = *b;
 
-    static const char *const EFFORTS[] = {
-        "", "low", "medium", "high", "xhigh", "max",
-    };
-
-    char backend[32], model[128], effort[32];
+    char tier[8], backend[32], model[128], effort[32];
+    snprintf(tier, sizeof tier, "%s", p->tier);
     snprintf(backend, sizeof backend, "%s", p->backend[0] ? p->backend : "claude");
     snprintf(model, sizeof model, "%s", p->model);
     snprintf(effort, sizeof effort, "%s", p->effort);
 
     struct form_field fields[] = {
+        {"tier", FORM_CHOICE, tier, sizeof tier, TIERS, COUNT(TIERS)},
         {"backend", FORM_CHOICE, backend, sizeof backend, backends, nbackends},
         {"model", FORM_TEXT, model, sizeof model, NULL, 0},
         {"effort", FORM_CHOICE, effort, sizeof effort, EFFORTS, COUNT(EFFORTS)},
@@ -218,22 +257,83 @@ static void edit_profile(struct board_cfg *c, enum board_who who)
     snprintf(title, sizeof title, "%s model", boardcfg_who_name(who));
 
     static const char *const NOTES[] = {
+        "a tier runs on whichever backend is serving, at that level.",
+        "no tier pins the role to the backend and model below.",
         "empty = the backend's own default",
     };
 
     struct form f = {
         .title = title,
         .notes = NOTES,
-        .notes_n = 1,
+        .notes_n = 3,
         .fields = fields,
         .fields_n = COUNT(fields),
     };
     if (!form_run(&f))
         return;
 
+    snprintf(p->tier, sizeof p->tier, "%s", tier);
     snprintf(p->backend, sizeof p->backend, "%s", backend);
     snprintf(p->model, sizeof p->model, "%s", model);
     snprintf(p->effort, sizeof p->effort, "%s", effort);
+}
+
+static void edit_serving(struct board_cfg *c)
+{
+    if (!c->backends_n)
+        return;
+
+    struct pick_item items[BOARD_BACKENDS_MAX];
+    int              at = 0;
+    for (int i = 0; i < c->backends_n; i++) {
+        items[i] = (struct pick_item){c->backends[i].name, NULL};
+        if (!strcmp(c->backends[i].name, c->serving))
+            at = i;
+    }
+
+    int chosen = pick_run("serving the board", items, c->backends_n, at);
+    if (chosen >= 0)
+        snprintf(c->serving, sizeof c->serving, "%s", c->backends[chosen].name);
+}
+
+static void edit_backend(struct board_cfg *c, int at)
+{
+    struct board_backend *b = &c->backends[at];
+
+    char              model[BOARD_TIERS][128], effort[BOARD_TIERS][32];
+    char              labels[BOARD_TIERS * 2][32];
+    struct form_field fields[BOARD_TIERS * 2];
+    int               n = 0;
+
+    for (int t = 0; t < BOARD_TIERS; t++) {
+        const char *name = boardcfg_tier_name((enum board_tier)t);
+        snprintf(model[t], sizeof model[t], "%s", b->level[t].model);
+        snprintf(effort[t], sizeof effort[t], "%s", b->level[t].effort);
+
+        snprintf(labels[n], sizeof labels[n], "%s model", name);
+        fields[n] = (struct form_field){labels[n], FORM_TEXT, model[t],
+                                        sizeof model[t], NULL, 0};
+        n++;
+        snprintf(labels[n], sizeof labels[n], "%s effort", name);
+        fields[n] = (struct form_field){labels[n], FORM_CHOICE, effort[t],
+                                        sizeof effort[t], EFFORTS, COUNT(EFFORTS)};
+        n++;
+    }
+
+    static const char *const NOTES[] = {
+        "what low, med and high mean on this backend.",
+        "empty = the backend's own default",
+    };
+
+    struct form f = {.title = b->name, .notes = NOTES, .notes_n = 2,
+                     .fields = fields, .fields_n = n};
+    if (!form_run(&f))
+        return;
+
+    for (int t = 0; t < BOARD_TIERS; t++) {
+        snprintf(b->level[t].model, sizeof b->level[t].model, "%s", model[t]);
+        snprintf(b->level[t].effort, sizeof b->level[t].effort, "%s", effort[t]);
+    }
 }
 
 static void edit_prompt(struct board_cfg *c, enum board_who who)
@@ -394,6 +494,8 @@ void boardcfgui_run(void)
         case ROW_COUNT:   edit_count(&rows[at]); touched = 1; break;
         case ROW_TOGGLE:  *rows[at].count = !*rows[at].count; touched = 1; break;
         case ROW_PROFILE: edit_profile(c, rows[at].who); touched = 1; break;
+        case ROW_SERVING: edit_serving(c); touched = 1; break;
+        case ROW_BACKEND: edit_backend(c, rows[at].backend_at); touched = 1; break;
         case ROW_PROMPT:  edit_prompt(c, rows[at].who); touched = 1; break;
         case ROW_VERIFY:  edit_verify(c); touched = 1; break;
         case ROW_KIND:    edit_kind(c, rows[at].kind_at); touched = 1; break;

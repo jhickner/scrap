@@ -15,7 +15,32 @@ enum board_who {
 
 const char *boardcfg_who_name(enum board_who who);
 
+enum board_tier {
+    BOARD_TIER_LOW,
+    BOARD_TIER_MED,
+    BOARD_TIER_HIGH,
+    BOARD_TIERS,
+};
+
+const char     *boardcfg_tier_name(enum board_tier tier);
+enum board_tier boardcfg_tier_from_name(const char *name);
+
+struct board_level {
+    char model[128];
+    char effort[32];
+};
+
+#define BOARD_BACKENDS_MAX 8
+
+struct board_backend {
+    char               name[32];
+    struct board_level level[BOARD_TIERS];
+};
+
+/* tier, when set, points backend/model/effort at the serving backend's level
+ * of that name instead of the three fields below it. */
 struct board_profile {
+    char  tier[8];
     char  backend[32];
     char  model[128];
     char  effort[32];
@@ -45,6 +70,8 @@ struct board_kind {
 };
 
 struct board_cfg {
+    char serving[32];
+
     int workers;
     int auto_pull;
     int audit_files;
@@ -58,6 +85,9 @@ struct board_cfg {
     int               kinds_n;
 
     struct board_profile who[BOARD_WHO];
+
+    struct board_backend backends[BOARD_BACKENDS_MAX];
+    int                  backends_n;
 };
 
 const struct board_cfg *boardcfg(void);
@@ -67,7 +97,15 @@ void              boardcfg_free(struct board_cfg *c);
 
 int boardcfg_set(const struct board_cfg *c);
 
+/* The profile as a role runs it: a tiered role reads the serving backend. */
 const struct board_profile *boardcfg_for(enum board_who who);
+
+const char *boardcfg_serving(void);
+
+int boardcfg_set_serving(const char *backend);
+
+const struct board_backend *boardcfg_backend(const struct board_cfg *c,
+                                             const char *name);
 
 const struct board_kind *boardcfg_kind(const char *name);
 

@@ -25,6 +25,7 @@ struct worker {
     enum board_role  role;
     int              done;
     int              checked;
+    int              handover;
 };
 
 static struct worker workers[WORKSPACE_MAX];
@@ -181,6 +182,81 @@ int boardwork_sweep_pump(void)
     if (!started)
         board_remove(id);
     return started;
+}
+
+static enum board_who who_of(enum board_role role)
+{
+    switch (role) {
+    case BOARD_ROLE_AUDIT: return BOARD_WHO_AUDIT;
+    case BOARD_ROLE_SWEEP: return BOARD_WHO_SWEEP;
+    default:               return BOARD_WHO_WORKER;
+    }
+}
+
+static void card_backend(const char *id, const char *backend)
+{
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    struct board_card *c = board_find(cards, n, id);
+    if (c) {
+        struct board_card edited = *c;
+        snprintf(edited.backend, sizeof edited.backend, "%s", backend);
+        edited.model[0] = '\0';
+        edited.effort[0] = '\0';
+        board_update(&edited);
+    }
+    board_free(cards, n);
+}
+
+static int handover(struct worker *w)
+{
+    const struct board_profile *p = boardcfg_for(who_of(w->role));
+
+    w->handover = 0;
+    if (!session_switch_backend(w->session, p->backend))
+        return 0;
+    if (p->model[0])
+        session_set_model(w->session, p->model);
+    if (p->effort[0])
+        session_set_effort(w->session, p->effort);
+
+    if (w->role == BOARD_ROLE_WORKER)
+        card_backend(w->id, p->backend);
+
+    char said[64];
+    snprintf(said, sizeof said, "handed to %s", p->backend);
+    board_note(w->id, "board", said);
+    return 1;
+}
+
+/* A role with no tier is pinned to its own backend and does not follow. */
+static int follows(const struct worker *w)
+{
+    const struct board_profile *p = boardcfg_for(who_of(w->role));
+    return p->tier[0] && strcmp(session_backend(w->session), p->backend);
+}
+
+int boardwork_serve(int *waiting)
+{
+    int moved = 0, later = 0;
+
+    for (int i = 0; i < WORKSPACE_MAX; i++) {
+        struct worker *w = &workers[i];
+        if (!w->session || !follows(w))
+            continue;
+
+        int at = workspace_index_of(w->session);
+        if (session_turn_running(w->session) || workspace_queued(at)) {
+            w->handover = 1;
+            later++;
+            continue;
+        }
+        moved += handover(w);
+    }
+
+    if (waiting)
+        *waiting = later;
+    return moved;
 }
 
 int boardwork_hold(const char *id, struct session *s, enum board_role role)
@@ -750,8 +826,17 @@ int boardwork_poll(void)
             changed = 1;
             continue;
         }
-        if (workspace_index_of(workers[i].session) >= 0)
+        int tab = workspace_index_of(workers[i].session);
+        if (tab >= 0) {
+            if (workers[i].handover && !session_turn_running(workers[i].session) &&
+                !workspace_queued(tab)) {
+                if (follows(&workers[i]))
+                    changed |= handover(&workers[i]);
+                else
+                    workers[i].handover = 0;
+            }
             continue;
+        }
 
         struct board_card *cards = NULL;
         int                n = board_load(&cards);
