@@ -7,6 +7,7 @@
 #include "text.h"
 #include "boardaudit.h"
 #include "boardtriage.h"
+#include "replyjson.h"
 #include "sessionfork.h"
 
 static int failures;
@@ -390,6 +391,40 @@ static void test_audit_verdict(void)
     board_remove(id);
 }
 
+// The reply that started this: the model answered, thought better of it, and
+// answered again. Taking the outermost braces spans both and lands the one it
+// took back.
+static void test_reply_json(void)
+{
+    cJSON *o = replyjson_parse("{\"n\":1}\n\nCorrection:\n\n{\"n\":2}");
+    expect(o && cJSON_GetObjectItem(o, "n") &&
+           cJSON_GetObjectItem(o, "n")->valuedouble == 2,
+           "the last answer is the one meant");
+    cJSON_Delete(o);
+
+    o = replyjson_parse("Here you go:\n{\"n\":3}\nhope that helps");
+    expect(o && cJSON_GetObjectItem(o, "n") &&
+           cJSON_GetObjectItem(o, "n")->valuedouble == 3,
+           "prose either side is stepped over");
+    cJSON_Delete(o);
+
+    // A brace inside a string is not a brace.
+    o = replyjson_parse("{\"s\":\"a } in the text\",\"n\":4}");
+    expect(o && cJSON_GetObjectItem(o, "n") &&
+           cJSON_GetObjectItem(o, "n")->valuedouble == 4,
+           "a brace in a string does not close the object");
+    cJSON_Delete(o);
+
+    o = replyjson_parse("{\"outer\":{\"inner\":1},\"n\":5}");
+    expect(o && cJSON_GetObjectItem(o, "n") &&
+           cJSON_GetObjectItem(o, "n")->valuedouble == 5,
+           "a nested object is not mistaken for the whole");
+    cJSON_Delete(o);
+
+    expect(!replyjson_parse("no json at all"), "prose alone is nothing");
+    expect(!replyjson_parse(NULL), "nothing is nothing");
+}
+
 int main(void)
 {
     if (!mkdtemp(home)) {
@@ -407,6 +442,7 @@ int main(void)
     test_columns();
     test_attempts_reset_when_answered();
     test_audit_verdict();
+    test_reply_json();
     test_archive();
     test_empty_and_missing();
 

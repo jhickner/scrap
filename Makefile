@@ -112,7 +112,7 @@ $(BUILD)/muxcfgtest: tools/muxcfgtest.c src/muxcfg.o src/settings.o src/text.o s
 $(BUILD)/telegramtest: tools/telegramtest.c src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
-$(BUILD)/boardtest: tools/boardtest.c src/board.o src/boardtriage.o src/boardaudit.o src/boardcfg.o src/child.o src/gitcmd.o src/text.o src/vendor/cJSON.o | $(BUILD)
+$(BUILD)/boardtest: tools/boardtest.c src/board.o src/boardtriage.o src/boardaudit.o src/boardcfg.o src/replyjson.o src/child.o src/gitcmd.o src/text.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
 $(BUILD)/highlighttest: tools/highlighttest.c src/highlight.o | $(BUILD)

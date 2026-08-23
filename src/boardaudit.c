@@ -9,6 +9,7 @@
 #include "child.h"
 #include "gitcmd.h"
 #include "sessionfork.h"
+#include "replyjson.h"
 #include "vendor/cJSON.h"
 
 #define AUDIT_KEY "audit:"
@@ -172,25 +173,6 @@ int boardaudit_pump(void)
 
 /* ---- what it found ------------------------------------------------------ */
 
-static cJSON *parse_reply(const char *text)
-{
-    if (!text)
-        return NULL;
-    const char *open = strchr(text, '{');
-    const char *close = strrchr(text, '}');
-    if (!open || !close || close < open)
-        return NULL;
-
-    size_t n = (size_t)(close - open) + 1;
-    char  *slice = malloc(n + 1);
-    if (!slice)
-        return NULL;
-    memcpy(slice, open, n);
-    slice[n] = '\0';
-    cJSON *o = cJSON_Parse(slice);
-    free(slice);
-    return o;
-}
 
 int boardaudit_take(const char *key, const char *reply)
 {
@@ -199,7 +181,7 @@ int boardaudit_take(const char *key, const char *reply)
         return 0;
 
     const char *id = key + mark;
-    cJSON      *o = parse_reply(reply);
+    cJSON      *o = replyjson_parse(reply);
     if (!o) {
         // An audit that did not answer is not an audit that passed, but it is
         // not a reason to hold the card either: it goes on, and says so.

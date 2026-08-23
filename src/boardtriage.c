@@ -12,6 +12,7 @@
 #include "child.h"
 #include "boardcfg.h"
 #include "sessionfork.h"
+#include "replyjson.h"
 #include "vendor/cJSON.h"
 
 // Triage runs as a child so the board stays live while it thinks. The pool
@@ -53,27 +54,6 @@ static char *build_prompt(const struct board_card *c)
 
 /* ---- what comes back --------------------------------------------------- */
 
-// The reply should be JSON and nothing else, but a model that has been asked
-// for JSON only will still sometimes wrap it. Take the outermost braces.
-static cJSON *parse_reply(const char *text)
-{
-    if (!text)
-        return NULL;
-    const char *open = strchr(text, '{');
-    const char *close = strrchr(text, '}');
-    if (!open || !close || close < open)
-        return NULL;
-
-    size_t n = (size_t)(close - open) + 1;
-    char  *slice = malloc(n + 1);
-    if (!slice)
-        return NULL;
-    memcpy(slice, open, n);
-    slice[n] = '\0';
-    cJSON *o = cJSON_Parse(slice);
-    free(slice);
-    return o;
-}
 
 static const char *str_of(const cJSON *o, const char *key)
 {
@@ -243,7 +223,7 @@ int boardtriage_take(const char *key, const char *reply)
         return 0;
 
     const char *id = key + mark;
-    cJSON      *o = parse_reply(reply);
+    cJSON      *o = replyjson_parse(reply);
     if (o) {
         apply(id, o);
         cJSON_Delete(o);
