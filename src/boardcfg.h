@@ -46,14 +46,10 @@ struct board_kind {
 
 struct board_cfg {
     int workers;
-    int usage_ceiling;
-    int reset_hold;
     int audit_files;
     int audit_lines;
     int sweep_every;
     int archive_after;
-
-    char delegation[256];
 
     char verify[256];
 

@@ -7,7 +7,6 @@
 
 #include "board.h"
 #include "gitcmd.h"
-#include "quota.h"
 #include "boardcfg.h"
 #include "boardaudit.h"
 #include "boardflow.h"
@@ -214,37 +213,6 @@ static char *first_turn(const struct board_card *c)
     return out;
 }
 
-static int has_room(const char *backend, int ceiling)
-{
-    int percent = 0;
-    if (!quota_get(backend, &percent, NULL))
-        return 1;
-    return percent < ceiling;
-}
-
-static const char *with_room(const char *first, const char *chain, int ceiling,
-                             char *out, size_t size)
-{
-    if (has_room(first, ceiling)) {
-        snprintf(out, size, "%s", first);
-        return out;
-    }
-
-    char rest[256];
-    snprintf(rest, sizeof rest, "%s", chain ? chain : "");
-    for (char *save = rest, *name; (name = strsep(&save, ","));) {
-        while (*name == ' ')
-            name++;
-        if (!*name || !strcmp(name, first))
-            continue;
-        if (has_room(name, ceiling)) {
-            snprintf(out, size, "%s", name);
-            return out;
-        }
-    }
-    return NULL;
-}
-
 static const char *wanted_backend(const struct board_card *c)
 {
     const struct board_profile *p = boardcfg_for(BOARD_WHO_WORKER);
@@ -277,21 +245,6 @@ int boardwork_blocked(const struct board_card *c, char *why, int size)
         return 1;
     }
 
-    const char *wanted = wanted_backend(c);
-    if (has_room(wanted, cfg->usage_ceiling))
-        return 0;
-
-    int soon = quota_resets_in(wanted);
-    if (soon >= 0 && soon <= cfg->reset_hold) {
-        snprintf(why, (size_t)size, "%s resets in %d min", wanted, soon);
-        return 1;
-    }
-
-    char took[32];
-    if (!with_room(wanted, cfg->delegation, cfg->usage_ceiling, took, sizeof took)) {
-        snprintf(why, (size_t)size, "every backend over %d%%", cfg->usage_ceiling);
-        return 1;
-    }
     return 0;
 }
 
@@ -299,8 +252,6 @@ int boardwork_start(const struct board_card *c, char *why, int size)
 {
     if (boardwork_blocked(c, why, size))
         return 0;
-
-    const struct board_cfg *cfg = boardcfg();
 
     int  lands = boardcfg_kind_takes(c->kind, BOARD_STEP_WORKTREE);
     char path[4200];
@@ -329,13 +280,7 @@ int boardwork_start(const struct board_card *c, char *why, int size)
     const char *model = c->model[0] ? c->model : p->model;
     const char *effort = c->effort[0] ? c->effort : p->effort;
 
-    char        took[32];
-    const char *backend = with_room(wanted, cfg->delegation, cfg->usage_ceiling,
-                                    took, sizeof took);
-    if (!backend)
-        backend = wanted;
-
-    int handed_on = strcmp(backend, wanted) != 0;
+    const char *backend = wanted;
 
     int front = workspace_index();
 
@@ -373,16 +318,7 @@ int boardwork_start(const struct board_card *c, char *why, int size)
     snprintf(edited.backend, sizeof edited.backend, "%s", backend);
     board_update(&edited);
 
-    if (handed_on) {
-        int spent = 0;
-        quota_get(wanted, &spent, NULL);
-        char said[256];
-        snprintf(said, sizeof said, "%s at %d%%; started on %s", wanted,
-                 spent, backend);
-        board_note(c->id, "board", said);
-    } else {
-        board_note(c->id, "board", "started");
-    }
+    board_note(c->id, "board", "started");
     return 1;
 }
 

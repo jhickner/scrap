@@ -116,9 +116,6 @@ events for long enough, gets a mark and — past a timeout — is reaped back to
 forever.
 
 Each card records what it cost, from `backend_result`. That is what makes the
-quota headroom below more than a guess.
-
-## Profiles, quota, and delegation
 
 `struct mux_spec` in `muxcfg.h` is already a worker profile — backend, model,
 effort, and standing instructions — so profiles are keyed by kind and reuse the
@@ -140,15 +137,10 @@ becomes the worker's `session_set_system_extra()`, which is where "work in a
 worktree, arrive at a testable state" lives rather than being retyped into
 every spawn.
 
-`session.c` already polls `backend_rate_limit` through `quota_poll()`, so the
 board reads a number that exists. Two rules gate a start: don't begin above a
-usage ceiling, and don't begin work that will die mid-flight — the board sees
 usage before and after every card, so it keeps a rolling per-profile average of
-quota burned and requires headroom against it. A reset inside the next few
-minutes holds the card instead of delegating, because waiting beats running it
 on a worse backend.
 
-When the head backend has no headroom, a delegation chain — `claude → codex →
 grok` — hands the card to the first link that does, and logs why. Backends
 reporting `available == 0` do not report limits at all, which makes them the
 natural tail of the chain: the escape hatch when everything metered is spent.
@@ -193,7 +185,6 @@ renderer until the list actually annoys someone.
 
   backlog
     ● telegram menus lose the cancel row  bug · 3h
-    ● worktree cleanup after approve      waiting on quota · 14:20
 
   active
   → ⣾ kanban store and /card capture      tab 2 · 4m
@@ -236,8 +227,6 @@ when you would rather not leave: a line, logged, sent with `workspace_send()`,
 card back to `active`.
 
 Configuration lives on the board too, behind `c`, rather than being scattered
-into settings: worker cap, usage ceiling and reset hold, audit thresholds,
-profiles, the delegation chain, and the sweep cadence.
 
 Board workers are marked wherever sessions are listed. `struct live_session`
 carries the card id, so any window's session list can tell a board worker from
@@ -272,7 +261,6 @@ keeps it.
 2. The config screen, profiles, triage, `unclear`.
 3. Workers: worktree, `CARD.md`, spawn, `on_finish` to `review`,
    approve/reject/feedback, the watchdog, `◆` in the session view.
-4. Quota ceiling and delegation; headroom averaging once there is data.
 5. Conditional audit, then the merge queue.
 6. The refactor sweep, priorities per kind, archiving.
 7. Kinds as configuration: the classes, what they mean, their prompts, and

@@ -12,7 +12,6 @@
 #include <unistd.h>
 
 #include "agenttabs.h"
-#include "quota.h"
 #include "block.h"
 #include "app.h"
 #include "prompt.h"
@@ -463,7 +462,7 @@ void session_set_typeahead(session_key_fn fn, void *ud)
 
 static void set_id(struct session *s, const char *id);
 
-static void quota_poll(struct session *s)
+static void usage_poll(struct session *s)
 {
     if (!s || !s->agent || !s->agent->rate_limit)
         return;
@@ -472,8 +471,6 @@ static void quota_poll(struct session *s)
     if (limit.available) {
         agenttabs_usage(limit.used_percent, limit.resets_at, limit.window_minutes);
 
-        quota_note(s->backend, limit.used_percent, limit.resets_at,
-                   limit.window_minutes);
     }
 }
 
@@ -644,7 +641,7 @@ static int abort_check(void)
         return owner->abort_request;
 
     name_poll(live);
-    quota_poll(live);
+    usage_poll(live);
     if (live)
         set_spin_word(live);
 
@@ -1505,7 +1502,7 @@ int session_turn(struct session *s, const char *text)
 
     backend_result meta = {0};
     char *reply = s->agent->ask_ex(s->agent, text, &meta);
-    quota_poll(s);
+    usage_poll(s);
     double elapsed = now_seconds() - s->started;
     session_set_drawing(was);
     if (!s->quiet && !s->silent)
@@ -1630,7 +1627,7 @@ int session_turn_pump(struct session *s)
     wake_drain(s);
     drain_events(s);
     name_poll(s);
-    quota_poll(s);
+    usage_poll(s);
 
     if (!s->finished)
         return 1;

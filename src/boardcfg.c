@@ -206,13 +206,10 @@ static void defaults(struct board_cfg *c)
 {
     memset(c, 0, sizeof *c);
     c->workers = 3;
-    c->usage_ceiling = 85;
-    c->reset_hold = 10;
     c->audit_files = 5;
     c->audit_lines = 200;
     c->sweep_every = 8;
     c->archive_after = 14;
-    snprintf(c->delegation, sizeof c->delegation, "claude,codex,grok");
     c->verify[0] = '\0';
 
     c->kinds_n = (int)(sizeof KINDS / sizeof *KINDS);
@@ -257,13 +254,10 @@ static void set_int(int *dst, const cJSON *o, const char *key)
 static void overlay(struct board_cfg *c, const cJSON *o)
 {
     set_int(&c->workers, o, "workers");
-    set_int(&c->usage_ceiling, o, "usage_ceiling");
-    set_int(&c->reset_hold, o, "reset_hold");
     set_int(&c->audit_files, o, "audit_files");
     set_int(&c->audit_lines, o, "audit_lines");
     set_int(&c->sweep_every, o, "sweep_every");
     set_int(&c->archive_after, o, "archive_after");
-    set_str(c->delegation, sizeof c->delegation, o, "delegation");
     set_str(c->verify, sizeof c->verify, o, "verify");
 
     const cJSON *kinds = cJSON_GetObjectItem((cJSON *)o, "kinds");
@@ -381,21 +375,11 @@ static void read_settings(struct board_cfg *c)
         return;
 
     c->workers = mdcfg_int(&m, "workers", c->workers);
-    c->usage_ceiling = mdcfg_int(&m, "usage ceiling", c->usage_ceiling);
-    c->reset_hold = mdcfg_int(&m, "reset hold", c->reset_hold);
     c->audit_files = mdcfg_int(&m, "audit files", c->audit_files);
     c->audit_lines = mdcfg_int(&m, "audit lines", c->audit_lines);
     c->sweep_every = mdcfg_int(&m, "sweep every", c->sweep_every);
     c->archive_after = mdcfg_int(&m, "archive after", c->archive_after);
 
-    const char *chain = mdcfg_get(&m, "delegation");
-    if (*chain) {
-        size_t at = 0;
-        for (const char *p = chain; *p && at + 1 < sizeof c->delegation; p++)
-            if (*p != ' ')
-                c->delegation[at++] = *p;
-        c->delegation[at] = '\0';
-    }
     snprintf(c->verify, sizeof c->verify, "%s", mdcfg_get(&m, "check"));
     mdcfg_free(&m);
 }
@@ -471,38 +455,23 @@ static int write_settings(const struct board_cfg *c)
     if (!board_path(path, sizeof path, BOARD_DIR, "settings"))
         return 0;
 
-    char nums[7][32], chain[256];
+    char nums[5][32];
     snprintf(nums[0], sizeof nums[0], "%d", c->workers);
-    snprintf(nums[1], sizeof nums[1], "%d", c->usage_ceiling);
-    snprintf(nums[2], sizeof nums[2], "%d", c->reset_hold);
-    snprintf(nums[3], sizeof nums[3], "%d", c->audit_files);
-    snprintf(nums[4], sizeof nums[4], "%d", c->audit_lines);
-    snprintf(nums[5], sizeof nums[5], "%d", c->sweep_every);
-    snprintf(nums[6], sizeof nums[6], "%d", c->archive_after);
+    snprintf(nums[1], sizeof nums[1], "%d", c->audit_files);
+    snprintf(nums[2], sizeof nums[2], "%d", c->audit_lines);
+    snprintf(nums[3], sizeof nums[3], "%d", c->sweep_every);
+    snprintf(nums[4], sizeof nums[4], "%d", c->archive_after);
 
-    size_t at = 0;
-    chain[0] = '\0';
-    for (const char *p = c->delegation; *p && at + 2 < sizeof chain; p++) {
-        chain[at++] = *p;
-        if (*p == ',')
-            chain[at++] = ' ';
-    }
-    chain[at] = '\0';
+    const char *keys[] = {"workers", "audit files", "audit lines",
+                          "sweep every", "archive after", "check"};
+    const char *vals[] = {nums[0], nums[1], nums[2], nums[3], nums[4], c->verify};
 
-    const char *keys[] = {"workers", "usage ceiling", "reset hold", "audit files",
-                          "audit lines", "sweep every", "archive after",
-                          "delegation", "check"};
-    const char *vals[] = {nums[0], nums[1], nums[2], nums[3], nums[4], nums[5],
-                          nums[6], chain, c->verify};
-
-    return mdcfg_write(path, keys, vals, 9,
-        "How many workers may run at once, the percent of quota above which\n"
-        "nothing starts, and how close to a reset is worth waiting for rather\n"
-        "than handing on. A diff over either audit threshold is read before it\n"
-        "lands; zero turns that half off. A sweep comes due every so many cards\n"
-        "landed in a repo. Done cards leave the board after so many days.\n"
-        "\n"
-        "delegation is who takes over when a backend runs out, in order.\n"
+    return mdcfg_write(path, keys, vals, 6,
+        "workers is how many may run at once.\n"
+        "A diff over either audit threshold is read before it lands; zero turns\n"
+        "that half off.\n"
+        "sweep every is cards landed in a repo before a sweep of it; zero never.\n"
+        "archive after is days a done card stays on the board; zero forever.\n"
         "check is run in the worktree before a card lands, and it does not land\n"
         "if that fails.\n");
 }
@@ -712,8 +681,6 @@ int boardcfg_set(const struct board_cfg *c)
         cache.who[i].prompt = kept;
     }
     cache.workers = c->workers;
-    cache.usage_ceiling = c->usage_ceiling;
-    cache.reset_hold = c->reset_hold;
     cache.audit_files = c->audit_files;
     cache.audit_lines = c->audit_lines;
     cache.sweep_every = c->sweep_every;
@@ -731,7 +698,6 @@ int boardcfg_set(const struct board_cfg *c)
         cache.kinds[i].prompt = dup_or_null(c->kinds[i].prompt);
     }
 
-    snprintf(cache.delegation, sizeof cache.delegation, "%s", c->delegation);
     snprintf(cache.verify, sizeof cache.verify, "%s", c->verify);
     for (int i = 0; i < BOARD_WHO; i++) {
         snprintf(cache.who[i].backend, sizeof cache.who[i].backend, "%s", c->who[i].backend);

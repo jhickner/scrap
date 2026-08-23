@@ -22,7 +22,6 @@
 #include "confirm.h"
 #include "form.h"
 #include "pick.h"
-#include "quota.h"
 #include "text.h"
 #include "ui.h"
 #include "viewport.h"
@@ -35,14 +34,13 @@
 #define KEY_START    's'
 #define KEY_GO       'g'
 #define KEY_APPROVE  'a'
-#define KEY_APPROVE_OTHER 'A'
 #define KEY_REJECT   'r'
 #define KEY_FEEDBACK 'f'
 #define KEY_LOG      'l'
 #define KEY_CONFIG   'c'
 #define KEY_ALL      '*'
 
-#define BOARD_KEYS "ndtsgaArflc*"
+#define BOARD_KEYS "ndtsgarflc*"
 
 #define BOARD_HINT \
     "enter edit  ·  s start  ·  g worker  ·  "                                \
@@ -643,11 +641,14 @@ int boardview_run(const char *cwd)
             snprintf(busy, sizeof busy, " · %d/%d workers", boardwork_running(),
                      cfg->workers);
 
+        double spent = 0;
+        for (int i = 0; i < n; i++)
+            if (!filter[0] || !strcmp(cards[i].cwd, filter))
+                spent += cards[i].cost_usd;
+
         char left[64] = "";
-        int  spent = 0;
-        const char *whose = boardcfg_for(BOARD_WHO_WORKER)->backend;
-        if (whose[0] && quota_get(whose, &spent, NULL))
-            snprintf(left, sizeof left, " · %s %d%%", whose, spent);
+        if (spent > 0)
+            snprintf(left, sizeof left, " · $%.2f", spent);
 
         char title[820];
         if (shown == n)
@@ -711,13 +712,14 @@ int boardview_run(const char *cwd)
             break;
         }
         case KEY_APPROVE:
-            if (c && c->col == BOARD_REVIEW)
-                boardwork_approve(c, boardaudit_wanted(c));
-            break;
-        case KEY_APPROVE_OTHER:
-
-            if (c && c->col == BOARD_REVIEW)
-                boardwork_approve(c, !boardaudit_wanted(c));
+            if (c && c->col == BOARD_REVIEW) {
+                int files = 0, lines = 0;
+                boardaudit_size(c, &files, &lines);
+                char ask[256];
+                snprintf(ask, sizeof ask, "audit %d file%s, %d line%s before it lands?",
+                         files, files == 1 ? "" : "s", lines, lines == 1 ? "" : "s");
+                boardwork_approve(c, confirm_run(ask));
+            }
             break;
         case KEY_REJECT:
             if (c && (c->col == BOARD_REVIEW || c->col == BOARD_DOING)) {

@@ -19,7 +19,6 @@ enum row_kind {
     ROW_COUNT,
     ROW_PROFILE,
     ROW_PROMPT,
-    ROW_CHAIN,
     ROW_VERIFY,
     ROW_KIND,
     ROW_KIND_NEW,
@@ -65,8 +64,6 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
 
     head(rows, n, "workers");
     count_row(rows, n, "concurrency", &c->workers, 1, 11, NULL);
-    count_row(rows, n, "usage ceiling", &c->usage_ceiling, 1, 100, "%");
-    count_row(rows, n, "reset hold", &c->reset_hold, 0, 240, "min");
 
     head(rows, n, "audit");
     count_row(rows, n, "file threshold", &c->audit_files, 0, 500, NULL);
@@ -112,10 +109,6 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
     rows[*n].label = "check";
     (*n)++;
 
-    head(rows, n, "delegation");
-    rows[*n].kind = ROW_CHAIN;
-    rows[*n].label = "order";
-    (*n)++;
 }
 
 static void value_of(const struct row *r, const struct board_cfg *c,
@@ -158,21 +151,6 @@ static void value_of(const struct row *r, const struct board_cfg *c,
                                        boardcfg_step_name((enum board_step)i));
         if (!k->steps && at < size)
             snprintf(out + at, size - at, " \xc2\xb7 nothing after the worker");
-        break;
-    }
-    case ROW_CHAIN: {
-        char shown[256];
-        snprintf(shown, sizeof shown, "%s", c->delegation);
-        for (char *p = shown; *p; p++)
-            if (*p == ',')
-                *p = '\0';
-        out[0] = '\0';
-        size_t at = 0;
-        for (char *p = shown; p < shown + strlen(c->delegation);) {
-            size_t k = strlen(p);
-            at += (size_t)snprintf(out + at, size - at, "%s%s", at ? " → " : "", p);
-            p += k + 1;
-        }
         break;
     }
     default:
@@ -263,21 +241,6 @@ static void edit_verify(struct board_cfg *c)
     free(said);
 }
 
-static void edit_chain(struct board_cfg *c)
-{
-    char *said = ask_run("delegation order, comma separated", c->delegation);
-    if (!said)
-        return;
-
-    char packed[256];
-    size_t at = 0;
-    for (const char *p = said; *p && at + 1 < sizeof packed; p++)
-        if (*p != ' ')
-            packed[at++] = *p;
-    packed[at] = '\0';
-    free(said);
-    snprintf(c->delegation, sizeof c->delegation, "%s", packed);
-}
 
 static const char *const YES_NO[] = {"no", "yes"};
 static const char *const LEVELS[] = {"0", "1", "2", "3"};
@@ -419,7 +382,6 @@ void boardcfgui_run(void)
         case ROW_PROFILE: edit_profile(c, rows[at].who); touched = 1; break;
         case ROW_PROMPT:  edit_prompt(c, rows[at].who); touched = 1; break;
         case ROW_VERIFY:  edit_verify(c); touched = 1; break;
-        case ROW_CHAIN:   edit_chain(c); touched = 1; break;
         case ROW_KIND:    edit_kind(c, rows[at].kind_at); touched = 1; break;
         case ROW_KIND_NEW: add_kind(c); touched = 1; break;
         default:          break;
