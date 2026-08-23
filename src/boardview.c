@@ -676,6 +676,35 @@ static void build_stages(const struct board_card *c, struct notes *notes)
     }
 }
 
+/* one tidy line: no escapes, no control characters, no runs of blanks */
+static char *flatten(const char *text)
+{
+    size_t n = strlen(text);
+    char  *out = malloc(n + 1);
+    if (!out)
+        return NULL;
+
+    size_t w = 0;
+    for (size_t i = 0; i < n;) {
+        enum ui_esc_kind kind;
+        size_t           end = ui_esc_span(text, n, i, &kind);
+        if (kind == UI_ESC_TEXT)
+            for (size_t k = i; k < end; k++) {
+                unsigned char ch = (unsigned char)text[k];
+                if (ch < ' ' || ch == 0x7f)
+                    ch = ' ';
+                if (ch == ' ' && (!w || out[w - 1] == ' '))
+                    continue;
+                out[w++] = (char)ch;
+            }
+        i = end;
+    }
+    while (w && out[w - 1] == ' ')
+        w--;
+    out[w] = '\0';
+    return out;
+}
+
 static void build_notes(const struct board_card *c, struct notes *notes)
 {
     build_stages(c, notes);
@@ -689,12 +718,9 @@ static void build_notes(const struct board_card *c, struct notes *notes)
             localtime_r(&c->log[i].ts, &when);
             strftime(stamp, sizeof stamp, "%H:%M", &when);
         }
-        const char *text = c->log[i].text ? c->log[i].text : "";
-        size_t      need = strlen(stamp) + strlen(c->log[i].who) + strlen(text) + 16;
-        char       *line = malloc(need);
-        if (line)
-            snprintf(line, need, "%s  %-6s %s", stamp, c->log[i].who, text);
-        note_line(notes, line);
+        char *text = flatten(c->log[i].text ? c->log[i].text : "");
+        note_line(notes, dsprintf("%s  %-6s %s", stamp, c->log[i].who, text ? text : ""));
+        free(text);
     }
 }
 
