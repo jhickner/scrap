@@ -9,6 +9,7 @@
 
 #include "ask.h"
 #include "board.h"
+#include "boardtriage.h"
 #include "confirm.h"
 #include "form.h"
 #include "pick.h"
@@ -20,13 +21,15 @@
 // letter means the key it stands for.
 #define KEY_NEW    'n'
 #define KEY_DELETE 'd'
+#define KEY_TRIAGE 't'
 #define KEY_ALL    '*'
 
-#define BOARD_KEYS "nd*"
+#define BOARD_KEYS "ndt*"
 
 // Letters are shortcuts here rather than a search, so without a line saying
 // so the list gives no sign it has any keys at all.
-#define BOARD_HINT "enter edit  ·  n new  ·  d delete  ·  * all repos  ·  / search"
+#define BOARD_HINT \
+    "enter edit  ·  n new  ·  t triage  ·  d delete  ·  * all repos  ·  / search"
 
 // How wide a card's title may grow before the meta beside it stops lining up.
 #define TITLE_SHARE(cols) ((cols) * 3 / 5)
@@ -38,6 +41,7 @@ struct vrow {
     char         *label;
     char         *detail;
     unsigned char heading;
+    unsigned char spin;
     const char   *mark;
     unsigned char mark_role;
     int           action;
@@ -105,15 +109,18 @@ static void vlist_free(struct vlist *l)
 // Runs a built list through the picker, which wants its columns as separate
 // arrays. Returns the row that was chosen, or -1.
 static int vlist_run(const char *title, struct vlist *l, int initial,
-                     const char *hint, const char *shortcuts, int *pressed)
+                     const char *hint, const char *shortcuts, int *pressed,
+                     int (*tick)(void *ud), void *tick_ud)
 {
     struct pick_item *items = calloc((size_t)l->n, sizeof *items);
     unsigned char    *heading = calloc((size_t)l->n, 1);
+    unsigned char    *spin = calloc((size_t)l->n, 1);
     const char      **mark = calloc((size_t)l->n, sizeof *mark);
     unsigned char    *role = calloc((size_t)l->n, 1);
-    if (!items || !heading || !mark || !role) {
+    if (!items || !heading || !spin || !mark || !role) {
         free(items);
         free(heading);
+        free(spin);
         free(mark);
         free(role);
         return -1;
@@ -123,21 +130,26 @@ static int vlist_run(const char *title, struct vlist *l, int initial,
         items[i].label = l->v[i].label ? l->v[i].label : "";
         items[i].detail = l->v[i].detail;
         heading[i] = l->v[i].heading;
+        spin[i] = l->v[i].spin;
         mark[i] = l->v[i].mark;
         role[i] = l->v[i].mark_role;
     }
 
     struct pick_live live = {
         .heading = heading,
+        .spin = spin,
         .mark = mark,
         .mark_role = role,
         .hint = hint,
+        .tick = tick,
+        .ud = tick_ud,
     };
     int at = pick_run_live(title, items, l->n, initial, &live, PICK_SEARCH_SLASH,
                            shortcuts, pressed);
 
     free(items);
     free(heading);
+    free(spin);
     free(mark);
     free(role);
     return at;
@@ -216,6 +228,16 @@ static void short_repo(const char *cwd, char *out, size_t size)
         snprintf(out, size, "…%s", strrchr(full, '/') ? strrchr(full, '/') : full);
 }
 
+// What a card in `unclear` is waiting for: the last thing triage asked. It
+// belongs on the row, because it is the whole reason the row is there.
+static const char *asked(const struct board_card *c)
+{
+    for (int i = c->log_n - 1; i >= 0; i--)
+        if (!strcmp(c->log[i].who, "triage") && c->log[i].text)
+            return c->log[i].text;
+    return NULL;
+}
+
 static int shows(const struct board_card *c, const char *filter)
 {
     return !filter || !*filter || !strcmp(c->cwd, filter);
@@ -262,9 +284,12 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             snprintf(r->id, sizeof r->id, "%s", c->id);
             r->label = dsprintf("%s", c->title[0] ? c->title : "(untitled)");
             column_mark(c->col, &r->mark, &r->mark_role);
+            r->spin = (unsigned char)boardtriage_running(c->id);
 
             char when[32];
             ago(c->updated ? c->updated : c->created, when, sizeof when);
+            if (r->spin)
+                snprintf(when, sizeof when, "triaging…");
 
             // In one repo the directory is the title bar's job; across repos
             // it is the first thing you need from a row.
@@ -272,7 +297,10 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             if (wide)
                 short_repo(c->cwd, where, sizeof where);
 
-            if (where[0] && c->kind[0])
+            const char *question = c->col == BOARD_UNCLEAR ? asked(c) : NULL;
+            if (question)
+                r->detail = dsprintf("%s", question);
+            else if (where[0] && c->kind[0])
                 r->detail = dsprintf("%s · %s · %s", where, c->kind, when);
             else if (where[0])
                 r->detail = dsprintf("%s · %s", where, when);
@@ -332,6 +360,27 @@ static int row_of(const struct vlist *l, const char *id)
         if (!is_text(&l->v[i]))
             return i;
     return 0;
+}
+
+// Called on the spinner's frames while the list is open. Triage answers on
+// its own schedule; this is where those answers land on the rows.
+static int board_tick(void *ud)
+{
+    (void)ud;
+    // What triage decided moves cards between columns, which no redraw of the
+    // rows we built can show. The list has to be built again.
+    return boardtriage_poll() ? PICK_TICK_REOPEN : 0;
+}
+
+// Everything sitting in `new` that nothing is already working on. A card is
+// triaged once on its own, and after that only when asked: a card that came
+// back unclear twice is waiting for a person, not another turn.
+static void triage_the_new(struct board_card *cards, int n)
+{
+    for (int i = 0; i < n; i++)
+        if (cards[i].col == BOARD_NEW && !boardtriage_running(cards[i].id) &&
+            boardtriage_attempts(&cards[i]) == 0)
+            boardtriage_start(&cards[i]);
 }
 
 __attribute__((format(printf, 1, 2)))
@@ -553,6 +602,11 @@ void boardview_run(const char *cwd)
         struct board_card *cards = NULL;
         int                n = board_load(&cards);
 
+        // A card that has never been looked at is looked at now, without being
+        // asked for: capture is meant to cost nothing, and this is the rest of
+        // that bargain.
+        triage_the_new(cards, n);
+
         struct vlist l = {0};
         int          shown = build_board(&l, cards, n, filter, !filter[0]);
         align(&l);
@@ -583,11 +637,17 @@ void boardview_run(const char *cwd)
 
         int pressed = 0;
         int at = vlist_run(title, &l, row_of(&l, sel_id), BOARD_HINT, BOARD_KEYS,
-                           &pressed);
+                           &pressed, board_tick, NULL);
         if (at >= 0)
             snprintf(sel_id, sizeof sel_id, "%s", l.v[at].id);
         vlist_free(&l);
 
+        // Triage answered while the list was open, so the rows are stale: they
+        // are built again, with the highlight left where it was.
+        if (at == PICK_REOPEN) {
+            board_free(cards, n);
+            continue;
+        }
         if (at < 0) {
             board_free(cards, n);
             return;
@@ -601,6 +661,10 @@ void boardview_run(const char *cwd)
             break;
         case KEY_NEW:
             do_new(filter[0] ? filter : here, sel_id);
+            break;
+        case KEY_TRIAGE:
+            if (c)
+                boardtriage_start(c);
             break;
         case KEY_DELETE:
             if (c && do_delete(c))

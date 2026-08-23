@@ -23,6 +23,10 @@ enum pick_search {
 // right arrow; both come back in *pressed the same way.
 #define PICK_KEY_RIGHT '\x1c'
 
+// A tick that wants the list rebuilt, and what the list returns when it does.
+#define PICK_TICK_REOPEN 2
+#define PICK_REOPEN      (-2)
+
 // Values for pick_live.heading below.
 #define PICK_HEADING 1   /* a group header: dim, never selectable, dropped by
                             a query that empties its group */
@@ -51,7 +55,9 @@ struct pick_live {
     // whose shortcuts are letters gives no sign that it has any.
     const char *hint;
     // Called on the spinner's frames. Nonzero means the caller has changed
-    // what the rows say, and the list is drawn again.
+    // what the rows say, and the list is drawn again. PICK_TICK_REOPEN means
+    // more than that: the rows themselves are stale and only the caller can
+    // build them again, so the list closes with PICK_REOPEN.
     int  (*tick)(void *ud);
     void  *ud;
 };

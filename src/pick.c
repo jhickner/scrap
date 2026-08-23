@@ -456,7 +456,11 @@ static int run(const char *title, const struct pick_item *items, int count,
                 continue;
             // A frame of the spinners, and a chance for the caller to say the
             // rows have moved on.
-            int moved = watching && v.live->tick(v.live->ud);
+            int moved = watching ? v.live->tick(v.live->ud) : 0;
+            if (moved == PICK_TICK_REOPEN) {
+                result = PICK_REOPEN;
+                goto done;
+            }
             if (moved)
                 refilter(&v);
             if ((turning && spin_advance(&v.frame, &v.frame_at)) || moved)
