@@ -1156,6 +1156,12 @@ static int gk_handshake(grok_client *c) {
         snprintf(c->session_id, sizeof c->session_id, "%s", resume);
 
     c->handshake_failed = 0;
+    /* Startup writes to stderr even when it recovers -- the CLI's own worker
+     * connect is retried, and the first attempt's fatal is logged. Once the
+     * session is live none of that belongs to a turn. */
+    gk_drain_stderr(c);
+    c->err_len = 0;
+    c->err[0] = '\0';
 
     int repinned = c->model && *c->model && gk_apply_model(c);
     /* An effort chosen while the process was still lazy predates this session,

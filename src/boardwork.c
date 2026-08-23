@@ -594,6 +594,11 @@ void boardwork_finished(struct session *s)
     const char *reply = session_last_reply(s);
     const char *failed = session_last_error(s);
 
+    /* stderr is only the story of the turn when the turn said nothing: a CLI
+     * that logged a warning and then answered has not failed. */
+    if (reply && *reply)
+        failed = NULL;
+
     if (w->role == BOARD_ROLE_AUDIT) {
         w->done = 1;
         if (failed && *failed)
