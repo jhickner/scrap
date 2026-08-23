@@ -23,6 +23,8 @@ int boardwork_poll(void);
 
 int boardwork_release(const struct board_card *c);
 
+void boardwork_discard(const struct board_card *c);
+
 int boardwork_pump(void);
 
 int boardwork_approve(const struct board_card *c, int audit);

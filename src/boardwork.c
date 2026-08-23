@@ -398,27 +398,33 @@ int boardwork_pump(void)
     return started;
 }
 
+static int drop_worktree(const struct board_card *c)
+{
+    char root[4096], branch[128];
+    branch_of(c->id, branch, sizeof branch);
+
+    if (!gitcmd_root(c->cwd, root, sizeof root))
+        return 1;
+
+    char qroot[4200], qtree[4200];
+    if (!text_shell_quote(root, qroot, sizeof qroot) ||
+        !text_shell_quote(c->worktree, qtree, sizeof qtree))
+        return 1;
+
+    char cmd[9000];
+    snprintf(cmd, sizeof cmd,
+             "git -C %s worktree remove --force %s >/dev/null 2>&1; "
+             "git -C %s branch -D %s >/dev/null 2>&1",
+             qroot, qtree, qroot, branch);
+    return system(cmd) != -1;
+}
+
 int boardwork_release(const struct board_card *c)
 {
     if (!c || !c->worktree[0] || boardwork_tab(c->id) >= 0)
         return 0;
-
-    char root[4096], branch[128];
-    branch_of(c->id, branch, sizeof branch);
-
-    if (gitcmd_root(c->cwd, root, sizeof root)) {
-        char qroot[4200], qtree[4200];
-        if (text_shell_quote(root, qroot, sizeof qroot) &&
-            text_shell_quote(c->worktree, qtree, sizeof qtree)) {
-            char cmd[9000];
-            snprintf(cmd, sizeof cmd,
-                     "git -C %s worktree remove --force %s >/dev/null 2>&1; "
-                     "git -C %s branch -D %s >/dev/null 2>&1",
-                     qroot, qtree, qroot, branch);
-            if (system(cmd) == -1)
-                return 0;
-        }
-    }
+    if (!drop_worktree(c))
+        return 0;
 
     struct board_card edited = *c;
     edited.worktree[0] = '\0';
@@ -471,6 +477,15 @@ static void let_go(const char *id)
     memset(w, 0, sizeof *w);
     if (at >= 0 && workspace_count() > 1)
         workspace_close(at);
+}
+
+void boardwork_discard(const struct board_card *c)
+{
+    if (!c)
+        return;
+    let_go(c->id);
+    if (c->worktree[0])
+        drop_worktree(c);
 }
 
 int boardwork_approve(const struct board_card *c, int audit)

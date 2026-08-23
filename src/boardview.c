@@ -435,6 +435,7 @@ static int do_delete(const struct board_card *c)
     snprintf(question, sizeof question, "delete \"%s\"?", c->title);
     if (!confirm_run(question))
         return 0;
+    boardwork_discard(c);
     return board_remove(c->id);
 }
 
