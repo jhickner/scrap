@@ -55,6 +55,7 @@
 
 struct vrow {
     char          id[BOARD_ID_MAX];
+    unsigned char col;
     char         *label;
     char         *detail;
     unsigned char heading;
@@ -300,6 +301,7 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             if (!r)
                 break;
             snprintf(r->id, sizeof r->id, "%s", c->id);
+            r->col = (unsigned char)c->col;
             r->label = dsprintf("%s", c->title[0] ? c->title : "(untitled)");
             column_mark(c->col, &r->mark, &r->mark_role);
             int         tab = boardwork_tab(c->id);
@@ -382,12 +384,55 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
     return shown;
 }
 
-static int row_of(const struct vlist *l, const char *id)
+static int find_id(const struct vlist *l, const char *id)
 {
     if (id && *id)
         for (int i = 0; i < l->n; i++)
             if (!is_text(&l->v[i]) && !strcmp(l->v[i].id, id))
                 return i;
+    return -1;
+}
+
+/* col is the column the card sat in when the cursor last rested on it, or -1
+   to follow that card wherever it has gone. */
+struct anchor {
+    char id[BOARD_ID_MAX];
+    char next[BOARD_ID_MAX];
+    char prev[BOARD_ID_MAX];
+    int  col;
+};
+
+static void anchor_set(struct anchor *a, const struct vlist *l, int row, int col)
+{
+    snprintf(a->id, sizeof a->id, "%s", l->v[row].id);
+    a->col = col;
+    a->next[0] = a->prev[0] = '\0';
+    for (int i = row + 1; i < l->n; i++)
+        if (!is_text(&l->v[i])) {
+            snprintf(a->next, sizeof a->next, "%s", l->v[i].id);
+            break;
+        }
+    for (int i = row - 1; i >= 0; i--)
+        if (!is_text(&l->v[i])) {
+            snprintf(a->prev, sizeof a->prev, "%s", l->v[i].id);
+            break;
+        }
+}
+
+static int row_of(const struct vlist *l, const struct anchor *a)
+{
+    int at = find_id(l, a->id);
+    if (at >= 0 && (a->col < 0 || (int)l->v[at].col == a->col))
+        return at;
+
+    int by = find_id(l, a->next);
+    if (by < 0)
+        by = find_id(l, a->prev);
+    if (by >= 0)
+        return by;
+    if (at >= 0)
+        return at;
+
     for (int i = 0; i < l->n; i++)
         if (!is_text(&l->v[i]))
             return i;
@@ -710,10 +755,10 @@ int boardview_run(const char *cwd)
     char here[4096];
     snprintf(here, sizeof here, "%s", cwd ? cwd : "");
 
-    static char filter[4096];
-    static char sel_id[BOARD_ID_MAX];
-    char        notice[256] = {0};
-    static int  been_here;
+    static char          filter[4096];
+    static struct anchor cur = {.col = -1};
+    char                 notice[256] = {0};
+    static int           been_here;
 
     if (!been_here) {
         snprintf(filter, sizeof filter, "%s", here);
@@ -785,12 +830,11 @@ int boardview_run(const char *cwd)
 
         int pressed = 0;
         int cursor = -1;
-        int at = vlist_run(title, &l, row_of(&l, sel_id), hint, BOARD_KEYS,
+        int at = vlist_run(title, &l, row_of(&l, &cur), hint, BOARD_KEYS,
                            &pressed, board_tick, NULL, &cursor);
-        if (at >= 0)
-            snprintf(sel_id, sizeof sel_id, "%s", l.v[at].id);
-        else if (cursor >= 0)
-            snprintf(sel_id, sizeof sel_id, "%s", l.v[cursor].id);
+        int row = at >= 0 ? at : cursor;
+        if (row >= 0)
+            anchor_set(&cur, &l, row, at >= 0 ? -1 : (int)l.v[row].col);
         vlist_free(&l);
 
         if (at == PICK_REOPEN) {
@@ -803,7 +847,7 @@ int boardview_run(const char *cwd)
             return -1;
         }
 
-        struct board_card *c = board_find(cards, n, sel_id);
+        struct board_card *c = board_find(cards, n, cur.id);
         switch (pressed) {
         case 0:
             if (c) {
@@ -813,7 +857,8 @@ int boardview_run(const char *cwd)
             break;
         case KEY_NEW:
             close_list();
-            do_new(filter[0] ? filter : here, sel_id);
+            do_new(filter[0] ? filter : here, cur.id);
+            cur.col = -1;
             break;
         case KEY_TRIAGE:
             if (c)
@@ -885,7 +930,7 @@ int boardview_run(const char *cwd)
             if (c) {
                 close_list();
                 if (do_delete(c))
-                    sel_id[0] = '\0';
+                    cur.id[0] = '\0';
             }
             break;
         case KEY_LOG: {
