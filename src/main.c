@@ -8,7 +8,7 @@
 #include "agenttabs.h"
 #include "app.h"
 #include "boardview.h"
-#include "boardtriage.h"
+#include "child.h"
 #include "boardwork.h"
 #include "bash.h"
 #include "chrome.h"
@@ -295,7 +295,7 @@ static int idle_restart(void *ud)
     // Returns only when the new build could not be run at all, in which case
     // this window keeps going on the old one.
     sidechannel_close_all();
-    boardtriage_close_all();
+    child_close_all();
     // The whole window travels: the session in front carries the screen, and
     // the rest are named in a file the new build opens a tab from.
     if (!restart_exec(workspace_current())) {
@@ -714,7 +714,7 @@ int main(int argc, char **argv)
     }
 
     sidechannel_close_all();
-    boardtriage_close_all();
+    child_close_all();
     tg_stop();
     session_set_typeahead(NULL, NULL);
     chrome_bind(NULL);

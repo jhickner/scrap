@@ -9,12 +9,15 @@
 #include <unistd.h>
 
 #include "board.h"
+#include "child.h"
 #include "boardcfg.h"
 #include "sessionfork.h"
 #include "vendor/cJSON.h"
 
-#define TRIAGE_SLOTS 4
-#define REPLY_MAX    (1u << 18)
+// Triage runs as a child so the board stays live while it thinks. The pool
+// and the reaping belong to child.c; what is left here is the question, and
+// what to do with the answer.
+#define TRIAGE_KEY "triage:"
 
 // A card short enough to read as a row is its own best title. Rewriting one
 // buys a few columns and stakes the meaning on a paraphrase -- and a title
@@ -22,23 +25,9 @@
 // the truncated one is still the words that were written.
 #define TITLE_KEEP 100
 
-struct slot {
-    pid_t  pid;
-    char   id[BOARD_ID_MAX];
-    int    fd;
-    char  *buf;
-    size_t len, cap;
-};
-
-static struct slot slots[TRIAGE_SLOTS];
-
-static void slot_free(struct slot *s)
+static void triage_key(const char *id, char *out, size_t size)
 {
-    if (s->fd >= 0)
-        close(s->fd);
-    free(s->buf);
-    memset(s, 0, sizeof *s);
-    s->fd = -1;
+    snprintf(out, size, TRIAGE_KEY "%s", id);
 }
 
 /* ---- what the card is asked ------------------------------------------- */
@@ -60,73 +49,6 @@ static char *build_prompt(const struct board_card *c)
              "%s\n\nThe card was captured in: %s\n\ncard:\n%s\n",
              head, c->cwd[0] ? c->cwd : "(nowhere in particular)", body);
     return out;
-}
-
-static int spawn(struct slot *s, const struct board_card *c)
-{
-    char *prompt = build_prompt(c);
-    if (!prompt)
-        return 0;
-
-    int pipes[2];
-    if (pipe(pipes) != 0) {
-        free(prompt);
-        return 0;
-    }
-
-    const struct board_profile *p = boardcfg_for(BOARD_WHO_TRIAGE);
-
-    char *argv[16];
-    int   n = 0;
-    argv[n++] = (char *)sessionfork_program();
-    argv[n++] = "-b";
-    argv[n++] = (char *)(p->backend[0] ? p->backend : "claude");
-    if (c->cwd[0]) {
-        argv[n++] = "-C";
-        argv[n++] = (char *)c->cwd;
-    }
-    if (p->model[0] && strcmp(p->model, "default")) {
-        argv[n++] = "-m";
-        argv[n++] = (char *)p->model;
-    }
-    if (p->effort[0] && strcmp(p->effort, "default")) {
-        argv[n++] = "-e";
-        argv[n++] = (char *)p->effort;
-    }
-    argv[n++] = prompt;
-    argv[n] = NULL;
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        close(pipes[0]);
-        close(pipes[1]);
-        free(prompt);
-        return 0;
-    }
-    if (pid == 0) {
-        close(pipes[0]);
-        dup2(pipes[1], STDOUT_FILENO);
-        if (pipes[1] != STDOUT_FILENO)
-            close(pipes[1]);
-        // What it says on stderr is the CLI's own noise, not an answer.
-        int null = open("/dev/null", O_RDWR);
-        if (null >= 0) {
-            dup2(null, STDERR_FILENO);
-            dup2(null, STDIN_FILENO);
-            if (null > STDERR_FILENO)
-                close(null);
-        }
-        execvp(argv[0], argv);
-        _exit(127);
-    }
-
-    close(pipes[1]);
-    free(prompt);
-    fcntl(pipes[0], F_SETFL, O_NONBLOCK);
-    s->pid = pid;
-    s->fd = pipes[0];
-    snprintf(s->id, sizeof s->id, "%s", c->id);
-    return 1;
 }
 
 /* ---- what comes back --------------------------------------------------- */
@@ -265,105 +187,69 @@ static void failed(const char *id, const char *why)
     board_move(id, BOARD_UNCLEAR, "triage", why);
 }
 
-/* ---- the pool ---------------------------------------------------------- */
-
-int boardtriage_running(const char *id)
-{
-    for (int i = 0; i < TRIAGE_SLOTS; i++)
-        if (slots[i].pid && !strcmp(slots[i].id, id))
-            return 1;
-    return 0;
-}
-
-int boardtriage_busy(void)
-{
-    for (int i = 0; i < TRIAGE_SLOTS; i++)
-        if (slots[i].pid)
-            return 1;
-    return 0;
-}
+/* ---- what has come back ------------------------------------------------- */
 
 int boardtriage_start(const struct board_card *c)
 {
-    if (!c || boardtriage_running(c->id))
+    if (!c)
         return 0;
-    for (int i = 0; i < TRIAGE_SLOTS; i++) {
-        if (slots[i].pid)
-            continue;
-        slots[i].fd = -1;
-        if (!spawn(&slots[i], c)) {
-            slot_free(&slots[i]);
-            return 0;
-        }
+
+    char key[CHILD_KEY_MAX];
+    triage_key(c->id, key, sizeof key);
+    if (child_running(key))
+        return 0;
+
+    char *prompt = build_prompt(c);
+    if (!prompt)
+        return 0;
+
+    const struct board_profile *p = boardcfg_for(BOARD_WHO_TRIAGE);
+
+    char *argv[16];
+    int   n = 0;
+    argv[n++] = (char *)sessionfork_program();
+    argv[n++] = (char *)"-b";
+    argv[n++] = (char *)(p->backend[0] ? p->backend : "claude");
+    if (p->model[0] && strcmp(p->model, "default")) {
+        argv[n++] = (char *)"-m";
+        argv[n++] = (char *)p->model;
+    }
+    if (p->effort[0] && strcmp(p->effort, "default")) {
+        argv[n++] = (char *)"-e";
+        argv[n++] = (char *)p->effort;
+    }
+    argv[n++] = prompt;
+    argv[n] = NULL;
+
+    int ok = child_start(key, argv, c->cwd[0] ? c->cwd : NULL);
+    free(prompt);
+    return ok;
+}
+
+
+int boardtriage_running(const char *id)
+{
+    char key[CHILD_KEY_MAX];
+    triage_key(id, key, sizeof key);
+    return child_running(key);
+}
+
+// Whether a finished child was triage's, and if so what it decided. Anything
+// filed under another key is not ours to take.
+int boardtriage_take(const char *key, const char *reply)
+{
+    size_t mark = strlen(TRIAGE_KEY);
+    if (!key || strncmp(key, TRIAGE_KEY, mark))
+        return 0;
+
+    const char *id = key + mark;
+    cJSON      *o = parse_reply(reply);
+    if (o) {
+        apply(id, o);
+        cJSON_Delete(o);
         return 1;
     }
-    return 0;
-}
-
-static void drain(struct slot *s)
-{
-    for (;;) {
-        if (s->len + 4096 > s->cap) {
-            if (s->cap >= REPLY_MAX)
-                return;
-            size_t cap = s->cap ? s->cap * 2 : 8192;
-            char  *grown = realloc(s->buf, cap);
-            if (!grown)
-                return;
-            s->buf = grown;
-            s->cap = cap;
-        }
-        ssize_t k = read(s->fd, s->buf + s->len, s->cap - s->len - 1);
-        if (k <= 0)
-            return;
-        s->len += (size_t)k;
-        s->buf[s->len] = '\0';
-    }
-}
-
-int boardtriage_poll(void)
-{
-    int changed = 0;
-
-    for (int i = 0; i < TRIAGE_SLOTS; i++) {
-        struct slot *s = &slots[i];
-        if (!s->pid)
-            continue;
-
-        drain(s);
-
-        int   status = 0;
-        pid_t done = waitpid(s->pid, &status, WNOHANG);
-        if (done != s->pid)
-            continue;
-
-        drain(s);
-
-        char id[BOARD_ID_MAX];
-        snprintf(id, sizeof id, "%s", s->id);
-
-        cJSON *o = parse_reply(s->buf);
-        if (o) {
-            changed |= apply(id, o);
-            cJSON_Delete(o);
-        } else {
-            failed(id, s->buf && *s->buf
-                           ? "triage did not answer with a card"
-                           : "triage did not answer");
-            changed = 1;
-        }
-        slot_free(s);
-    }
-    return changed;
-}
-
-void boardtriage_close_all(void)
-{
-    for (int i = 0; i < TRIAGE_SLOTS; i++) {
-        if (!slots[i].pid)
-            continue;
-        kill(slots[i].pid, SIGTERM);
-        waitpid(slots[i].pid, NULL, 0);
-        slot_free(&slots[i]);
-    }
+    failed(id, reply && *reply ? "triage did not answer with a card"
+                               : "triage did not answer");
+    return 1;
 }

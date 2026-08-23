@@ -16,13 +16,10 @@ struct board_card;
 int boardtriage_start(const struct board_card *c);
 
 int boardtriage_running(const char *id);
-int boardtriage_busy(void);
 
-// Reaps whatever has finished and writes those cards. Nonzero when the store
-// changed, which is the caller's cue to draw the rows again. Cheap when idle.
-int boardtriage_poll(void);
-
-void boardtriage_close_all(void);
+// Offered every child that has finished. Nonzero when it was triage's, and the
+// card has been written; zero leaves it for whoever else was waiting on it.
+int boardtriage_take(const char *key, const char *reply);
 
 // How many times triage has had a go at this card since the last time a
 // person said anything about it. Two failed passes is enough: a card that will

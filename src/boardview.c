@@ -13,6 +13,7 @@
 #include "boardcfgui.h"
 #include "boardtriage.h"
 #include "boardwork.h"
+#include "child.h"
 #include "confirm.h"
 #include "form.h"
 #include "pick.h"
@@ -365,6 +366,24 @@ static int row_of(const struct vlist *l, const char *id)
 
 // Called on the spinner's frames while the list is open. Triage answers on
 // its own schedule; this is where those answers land on the rows.
+// Every child that has finished, offered to whoever asked for it. One place
+// asks, because one place is polling: the list that is open.
+static int board_reap(void)
+{
+    int  changed = 0;
+    char key[CHILD_KEY_MAX];
+
+    for (;;) {
+        char *out = NULL;
+        int   ok = 0;
+        if (!child_reap(key, sizeof key, &out, &ok))
+            break;
+        changed |= boardtriage_take(key, out);
+        free(out);
+    }
+    return changed;
+}
+
 static int board_tick(void *ud)
 {
     (void)ud;
@@ -375,7 +394,7 @@ static int board_tick(void *ud)
 
     // What triage and the workers decided moves cards between columns, which
     // no redraw of the rows we built can show. The list has to be built again.
-    int moved = boardtriage_poll();
+    int moved = board_reap();
     moved |= boardwork_poll();
     return moved ? PICK_TICK_REOPEN : 0;
 }
