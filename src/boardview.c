@@ -122,7 +122,7 @@ static void vlist_free(struct vlist *l)
 
 static int vlist_run(const char *title, struct vlist *l, int initial,
                      const char *hint, const char *shortcuts, int *pressed,
-                     int (*tick)(void *ud), void *tick_ud)
+                     int (*tick)(void *ud), void *tick_ud, int *cursor)
 {
     struct pick_item *items = calloc((size_t)l->n, sizeof *items);
     unsigned char    *heading = calloc((size_t)l->n, 1);
@@ -156,6 +156,7 @@ static int vlist_run(const char *title, struct vlist *l, int initial,
         .align = 1,
         .tick = tick,
         .ud = tick_ud,
+        .cursor = cursor,
     };
     int at = pick_run_live(title, items, l->n, initial, &live, PICK_SEARCH_SLASH,
                            shortcuts, pressed);
@@ -767,10 +768,13 @@ int boardview_run(const char *cwd)
         notice[0] = '\0';
 
         int pressed = 0;
+        int cursor = -1;
         int at = vlist_run(title, &l, row_of(&l, sel_id), hint, BOARD_KEYS,
-                           &pressed, board_tick, NULL);
+                           &pressed, board_tick, NULL, &cursor);
         if (at >= 0)
             snprintf(sel_id, sizeof sel_id, "%s", l.v[at].id);
+        else if (cursor >= 0)
+            snprintf(sel_id, sizeof sel_id, "%s", l.v[cursor].id);
         vlist_free(&l);
 
         if (at == PICK_REOPEN) {
