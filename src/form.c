@@ -10,10 +10,13 @@
 #include "replkeys.h"
 #include "tty.h"
 #include "ui.h"
+#include "viewport.h"
 
 #define FORM_FIELDS 12
 
 #define FORM_INDENT 2
+
+#define HIT_MAX 128
 
 struct slot {
     Repl repl;
@@ -31,6 +34,8 @@ struct state {
 
     struct replframe frame;
     int              framed;
+
+    short hit[HIT_MAX];
 };
 
 static struct form_field *field_at(struct state *st, int i)
@@ -223,6 +228,10 @@ static void paint(void *ud)
     st->framed = -1;
     int n = layout(st, columns, lines, LINES_MAX);
     int room = room_for();
+    int base = chrome_gap();
+
+    for (int i = 0; i < HIT_MAX; i++)
+        st->hit[i] = -1;
 
     if (n <= room) {
         st->top = 0;
@@ -280,6 +289,10 @@ static void paint(void *ud)
     int end = n <= room ? n : st->top + room;
     for (int i = st->top; i < end; i++) {
         const struct line *l = &lines[i];
+        int                at = base + 1 + i - st->top;
+
+        if (l->field >= 0 && at >= 0 && at < HIT_MAX)
+            st->hit[at] = (short)l->field;
 
         if (l->field < 0) {
             if (l->len) {
@@ -425,6 +438,17 @@ int form_run(struct form *form)
         case TK_TAB:
             focus_step(&st, 1);
             break;
+
+        case TK_MOUSE_DOWN: {
+            int top = viewport_chrome_top();
+            if (top < 0)
+                continue;
+            int at = ev.row - 1 - top;
+            if (at < 0 || at >= HIT_MAX || st.hit[at] < 0)
+                continue;
+            st.focus = st.hit[at];
+            break;
+        }
 
         case TK_ENTER:
             store(&st);
