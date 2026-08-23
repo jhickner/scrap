@@ -451,8 +451,12 @@ static void read_settings(struct board_cfg *c)
     mdcfg_free(&m);
 }
 
-static void read_roles(struct board_cfg *c)
+/* A role file written before tiers keeps the tier the defaults gave it, so an
+ * existing board follows the serving backend instead of staying on claude. */
+static int read_roles(struct board_cfg *c)
 {
+    int aged = 0;
+
     for (int i = 0; i < BOARD_WHO; i++) {
         char path[4300];
         if (!board_path(path, sizeof path, BOARD_DIR "/roles", WHO_NAMES[i]))
@@ -462,7 +466,10 @@ static void read_roles(struct board_cfg *c)
         if (!mdcfg_load(&m, path))
             continue;
 
-        snprintf(c->who[i].tier, sizeof c->who[i].tier, "%s", mdcfg_get(&m, "tier"));
+        if (mdcfg_has(&m, "tier"))
+            snprintf(c->who[i].tier, sizeof c->who[i].tier, "%s", mdcfg_get(&m, "tier"));
+        else
+            aged = 1;
 
         const char *backend = mdcfg_get(&m, "backend");
         if (*backend)
@@ -479,6 +486,7 @@ static void read_roles(struct board_cfg *c)
         }
         mdcfg_free(&m);
     }
+    return aged;
 }
 
 static void level_key(char *out, size_t size, enum board_tier tier,
@@ -723,12 +731,12 @@ static void read_all(void)
     }
 
     read_settings(&cache);
-    read_roles(&cache);
+    int aged = read_roles(&cache);
     read_backends(&cache);
     read_kinds(&cache);
 
     char seed[4300];
-    if (board_path(seed, sizeof seed, BOARD_DIR, "settings") && access(seed, F_OK))
+    if (aged || (board_path(seed, sizeof seed, BOARD_DIR, "settings") && access(seed, F_OK)))
         write_out(&cache);
 }
 
