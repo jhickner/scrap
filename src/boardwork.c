@@ -232,7 +232,7 @@ static int handover(struct worker *w)
 static int follows(const struct worker *w)
 {
     const struct board_profile *p = boardcfg_for(who_of(w->role));
-    return p->tier[0] && strcmp(session_backend(w->session), p->backend);
+    return strcmp(session_backend(w->session), p->backend) != 0;
 }
 
 int boardwork_serve(int *waiting)

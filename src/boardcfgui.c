@@ -154,16 +154,12 @@ static void value_of(const struct row *r, const struct board_cfg *c,
     case ROW_PROFILE: {
         const struct board_profile *p = &c->who[r->who];
         enum board_tier             tier = boardcfg_tier_from_name(p->tier);
-        if (tier < BOARD_TIERS) {
-            const struct board_backend *b = boardcfg_backend(c, c->serving);
-            const char                 *model = b ? b->level[tier].model : "";
-            snprintf(out, size, "%s · %s · %s", p->tier, c->serving,
-                     model[0] ? model : "default");
-            break;
-        }
-        snprintf(out, size, "%s · %s%s%s", p->backend[0] ? p->backend : "claude",
-                 p->model[0] ? p->model : "default",
-                 p->effort[0] ? " · " : "", p->effort);
+        if (tier >= BOARD_TIERS)
+            tier = BOARD_TIER_MED;
+        const struct board_backend *b = boardcfg_backend(c, c->serving);
+        const char                 *model = b ? b->level[tier].model : "";
+        snprintf(out, size, "%s · %s · %s", boardcfg_tier_name(tier), c->serving,
+                 model[0] ? model : "default");
         break;
     }
     case ROW_SERVING:
@@ -228,54 +224,28 @@ static const char *const EFFORTS[] = {
     "", "low", "medium", "high", "xhigh", "max",
 };
 
-static const char *const TIERS[] = {"", "low", "med", "high"};
+static const char *const TIERS[] = {"low", "med", "high"};
 
 static void edit_profile(struct board_cfg *c, enum board_who who)
 {
     struct board_profile *p = &c->who[who];
 
-    const char *backends[BOARD_BACKENDS_MAX];
-    int         nbackends = 0;
-    for (const char *const *b = backend_names();
-         *b && nbackends < BOARD_BACKENDS_MAX; b++)
-        backends[nbackends++] = *b;
-
-    char tier[8], backend[32], model[128], effort[32];
-    snprintf(tier, sizeof tier, "%s", p->tier);
-    snprintf(backend, sizeof backend, "%s", p->backend[0] ? p->backend : "claude");
-    snprintf(model, sizeof model, "%s", p->model);
-    snprintf(effort, sizeof effort, "%s", p->effort);
-
-    struct form_field fields[] = {
-        {"tier", FORM_CHOICE, tier, sizeof tier, TIERS, COUNT(TIERS)},
-        {"backend", FORM_CHOICE, backend, sizeof backend, backends, nbackends},
-        {"model", FORM_TEXT, model, sizeof model, NULL, 0},
-        {"effort", FORM_CHOICE, effort, sizeof effort, EFFORTS, COUNT(EFFORTS)},
-    };
+    struct pick_item items[BOARD_TIERS];
+    int              at = 0;
+    for (int t = 0; t < BOARD_TIERS; t++) {
+        const struct board_backend *b = boardcfg_backend(c, c->serving);
+        const char                 *model = b ? b->level[t].model : "";
+        items[t] = (struct pick_item){TIERS[t], model[0] ? model : "default"};
+        if (!strcmp(TIERS[t], p->tier))
+            at = t;
+    }
 
     char title[128];
-    snprintf(title, sizeof title, "%s model", boardcfg_who_name(who));
+    snprintf(title, sizeof title, "%s tier", boardcfg_who_name(who));
 
-    static const char *const NOTES[] = {
-        "a tier runs on whichever backend is serving, at that level.",
-        "no tier pins the role to the backend and model below.",
-        "empty = the backend's own default",
-    };
-
-    struct form f = {
-        .title = title,
-        .notes = NOTES,
-        .notes_n = 3,
-        .fields = fields,
-        .fields_n = COUNT(fields),
-    };
-    if (!form_run(&f))
-        return;
-
-    snprintf(p->tier, sizeof p->tier, "%s", tier);
-    snprintf(p->backend, sizeof p->backend, "%s", backend);
-    snprintf(p->model, sizeof p->model, "%s", model);
-    snprintf(p->effort, sizeof p->effort, "%s", effort);
+    int chosen = pick_run(title, items, BOARD_TIERS, at);
+    if (chosen >= 0)
+        snprintf(p->tier, sizeof p->tier, "%s", TIERS[chosen]);
 }
 
 static void edit_serving(struct board_cfg *c)

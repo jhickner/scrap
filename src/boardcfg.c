@@ -273,13 +273,6 @@ static void defaults(struct board_cfg *c)
     for (const char *const *b = backend_names(); *b && c->backends_n < BOARD_BACKENDS_MAX; b++)
         backend_defaults(&c->backends[c->backends_n++], *b);
 
-    for (int i = 0; i < BOARD_WHO; i++)
-        snprintf(c->who[i].backend, sizeof c->who[i].backend, "claude");
-
-    snprintf(c->who[BOARD_WHO_TRIAGE].model, sizeof c->who[BOARD_WHO_TRIAGE].model, "haiku");
-    snprintf(c->who[BOARD_WHO_TRIAGE].effort, sizeof c->who[BOARD_WHO_TRIAGE].effort, "low");
-    snprintf(c->who[BOARD_WHO_AUDIT].effort, sizeof c->who[BOARD_WHO_AUDIT].effort, "high");
-
     static const enum board_tier WHO_TIERS[BOARD_WHO] = {
         [BOARD_WHO_TRIAGE] = BOARD_TIER_LOW,
         [BOARD_WHO_WORKER] = BOARD_TIER_MED,
@@ -368,9 +361,6 @@ static void overlay(struct board_cfg *c, const cJSON *o)
         const cJSON *p = cJSON_GetObjectItem((cJSON *)who, WHO_NAMES[i]);
         if (!p)
             continue;
-        set_str(c->who[i].backend, sizeof c->who[i].backend, p, "backend");
-        set_str(c->who[i].model, sizeof c->who[i].model, p, "model");
-        set_str(c->who[i].effort, sizeof c->who[i].effort, p, "effort");
         const char *prompt = cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)p, "prompt"));
         if (prompt) {
             free(c->who[i].prompt);
@@ -464,16 +454,15 @@ static int read_roles(struct board_cfg *c)
         if (!mdcfg_load(&m, path))
             continue;
 
-        if (mdcfg_has(&m, "tier"))
-            snprintf(c->who[i].tier, sizeof c->who[i].tier, "%s", mdcfg_get(&m, "tier"));
+        const char *tier = mdcfg_get(&m, "tier");
+        if (boardcfg_tier_from_name(tier) < BOARD_TIERS)
+            snprintf(c->who[i].tier, sizeof c->who[i].tier, "%s", tier);
         else
             aged = 1;
 
-        const char *backend = mdcfg_get(&m, "backend");
-        if (*backend)
-            snprintf(c->who[i].backend, sizeof c->who[i].backend, "%s", backend);
-        snprintf(c->who[i].model, sizeof c->who[i].model, "%s", mdcfg_get(&m, "model"));
-        snprintf(c->who[i].effort, sizeof c->who[i].effort, "%s", mdcfg_get(&m, "effort"));
+        if (mdcfg_has(&m, "backend") || mdcfg_has(&m, "model") ||
+            mdcfg_has(&m, "effort"))
+            aged = 1;
 
         if (m.body && *m.body) {
             char *kept = dup_or_null(m.body);
@@ -594,10 +583,9 @@ static int write_roles(const struct board_cfg *c)
             ok = 0;
             continue;
         }
-        const char *keys[] = {"tier", "backend", "model", "effort"};
-        const char *vals[] = {c->who[i].tier, c->who[i].backend, c->who[i].model,
-                              c->who[i].effort};
-        if (!mdcfg_write(path, keys, vals, 4, c->who[i].prompt))
+        const char *keys[] = {"tier"};
+        const char *vals[] = {c->who[i].tier};
+        if (!mdcfg_write(path, keys, vals, 1, c->who[i].prompt))
             ok = 0;
     }
     return ok;
@@ -696,7 +684,7 @@ static void resolve(void)
 
         enum board_tier tier = boardcfg_tier_from_name(cache.who[i].tier);
         if (tier >= BOARD_TIERS)
-            continue;
+            tier = BOARD_TIER_MED;
 
         snprintf(serving_who[i].backend, sizeof serving_who[i].backend, "%s",
                  cache.serving[0] ? cache.serving : "claude");
@@ -893,9 +881,6 @@ int boardcfg_set(const struct board_cfg *c)
     memcpy(cache.backends, c->backends, sizeof cache.backends);
     for (int i = 0; i < BOARD_WHO; i++) {
         snprintf(cache.who[i].tier, sizeof cache.who[i].tier, "%s", c->who[i].tier);
-        snprintf(cache.who[i].backend, sizeof cache.who[i].backend, "%s", c->who[i].backend);
-        snprintf(cache.who[i].model, sizeof cache.who[i].model, "%s", c->who[i].model);
-        snprintf(cache.who[i].effort, sizeof cache.who[i].effort, "%s", c->who[i].effort);
     }
     resolve();
     return write_out(&cache);
