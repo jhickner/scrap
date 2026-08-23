@@ -667,10 +667,17 @@ int boardview_run(const char *cwd)
     char here[4096];
     snprintf(here, sizeof here, "%s", cwd ? cwd : "");
 
-    char filter[4096];
-    snprintf(filter, sizeof filter, "%s", here);
+    // Where the board was left. Going to a worker and coming back is the
+    // ordinary way round the board, so coming back should land where it was
+    // rather than at the top of the list.
+    static char filter[4096];
+    static char sel_id[BOARD_ID_MAX];
+    static int  been_here;
 
-    char sel_id[BOARD_ID_MAX] = {0};
+    if (!been_here) {
+        snprintf(filter, sizeof filter, "%s", here);
+        been_here = 1;
+    }
 
     for (;;) {
         struct board_card *cards = NULL;

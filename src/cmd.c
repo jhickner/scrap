@@ -801,7 +801,7 @@ static const struct cmd COMMANDS[] = {
     {"/fw", "fork into a tmux window", NULL, CMD_LIVE, do_fork_w},
     {"/split", "a shell split here, in this directory", "[h|v|w]", 0, do_split},
     {"/card", "put a thought on the board, unsorted", "<text>", CMD_LIVE, do_card},
-    {"/board", "the cards, by column", NULL, 0, do_board},
+    {"/board", "the cards, by column", NULL, CMD_LIVE, do_board},
     {"/status", "reprint the status bar", NULL, CMD_LIVE, do_status},
     {"/session", "show this session's info and totals", NULL, CMD_LIVE, do_session},
     {"/rename", "name this session, or ask the model to name it again", "[name]",
