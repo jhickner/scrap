@@ -178,12 +178,18 @@ static int is_work_kind(const char *kind)
            !strcmp(kind, "chore");
 }
 
+// Counted from the last thing a person said, not from the start of the card.
+// Answering the question triage asked is new information, so the passes it
+// made before the answer are not passes at this card.
 int boardtriage_attempts(const struct board_card *c)
 {
     int n = 0;
-    for (int i = 0; i < c->log_n; i++)
-        if (!strcmp(c->log[i].who, "triage"))
+    for (int i = 0; i < c->log_n; i++) {
+        if (!strcmp(c->log[i].who, "you"))
+            n = 0;
+        else if (!strcmp(c->log[i].who, "triage"))
             n++;
+    }
     return n;
 }
 

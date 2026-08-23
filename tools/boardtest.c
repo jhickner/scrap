@@ -4,8 +4,17 @@
 #include <unistd.h>
 
 #include "board.h"
+#include "boardtriage.h"
+#include "sessionfork.h"
 
 static int failures;
+
+// Only the counting is under test here, and nothing in it forks. The stub is
+// what keeps the harness off the rest of the session machinery.
+const char *sessionfork_program(void)
+{
+    return "false";
+}
 
 static void fail(const char *what)
 {
@@ -221,6 +230,46 @@ static void test_columns(void)
     board_free(v, n);
 }
 
+// A card that came back unclear has had its turn. Answering the question puts
+// something on the card triage has not seen, so the count starts again and the
+// board is free to give it another turn on its own.
+static void test_attempts_reset_when_answered(void)
+{
+    char id[BOARD_ID_MAX] = {0};
+    board_add("do the thing", "/tmp/repo", id);
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    expect(boardtriage_attempts(board_find(v, n, id)) == 0,
+           "a fresh card has had no turns");
+    board_free(v, n);
+
+    board_move(id, BOARD_UNCLEAR, "triage", "which thing?");
+    n = board_load(&v);
+    expect(boardtriage_attempts(board_find(v, n, id)) == 1, "unclear counts a turn");
+    board_free(v, n);
+
+    board_note(id, "worker", "still stuck");
+    n = board_load(&v);
+    expect(boardtriage_attempts(board_find(v, n, id)) == 1,
+           "a worker saying something is not an answer");
+    board_free(v, n);
+
+    board_note(id, "you", "answered, and sent back to triage");
+    n = board_load(&v);
+    expect(boardtriage_attempts(board_find(v, n, id)) == 0,
+           "answering it makes it new again");
+    board_free(v, n);
+
+    board_move(id, BOARD_UNCLEAR, "triage", "still cannot tell");
+    n = board_load(&v);
+    expect(boardtriage_attempts(board_find(v, n, id)) == 1,
+           "the next turn counts from the answer");
+    board_free(v, n);
+
+    board_remove(id);
+}
+
 static void test_empty_and_missing(void)
 {
     struct board_card *v = (struct board_card *)1;
@@ -247,6 +296,7 @@ int main(void)
     test_update_leaves_others_alone();
     test_remove();
     test_columns();
+    test_attempts_reset_when_answered();
     test_empty_and_missing();
 
     cleanup();

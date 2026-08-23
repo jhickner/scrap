@@ -24,9 +24,10 @@ int boardtriage_poll(void);
 
 void boardtriage_close_all(void);
 
-// How many times triage has already had a go at this card. Two failed passes
-// is enough: a card that will not parse waits for a person rather than for
-// another turn.
+// How many times triage has had a go at this card since the last time a
+// person said anything about it. Two failed passes is enough: a card that will
+// not parse waits for a person rather than for another turn -- and once that
+// person has answered, the count starts again.
 int boardtriage_attempts(const struct board_card *c);
 
 #define BOARDTRIAGE_TRIES 2

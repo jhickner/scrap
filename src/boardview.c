@@ -414,7 +414,10 @@ static int board_tick(void *ud)
 
 // Everything sitting in `new` that nothing is already working on. A card is
 // triaged once on its own, and after that only when asked: a card that came
-// back unclear twice is waiting for a person, not another turn.
+// back unclear is waiting for a person, not another turn. Answering it is that
+// person, so an answered card is new again and gets its turn here -- which is
+// also what catches one that could not be started at the moment it was
+// answered because every triage slot was busy.
 static void triage_the_new(struct board_card *cards, int n)
 {
     for (int i = 0; i < n; i++)
@@ -639,6 +642,8 @@ static void card_form(const struct board_card *c)
     int ok = board_update(&edited);
     board_free(cards, n);
 
+    // The note goes on before triage is asked for: it is what tells the board
+    // this card has been answered, and so what makes it eligible again.
     if (ok && answered) {
         board_note(c->id, "you", "answered, and sent back to triage");
         struct board_card *again = NULL;
