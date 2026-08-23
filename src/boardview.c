@@ -451,14 +451,12 @@ static void card_form(const struct board_card *c)
     for (int i = 0; i < BOARD_COLS; i++)
         cols[i] = board_col_name((enum board_col)i);
 
-    char title[BOARD_TITLE_MAX];
     char spec[1024];
     char kind[16];
     char column[16];
     char where[4096];
     char priority[8];
 
-    snprintf(title, sizeof title, "%s", c->title);
     snprintf(spec, sizeof spec, "%s", c->body ? c->body : "");
     snprintf(kind, sizeof kind, "%s", c->kind);
     snprintf(column, sizeof column, "%s", board_col_name(c->col));
@@ -468,8 +466,6 @@ static void card_form(const struct board_card *c)
     struct form_field fields[6];
     int               fields_n = 0;
 
-    fields[fields_n++] = (struct form_field){"title", FORM_TEXT, title,
-                                             sizeof title, NULL, 0};
     if (spec_is_field(c))
         fields[fields_n++] = (struct form_field){"spec", FORM_TEXT, spec,
                                                  sizeof spec, NULL, 0};
@@ -487,9 +483,14 @@ static void card_form(const struct board_card *c)
     char       *owned[NOTES_MAX] = {0};
     int         notes_n = build_notes(c, notes, owned);
 
+    // The title only earns a place in the heading once triage has made it
+    // something other than the spec's first line.
     char heading[600];
-    snprintf(heading, sizeof heading, "%s · %s", c->id,
-             c->kind[0] ? c->kind : "unsorted");
+    if (c->kind[0] && c->title[0] && strcmp(c->title, c->body ? c->body : ""))
+        snprintf(heading, sizeof heading, "%s · %s · %s", c->id, c->kind, c->title);
+    else
+        snprintf(heading, sizeof heading, "%s · %s", c->id,
+                 c->kind[0] ? c->kind : "unsorted");
 
     struct form f = {
         .title = heading,
@@ -506,12 +507,15 @@ static void card_form(const struct board_card *c)
         return;
 
     struct board_card edited = *c;
-    snprintf(edited.title, sizeof edited.title, "%s", title);
     snprintf(edited.kind, sizeof edited.kind, "%s", kind);
-    // The spec is what a worker is handed, so it is the thing that must not
-    // drift from the title quietly.
-    if (spec_is_field(c))
+    // The spec is the card; the title is only how it reads in a list. Until
+    // triage has named it, that name follows the spec rather than drifting
+    // from it.
+    if (spec_is_field(c)) {
         edited.body = spec;
+        if (!c->kind[0])
+            board_title_of(spec, edited.title, sizeof edited.title);
+    }
     edited.col = board_col_from_name(column);
     edited.priority = atoi(priority);
 

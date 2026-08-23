@@ -77,6 +77,10 @@ struct board_card *board_find(struct board_card *cards, int n, const char *id);
 // was given. The first line becomes the title, the whole of it the body.
 int board_add(const char *text, const char *cwd, char id_out[BOARD_ID_MAX]);
 
+// The title a card takes from its own text: the first line, tidied. A card
+// carries this until triage gives it one worth keeping.
+void board_title_of(const char *text, char *out, size_t size);
+
 // Writes `card` back over the one with its id, under the lock, leaving every
 // other card as it was found. Its `updated` is stamped for the caller.
 int board_update(const struct board_card *card);

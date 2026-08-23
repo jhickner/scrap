@@ -376,7 +376,7 @@ static void mint_id(const struct board_card *v, int n, char out[BOARD_ID_MAX])
 
 // The first line of a capture, tidied. text_one_line() alone would fold the
 // whole card into the title, which for anything pasted is the whole of it.
-static void title_of(const char *text, char *out, size_t size)
+void board_title_of(const char *text, char *out, size_t size)
 {
     size_t n = strcspn(text, "\n");
     char  *first = strndup(text, n);
@@ -411,7 +411,7 @@ int board_add(const char *text, const char *cwd, char id_out[BOARD_ID_MAX])
     mint_id(v, n, c->id);
     c->col = BOARD_NEW;
     c->created = c->updated = time(NULL);
-    title_of(text, c->title, sizeof c->title);
+    board_title_of(text, c->title, sizeof c->title);
     c->body = dup_or_empty(text);
 
     char here[4096];
