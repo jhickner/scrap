@@ -172,6 +172,18 @@ static int layout(struct state *st, int columns)
     st->budget = value_budget(st, columns);
 
     for (int i = 0; i < form->fields_n; i++) {
+        if (form->fields[i].kind == FORM_BUTTON) {
+            if (i == 0 || form->fields[i - 1].kind != FORM_BUTTON) {
+                struct line *gap = line_add(out);
+                if (gap)
+                    gap->field = -1;
+            }
+            st->slots[i].rows = 1;
+            struct line *l = line_add(out);
+            if (l)
+                l->field = i;
+            continue;
+        }
         if (form->fields[i].kind == FORM_CHOICE) {
             st->slots[i].rows = 1;
             struct line *l = line_add(out);
@@ -346,6 +358,15 @@ static void paint(void *ud)
         struct form_field *f = field_at(st, l->field);
         int                focused = l->field == st->focus;
 
+        if (f->kind == FORM_BUTTON) {
+            ui_pad(FORM_INDENT);
+            ui_esc(ui_style(focused ? UI_ACCENT : UI_DIM));
+            ui_put(f->label ? f->label : "");
+            ui_esc(ui_style(UI_RESET));
+            ui_put("\n");
+            continue;
+        }
+
         if (i == st->top || lines[i - 1].field != l->field) {
             put_label(st, f->label ? f->label : "", focused);
             put_gutter(st, l->field, focused);
@@ -383,6 +404,8 @@ static void load(struct state *st)
 
         repl_init(&s->repl, NULL, 0);
 
+        if (f->kind == FORM_BUTTON)
+            continue;
         if (f->kind == FORM_CHOICE) {
             s->choice = 0;
             for (int c = 0; c < f->choices_n; c++)
@@ -417,10 +440,22 @@ static void store(struct state *st)
 {
     for (int i = 0; i < st->form->fields_n; i++) {
         struct form_field *f = field_at(st, i);
-        if (!f->value || !f->size)
+        if (!f->value || !f->size || f->kind == FORM_BUTTON)
             continue;
         snprintf(f->value, f->size, "%s", slot_shown(st, i));
     }
+}
+
+static int press_button(struct state *st)
+{
+    struct form_field *f = field_at(st, st->focus);
+    if (f->kind != FORM_BUTTON)
+        return 0;
+    if (f->value && f->size)
+        snprintf(f->value, f->size, "1");
+    chrome_modal(NULL, NULL);
+    unload(st);
+    return 1;
 }
 
 static int feed(struct state *st, const ReplEvent *ev)
@@ -470,6 +505,7 @@ int form_run(struct form *form)
 
         struct form_field *f = field_at(&st, st.focus);
         int                typing = f->kind == FORM_TEXT;
+        int                button = f->kind == FORM_BUTTON;
 
         if (ev.key == TK_CHAR && ev.cp == 3) {
             chrome_modal(NULL, NULL);
@@ -497,10 +533,14 @@ int form_run(struct form *form)
             if (at < 0 || at >= HIT_MAX || st.hit[at] < 0)
                 continue;
             st.focus = st.hit[at];
+            if (press_button(&st))
+                return 1;
             break;
         }
 
         case TK_ENTER:
+            if (press_button(&st))
+                return 1;
             store(&st);
             chrome_modal(NULL, NULL);
             unload(&st);
@@ -514,6 +554,12 @@ int form_run(struct form *form)
 
         default: {
             if (!typing) {
+                if (button && ev.key == TK_CHAR && ev.cp == ' ') {
+                    free(ev.text);
+                    if (press_button(&st))
+                        return 1;
+                    break;
+                }
                 if (ev.key == TK_CHAR && ev.cp == ' ')
                     cycle(&st, st.focus, 1);
                 else if (ev.key == TK_LEFT || ev.key == TK_RIGHT)

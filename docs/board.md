@@ -221,6 +221,7 @@ to be memorised while the letters still work as shortcuts.
     approve and audit anyway                         A
     send feedback                                    f
     reject, back to backlog                          r
+    cancel starting, back to backlog                 x
 ```
 
 There is no REPL inside a card. Opening the worker calls `workspace_show()` and

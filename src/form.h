@@ -7,6 +7,7 @@
 enum form_kind {
     FORM_TEXT,
     FORM_CHOICE,
+    FORM_BUTTON,
 };
 
 struct form_field {

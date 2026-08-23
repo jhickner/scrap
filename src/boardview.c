@@ -36,13 +36,14 @@
 #define KEY_GO       'g'
 #define KEY_APPROVE  'a'
 #define KEY_REJECT   'r'
+#define KEY_UNSTART  'x'
 #define KEY_FEEDBACK 'f'
 #define KEY_LOG      'l'
 #define KEY_CONFIG   'c'
 #define KEY_SERVE    'b'
 #define KEY_ALL      '*'
 
-#define BOARD_KEYS "ndtsgarflcb*"
+#define BOARD_KEYS "ndtsgarxflcb*"
 
 #define BOARD_RECENT 3
 
@@ -50,7 +51,7 @@
 
 #define BOARD_HINT \
     "enter edit  ·  s start  ·  g worker  ·  "                                \
-    "a approve  ·  f feedback  ·  r reject\n"                                 \
+    "a approve  ·  f feedback  ·  r reject  ·  x cancel start\n"              \
     "n new  ·  t triage  ·  l log  ·  d delete  ·  c config  ·  "               \
     "b backend  ·  * all repos  ·  / search"
 
@@ -697,6 +698,13 @@ static void build_notes(const struct board_card *c, struct notes *notes)
     }
 }
 
+static int unstart(const struct board_card *c)
+{
+    if (!c || c->col != BOARD_DOING || boardsweep_is(c))
+        return 0;
+    return boardwork_reject(c, "cancelled start");
+}
+
 static void card_form(const struct board_card *c)
 {
     const char *cols[BOARD_COLS];
@@ -722,7 +730,9 @@ static void card_form(const struct board_card *c)
     path_home_relative(c->cwd, where, sizeof where);
     snprintf(priority, sizeof priority, "%d", c->priority);
 
-    struct form_field fields[6];
+    char unstart_at[2] = "";
+
+    struct form_field fields[7];
     int               fields_n = 0;
 
     fields[fields_n++] = (struct form_field){"spec", FORM_TEXT, spec,
@@ -736,6 +746,10 @@ static void card_form(const struct board_card *c)
     fields[fields_n++] = (struct form_field){"priority", FORM_CHOICE, priority,
                                              sizeof priority, PRIORITIES,
                                              COUNT(PRIORITIES)};
+    if (c->col == BOARD_DOING && !boardsweep_is(c))
+        fields[fields_n++] = (struct form_field){
+            "cancel starting, back to backlog", FORM_BUTTON, unstart_at,
+            sizeof unstart_at, NULL, 0};
 
     struct notes notes = {0};
     build_notes(c, &notes);
@@ -757,6 +771,15 @@ static void card_form(const struct board_card *c)
     int kept = form_run(&f);
 
     notes_free(&notes);
+    if (unstart_at[0]) {
+        struct board_card *cards = NULL;
+        int                n = board_load(&cards);
+        struct board_card *live = board_find(cards, n, c->id);
+        if (live)
+            unstart(live);
+        board_free(cards, n);
+        return;
+    }
     if (!kept)
         return;
 
@@ -990,6 +1013,10 @@ int boardview_run(const char *cwd)
                     free(why);
                 }
             }
+            break;
+        case KEY_UNSTART:
+            if (c)
+                unstart(c);
             break;
         case KEY_FEEDBACK:
             if (c && boardwork_tab(c->id) >= 0) {
