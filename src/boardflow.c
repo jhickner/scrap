@@ -4,19 +4,15 @@
 
 #include "boardaudit.h"
 
-/* The column a card waits in for a role. Skipping it takes the flow from
- * `next`, or lands on `to` where what follows is not a step. */
+/* The step a card in each column is waiting on. */
 static const struct {
     enum board_col  at;
-    enum board_who  who;
-    enum board_step next;
-    enum board_col  to;
-} STAGE[] = {
-    {BOARD_NEW,     BOARD_WHO_TRIAGE, BOARD_STEPS,       BOARD_BACKLOG},
-    {BOARD_UNCLEAR, BOARD_WHO_TRIAGE, BOARD_STEPS,       BOARD_BACKLOG},
-    {BOARD_DOING,   BOARD_WHO_WORKER, BOARD_STEP_REVIEW, BOARD_COLS},
-    {BOARD_AUDIT,   BOARD_WHO_AUDIT,  BOARD_STEP_MERGE,  BOARD_COLS},
-    {BOARD_MERGING, BOARD_WHO_MERGE,  BOARD_STEPS,       BOARD_DONE},
+    enum board_step step;
+} COLUMN[] = {
+    {BOARD_DOING,   BOARD_STEP_WORKTREE},
+    {BOARD_REVIEW,  BOARD_STEP_REVIEW},
+    {BOARD_AUDIT,   BOARD_STEP_AUDIT},
+    {BOARD_MERGING, BOARD_STEP_MERGE},
 };
 
 enum board_col boardflow_from(const char *kind, enum board_step from,
@@ -42,26 +38,20 @@ enum board_col boardflow_from(const char *kind, enum board_step from,
     return BOARD_DONE;
 }
 
-enum board_who boardflow_who_at(enum board_col col)
+enum board_step boardflow_step_at(enum board_col col)
 {
-    for (size_t i = 0; i < sizeof STAGE / sizeof *STAGE; i++)
-        if (STAGE[i].at == col)
-            return STAGE[i].who;
-    return BOARD_WHO;
-}
-
-int boardflow_has_stage(enum board_who who)
-{
-    for (size_t i = 0; i < sizeof STAGE / sizeof *STAGE; i++)
-        if (STAGE[i].who == who)
-            return 1;
-    return 0;
+    for (size_t i = 0; i < sizeof COLUMN / sizeof *COLUMN; i++)
+        if (COLUMN[i].at == col)
+            return COLUMN[i].step;
+    return BOARD_STEPS;
 }
 
 int boardflow_skippable(const struct board_card *c)
 {
-    enum board_who who = c ? boardflow_who_at(c->col) : BOARD_WHO;
-    return who < BOARD_WHO && boardcfg_for(who)->skippable;
+    if (!c)
+        return 0;
+    const struct board_profile *p = boardcfg_for_step(boardflow_step_at(c->col));
+    return p && p->skippable;
 }
 
 int boardflow_skip(const struct board_card *c)
@@ -69,17 +59,11 @@ int boardflow_skip(const struct board_card *c)
     if (!boardflow_skippable(c))
         return 0;
 
-    for (size_t i = 0; i < sizeof STAGE / sizeof *STAGE; i++) {
-        if (STAGE[i].at != c->col)
-            continue;
-        enum board_col to =
-            STAGE[i].next < BOARD_STEPS
-                ? boardflow_from(c->kind, STAGE[i].next, boardaudit_wanted(c))
-                : STAGE[i].to;
-        char why[64];
-        snprintf(why, sizeof why, "%s skipped",
-                 boardcfg_who_name(STAGE[i].who));
-        return board_move(c->id, to, "you", why);
-    }
-    return 0;
+    enum board_step step = boardflow_step_at(c->col);
+    char            why[64];
+    snprintf(why, sizeof why, "%s skipped", boardcfg_step_name(step));
+    return board_move(c->id,
+                      boardflow_from(c->kind, (enum board_step)(step + 1),
+                                     boardaudit_wanted(c)),
+                      "you", why);
 }

@@ -152,11 +152,13 @@ The audit is a gate a card may skip, not a stage every card walks. `git diff
 runs, under it the card goes straight on. You can always force one, and always
 skip one, from the approve row — which says which it will do, so pressing it is
 never a surprise. A card sitting in a step is skipped with `k`, which stops
-whatever is running for it and moves it on: `audit` to `merge`, `merge` to
-`done`, `new` to `backlog`. Which steps that key works on is `skippable` in the
-role's file — on in `roles/audit.md`, off in the rest, because a step worth
-skipping by hand is a judgement about your board rather than a property of the
-flow.
+whatever is running for it and moves it on to whatever its kind takes next.
+
+Which steps that works on is configuration, not code. A role file names the
+step it runs — `step: audit` in `roles/audit.md` — and `skippable` there says
+whether a person may step over it; a role named after a step runs it without
+being told. Nothing in the flow knows which roles exist, so a role added to
+`roles/` is skippable on the same terms as the ones that shipped.
 
 An audit is a worker in the same worktree running the review skills already
 installed, scoped to architecture, duplicated mechanisms, memory, and security.

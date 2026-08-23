@@ -536,12 +536,12 @@ static void test_skipping_a_step(void)
     expect(board_add("a card to skip past", "/tmp/repo", id), "capture");
     expect(board_move(id, BOARD_AUDIT, "you", NULL), "into audit");
 
-    expect(boardflow_who_at(BOARD_AUDIT) == BOARD_WHO_AUDIT,
-           "the audit column belongs to the audit role");
-    expect(boardflow_who_at(BOARD_BACKLOG) == BOARD_WHO,
-           "a column no role runs has none");
-    expect(boardflow_has_stage(BOARD_WHO_MERGE), "merge is a step a card waits in");
-    expect(!boardflow_has_stage(BOARD_WHO_SWEEP), "the sweep is not");
+    expect(boardflow_step_at(BOARD_AUDIT) == BOARD_STEP_AUDIT,
+           "a card in audit waits on the audit step");
+    expect(boardflow_step_at(BOARD_BACKLOG) == BOARD_STEPS,
+           "a card waiting for a worker waits on no step");
+    expect(boardcfg_for_step(BOARD_STEP_AUDIT) != NULL,
+           "a role declares the audit step");
 
     struct board_cfg *cfg = boardcfg_copy();
     for (int i = 0; i < BOARD_WHO; i++)
@@ -551,8 +551,8 @@ static void test_skipping_a_step(void)
     expect(!boardflow_skip(NULL), "a missing card is not skipped");
     expect(!skip_card(id), "an unskippable step holds the card");
 
-    cfg->who[BOARD_WHO_AUDIT].skippable = 1;
-    cfg->who[BOARD_WHO_MERGE].skippable = 1;
+    for (int i = 0; i < BOARD_WHO; i++)
+        cfg->who[i].skippable = 1;
     boardcfg_set(cfg);
     boardcfg_free(cfg);
 

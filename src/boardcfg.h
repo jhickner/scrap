@@ -39,6 +39,7 @@ struct board_backend {
 
 struct board_profile {
     char  tier[8];
+    char  step[16];
     int   skippable;
     char  backend[32];
     char  model[128];
@@ -102,6 +103,8 @@ void              boardcfg_free(struct board_cfg *c);
 int boardcfg_set(const struct board_cfg *c);
 
 const struct board_profile *boardcfg_for(enum board_who who);
+
+const struct board_profile *boardcfg_for_step(enum board_step step);
 
 const struct board_profile *boardcfg_for_backend(enum board_who who,
                                                  const char *backend);

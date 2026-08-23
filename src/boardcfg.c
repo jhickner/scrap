@@ -5,7 +5,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "boardflow.h"
 #include "text.h"
 #include "mdcfg.h"
 #include "sessionfork.h"
@@ -130,10 +129,17 @@ static void defaults(struct board_cfg *c)
         [BOARD_WHO_SWEEP]  = BOARD_TIER_MED,
         [BOARD_WHO_MERGE]  = BOARD_TIER_MED,
     };
-    for (int i = 0; i < BOARD_WHO; i++)
+    for (int i = 0; i < BOARD_WHO; i++) {
         snprintf(c->who[i].tier, sizeof c->who[i].tier, "%s",
                  boardcfg_tier_name(WHO_TIERS[i]));
-    c->who[BOARD_WHO_AUDIT].skippable = 1;
+
+        /* A role named after a step runs that step until its file says
+         * otherwise, so nothing here has to know which roles those are. */
+        if (boardcfg_step_from_name(WHO_NAMES[i]) < BOARD_STEPS) {
+            snprintf(c->who[i].step, sizeof c->who[i].step, "%s", WHO_NAMES[i]);
+            c->who[i].skippable = 1;
+        }
+    }
 
 }
 
@@ -218,7 +224,7 @@ static void overlay(struct board_cfg *c, const cJSON *o)
 
 #define BOARD_DIR "board"
 
-static int cfg_path(char *out, size_t size, const char *leaf, const char *name)
+static int board_path(char *out, size_t size, const char *leaf, const char *name)
 {
     char dir[4096];
     if (!mdcfg_dir(dir, sizeof dir, leaf))
@@ -266,7 +272,7 @@ static void steps_str(unsigned mask, char *out, size_t size)
 static void read_settings(struct board_cfg *c)
 {
     char path[4300];
-    if (!cfg_path(path, sizeof path, BOARD_DIR, "settings"))
+    if (!board_path(path, sizeof path, BOARD_DIR, "settings"))
         return;
 
     struct mdcfg m;
@@ -295,7 +301,7 @@ static int read_roles(struct board_cfg *c)
 
     for (int i = 0; i < BOARD_WHO; i++) {
         char path[4300];
-        if (!cfg_path(path, sizeof path, BOARD_DIR "/roles", WHO_NAMES[i]))
+        if (!board_path(path, sizeof path, BOARD_DIR "/roles", WHO_NAMES[i]))
             continue;
 
         struct mdcfg m;
@@ -308,6 +314,9 @@ static int read_roles(struct board_cfg *c)
         else
             aged = 1;
 
+        if (mdcfg_has(&m, "step"))
+            snprintf(c->who[i].step, sizeof c->who[i].step, "%s",
+                     mdcfg_get(&m, "step"));
         c->who[i].skippable = mdcfg_int(&m, "skippable", c->who[i].skippable);
 
         if (mdcfg_has(&m, "backend") || mdcfg_has(&m, "model") ||
@@ -336,7 +345,7 @@ static void read_backends(struct board_cfg *c)
 {
     for (int i = 0; i < c->backends_n; i++) {
         char path[4300];
-        if (!cfg_path(path, sizeof path, BOARD_DIR "/backends", c->backends[i].name))
+        if (!board_path(path, sizeof path, BOARD_DIR "/backends", c->backends[i].name))
             continue;
 
         struct mdcfg m;
@@ -366,7 +375,7 @@ static void read_kinds(struct board_cfg *c)
 
     for (int i = 0; i < found; i++) {
         char path[4300];
-        if (!cfg_path(path, sizeof path, BOARD_DIR "/kinds", names[i]))
+        if (!board_path(path, sizeof path, BOARD_DIR "/kinds", names[i]))
             continue;
 
         struct mdcfg m;
@@ -386,7 +395,7 @@ static void read_kinds(struct board_cfg *c)
 static int write_settings(const struct board_cfg *c)
 {
     char path[4300];
-    if (!cfg_path(path, sizeof path, BOARD_DIR, "settings"))
+    if (!board_path(path, sizeof path, BOARD_DIR, "settings"))
         return 0;
 
     char nums[7][32];
@@ -425,15 +434,15 @@ static int write_roles(const struct board_cfg *c)
     int ok = 1;
     for (int i = 0; i < BOARD_WHO; i++) {
         char path[4300];
-        if (!cfg_path(path, sizeof path, BOARD_DIR "/roles", WHO_NAMES[i])) {
+        if (!board_path(path, sizeof path, BOARD_DIR "/roles", WHO_NAMES[i])) {
             ok = 0;
             continue;
         }
         char        skip[8];
         snprintf(skip, sizeof skip, "%d", c->who[i].skippable);
-        const char *keys[] = {"tier", "skippable"};
-        const char *vals[] = {c->who[i].tier, skip};
-        int         n = boardflow_has_stage((enum board_who)i) ? 2 : 1;
+        const char *keys[] = {"tier", "step", "skippable"};
+        const char *vals[] = {c->who[i].tier, c->who[i].step, skip};
+        int         n = c->who[i].step[0] ? 3 : 1;
         if (!mdcfg_write(path, keys, vals, n, c->who[i].prompt))
             ok = 0;
     }
@@ -445,7 +454,7 @@ static int write_backends(const struct board_cfg *c)
     int ok = 1;
     for (int i = 0; i < c->backends_n; i++) {
         char path[4300];
-        if (!cfg_path(path, sizeof path, BOARD_DIR "/backends", c->backends[i].name)) {
+        if (!board_path(path, sizeof path, BOARD_DIR "/backends", c->backends[i].name)) {
             ok = 0;
             continue;
         }
@@ -484,14 +493,14 @@ static int write_kinds(const struct board_cfg *c)
         if (still)
             continue;
         char gone[4300];
-        if (cfg_path(gone, sizeof gone, BOARD_DIR "/kinds", names[i]))
+        if (board_path(gone, sizeof gone, BOARD_DIR "/kinds", names[i]))
             unlink(gone);
     }
 
     int ok = 1;
     for (int i = 0; i < c->kinds_n; i++) {
         char path[4300];
-        if (!cfg_path(path, sizeof path, BOARD_DIR "/kinds", c->kinds[i].name)) {
+        if (!board_path(path, sizeof path, BOARD_DIR "/kinds", c->kinds[i].name)) {
             ok = 0;
             continue;
         }
@@ -581,7 +590,7 @@ static void read_all(void)
     read_kinds(&cache);
 
     char seed[4300];
-    if (aged || (cfg_path(seed, sizeof seed, BOARD_DIR, "settings") && access(seed, F_OK)))
+    if (aged || (board_path(seed, sizeof seed, BOARD_DIR, "settings") && access(seed, F_OK)))
         write_out(&cache);
 }
 
@@ -689,6 +698,18 @@ const struct board_profile *boardcfg_for(enum board_who who)
     if (who < 0 || who >= BOARD_WHO)
         who = BOARD_WHO_TRIAGE;
     return &serving_who[who];
+}
+
+const struct board_profile *boardcfg_for_step(enum board_step step)
+{
+    load();
+    const char *name = boardcfg_step_name(step);
+    if (!*name)
+        return NULL;
+    for (int i = 0; i < BOARD_WHO; i++)
+        if (!strcmp(serving_who[i].step, name))
+            return &serving_who[i];
+    return NULL;
 }
 
 const struct board_profile *boardcfg_for_backend(enum board_who who,
@@ -829,6 +850,7 @@ int boardcfg_set(const struct board_cfg *c)
     memcpy(cache.backends, c->backends, sizeof cache.backends);
     for (int i = 0; i < BOARD_WHO; i++) {
         snprintf(cache.who[i].tier, sizeof cache.who[i].tier, "%s", c->who[i].tier);
+        snprintf(cache.who[i].step, sizeof cache.who[i].step, "%s", c->who[i].step);
         cache.who[i].skippable = c->who[i].skippable;
     }
     resolve();

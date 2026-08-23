@@ -1265,12 +1265,12 @@ int boardview_run(const char *cwd)
             break;
         case KEY_SKIP:
             if (c) {
-                enum board_who who = boardflow_who_at(c->col);
-                if (who >= BOARD_WHO)
+                enum board_step step = boardflow_step_at(c->col);
+                if (step >= BOARD_STEPS)
                     snprintf(notice, sizeof notice, "nothing to skip here");
                 else if (!boardflow_skippable(c))
                     snprintf(notice, sizeof notice, "%s is not skippable",
-                             boardcfg_who_name(who));
+                             boardcfg_step_name(step));
                 else {
                     boardwork_halt(c->id);
                     boardflow_skip(c);

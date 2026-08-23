@@ -7,7 +7,6 @@
 #include "app.h"
 #include "ask.h"
 #include "boardcfg.h"
-#include "boardflow.h"
 #include "edit.h"
 #include "form.h"
 #include "pick.h"
@@ -124,9 +123,8 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
 
     head(rows, n, "skippable");
     for (int i = 0; i < BOARD_WHO; i++)
-        if (boardflow_has_stage((enum board_who)i))
-            toggle_row(rows, n, boardcfg_who_name((enum board_who)i),
-                       &c->who[i].skippable);
+        if (c->who[i].step[0])
+            toggle_row(rows, n, c->who[i].step, &c->who[i].skippable);
 
     head(rows, n, "prompts");
     for (int i = 0; i < BOARD_WHO; i++) {
