@@ -322,11 +322,9 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             else if (c->col == BOARD_REVIEW && c->worktree[0]) {
                 int files = 0, lines = 0;
                 boardaudit_size(c, &files, &lines);
-                r->detail = dsprintf("%d file%s, %d line%s · %s", files,
+                r->detail = dsprintf("%d file%s, %d line%s", files,
                                      files == 1 ? "" : "s", lines,
-                                     lines == 1 ? "" : "s",
-                                     boardaudit_wanted(c) ? "a audits"
-                                                          : "a lands it");
+                                     lines == 1 ? "" : "s");
             } else if (c->cost_usd > 0 &&
                      (c->col == BOARD_REVIEW || c->col == BOARD_DONE)) {
                 char head[320] = "";
