@@ -455,6 +455,39 @@ int boardwork_pump(void)
     return started;
 }
 
+// A card in backlog has not been started, so it must not still be holding the
+// worktree and branch of a run that is over. Dropping them is what makes the
+// next start a fresh one: worktree_make adopts whatever is already there, and
+// would otherwise hand the worker back a tree branched off a stale commit.
+int boardwork_release(const struct board_card *c)
+{
+    if (!c || !c->worktree[0] || boardwork_tab(c->id) >= 0)
+        return 0;
+
+    char root[4096], branch[128];
+    branch_of(c->id, branch, sizeof branch);
+
+    if (gitcmd_root(c->cwd, root, sizeof root)) {
+        char qroot[4200], qtree[4200];
+        if (text_shell_quote(root, qroot, sizeof qroot) &&
+            text_shell_quote(c->worktree, qtree, sizeof qtree)) {
+            char cmd[9000];
+            snprintf(cmd, sizeof cmd,
+                     "git -C %s worktree remove --force %s >/dev/null 2>&1; "
+                     "git -C %s branch -D %s >/dev/null 2>&1",
+                     qroot, qtree, qroot, branch);
+            if (system(cmd) == -1)
+                return 0;
+        }
+    }
+
+    struct board_card edited = *c;
+    edited.worktree[0] = '\0';
+    edited.base[0] = '\0';
+    edited.stuck[0] = '\0';
+    return board_update(&edited);
+}
+
 int boardwork_poll(void)
 {
     int changed = 0;
@@ -475,6 +508,21 @@ int boardwork_poll(void)
         board_free(cards, n);
         memset(&workers[i], 0, sizeof workers[i]);
     }
+
+    // Enforced here rather than on each way back to backlog: rejecting, a
+    // worker vanishing, and changing the column by hand all land there, and
+    // only one of them was a transition anything could hook.
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    for (int i = 0; i < n; i++) {
+        if (cards[i].col != BOARD_BACKLOG || !cards[i].worktree[0])
+            continue;
+        if (!boardwork_release(&cards[i]))
+            continue;
+        board_note(cards[i].id, "board", "worktree dropped; it starts again clean");
+        changed = 1;
+    }
+    board_free(cards, n);
     return changed;
 }
 

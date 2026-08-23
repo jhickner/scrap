@@ -21,6 +21,8 @@ int boardwork_tab(const char *id);
 
 int boardwork_poll(void);
 
+int boardwork_release(const struct board_card *c);
+
 int boardwork_pump(void);
 
 int boardwork_approve(const struct board_card *c, int audit);
