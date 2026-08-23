@@ -244,7 +244,7 @@ static void backend_defaults(struct board_backend *b, const char *name)
     if (strcmp(name, "claude"))
         return;
     snprintf(b->level[BOARD_TIER_LOW].model, sizeof b->level[0].model, "haiku");
-    snprintf(b->level[BOARD_TIER_MED].model, sizeof b->level[0].model, "sonnet");
+    snprintf(b->level[BOARD_TIER_MED].model, sizeof b->level[0].model, "opus");
     snprintf(b->level[BOARD_TIER_HIGH].model, sizeof b->level[0].model, "opus");
 }
 
