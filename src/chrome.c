@@ -62,6 +62,12 @@ void chrome_modal(chrome_modal_fn fn, void *ud)
     chrome_paint();
 }
 
+void chrome_modal_keep(void)
+{
+    modal = NULL;
+    modal_ud = NULL;
+}
+
 struct above {
     int side;
     int sticky;

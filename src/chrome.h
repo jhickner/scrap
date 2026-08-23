@@ -19,6 +19,7 @@ int  chrome_gap(void);
 
 typedef void (*chrome_modal_fn)(void *ud);
 void chrome_modal(chrome_modal_fn fn, void *ud);
+void chrome_modal_keep(void);
 
 int  chrome_modal_active(void);
 

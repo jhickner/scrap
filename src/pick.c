@@ -595,7 +595,10 @@ static int run(const char *title, const struct pick_item *items, int count,
     }
 
 done:
-    chrome_modal(NULL, NULL);
+    if (result == PICK_REOPEN)
+        chrome_modal_keep();
+    else
+        chrome_modal(NULL, NULL);
     free(v.order);
     free(v.score);
     return result;
