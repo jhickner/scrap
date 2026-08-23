@@ -469,10 +469,10 @@ static int build_notes(const struct board_card *c, const char **notes, char **ow
             localtime_r(&c->log[i].ts, &when);
             strftime(stamp, sizeof stamp, "%H:%M", &when);
         }
-        char line[1024];
-        snprintf(line, sizeof line, "%s  %-6s %s", stamp, c->log[i].who,
-                 c->log[i].text ? c->log[i].text : "");
-        note_line(notes, &n, owned, line);
+        char *line = dsprintf("%s  %-6s %s", stamp, c->log[i].who,
+                              c->log[i].text ? c->log[i].text : "");
+        note_line(notes, &n, owned, line ? line : "");
+        free(line);
     }
     return n;
 }

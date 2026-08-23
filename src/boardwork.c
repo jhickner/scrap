@@ -424,13 +424,20 @@ void boardwork_finished(struct session *s)
     board_update(&edited);
     board_free(cards, n);
 
-    char said[1024];
-    if (failed && *failed)
-        snprintf(said, sizeof said, "the turn failed: %s", failed);
-    else
-        snprintf(said, sizeof said, "%s",
-                 reply && *reply ? reply : "finished without saying anything");
-    board_note(w->id, "worker", said);
+    if (failed && *failed) {
+        size_t need = strlen(failed) + 32;
+        char  *said = malloc(need);
+        if (said) {
+            snprintf(said, need, "the turn failed: %s", failed);
+            board_note(w->id, "worker", said);
+            free(said);
+        } else {
+            board_note(w->id, "worker", failed);
+        }
+    } else {
+        board_note(w->id, "worker",
+                   reply && *reply ? reply : "finished without saying anything");
+    }
     if (empty)
         board_note(w->id, "board", "nothing was committed, so it stays here");
 }
