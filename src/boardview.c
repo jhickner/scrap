@@ -255,7 +255,7 @@ static const char *step_of(const char *id)
         return "triaging";
     if (boardmerge_running(id))
         return "landing";
-    if (boardaudit_running(id))
+    if (boardwork_auditing(id))
         return "auditing";
     return NULL;
 }
@@ -304,7 +304,9 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
 
             char ts[32], when[64];
             ago(c->updated ? c->updated : c->created, ts, sizeof ts);
-            if (step)
+            if (step && tab >= 0)
+                snprintf(when, sizeof when, "%s · tab %d", step, tab + 1);
+            else if (step)
                 snprintf(when, sizeof when, "%s…", step);
             else if (tab >= 0)
                 snprintf(when, sizeof when, "tab %d · %s", tab + 1, ts);
@@ -394,7 +396,6 @@ static int board_reap(void)
             break;
         changed |= boardtriage_take(key, out);
         changed |= boardmerge_take(key, out, ok);
-        changed |= boardaudit_take(key, out);
         changed |= boardsweep_take(key, out);
         free(out);
     }
@@ -412,7 +413,7 @@ static int board_tick(void *ud)
     moved |= boardwork_pump();
 
     moved |= boardmerge_pump();
-    moved |= boardaudit_pump();
+    moved |= boardwork_audit_pump();
     moved |= boardsweep_pump();
 
     static int seen;

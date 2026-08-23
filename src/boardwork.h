@@ -19,6 +19,14 @@ const char *boardwork_card_of(const struct session *s);
 
 int boardwork_tab(const char *id);
 
+int boardwork_auditing(const char *id);
+
+int boardwork_audit_pump(void);
+
+int boardwork_hold(const char *id, struct session *s, int audit);
+
+void boardwork_let_go(const char *id);
+
 int boardwork_poll(void);
 
 int boardwork_release(const struct board_card *c);

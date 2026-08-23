@@ -20,6 +20,8 @@
 struct worker {
     char            id[BOARD_ID_MAX];
     struct session *session;
+    int             audit;
+    int             done;
 };
 
 static struct worker workers[WORKSPACE_MAX];
@@ -58,6 +60,84 @@ int boardwork_tab(const char *id)
 {
     struct worker *w = id ? slot_of(id) : NULL;
     return w ? workspace_index_of(w->session) : -1;
+}
+
+int boardwork_auditing(const char *id)
+{
+    struct worker *w = id ? slot_of(id) : NULL;
+    return w && w->audit;
+}
+
+static int audit_start(const struct board_card *c)
+{
+    if (!c || !c->worktree[0] || boardwork_auditing(c->id))
+        return 0;
+
+    char *prompt = boardaudit_prompt(c);
+    if (!prompt)
+        return 0;
+
+    const struct board_profile *p = boardcfg_for(BOARD_WHO_AUDIT);
+
+    int front = workspace_index();
+    int at = workspace_spawn(p->backend[0] ? p->backend : "claude",
+                             p->model[0] ? p->model : NULL,
+                             p->effort[0] ? p->effort : NULL, c->worktree, NULL);
+    if (at < 0) {
+        free(prompt);
+        return 0;
+    }
+    workspace_show(front);
+
+    if (!boardwork_hold(c->id, workspace_at(at), 1)) {
+        workspace_close(at);
+        free(prompt);
+        return 0;
+    }
+
+    workspace_send(at, prompt, c->title);
+    boardlog_turn(c->id, "audit", prompt, NULL);
+    free(prompt);
+    return 1;
+}
+
+int boardwork_audit_pump(void)
+{
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+
+    int started = 0;
+    for (int i = 0; i < n && !started; i++) {
+        if (cards[i].col != BOARD_AUDIT || boardwork_auditing(cards[i].id))
+            continue;
+        started = audit_start(&cards[i]);
+
+        if (!started && !cards[i].worktree[0]) {
+            board_move(cards[i].id,
+                       boardflow_from(cards[i].kind, BOARD_STEP_MERGE, 0),
+                       "board", "no diff to audit");
+            started = 1;
+        }
+    }
+    board_free(cards, n);
+    return started;
+}
+
+int boardwork_hold(const char *id, struct session *s, int audit)
+{
+    if (!id || !*id || !s || slot_of(id))
+        return 0;
+
+    for (int i = 0; i < WORKSPACE_MAX; i++) {
+        if (workers[i].session)
+            continue;
+        memset(&workers[i], 0, sizeof workers[i]);
+        snprintf(workers[i].id, sizeof workers[i].id, "%s", id);
+        workers[i].session = s;
+        workers[i].audit = audit;
+        return 1;
+    }
+    return 0;
 }
 
 static void worktree_of(const char *root, const char *id, char *out, size_t size)
@@ -302,13 +382,7 @@ int boardwork_start(const struct board_card *c, char *why, int size)
         free(turn);
     }
 
-    for (int i = 0; i < WORKSPACE_MAX; i++) {
-        if (workers[i].session)
-            continue;
-        snprintf(workers[i].id, sizeof workers[i].id, "%s", c->id);
-        workers[i].session = s;
-        break;
-    }
+    boardwork_hold(c->id, s, 0);
 
     struct board_card edited = *c;
     edited.col = BOARD_DOING;
@@ -332,6 +406,14 @@ void boardwork_finished(struct session *s)
     const char *sid = session_id(s);
     const char *reply = session_last_reply(s);
     const char *failed = session_last_error(s);
+
+    if (w->audit) {
+        w->done = 1;
+        if (failed && *failed)
+            board_note(w->id, "audit", failed);
+        boardaudit_finished(w->id, failed && *failed ? NULL : reply);
+        return;
+    }
 
     struct board_card *cards = NULL;
     int                n = board_load(&cards);
@@ -434,7 +516,7 @@ int boardwork_release(const struct board_card *c)
     return board_update(&edited);
 }
 
-static void let_go(const char *id)
+void boardwork_let_go(const char *id)
 {
     struct worker *w = slot_of(id);
     if (!w)
@@ -451,6 +533,11 @@ int boardwork_poll(void)
     for (int i = 0; i < WORKSPACE_MAX; i++) {
         if (!workers[i].session)
             continue;
+        if (workers[i].done) {
+            boardwork_let_go(workers[i].id);
+            changed = 1;
+            continue;
+        }
         if (workspace_index_of(workers[i].session) >= 0)
             continue;
 
@@ -473,9 +560,11 @@ int boardwork_poll(void)
         if (!workers[i].session)
             continue;
         struct board_card *c = board_find(cards, n, workers[i].id);
-        if (c && (c->col == BOARD_DOING || c->col == BOARD_REVIEW))
+        if (c && (workers[i].audit
+                      ? c->col == BOARD_AUDIT
+                      : (c->col == BOARD_DOING || c->col == BOARD_REVIEW)))
             continue;
-        let_go(workers[i].id);
+        boardwork_let_go(workers[i].id);
         changed = 1;
     }
 
@@ -498,14 +587,14 @@ void boardwork_discard(const struct board_card *c)
     if (!c)
         return;
 
-    static const char *const STAGES[] = {"triage:", "audit:", "merge:", "sweep:"};
+    static const char *const STAGES[] = {"triage:", "merge:", "sweep:"};
     for (size_t i = 0; i < sizeof STAGES / sizeof *STAGES; i++) {
         char key[CHILD_KEY_MAX];
         snprintf(key, sizeof key, "%s%s", STAGES[i], c->id);
         child_stop(key);
     }
 
-    let_go(c->id);
+    boardwork_let_go(c->id);
     if (c->worktree[0])
         drop_worktree(c);
 }
@@ -514,7 +603,7 @@ int boardwork_approve(const struct board_card *c, int audit)
 {
     if (!c)
         return 0;
-    let_go(c->id);
+    boardwork_let_go(c->id);
     board_note(c->id, "you", audit ? "approved, for audit" : "approved");
 
     if (!c->worktree[0])
@@ -527,7 +616,7 @@ int boardwork_reject(const struct board_card *c, const char *why)
 {
     if (!c)
         return 0;
-    let_go(c->id);
+    boardwork_let_go(c->id);
     return board_move(c->id, BOARD_BACKLOG, "you",
                       why && *why ? why : "rejected");
 }

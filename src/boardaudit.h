@@ -8,11 +8,8 @@ int boardaudit_size(const struct board_card *c, int *files, int *lines);
 
 int boardaudit_wanted(const struct board_card *c);
 
-int boardaudit_start(const struct board_card *c);
-int boardaudit_running(const char *id);
+char *boardaudit_prompt(const struct board_card *c);
 
-int boardaudit_pump(void);
-
-int boardaudit_take(const char *key, const char *reply);
+int boardaudit_finished(const char *id, const char *reply);
 
 #endif

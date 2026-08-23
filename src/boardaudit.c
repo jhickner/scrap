@@ -8,25 +8,9 @@
 #include "boardcfg.h"
 #include "boardlog.h"
 #include "boardflow.h"
-#include "child.h"
 #include "gitcmd.h"
-#include "sessionfork.h"
 #include "replyjson.h"
 #include "vendor/cJSON.h"
-
-#define AUDIT_KEY "audit:"
-
-static void audit_key(const char *id, char *out, size_t size)
-{
-    snprintf(out, size, AUDIT_KEY "%s", id);
-}
-
-int boardaudit_running(const char *id)
-{
-    char key[CHILD_KEY_MAX];
-    audit_key(id, key, sizeof key);
-    return child_running(key);
-}
 
 int boardaudit_size(const struct board_card *c, int *files, int *lines)
 {
@@ -92,7 +76,7 @@ int boardaudit_wanted(const struct board_card *c)
     return 0;
 }
 
-static char *build_prompt(const struct board_card *c)
+char *boardaudit_prompt(const struct board_card *c)
 {
     const struct board_profile *p = boardcfg_for(BOARD_WHO_AUDIT);
     const char                 *head = p->prompt ? p->prompt : "";
@@ -105,67 +89,6 @@ static char *build_prompt(const struct board_card *c)
              "%s\n\nThe branch came off %s. The card it was built for:\n\n%s\n",
              head, c->base, c->title);
     return out;
-}
-
-int boardaudit_start(const struct board_card *c)
-{
-    if (!c || !c->worktree[0])
-        return 0;
-
-    char key[CHILD_KEY_MAX];
-    audit_key(c->id, key, sizeof key);
-    if (child_running(key))
-        return 0;
-
-    char *prompt = build_prompt(c);
-    if (!prompt)
-        return 0;
-
-    const struct board_profile *p = boardcfg_for(BOARD_WHO_AUDIT);
-
-    char *argv[16];
-    int   n = 0;
-    argv[n++] = (char *)sessionfork_program();
-    argv[n++] = (char *)"-b";
-    argv[n++] = (char *)(p->backend[0] ? p->backend : "claude");
-    if (p->model[0] && strcmp(p->model, "default")) {
-        argv[n++] = (char *)"-m";
-        argv[n++] = (char *)p->model;
-    }
-    if (p->effort[0] && strcmp(p->effort, "default")) {
-        argv[n++] = (char *)"-e";
-        argv[n++] = (char *)p->effort;
-    }
-    argv[n++] = prompt;
-    argv[n] = NULL;
-
-    int ok = child_start(key, argv, c->worktree);
-    if (ok)
-        boardlog_turn(c->id, "audit", prompt, NULL);
-    free(prompt);
-    return ok;
-}
-
-int boardaudit_pump(void)
-{
-    struct board_card *cards = NULL;
-    int                n = board_load(&cards);
-
-    int started = 0;
-    for (int i = 0; i < n && !started; i++) {
-        if (cards[i].col != BOARD_AUDIT || boardaudit_running(cards[i].id))
-            continue;
-        started = boardaudit_start(&cards[i]);
-
-        if (!started && !cards[i].worktree[0]) {
-            board_move(cards[i].id,
-                       boardflow_from(cards[i].kind, BOARD_STEP_MERGE, 0),
-                       "board", "no diff to audit");
-            started = 1;
-        }
-    }
-    board_free(cards, n);
-    return started;
 }
 
 static enum board_col next_after_audit(const char *id)
@@ -204,19 +127,14 @@ static int finding_text(cJSON *f, char *out, size_t size)
     return 0;
 }
 
-int boardaudit_take(const char *key, const char *reply)
+int boardaudit_finished(const char *id, const char *reply)
 {
-    {
-        size_t mark = strlen(AUDIT_KEY);
-        if (key && !strncmp(key, AUDIT_KEY, mark))
-            boardlog_turn(key + mark, "audit", NULL, reply);
-    }
-    size_t mark = strlen(AUDIT_KEY);
-    if (!key || strncmp(key, AUDIT_KEY, mark))
+    if (!id || !*id)
         return 0;
 
-    const char *id = key + mark;
-    cJSON      *o = replyjson_parse(reply);
+    boardlog_turn(id, "audit", NULL, reply);
+
+    cJSON *o = replyjson_parse(reply);
     if (!o) {
         board_note(id, "audit", "no verdict; not held");
         board_move(id, next_after_audit(id), "audit", NULL);

@@ -338,13 +338,10 @@ static void test_audit_verdict(void)
     expect(board_add("a card to audit", "/tmp/repo", id), "capture");
     expect(board_move(id, BOARD_AUDIT, "you", NULL), "into audit");
 
-    char key[64];
-    snprintf(key, sizeof key, "audit:%s", id);
+    expect(!boardaudit_finished("", "{}"), "a verdict needs a card");
 
-    expect(!boardaudit_take("merge:x", "{}"), "another job's key is not ours");
-
-    expect(boardaudit_take(key, "{\"clean\":false,"
-                                "\"findings\":[\"src/a.c: leaks the buffer\"]}"),
+    expect(boardaudit_finished(id, "{\"clean\":false,"
+                                   "\"findings\":[\"src/a.c: leaks the buffer\"]}"),
            "a verdict is taken");
 
     struct board_card *v = NULL;
@@ -364,15 +361,15 @@ static void test_audit_verdict(void)
     board_free(v, n);
 
     expect(board_move(id, BOARD_AUDIT, "you", NULL), "back into audit");
-    expect(boardaudit_take(key, "{\"clean\":true,\"findings\":[]}"), "clean verdict");
+    expect(boardaudit_finished(id, "{\"clean\":true,\"findings\":[]}"), "clean verdict");
     n = board_load(&v);
     c = board_find(v, n, id);
     expect(c && c->col == BOARD_MERGING, "clean sends it on to land");
     board_free(v, n);
 
     expect(board_move(id, BOARD_AUDIT, "you", NULL), "into audit once more");
-    expect(boardaudit_take(key, "{\"clean\":false,\"findings\":["
-                                "{\"file\":\"src/b.c\",\"finding\":\"restates the code\"}]}"),
+    expect(boardaudit_finished(id, "{\"clean\":false,\"findings\":["
+                                   "{\"file\":\"src/b.c\",\"finding\":\"restates the code\"}]}"),
            "an object verdict is taken");
     n = board_load(&v);
     c = board_find(v, n, id);
@@ -388,7 +385,7 @@ static void test_audit_verdict(void)
     board_free(v, n);
 
     expect(board_move(id, BOARD_AUDIT, "you", NULL), "into audit again");
-    expect(boardaudit_take(key, "the model wandered off"), "unparsable verdict");
+    expect(boardaudit_finished(id, "the model wandered off"), "unparsable verdict");
     n = board_load(&v);
     c = board_find(v, n, id);
     expect(c && c->col == BOARD_MERGING, "an unreadable audit does not hold it");
