@@ -672,11 +672,13 @@ static void build_stages(const struct board_card *c, struct notes *notes)
     }
 }
 
+#define NOTE_MAX 200
+
 /* one tidy line: no escapes, no control characters, no runs of blanks */
 static char *flatten(const char *text)
 {
     size_t n = strlen(text);
-    char  *out = malloc(n + 1);
+    char  *out = malloc(n + 4); /* room for the ellipsis a cut adds */
     if (!out)
         return NULL;
 
@@ -697,6 +699,19 @@ static char *flatten(const char *text)
     }
     while (w && out[w - 1] == ' ')
         w--;
+
+    /* The whole turn is in the card's log file; the card only needs its
+     * opening. */
+    if (w > NOTE_MAX) {
+        size_t cut = NOTE_MAX;
+        while (cut && out[cut] != ' ')
+            cut--;
+        if (!cut)
+            for (cut = NOTE_MAX; cut && ((unsigned char)out[cut] & 0xc0) == 0x80; cut--)
+                ;
+        memcpy(out + cut, "\xe2\x80\xa6", 3);
+        w = cut + 3;
+    }
     out[w] = '\0';
     return out;
 }

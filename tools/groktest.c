@@ -89,9 +89,6 @@ static int mock_server(int argc, char **argv)
         int id = cJSON_IsNumber(idj) ? idj->valueint : 0;
 
         if (method && !strcmp(method, "initialize")) {
-            fprintf(stderr, "2026-08-21T17:42:19.713144Z ERROR tool_error: "
-                    "tool_output_error session_id=test tool_name=\"read_file\"\n");
-            fflush(stderr);
             respond(id, "{}");
         } else if (method && !strcmp(method, "session/new")) {
             cJSON *params = cJSON_GetObjectItemCaseSensitive(msg, "params");
@@ -119,6 +116,9 @@ static int mock_server(int argc, char **argv)
             respond(id, "{}");
         } else if (method && !strcmp(method, "session/prompt")) {
             const char *text = prompt_text(msg);
+            fprintf(stderr, "2026-08-21T17:42:19.713144Z ERROR tool_error: "
+                    "tool_output_error session_id=test tool_name=\"read_file\"\n");
+            fflush(stderr);
             if (text && strstr(text, "path-only")) {
                 emit_tool("edit-path", "failed",
                           "[{\"type\":\"diff\",\"path\":\"/tmp/status.c\"}]", NULL);

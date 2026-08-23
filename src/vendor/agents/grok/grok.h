@@ -200,6 +200,7 @@ struct grok_client {
     int   next_id;            /* JSON-RPC request id counter                */
     int   abort_latched;      /* ESC arrived before a session was live      */
     int   cancelling;         /* session/cancel has been sent this turn     */
+    int   tools_since_text;   /* a tool ran since the last assistant chunk  */
     grok_result *meta;
     char *buf;                /* line-assembly buffer for out_fd            */
     size_t len, cap;
@@ -415,6 +416,15 @@ static void gk_concat(char **dst, const char *src) {
     if (!n) return;
     memcpy(n + al, src, tl + 1);
     *dst = n;
+}
+
+static void gk_paragraph(char **dst) {
+    size_t al = *dst ? strlen(*dst) : 0;
+    if (!al) return;
+    while (al && ((*dst)[al - 1] == '\n' || (*dst)[al - 1] == ' ')) al--;
+    if (!al) return;
+    (*dst)[al] = '\0';
+    gk_concat(dst, "\n\n");
 }
 
 static void gk_append(char **dst, const char *src) {
@@ -870,6 +880,11 @@ static int gk_handle(grok_client *c, cJSON *ev, int want_id, char **acc, int *ok
                 cJSON *content = cJSON_GetObjectItem(u, "content");
                 const char *txt = content ? cJSON_GetStringValue(cJSON_GetObjectItem(content, "text")) : NULL;
                 if (strcmp(su, "agent_message_chunk") == 0 && txt) {
+                    /* Chunks stream one message, but the messages either side
+                     * of a tool call are separate paragraphs. */
+                    if (acc && c->tools_since_text)
+                        gk_paragraph(acc);
+                    c->tools_since_text = 0;
                     if (acc) gk_concat(acc, txt);
                     grok_event e = { .kind = GROK_EV_ASSISTANT, .text = txt };
                     gk_emit(c, &e);
@@ -877,6 +892,7 @@ static int gk_handle(grok_client *c, cJSON *ev, int want_id, char **acc, int *ok
                     grok_event e = { .kind = GROK_EV_THINKING, .text = txt };
                     gk_emit(c, &e);
                 } else if (!strcmp(su, "tool_call") || !strcmp(su, "tool_call_update")) {
+                    c->tools_since_text = 1;
                     gk_tool_update(c, u);
                 }
             }
@@ -1156,12 +1172,6 @@ static int gk_handshake(grok_client *c) {
         snprintf(c->session_id, sizeof c->session_id, "%s", resume);
 
     c->handshake_failed = 0;
-    /* Startup writes to stderr even when it recovers -- the CLI's own worker
-     * connect is retried, and the first attempt's fatal is logged. Once the
-     * session is live none of that belongs to a turn. */
-    gk_drain_stderr(c);
-    c->err_len = 0;
-    c->err[0] = '\0';
 
     int repinned = c->model && *c->model && gk_apply_model(c);
     /* An effort chosen while the process was still lazy predates this session,
@@ -1318,6 +1328,13 @@ char *grok_send_ex(grok_client *c, const char *user_text, grok_result *meta) {
 
     c->meta = meta;
     c->cancelling = 0;
+    c->tools_since_text = 0;
+    /* The tail belongs to this turn. Startup writes to stderr even when it
+     * recovers -- its worker connect is retried and the first attempt's fatal
+     * is logged -- and a turn that ends quiet would otherwise be blamed for it. */
+    gk_drain_stderr(c);
+    c->err_len = 0;
+    c->err[0] = '\0';
     gk_reset_tools(c);
     char *acc = NULL;
     int ok = gk_await(c, id, &acc, NULL, 0, 1);
