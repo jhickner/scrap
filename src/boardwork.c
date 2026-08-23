@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 
 #include "board.h"
+#include "gitcmd.h"
 #include "quota.h"
 #include "boardcfg.h"
 #include "session.h"
@@ -56,44 +57,6 @@ int boardwork_tab(const char *id)
 }
 
 /* ---- git ---------------------------------------------------------------- */
-
-// One line of a command's output, trimmed. Empty when it said nothing.
-static int git_line(const char *dir, const char *args, char *out, size_t size)
-{
-    char quoted[4200];
-    if (!text_shell_quote(dir, quoted, sizeof quoted))
-        return 0;
-
-    char cmd[8192];
-    snprintf(cmd, sizeof cmd, "git -C %s %s 2>/dev/null", quoted, args);
-    FILE *f = popen(cmd, "r");
-    if (!f)
-        return 0;
-    out[0] = '\0';
-    if (!fgets(out, (int)size, f)) {
-        pclose(f);
-        return 0;
-    }
-    pclose(f);
-    text_chomp(out);
-    return out[0] != '\0';
-}
-
-// The repo proper, not whichever worktree of it we happen to be standing in.
-// --show-toplevel answers with the worktree, so a board opened from inside one
-// would put its workers underneath it, on branches cut from it: nested trees
-// that go when that worktree is merged away, on bases the merge queue has no
-// way to rebase. The first line of `worktree list` is always the main one.
-static int repo_root(const char *cwd, char *out, size_t size)
-{
-    char line[4200];
-    if (git_line(cwd, "worktree list --porcelain", line, sizeof line) &&
-        !strncmp(line, "worktree ", 9) && line[9]) {
-        snprintf(out, size, "%s", line + 9);
-        return 1;
-    }
-    return git_line(cwd, "rev-parse --show-toplevel", out, size);
-}
 
 // The worktree of a card, and the branch that goes with it. The convention is
 // the one the repo already uses by hand.
@@ -155,7 +118,7 @@ static int worktree_make(const char *root, const char *id, const char *path,
 static void ignore_card_file(const char *path)
 {
     char common[4200];
-    if (!git_line(path, "rev-parse --path-format=absolute --git-common-dir",
+    if (!gitcmd_line(path, "rev-parse --path-format=absolute --git-common-dir",
                   common, sizeof common))
         return;
 
@@ -326,7 +289,7 @@ int boardwork_start(const struct board_card *c, char *why, int size)
     const struct board_cfg *cfg = boardcfg();
 
     char root[4096];
-    if (!repo_root(c->cwd, root, sizeof root)) {
+    if (!gitcmd_root(c->cwd, root, sizeof root)) {
         snprintf(why, (size_t)size, "%s is not in a git repo", c->cwd);
         return 0;
     }
@@ -339,7 +302,7 @@ int boardwork_start(const struct board_card *c, char *why, int size)
     // Asked of the worktree rather than of the repo: what the work is actually
     // sitting on is the thing the diff and the rebase are against.
     char base[64] = {0};
-    git_line(path, "rev-parse --short HEAD", base, sizeof base);
+    gitcmd_line(path, "rev-parse --short HEAD", base, sizeof base);
 
     ignore_card_file(path);
     write_card_file(path, c);
@@ -493,7 +456,11 @@ int boardwork_approve(const struct board_card *c)
         return 0;
     let_go(c->id);
     board_note(c->id, "you", "approved");
-    return board_move(c->id, BOARD_DONE, "you", NULL);
+
+    // Approving is not finishing: the work still has to land, and a card with
+    // no worktree has nothing to land.
+    return board_move(c->id, c->worktree[0] ? BOARD_MERGING : BOARD_DONE,
+                      "you", NULL);
 }
 
 int boardwork_reject(const struct board_card *c, const char *why)

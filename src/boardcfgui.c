@@ -20,6 +20,7 @@ enum row_kind {
     ROW_PROFILE,    /* backend, model and effort, as a form */
     ROW_PROMPT,     /* several paragraphs, in $EDITOR */
     ROW_CHAIN,      /* the delegation order */
+    ROW_VERIFY,     /* the command a card must pass to land */
 };
 
 struct row {
@@ -87,6 +88,11 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
         (*n)++;
     }
 
+    head(rows, n, "merge");
+    rows[*n].kind = ROW_VERIFY;
+    rows[*n].label = "check";
+    (*n)++;
+
     head(rows, n, "delegation");
     rows[*n].kind = ROW_CHAIN;
     rows[*n].label = "order";
@@ -122,6 +128,9 @@ static void value_of(const struct row *r, const struct board_cfg *c,
         snprintf(out, size, "%d line%s", lines, lines == 1 ? "" : "s");
         break;
     }
+    case ROW_VERIFY:
+        snprintf(out, size, "%s", c->verify[0] ? c->verify : "none");
+        break;
     case ROW_CHAIN: {
         // Commas are how it is stored; arrows are what it means.
         char shown[256];
@@ -219,6 +228,15 @@ static void edit_prompt(struct board_cfg *c, enum board_who who)
     c->who[who].prompt = text;
 }
 
+static void edit_verify(struct board_cfg *c)
+{
+    char *said = ask_run("command a card must pass to land", c->verify);
+    if (!said)
+        return;
+    snprintf(c->verify, sizeof c->verify, "%s", said);
+    free(said);
+}
+
 static void edit_chain(struct board_cfg *c)
 {
     char *said = ask_run("delegation order, comma separated", c->delegation);
@@ -273,6 +291,7 @@ void boardcfgui_run(void)
         case ROW_COUNT:   edit_count(&rows[at]); touched = 1; break;
         case ROW_PROFILE: edit_profile(c, rows[at].who); touched = 1; break;
         case ROW_PROMPT:  edit_prompt(c, rows[at].who); touched = 1; break;
+        case ROW_VERIFY:  edit_verify(c); touched = 1; break;
         case ROW_CHAIN:   edit_chain(c); touched = 1; break;
         default:          break;
         }

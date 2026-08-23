@@ -36,6 +36,10 @@ struct board_cfg {
 
     char delegation[256];   /* "claude,codex,grok": who takes over when quota runs out */
 
+    // Run in the worktree before a card lands, and it does not land if this
+    // fails. Empty means nothing is checked.
+    char verify[256];
+
     struct board_profile who[BOARD_WHO];
 };
 

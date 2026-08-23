@@ -11,6 +11,7 @@
 #include "board.h"
 #include "boardcfg.h"
 #include "boardcfgui.h"
+#include "boardmerge.h"
 #include "boardtriage.h"
 #include "boardwork.h"
 #include "child.h"
@@ -299,12 +300,15 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             column_mark(c->col, &r->mark, &r->mark_role);
             int tab = boardwork_tab(c->id);
             r->spin = (unsigned char)(boardtriage_running(c->id) ||
+                                      boardmerge_running(c->id) ||
                                       (tab >= 0 && session_busy(workspace_at(tab))));
 
             char ts[32], when[64];
             ago(c->updated ? c->updated : c->created, ts, sizeof ts);
             if (boardtriage_running(c->id))
                 snprintf(when, sizeof when, "triaging…");
+            else if (boardmerge_running(c->id))
+                snprintf(when, sizeof when, "landing…");
             else if (tab >= 0)
                 snprintf(when, sizeof when, "tab %d · %s", tab + 1, ts);
             else
@@ -379,6 +383,7 @@ static int board_reap(void)
         if (!child_reap(key, sizeof key, &out, &ok))
             break;
         changed |= boardtriage_take(key, out);
+        changed |= boardmerge_take(key, out, ok);
         free(out);
     }
     return changed;
@@ -396,6 +401,8 @@ static int board_tick(void *ud)
     // no redraw of the rows we built can show. The list has to be built again.
     int moved = board_reap();
     moved |= boardwork_poll();
+    // One card lands at a time, and the next one starts when it is done.
+    moved |= boardmerge_pump();
     return moved ? PICK_TICK_REOPEN : 0;
 }
 

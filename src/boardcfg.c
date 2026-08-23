@@ -118,6 +118,7 @@ static void defaults(struct board_cfg *c)
     c->audit_lines = 200;
     c->sweep_every = 8;
     snprintf(c->delegation, sizeof c->delegation, "claude,codex,grok");
+    c->verify[0] = '\0';
 
     for (int i = 0; i < BOARD_WHO; i++)
         snprintf(c->who[i].backend, sizeof c->who[i].backend, "claude");
@@ -165,6 +166,7 @@ static void overlay(struct board_cfg *c, const cJSON *o)
     set_int(&c->audit_lines, o, "audit_lines");
     set_int(&c->sweep_every, o, "sweep_every");
     set_str(c->delegation, sizeof c->delegation, o, "delegation");
+    set_str(c->verify, sizeof c->verify, o, "verify");
 
     const cJSON *who = cJSON_GetObjectItem((cJSON *)o, "who");
     if (!who)
@@ -254,6 +256,7 @@ static int write_out(const struct board_cfg *c)
     cJSON_AddNumberToObject(o, "audit_lines", c->audit_lines);
     cJSON_AddNumberToObject(o, "sweep_every", c->sweep_every);
     cJSON_AddStringToObject(o, "delegation", c->delegation);
+    cJSON_AddStringToObject(o, "verify", c->verify);
 
     cJSON *who = cJSON_AddObjectToObject(o, "who");
     if (!who) {
@@ -310,6 +313,7 @@ int boardcfg_set(const struct board_cfg *c)
     cache.audit_lines = c->audit_lines;
     cache.sweep_every = c->sweep_every;
     snprintf(cache.delegation, sizeof cache.delegation, "%s", c->delegation);
+    snprintf(cache.verify, sizeof cache.verify, "%s", c->verify);
     for (int i = 0; i < BOARD_WHO; i++) {
         snprintf(cache.who[i].backend, sizeof cache.who[i].backend, "%s", c->who[i].backend);
         snprintf(cache.who[i].model, sizeof cache.who[i].model, "%s", c->who[i].model);
