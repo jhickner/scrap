@@ -311,7 +311,8 @@ static void paint(void *ud)
     ui_put("\n");
     ui_esc(ui_style(UI_DIM));
     ui_pad(FORM_INDENT);
-    ui_put("tab to move, shift-enter for a new line, enter to keep, esc to leave it alone");
+    ui_put("tab next field  \xc2\xb7  shift-enter newline  \xc2\xb7  "
+           "enter confirm  \xc2\xb7  esc cancel");
     ui_esc(ui_style(UI_RESET));
 }
 
