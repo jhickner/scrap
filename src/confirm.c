@@ -1,6 +1,7 @@
 #include "confirm.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "chrome.h"
 #include "frontend.h"
@@ -9,13 +10,25 @@
 
 static void paint_question(void *ud)
 {
-    const char *question = ud;
+    const char *p = ud;
+    size_t      n = strlen(p);
+    int         columns = ui_columns();
+    size_t      budget = columns > 8 ? (size_t)(columns - 8) : 1;
 
     ui_esc(ui_style(UI_CHROME));
     ui_put(UI_BAR);
     ui_esc(ui_style(UI_RESET));
     ui_put(" ");
-    ui_put(question);
+    while (n) {
+        size_t skip = 0;
+        size_t row = ui_wrap_row(p, n, budget, &skip, NULL);
+        size_t used = row + skip;
+        ui_putn(p, row);
+        p += used;
+        n -= used < n ? used : n;
+        if (n)
+            ui_put("\n  ");
+    }
     ui_put(" ");
     ui_esc(ui_style(UI_ACCENT));
     ui_put("y/n");

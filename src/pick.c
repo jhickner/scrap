@@ -142,11 +142,25 @@ static void step(struct view *v, int dir)
     settle(v, dir);
 }
 
+static size_t ask_budget(int columns)
+{
+    return columns > 12 ? (size_t)(columns - 12) : 1;
+}
+
+static int ask_rows(const char *ask, int columns)
+{
+    struct ui_wrap w = {0};
+    w.budget = ask_budget(columns);
+    w.measure = 1;
+    w.paint_empty = 1;
+    return ui_wrap_paint(ask, &w);
+}
+
 static int visible_cap(const struct view *v)
 {
     int rows = tty_rows() - 3 - chrome_gap();
     if (v->live && v->live->ask && *v->live->ask)
-        rows -= 2;
+        rows -= 1 + ask_rows(v->live->ask, ui_columns());
     else if (v->live && v->live->hint && *v->live->hint) {
         rows -= 2;
         for (const char *p = v->live->hint; (p = strchr(p, '\n')); p++)
@@ -380,15 +394,28 @@ static void paint(void *ud)
     }
 
     if (v->live && v->live->ask && *v->live->ask) {
-        const char *ask = v->live->ask;
-        size_t      budget = columns > 12 ? (size_t)(columns - 12) : 1;
-        ui_put("\n    ");
-        ui_putn(ask, ui_fit_visible(ask, strlen(ask), budget));
+        const char *p = v->live->ask;
+        size_t      n = strlen(p);
+        size_t      budget = ask_budget(columns);
+        ui_put("\n");
+        rows += 2;
+        while (n) {
+            size_t skip = 0;
+            size_t row = ui_wrap_row(p, n, budget, &skip, NULL);
+            size_t used = row + skip;
+            ui_put("    ");
+            ui_putn(p, row);
+            p += used;
+            n -= used < n ? used : n;
+            if (n) {
+                ui_put("\n");
+                rows++;
+            }
+        }
         ui_put(" ");
         ui_esc(ui_style(UI_ACCENT));
         ui_put("y/n");
         ui_esc(ui_style(UI_RESET));
-        rows += 2;
     }
     else if (v->live && v->live->hint && *v->live->hint) {
         ui_put("\n");
