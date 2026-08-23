@@ -78,8 +78,19 @@ static int git_line(const char *dir, const char *args, char *out, size_t size)
     return out[0] != '\0';
 }
 
+// The repo proper, not whichever worktree of it we happen to be standing in.
+// --show-toplevel answers with the worktree, so a board opened from inside one
+// would put its workers underneath it, on branches cut from it: nested trees
+// that go when that worktree is merged away, on bases the merge queue has no
+// way to rebase. The first line of `worktree list` is always the main one.
 static int repo_root(const char *cwd, char *out, size_t size)
 {
+    char line[4200];
+    if (git_line(cwd, "worktree list --porcelain", line, sizeof line) &&
+        !strncmp(line, "worktree ", 9) && line[9]) {
+        snprintf(out, size, "%s", line + 9);
+        return 1;
+    }
     return git_line(cwd, "rev-parse --show-toplevel", out, size);
 }
 
@@ -206,8 +217,10 @@ int boardwork_start(const struct board_card *c, char *why, int size)
     if (!worktree_make(root, c->id, path, why, size))
         return 0;
 
+    // Asked of the worktree rather than of the repo: what the work is actually
+    // sitting on is the thing the diff and the rebase are against.
     char base[64] = {0};
-    git_line(root, "rev-parse --short HEAD", base, sizeof base);
+    git_line(path, "rev-parse --short HEAD", base, sizeof base);
 
     write_card_file(path, c);
 
