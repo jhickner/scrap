@@ -275,12 +275,13 @@ int boardwork_hold(const char *id, struct session *s, enum board_role role)
     return 0;
 }
 
-static void worktree_of(const char *root, const char *id, char *out, size_t size)
+void boardwork_worktree_of(const char *root, const char *id, char *out,
+                           size_t size)
 {
     snprintf(out, size, "%s/.claude/worktrees/%s", root, id);
 }
 
-static void branch_of(const char *id, char *out, size_t size)
+void boardwork_branch_of(const char *id, char *out, size_t size)
 {
     snprintf(out, size, "worktree-%s", id);
 }
@@ -293,7 +294,7 @@ static int worktree_make(const char *root, const char *id, const char *path,
         return 1;
 
     char branch[128];
-    branch_of(id, branch, sizeof branch);
+    boardwork_branch_of(id, branch, sizeof branch);
 
     char qroot[4200], qpath[4200];
     if (!text_shell_quote(root, qroot, sizeof qroot) ||
@@ -516,7 +517,7 @@ int boardwork_start(const struct board_card *c, char *why, int size)
             snprintf(why, (size_t)size, "%s is not in a git repo", c->cwd);
             return 0;
         }
-        worktree_of(root, c->id, path, sizeof path);
+        boardwork_worktree_of(root, c->id, path, sizeof path);
         if (!worktree_make(root, c->id, path, why, size))
             return 0;
 
@@ -740,7 +741,7 @@ int boardwork_pump(void)
 static int drop_worktree(const struct board_card *c)
 {
     char root[4096], branch[128];
-    branch_of(c->id, branch, sizeof branch);
+    boardwork_branch_of(c->id, branch, sizeof branch);
 
     if (!gitcmd_root(c->cwd, root, sizeof root))
         return 1;

@@ -2,6 +2,8 @@
 #ifndef BOARDWORK_H
 #define BOARDWORK_H
 
+#include <stddef.h>
+
 struct board_card;
 struct session;
 
@@ -24,6 +26,11 @@ int boardwork_running(void);
 int boardwork_serve(int *waiting);
 
 const char *boardwork_card_of(const struct session *s);
+
+void boardwork_worktree_of(const char *root, const char *id, char *out,
+                           size_t size);
+
+void boardwork_branch_of(const char *id, char *out, size_t size);
 
 int boardwork_tab(const char *id);
 

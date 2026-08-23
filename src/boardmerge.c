@@ -7,6 +7,7 @@
 #include "board.h"
 #include "boardcfg.h"
 #include "boardlog.h"
+#include "boardwork.h"
 #include "child.h"
 #include "gitcmd.h"
 #include "text.h"
@@ -54,13 +55,16 @@ static char *script_for(const struct board_card *c, const char *root,
 {
     const struct board_cfg *cfg = boardcfg();
 
+    char tree[4200];
+    boardwork_worktree_of(root, c->id, tree, sizeof tree);
+
     char qroot[4200], qtree[4200];
     if (!text_shell_quote(root, qroot, sizeof qroot) ||
-        !text_shell_quote(c->worktree, qtree, sizeof qtree))
+        !text_shell_quote(tree, qtree, sizeof qtree))
         return NULL;
 
     char branch[128];
-    snprintf(branch, sizeof branch, "worktree-%s", c->id);
+    boardwork_branch_of(c->id, branch, sizeof branch);
 
     const char *verify = cfg->verify[0] ? cfg->verify : NULL;
 
