@@ -41,6 +41,18 @@ static void check_widths(const char *what, const char *src)
         check_fits(what, src, w);
 }
 
+static void check_plain(const char *what, const char *src, const char *want)
+{
+    struct md_text *t = md_text_parse(src);
+    size_t          len = 0;
+    const char     *got = md_text_plain(t, &len);
+    if (strlen(want) != len || memcmp(got, want, len)) {
+        fprintf(stderr, "FAIL %s: [%.*s] wanted [%s]\n", what, (int)len, got, want);
+        failures++;
+    }
+    md_text_free(t);
+}
+
 int main(void)
 {
     setenv("COLUMNS", "80", 1);
@@ -74,6 +86,19 @@ int main(void)
     check_widths("styled text",
                  "- **Conversion path** / *non-PNG* (8): `photo.jpg`, [bmp](https://x.test/b), "
                  "tiff, webp, ico, anim.gif\n");
+
+    check_plain("inline marks", "12:34  worker **done** with `x` and *y*",
+                "12:34  worker done with x and y");
+    check_plain("a heading", "## Summary\nit landed", "Summary\nit landed");
+    check_plain("a bullet", "- one\n- two", "\xe2\x80\xa2 one\n\xe2\x80\xa2 two");
+    check_plain("a fence", "```c\nint x;\n```", "int x;");
+
+    {
+        char big[9000];
+        memset(big, 'x', sizeof big - 1);
+        big[sizeof big - 1] = '\0';
+        check_plain("a long message", big, big);
+    }
 
     if (failures)
         return 1;

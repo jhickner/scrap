@@ -543,16 +543,41 @@ static int do_delete(const struct board_card *c)
 
 static const char *const PRIORITIES[] = {"0", "1", "2", "3"};
 
-#define NOTES_MAX 48
+struct notes {
+    const char **v;
+    char       **owned;
+    int          n, cap;
+};
 
-static void note_line(const char **notes, int *n, char **owned, const char *text)
+/* takes ownership of text */
+static void note_line(struct notes *l, char *text)
 {
-    if (*n >= NOTES_MAX)
-        return;
-    char *copy = dsprintf("%s", text);
-    owned[*n] = copy;
-    notes[*n] = copy ? copy : "";
-    (*n)++;
+    if (l->n == l->cap) {
+        int          cap = l->cap ? l->cap * 2 : 32;
+        const char **v = realloc(l->v, (size_t)cap * sizeof *v);
+        if (v)
+            l->v = v;
+        char **owned = realloc(l->owned, (size_t)cap * sizeof *owned);
+        if (owned)
+            l->owned = owned;
+        if (!v || !owned) {
+            free(text);
+            return;
+        }
+        l->cap = cap;
+    }
+    l->owned[l->n] = text;
+    l->v[l->n] = text ? text : "";
+    l->n++;
+}
+
+static void notes_free(struct notes *l)
+{
+    for (int i = 0; i < l->n; i++)
+        free(l->owned[i]);
+    free(l->owned);
+    free(l->v);
+    memset(l, 0, sizeof *l);
 }
 
 static int stage_ran(const struct board_card *c, const char *who)
@@ -563,8 +588,7 @@ static int stage_ran(const struct board_card *c, const char *who)
     return 0;
 }
 
-static void build_stages(const struct board_card *c, const char **notes, int *n,
-                         char **owned)
+static void build_stages(const struct board_card *c, struct notes *notes)
 {
     static const struct {
         const char     *name;
@@ -599,33 +623,30 @@ static void build_stages(const struct board_card *c, const char **notes, int *n,
         else
             state = "done";
 
-        char *line = dsprintf("  %-8s %s", STAGE[i].name, state);
-        note_line(notes, n, owned, line ? line : "");
-        free(line);
+        note_line(notes, dsprintf("  %-8s %s", STAGE[i].name, state));
     }
 }
 
-static int build_notes(const struct board_card *c, const char **notes, char **owned)
+static void build_notes(const struct board_card *c, struct notes *notes)
 {
-    int n = 0;
+    build_stages(c, notes);
 
-    build_stages(c, notes, &n, owned);
-
-    for (int i = 0; i < c->log_n && n < NOTES_MAX; i++) {
+    for (int i = 0; i < c->log_n; i++) {
         if (i == 0)
-            note_line(notes, &n, owned, "");
+            note_line(notes, NULL);
         struct tm when;
         char      stamp[16] = "     ";
         if (c->log[i].ts) {
             localtime_r(&c->log[i].ts, &when);
             strftime(stamp, sizeof stamp, "%H:%M", &when);
         }
-        char *line = dsprintf("%s  %-6s %s", stamp, c->log[i].who,
-                              c->log[i].text ? c->log[i].text : "");
-        note_line(notes, &n, owned, line ? line : "");
-        free(line);
+        const char *text = c->log[i].text ? c->log[i].text : "";
+        size_t      need = strlen(stamp) + strlen(c->log[i].who) + strlen(text) + 16;
+        char       *line = malloc(need);
+        if (line)
+            snprintf(line, need, "%s  %-6s %s", stamp, c->log[i].who, text);
+        note_line(notes, line);
     }
-    return n;
 }
 
 static void card_form(const struct board_card *c)
@@ -668,9 +689,8 @@ static void card_form(const struct board_card *c)
                                              sizeof priority, PRIORITIES,
                                              COUNT(PRIORITIES)};
 
-    const char *notes[NOTES_MAX] = {0};
-    char       *owned[NOTES_MAX] = {0};
-    int         notes_n = build_notes(c, notes, owned);
+    struct notes notes = {0};
+    build_notes(c, &notes);
 
     char heading[600];
     if (c->kind[0] && c->title[0] && strcmp(c->title, c->body ? c->body : ""))
@@ -681,15 +701,14 @@ static void card_form(const struct board_card *c)
 
     struct form f = {
         .title = heading,
-        .notes = notes,
-        .notes_n = notes_n,
+        .notes = notes.v,
+        .notes_n = notes.n,
         .fields = fields,
         .fields_n = fields_n,
     };
     int kept = form_run(&f);
 
-    for (int i = 0; i < notes_n; i++)
-        free(owned[i]);
+    notes_free(&notes);
     if (!kept)
         return;
 

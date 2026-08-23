@@ -6,6 +6,7 @@
 
 #include "chrome.h"
 #include "frontend.h"
+#include "md.h"
 #include "replframe.h"
 #include "replkeys.h"
 #include "tty.h"
@@ -24,13 +25,27 @@ struct slot {
     int  rows;
 };
 
+struct line {
+    int                   field;
+    const struct md_text *note;
+    size_t                from, len;
+    int                   row;
+};
+
+struct lines {
+    struct line *v;
+    int          n, cap;
+};
+
 struct state {
-    struct form *form;
-    struct slot  slots[FORM_FIELDS];
-    int          focus;
-    int          label_width;
-    int          top;
-    int          budget;
+    struct form     *form;
+    struct md_text **notes;
+    struct lines     lines;
+    struct slot      slots[FORM_FIELDS];
+    int              focus;
+    int              label_width;
+    int              top;
+    int              budget;
 
     struct replframe frame;
     int              framed;
@@ -75,15 +90,6 @@ static void focus_step(struct state *st, int delta)
         st->focus += n;
 }
 
-struct line {
-    int         field;
-    const char *text;
-    size_t      len;
-    int         row;
-};
-
-#define LINES_MAX 512
-
 static int value_column(const struct state *st)
 {
     return FORM_INDENT + st->label_width + 4;
@@ -102,46 +108,75 @@ static int repl_width(const struct state *st)
     return st->budget + REPL_GUTTER;
 }
 
-static int wrap_notes(struct line *out, int n, int max, const char *text,
-                      int budget)
+static struct line *line_add(struct lines *l)
 {
-    size_t rest = text ? strlen(text) : 0;
-    if (!rest) {
-        if (n < max)
-            out[n++] = (struct line){-1, "", 0, 0};
-        return n;
+    if (l->n == l->cap) {
+        int          cap = l->cap ? l->cap * 2 : 128;
+        struct line *grown = realloc(l->v, (size_t)cap * sizeof *grown);
+        if (!grown)
+            return NULL;
+        l->v = grown;
+        l->cap = cap;
     }
-    while (rest && n < max) {
-        size_t skip = 0;
-        size_t got = ui_wrap_row(text, rest, (size_t)budget, &skip, NULL);
-        out[n++] = (struct line){-1, text, got, 0};
-        text += got + skip;
-        rest -= got + skip;
-    }
-    return n;
+    struct line *r = &l->v[l->n];
+    memset(r, 0, sizeof *r);
+    l->n++;
+    return r;
 }
 
-static int layout(struct state *st, int columns, struct line *out, int max)
+static void wrap_notes(struct lines *out, const struct md_text *note, int budget)
+{
+    size_t      rest = 0;
+    const char *text = md_text_plain(note, &rest);
+    size_t      at = 0;
+
+    if (!rest) {
+        struct line *l = line_add(out);
+        if (l)
+            l->field = -1;
+        return;
+    }
+    while (at < rest) {
+        size_t skip = 0;
+        size_t got = ui_wrap_row(text + at, rest - at, (size_t)budget, &skip, NULL);
+        struct line *l = line_add(out);
+        if (!l)
+            return;
+        l->field = -1;
+        l->note = note;
+        l->from = at;
+        l->len = got;
+        at += got + skip;
+    }
+}
+
+static int layout(struct state *st, int columns)
 {
     const struct form *form = st->form;
-    int                n = 0;
+    struct lines      *out = &st->lines;
+
+    out->n = 0;
 
     int note_budget = columns - FORM_INDENT - 2;
     if (note_budget < 8)
         note_budget = 8;
 
     for (int i = 0; i < form->notes_n; i++)
-        n = wrap_notes(out, n, max, form->notes[i] ? form->notes[i] : "",
-                       note_budget);
-    if (form->notes_n && n < max)
-        out[n++] = (struct line){-1, "", 0, 0};
+        wrap_notes(out, st->notes ? st->notes[i] : NULL, note_budget);
+    if (form->notes_n) {
+        struct line *l = line_add(out);
+        if (l)
+            l->field = -1;
+    }
 
     st->budget = value_budget(st, columns);
 
-    for (int i = 0; i < form->fields_n && n < max; i++) {
+    for (int i = 0; i < form->fields_n; i++) {
         if (form->fields[i].kind == FORM_CHOICE) {
             st->slots[i].rows = 1;
-            out[n++] = (struct line){i, NULL, 0, 0};
+            struct line *l = line_add(out);
+            if (l)
+                l->field = i;
             continue;
         }
 
@@ -149,10 +184,15 @@ static int layout(struct state *st, int columns, struct line *out, int max)
         if (rows < 1)
             rows = 1;
         st->slots[i].rows = rows;
-        for (int r = 0; r < rows && n < max; r++)
-            out[n++] = (struct line){i, NULL, 0, r};
+        for (int r = 0; r < rows; r++) {
+            struct line *l = line_add(out);
+            if (!l)
+                break;
+            l->field = i;
+            l->row = r;
+        }
     }
-    return n;
+    return out->n;
 }
 
 static void put_label(const struct state *st, const char *label, int focused)
@@ -224,9 +264,9 @@ static void paint(void *ud)
     struct form  *form = st->form;
     int           columns = ui_columns();
 
-    static struct line lines[LINES_MAX];
     st->framed = -1;
-    int n = layout(st, columns, lines, LINES_MAX);
+    int                n = layout(st, columns);
+    const struct line *lines = st->lines.v;
     int room = room_for();
     int base = chrome_gap();
 
@@ -297,9 +337,7 @@ static void paint(void *ud)
         if (l->field < 0) {
             if (l->len) {
                 ui_pad(FORM_INDENT);
-                ui_esc(ui_style(UI_DIM));
-                ui_putn(l->text, l->len);
-                ui_esc(ui_style(UI_RESET));
+                md_text_put(l->note, l->from, l->len, UI_DIM);
             }
             ui_put("\n");
             continue;
@@ -333,6 +371,12 @@ static void paint(void *ud)
 static void load(struct state *st)
 {
     st->framed = -1;
+    if (st->form->notes_n > 0) {
+        st->notes = calloc((size_t)st->form->notes_n, sizeof *st->notes);
+        for (int i = 0; st->notes && i < st->form->notes_n; i++)
+            st->notes[i] = md_text_parse(st->form->notes[i]);
+    }
+
     for (int i = 0; i < st->form->fields_n; i++) {
         struct form_field *f = field_at(st, i);
         struct slot       *s = &st->slots[i];
@@ -360,6 +404,12 @@ static void unload(struct state *st)
 {
     for (int i = 0; i < st->form->fields_n; i++)
         repl_free(&st->slots[i].repl);
+    for (int i = 0; st->notes && i < st->form->notes_n; i++)
+        md_text_free(st->notes[i]);
+    free(st->notes);
+    st->notes = NULL;
+    free(st->lines.v);
+    memset(&st->lines, 0, sizeof st->lines);
     replframe_free(&st->frame);
 }
 
