@@ -36,7 +36,7 @@ struct row {
     int  low, high;
     const char *units;
 
-    enum board_who who;
+    int            role_at;
     int            kind_at;
     int            backend_at;
 };
@@ -114,23 +114,28 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
     }
 
     head(rows, n, "models");
-    for (int i = 0; i < BOARD_WHO; i++) {
+    for (int i = 0; i < c->roles_n && *n < ROWS_MAX - 1; i++) {
         rows[*n].kind = ROW_PROFILE;
-        rows[*n].label = boardcfg_who_name((enum board_who)i);
-        rows[*n].who = (enum board_who)i;
+        rows[*n].label = c->roles[i].name;
+        rows[*n].role_at = i;
         (*n)++;
     }
 
-    head(rows, n, "skippable");
-    for (int i = 0; i < BOARD_WHO; i++)
-        if (c->who[i].step[0])
-            toggle_row(rows, n, c->who[i].step, &c->who[i].skippable);
+    int stands = 0;
+    for (int i = 0; i < c->roles_n; i++)
+        stands += c->roles[i].step[0] != '\0';
+    if (stands) {
+        head(rows, n, "skippable");
+        for (int i = 0; i < c->roles_n && *n < ROWS_MAX - 1; i++)
+            if (c->roles[i].step[0])
+                toggle_row(rows, n, c->roles[i].name, &c->roles[i].skippable);
+    }
 
     head(rows, n, "prompts");
-    for (int i = 0; i < BOARD_WHO; i++) {
+    for (int i = 0; i < c->roles_n && *n < ROWS_MAX - 1; i++) {
         rows[*n].kind = ROW_PROMPT;
-        rows[*n].label = boardcfg_who_name((enum board_who)i);
-        rows[*n].who = (enum board_who)i;
+        rows[*n].label = c->roles[i].name;
+        rows[*n].role_at = i;
         (*n)++;
     }
 
@@ -158,7 +163,7 @@ static void value_of(const struct row *r, const struct board_cfg *c,
         snprintf(out, size, "%s", *r->count ? "yes" : "no");
         break;
     case ROW_PROFILE: {
-        const struct board_profile *p = &c->who[r->who];
+        const struct board_profile *p = &c->roles[r->role_at];
         enum board_tier             tier = boardcfg_tier_from_name(p->tier);
         if (tier >= BOARD_TIERS)
             tier = BOARD_TIER_MED;
@@ -181,7 +186,7 @@ static void value_of(const struct row *r, const struct board_cfg *c,
         break;
     }
     case ROW_PROMPT: {
-        const char *text = c->who[r->who].prompt;
+        const char *text = c->roles[r->role_at].prompt;
         int         lines = 1;
         for (const char *s = text; s && *s; s++)
             lines += *s == '\n';
@@ -232,9 +237,9 @@ static const char *const EFFORTS[] = {
 
 static const char *const TIERS[] = {"low", "med", "high"};
 
-static void edit_profile(struct board_cfg *c, enum board_who who)
+static void edit_profile(struct board_cfg *c, int role_at)
 {
-    struct board_profile *p = &c->who[who];
+    struct board_profile *p = &c->roles[role_at];
 
     struct pick_item items[BOARD_TIERS];
     int              at = 0;
@@ -247,7 +252,7 @@ static void edit_profile(struct board_cfg *c, enum board_who who)
     }
 
     char title[128];
-    snprintf(title, sizeof title, "%s tier", boardcfg_who_name(who));
+    snprintf(title, sizeof title, "%s tier", p->name);
 
     int chosen = pick_run(title, items, BOARD_TIERS, at);
     if (chosen >= 0)
@@ -312,13 +317,13 @@ static void edit_backend(struct board_cfg *c, int at)
     }
 }
 
-static void edit_prompt(struct board_cfg *c, enum board_who who)
+static void edit_prompt(struct board_cfg *c, int at)
 {
-    char *text = edit_run(c->who[who].prompt, ".md");
+    char *text = edit_run(c->roles[at].prompt, ".md");
     if (!text)
         return;
-    free(c->who[who].prompt);
-    c->who[who].prompt = text;
+    free(c->roles[at].prompt);
+    c->roles[at].prompt = text;
 }
 
 static void edit_verify(struct board_cfg *c)
@@ -469,10 +474,10 @@ void boardcfgui_run(void)
         switch (rows[at].kind) {
         case ROW_COUNT:   edit_count(&rows[at]); touched = 1; break;
         case ROW_TOGGLE:  *rows[at].count = !*rows[at].count; touched = 1; break;
-        case ROW_PROFILE: edit_profile(c, rows[at].who); touched = 1; break;
+        case ROW_PROFILE: edit_profile(c, rows[at].role_at); touched = 1; break;
         case ROW_SERVING: edit_serving(c); touched = 1; break;
         case ROW_BACKEND: edit_backend(c, rows[at].backend_at); touched = 1; break;
-        case ROW_PROMPT:  edit_prompt(c, rows[at].who); touched = 1; break;
+        case ROW_PROMPT:  edit_prompt(c, rows[at].role_at); touched = 1; break;
         case ROW_VERIFY:  edit_verify(c); touched = 1; break;
         case ROW_KIND:    edit_kind(c, rows[at].kind_at); touched = 1; break;
         case ROW_KIND_NEW: add_kind(c); touched = 1; break;

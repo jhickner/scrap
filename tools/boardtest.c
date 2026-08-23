@@ -530,6 +530,41 @@ static int skip_card(const char *id)
     return did;
 }
 
+static void role_add(struct board_cfg *cfg, const char *name, const char *does,
+                     const char *prompt)
+{
+    struct board_profile *r = &cfg->roles[cfg->roles_n++];
+    memset(r, 0, sizeof *r);
+    snprintf(r->name, sizeof r->name, "%s", name);
+    snprintf(r->does, sizeof r->does, "%s", does);
+    snprintf(r->tier, sizeof r->tier, "high");
+    snprintf(r->step, sizeof r->step, "%s", does);
+    r->skippable = 1;
+    r->prompt = strdup(prompt);
+}
+
+static void test_roles_are_what_the_files_say(void)
+{
+    struct board_cfg *cfg = boardcfg_copy();
+    cfg->roles_n = 0;
+    role_add(cfg, "auditor", "audit", "read the diff");
+    role_add(cfg, "merge", "merge", "land it");
+    expect(boardcfg_set(cfg), "the roles are written out");
+    boardcfg_free(cfg);
+
+    boardcfg_reload();
+
+    const struct board_profile *p = boardcfg_doing("audit");
+    expect(p != NULL, "a role is found by the job its file says it does");
+    expect(p && !strcmp(p->name, "auditor"),
+           "and the file it came from names it, whatever the job");
+    expect(p && p->prompt && strstr(p->prompt, "read the diff"),
+           "the body of the file is its prompt");
+    expect(boardcfg_doing("triage") == NULL, "a job no role does has no role");
+    expect(boardcfg_for_step(BOARD_STEP_AUDIT) == p,
+           "the step it stands in is its own");
+}
+
 static void test_skipping_a_step(void)
 {
     char id[BOARD_ID_MAX] = {0};
@@ -540,19 +575,17 @@ static void test_skipping_a_step(void)
            "a card in audit waits on the audit step");
     expect(boardflow_step_at(BOARD_BACKLOG) == BOARD_STEPS,
            "a card waiting for a worker waits on no step");
-    expect(boardcfg_for_step(BOARD_STEP_AUDIT) != NULL,
-           "a role declares the audit step");
 
     struct board_cfg *cfg = boardcfg_copy();
-    for (int i = 0; i < BOARD_WHO; i++)
-        cfg->who[i].skippable = 0;
+    for (int i = 0; i < cfg->roles_n; i++)
+        cfg->roles[i].skippable = 0;
     boardcfg_set(cfg);
 
     expect(!boardflow_skip(NULL), "a missing card is not skipped");
     expect(!skip_card(id), "an unskippable step holds the card");
 
-    for (int i = 0; i < BOARD_WHO; i++)
-        cfg->who[i].skippable = 1;
+    for (int i = 0; i < cfg->roles_n; i++)
+        cfg->roles[i].skippable = 1;
     boardcfg_set(cfg);
     boardcfg_free(cfg);
 
@@ -886,6 +919,7 @@ int main(void)
     test_columns();
     test_attempts_reset_when_answered();
     test_audit_verdict();
+    test_roles_are_what_the_files_say();
     test_skipping_a_step();
     test_sweep_counts_landed_cards();
     test_sweep_review_can_refuse();

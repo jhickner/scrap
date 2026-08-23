@@ -4,17 +4,6 @@
 
 #include <stddef.h>
 
-enum board_who {
-    BOARD_WHO_TRIAGE,
-    BOARD_WHO_WORKER,
-    BOARD_WHO_AUDIT,
-    BOARD_WHO_SWEEP,
-    BOARD_WHO_MERGE,
-    BOARD_WHO,
-};
-
-const char *boardcfg_who_name(enum board_who who);
-
 enum board_tier {
     BOARD_TIER_LOW,
     BOARD_TIER_MED,
@@ -38,6 +27,8 @@ struct board_backend {
 };
 
 struct board_profile {
+    char  name[32];
+    char  does[32];
     char  tier[8];
     char  step[16];
     int   skippable;
@@ -46,6 +37,8 @@ struct board_profile {
     char  effort[32];
     char *prompt;
 };
+
+#define BOARD_ROLES_MAX 16
 
 #define BOARD_KINDS_MAX 16
 
@@ -85,7 +78,8 @@ struct board_cfg {
     struct board_kind kinds[BOARD_KINDS_MAX];
     int               kinds_n;
 
-    struct board_profile who[BOARD_WHO];
+    struct board_profile roles[BOARD_ROLES_MAX];
+    int                  roles_n;
 
     struct board_backend backends[BOARD_BACKENDS_MAX];
     int                  backends_n;
@@ -102,12 +96,12 @@ void              boardcfg_free(struct board_cfg *c);
 
 int boardcfg_set(const struct board_cfg *c);
 
-const struct board_profile *boardcfg_for(enum board_who who);
+const struct board_profile *boardcfg_doing(const char *job);
 
 const struct board_profile *boardcfg_for_step(enum board_step step);
 
-const struct board_profile *boardcfg_for_backend(enum board_who who,
-                                                 const char *backend);
+const struct board_profile *boardcfg_doing_on(const char *job,
+                                              const char *backend);
 
 #define BOARDCFG_ARGV_MAX 9
 

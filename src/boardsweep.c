@@ -103,8 +103,8 @@ int boardsweep_due(const struct board_card *cards, int n, char *cwd, size_t size
 
 char *boardsweep_prompt(const struct board_card *cards, int n, const char *cwd)
 {
-    const struct board_profile *p = boardcfg_for(BOARD_WHO_SWEEP);
-    const char                 *head = p->prompt ? p->prompt : "";
+    const struct board_profile *p = boardcfg_doing("sweep");
+    const char                 *head = p && p->prompt ? p->prompt : "";
     char                       *found = findings_for(cards, n, cwd);
 
     size_t need = strlen(head) + (found ? strlen(found) : 0) + 256;

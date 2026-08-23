@@ -13,16 +13,6 @@
 
 #define CFG_MAX_BYTES (1u << 20)
 
-static const char *const WHO_NAMES[BOARD_WHO] = {"triage", "worker", "audit",
-                                                 "sweep", "merge"};
-
-const char *boardcfg_who_name(enum board_who who)
-{
-    if (who < 0 || who >= BOARD_WHO)
-        return WHO_NAMES[BOARD_WHO_TRIAGE];
-    return WHO_NAMES[who];
-}
-
 static const char *const TIER_NAMES[BOARD_TIERS] = {"low", "med", "high"};
 
 const char *boardcfg_tier_name(enum board_tier tier)
@@ -108,6 +98,20 @@ static void backend_defaults(struct board_backend *b, const char *name)
     }
 }
 
+/* What a role's file leaves unsaid: it does the job it is named after, stands
+ * in the step of that name if there is one, and a step a role stands in may be
+ * stepped over by hand. */
+static void role_defaults(struct board_profile *p)
+{
+    if (!p->does[0])
+        snprintf(p->does, sizeof p->does, "%s", p->name);
+    if (!p->tier[0])
+        snprintf(p->tier, sizeof p->tier, "%s", boardcfg_tier_name(BOARD_TIER_MED));
+    if (!p->step[0] && boardcfg_step_from_name(p->does) < BOARD_STEPS)
+        snprintf(p->step, sizeof p->step, "%s", p->does);
+    p->skippable = p->step[0] != '\0';
+}
+
 static void defaults(struct board_cfg *c)
 {
     memset(c, 0, sizeof *c);
@@ -121,26 +125,6 @@ static void defaults(struct board_cfg *c)
     snprintf(c->serving, sizeof c->serving, "claude");
     for (const char *const *b = backend_names(); *b && c->backends_n < BOARD_BACKENDS_MAX; b++)
         backend_defaults(&c->backends[c->backends_n++], *b);
-
-    static const enum board_tier WHO_TIERS[BOARD_WHO] = {
-        [BOARD_WHO_TRIAGE] = BOARD_TIER_LOW,
-        [BOARD_WHO_WORKER] = BOARD_TIER_MED,
-        [BOARD_WHO_AUDIT]  = BOARD_TIER_HIGH,
-        [BOARD_WHO_SWEEP]  = BOARD_TIER_MED,
-        [BOARD_WHO_MERGE]  = BOARD_TIER_MED,
-    };
-    for (int i = 0; i < BOARD_WHO; i++) {
-        snprintf(c->who[i].tier, sizeof c->who[i].tier, "%s",
-                 boardcfg_tier_name(WHO_TIERS[i]));
-
-        /* A role named after a step runs that step until its file says
-         * otherwise, so nothing here has to know which roles those are. */
-        if (boardcfg_step_from_name(WHO_NAMES[i]) < BOARD_STEPS) {
-            snprintf(c->who[i].step, sizeof c->who[i].step, "%s", WHO_NAMES[i]);
-            c->who[i].skippable = 1;
-        }
-    }
-
 }
 
 static void set_str(char *dst, size_t n, const cJSON *o, const char *key)
@@ -208,17 +192,15 @@ static void overlay(struct board_cfg *c, const cJSON *o)
     }
 
     const cJSON *who = cJSON_GetObjectItem((cJSON *)o, "who");
-    if (!who)
-        return;
-    for (int i = 0; i < BOARD_WHO; i++) {
-        const cJSON *p = cJSON_GetObjectItem((cJSON *)who, WHO_NAMES[i]);
-        if (!p)
+    const cJSON *p = NULL;
+    cJSON_ArrayForEach(p, who) {
+        if (!p->string || !*p->string || c->roles_n >= BOARD_ROLES_MAX)
             continue;
-        const char *prompt = cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)p, "prompt"));
-        if (prompt) {
-            free(c->who[i].prompt);
-            c->who[i].prompt = strdup(prompt);
-        }
+        struct board_profile *into = &c->roles[c->roles_n++];
+        snprintf(into->name, sizeof into->name, "%s", p->string);
+        into->prompt = dup_or_null(
+            cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)p, "prompt")));
+        role_defaults(into);
     }
 }
 
@@ -297,39 +279,42 @@ static void read_settings(struct board_cfg *c)
 
 static int read_roles(struct board_cfg *c)
 {
-    int aged = 0;
+    char dir[4096];
+    if (!mdcfg_dir(dir, sizeof dir, BOARD_DIR "/roles"))
+        return 0;
 
-    for (int i = 0; i < BOARD_WHO; i++) {
+    char names[BOARD_ROLES_MAX][MDCFG_NAME];
+    int  found = mdcfg_list(dir, names, BOARD_ROLES_MAX);
+    int  aged = 0;
+
+    for (int i = 0; i < found && c->roles_n < BOARD_ROLES_MAX; i++) {
         char path[4300];
-        if (!board_path(path, sizeof path, BOARD_DIR "/roles", WHO_NAMES[i]))
+        if (!board_path(path, sizeof path, BOARD_DIR "/roles", names[i]))
             continue;
 
         struct mdcfg m;
         if (!mdcfg_load(&m, path))
             continue;
 
+        struct board_profile *p = &c->roles[c->roles_n++];
+        snprintf(p->name, sizeof p->name, "%s", names[i]);
+        snprintf(p->does, sizeof p->does, "%s", mdcfg_get(&m, "does"));
+        snprintf(p->step, sizeof p->step, "%s", mdcfg_get(&m, "step"));
+
         const char *tier = mdcfg_get(&m, "tier");
         if (boardcfg_tier_from_name(tier) < BOARD_TIERS)
-            snprintf(c->who[i].tier, sizeof c->who[i].tier, "%s", tier);
+            snprintf(p->tier, sizeof p->tier, "%s", tier);
         else
             aged = 1;
 
-        if (mdcfg_has(&m, "step"))
-            snprintf(c->who[i].step, sizeof c->who[i].step, "%s",
-                     mdcfg_get(&m, "step"));
-        c->who[i].skippable = mdcfg_int(&m, "skippable", c->who[i].skippable);
+        role_defaults(p);
+        p->skippable = mdcfg_int(&m, "skippable", p->skippable);
 
         if (mdcfg_has(&m, "backend") || mdcfg_has(&m, "model") ||
             mdcfg_has(&m, "effort"))
             aged = 1;
 
-        if (m.body && *m.body) {
-            char *kept = dup_or_null(m.body);
-            if (kept) {
-                free(c->who[i].prompt);
-                c->who[i].prompt = kept;
-            }
-        }
+        p->prompt = dup_or_null(m.body ? m.body : "");
         mdcfg_free(&m);
     }
     return aged;
@@ -432,18 +417,33 @@ static int write_settings(const struct board_cfg *c)
 static int write_roles(const struct board_cfg *c)
 {
     int ok = 1;
-    for (int i = 0; i < BOARD_WHO; i++) {
+    for (int i = 0; i < c->roles_n; i++) {
+        const struct board_profile *p = &c->roles[i];
+
         char path[4300];
-        if (!board_path(path, sizeof path, BOARD_DIR "/roles", WHO_NAMES[i])) {
+        if (!board_path(path, sizeof path, BOARD_DIR "/roles", p->name)) {
             ok = 0;
             continue;
         }
+
         char        skip[8];
-        snprintf(skip, sizeof skip, "%d", c->who[i].skippable);
-        const char *keys[] = {"tier", "step", "skippable"};
-        const char *vals[] = {c->who[i].tier, c->who[i].step, skip};
-        int         n = c->who[i].step[0] ? 3 : 1;
-        if (!mdcfg_write(path, keys, vals, n, c->who[i].prompt))
+        snprintf(skip, sizeof skip, "%d", p->skippable);
+
+        const char *keys[4], *vals[4];
+        int         n = 0;
+        keys[n] = "tier";
+        vals[n++] = p->tier;
+        if (strcmp(p->does, p->name)) {
+            keys[n] = "does";
+            vals[n++] = p->does;
+        }
+        if (p->step[0]) {
+            keys[n] = "step";
+            vals[n++] = p->step;
+            keys[n] = "skippable";
+            vals[n++] = skip;
+        }
+        if (!mdcfg_write(path, keys, vals, n, p->prompt))
             ok = 0;
     }
     return ok;
@@ -531,32 +531,32 @@ static int write_out(const struct board_cfg *c)
 
 static struct board_cfg cache;
 static int              loaded;
-static struct board_profile serving_who[BOARD_WHO];
+static struct board_profile serving_roles[BOARD_ROLES_MAX];
 
 static void resolve(void)
 {
     const struct board_backend *b = boardcfg_backend(&cache, cache.serving);
 
-    for (int i = 0; i < BOARD_WHO; i++) {
-        serving_who[i] = cache.who[i];
+    for (int i = 0; i < cache.roles_n; i++) {
+        serving_roles[i] = cache.roles[i];
 
-        enum board_tier tier = boardcfg_tier_from_name(cache.who[i].tier);
+        enum board_tier tier = boardcfg_tier_from_name(cache.roles[i].tier);
         if (tier >= BOARD_TIERS)
             tier = BOARD_TIER_MED;
 
-        snprintf(serving_who[i].backend, sizeof serving_who[i].backend, "%s",
+        snprintf(serving_roles[i].backend, sizeof serving_roles[i].backend, "%s",
                  cache.serving[0] ? cache.serving : "claude");
-        snprintf(serving_who[i].model, sizeof serving_who[i].model, "%s",
+        snprintf(serving_roles[i].model, sizeof serving_roles[i].model, "%s",
                  b ? b->level[tier].model : "");
-        snprintf(serving_who[i].effort, sizeof serving_who[i].effort, "%s",
+        snprintf(serving_roles[i].effort, sizeof serving_roles[i].effort, "%s",
                  b ? b->level[tier].effort : "");
     }
 }
 
 static void cache_free(void)
 {
-    for (int i = 0; i < BOARD_WHO; i++)
-        free(cache.who[i].prompt);
+    for (int i = 0; i < cache.roles_n; i++)
+        free(cache.roles[i].prompt);
     for (int i = 0; i < cache.kinds_n; i++) {
         free(cache.kinds[i].means);
         free(cache.kinds[i].prompt);
@@ -630,12 +630,25 @@ int boardcfg_missing(char *out, size_t size)
         return 1;
     }
 
+    if (!cache.roles_n) {
+        snprintf(out, size, "no roles in %s/roles", dir);
+        return 1;
+    }
+
+    for (int i = 0; i < cache.roles_n; i++)
+        for (int j = i + 1; j < cache.roles_n; j++)
+            if (!strcmp(cache.roles[i].does, cache.roles[j].does)) {
+                snprintf(out, size, "%s and %s both do %s", cache.roles[i].name,
+                         cache.roles[j].name, cache.roles[i].does);
+                return 1;
+            }
+
     char   who[128] = "";
     size_t at = 0;
-    for (int i = 0; i < BOARD_WHO; i++)
-        if (!cache.who[i].prompt || !*cache.who[i].prompt)
+    for (int i = 0; i < cache.roles_n; i++)
+        if (!cache.roles[i].prompt || !*cache.roles[i].prompt)
             at += (size_t)snprintf(who + at, sizeof who - at, "%s%s", at ? ", " : "",
-                                   WHO_NAMES[i]);
+                                   cache.roles[i].name);
     if (at) {
         snprintf(out, size, "no prompt in %s/roles: %s", dir, who);
         return 1;
@@ -692,12 +705,15 @@ void boardcfg_kinds_block(char *out, size_t size)
                                c->kinds[i].means ? c->kinds[i].means : "");
 }
 
-const struct board_profile *boardcfg_for(enum board_who who)
+const struct board_profile *boardcfg_doing(const char *job)
 {
     load();
-    if (who < 0 || who >= BOARD_WHO)
-        who = BOARD_WHO_TRIAGE;
-    return &serving_who[who];
+    if (!job || !*job)
+        return NULL;
+    for (int i = 0; i < cache.roles_n; i++)
+        if (!strcmp(serving_roles[i].does, job))
+            return &serving_roles[i];
+    return NULL;
 }
 
 const struct board_profile *boardcfg_for_step(enum board_step step)
@@ -706,32 +722,31 @@ const struct board_profile *boardcfg_for_step(enum board_step step)
     const char *name = boardcfg_step_name(step);
     if (!*name)
         return NULL;
-    for (int i = 0; i < BOARD_WHO; i++)
-        if (!strcmp(serving_who[i].step, name))
-            return &serving_who[i];
+    for (int i = 0; i < cache.roles_n; i++)
+        if (!strcmp(serving_roles[i].step, name))
+            return &serving_roles[i];
     return NULL;
 }
 
-const struct board_profile *boardcfg_for_backend(enum board_who who,
-                                                 const char *backend)
+const struct board_profile *boardcfg_doing_on(const char *job,
+                                              const char *backend)
 {
-    load();
-    if (who < 0 || who >= BOARD_WHO)
-        who = BOARD_WHO_TRIAGE;
+    static struct board_profile out;
 
-    const struct board_backend *b = backend && *backend
-                                        ? boardcfg_backend(&cache, backend)
-                                        : NULL;
-    if (!b || !strcmp(b->name, boardcfg_serving()))
-        return &serving_who[who];
+    const struct board_profile *p = boardcfg_doing(job);
+    if (!p || !backend || !*backend || !strcmp(backend, cache.serving))
+        return p;
 
-    enum board_tier tier = boardcfg_tier_from_name(cache.who[who].tier);
+    const struct board_backend *b = boardcfg_backend(&cache, backend);
+    if (!b)
+        return p;
+
+    enum board_tier tier = boardcfg_tier_from_name(p->tier);
     if (tier >= BOARD_TIERS)
         tier = BOARD_TIER_MED;
 
-    static struct board_profile out;
-    out = cache.who[who];
-    snprintf(out.backend, sizeof out.backend, "%s", b->name);
+    out = *p;
+    snprintf(out.backend, sizeof out.backend, "%s", backend);
     snprintf(out.model, sizeof out.model, "%s", b->level[tier].model);
     snprintf(out.effort, sizeof out.effort, "%s", b->level[tier].effort);
     return &out;
@@ -791,8 +806,8 @@ struct board_cfg *boardcfg_copy(void)
     if (!c)
         return NULL;
     *c = cache;
-    for (int i = 0; i < BOARD_WHO; i++)
-        c->who[i].prompt = dup_or_null(cache.who[i].prompt);
+    for (int i = 0; i < c->roles_n; i++)
+        c->roles[i].prompt = dup_or_null(cache.roles[i].prompt);
     for (int i = 0; i < c->kinds_n; i++) {
         c->kinds[i].means = dup_or_null(cache.kinds[i].means);
         c->kinds[i].prompt = dup_or_null(cache.kinds[i].prompt);
@@ -804,8 +819,8 @@ void boardcfg_free(struct board_cfg *c)
 {
     if (!c)
         return;
-    for (int i = 0; i < BOARD_WHO; i++)
-        free(c->who[i].prompt);
+    for (int i = 0; i < c->roles_n; i++)
+        free(c->roles[i].prompt);
     for (int i = 0; i < c->kinds_n; i++) {
         free(c->kinds[i].means);
         free(c->kinds[i].prompt);
@@ -819,10 +834,13 @@ int boardcfg_set(const struct board_cfg *c)
         return 0;
     load();
 
-    for (int i = 0; i < BOARD_WHO; i++) {
-        char *kept = dup_or_null(c->who[i].prompt);
-        free(cache.who[i].prompt);
-        cache.who[i].prompt = kept;
+    for (int i = 0; i < cache.roles_n; i++)
+        free(cache.roles[i].prompt);
+    memset(cache.roles, 0, sizeof cache.roles);
+    cache.roles_n = c->roles_n;
+    for (int i = 0; i < cache.roles_n; i++) {
+        cache.roles[i] = c->roles[i];
+        cache.roles[i].prompt = dup_or_null(c->roles[i].prompt);
     }
     cache.workers = c->workers;
     cache.auto_pull = c->auto_pull;
@@ -848,11 +866,6 @@ int boardcfg_set(const struct board_cfg *c)
     snprintf(cache.serving, sizeof cache.serving, "%s", c->serving);
     cache.backends_n = c->backends_n;
     memcpy(cache.backends, c->backends, sizeof cache.backends);
-    for (int i = 0; i < BOARD_WHO; i++) {
-        snprintf(cache.who[i].tier, sizeof cache.who[i].tier, "%s", c->who[i].tier);
-        snprintf(cache.who[i].step, sizeof cache.who[i].step, "%s", c->who[i].step);
-        cache.who[i].skippable = c->who[i].skippable;
-    }
     resolve();
     return write_out(&cache);
 }

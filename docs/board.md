@@ -154,11 +154,18 @@ skip one, from the approve row — which says which it will do, so pressing it i
 never a surprise. A card sitting in a step is skipped with `k`, which stops
 whatever is running for it and moves it on to whatever its kind takes next.
 
-Which steps that works on is configuration, not code. A role file names the
-step it runs — `step: audit` in `roles/audit.md` — and `skippable` there says
-whether a person may step over it; a role named after a step runs it without
-being told. Nothing in the flow knows which roles exist, so a role added to
-`roles/` is skippable on the same terms as the ones that shipped.
+Which steps that works on is configuration, not code. Roles are the files in
+`board/roles/`: one file is one role, and the file says everything about it —
+`does` is the job it performs, `tier` how much model it gets, `step` the stage
+of the flow it stands in, `skippable` whether a person may step over that
+stage, and the body is its prompt. What a file leaves out follows from its
+name: `audit.md` does `audit`, and a job named after a step stands in it.
+
+Nothing in the board holds a list of roles. `boardcfg_doing("audit")` asks
+which role's file says it does the audit, so renaming `audit.md` to
+`reviewer.md` with `does: audit` changes who audits, and a file added to
+`roles/` is a role on the same terms as the ones that shipped. A job no file
+claims simply does not run.
 
 An audit is a worker in the same worktree running the review skills already
 installed, scoped to architecture, duplicated mechanisms, memory, and security.

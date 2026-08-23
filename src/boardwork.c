@@ -110,14 +110,15 @@ int boardwork_sweeping(const char *id)
     return w && w->role == BOARD_ROLE_SWEEP;
 }
 
-static int side_start(const struct board_card *c, enum board_who who,
+static int side_start(const struct board_card *c, const char *job,
                       enum board_role role, const char *cwd, char *prompt,
                       const char *label)
 {
-    if (!prompt)
+    const struct board_profile *p = boardcfg_doing(job);
+    if (!prompt || !p) {
+        free(prompt);
         return 0;
-
-    const struct board_profile *p = boardcfg_for(who);
+    }
 
     int front = workspace_index();
     int at = workspace_spawn(p->backend[0] ? p->backend : "claude",
@@ -145,7 +146,7 @@ static int audit_start(const struct board_card *c)
 {
     if (!c || !c->worktree[0] || boardwork_auditing(c->id))
         return 0;
-    return side_start(c, BOARD_WHO_AUDIT, BOARD_ROLE_AUDIT, c->worktree,
+    return side_start(c, "audit", BOARD_ROLE_AUDIT, c->worktree,
                       boardaudit_prompt(c), "audit");
 }
 
@@ -205,7 +206,7 @@ int boardwork_sweep_pump(void)
     const struct board_card *c = board_find(cards, n, id);
     int started = 0;
     if (c)
-        started = side_start(c, BOARD_WHO_SWEEP, BOARD_ROLE_SWEEP, c->cwd,
+        started = side_start(c, "sweep", BOARD_ROLE_SWEEP, c->cwd,
                              prompt, "sweep");
     else
         free(prompt);
@@ -216,12 +217,12 @@ int boardwork_sweep_pump(void)
     return started;
 }
 
-static enum board_who who_of(enum board_role role)
+static const char *job_of(enum board_role role)
 {
     switch (role) {
-    case BOARD_ROLE_AUDIT: return BOARD_WHO_AUDIT;
-    case BOARD_ROLE_SWEEP: return BOARD_WHO_SWEEP;
-    default:               return BOARD_WHO_WORKER;
+    case BOARD_ROLE_AUDIT: return "audit";
+    case BOARD_ROLE_SWEEP: return "sweep";
+    default:               return "worker";
     }
 }
 
@@ -254,7 +255,7 @@ static const struct board_profile *worker_profile(const struct worker *w)
     char pin[32] = "";
     if (w->role == BOARD_ROLE_WORKER)
         card_pin(w->id, pin, sizeof pin);
-    return boardcfg_for_backend(who_of(w->role), pin);
+    return boardcfg_doing_on(job_of(w->role), pin);
 }
 
 static int handover(struct worker *w)
@@ -262,7 +263,7 @@ static int handover(struct worker *w)
     const struct board_profile *p = worker_profile(w);
 
     w->handover = 0;
-    if (!session_switch_backend(w->session, p->backend))
+    if (!p || !session_switch_backend(w->session, p->backend))
         return 0;
     if (p->model[0])
         session_set_model(w->session, p->model);
@@ -452,16 +453,17 @@ static void show_card(int at, const struct board_card *c)
     free(text);
 }
 
+static const char *prompt_of(const char *job)
+{
+    const struct board_profile *p = boardcfg_doing(job);
+    return p && p->prompt ? p->prompt : "";
+}
+
 static char *landing_turn(const struct board_card *c)
 {
-    const char *standing = boardcfg_for(BOARD_WHO_WORKER)->prompt;
-    const char *head = boardcfg_for(BOARD_WHO_MERGE)->prompt;
+    const char *standing = prompt_of("worker");
+    const char *head = prompt_of("merge");
     const char *body = c->body && *c->body ? c->body : c->title;
-
-    if (!standing)
-        standing = "";
-    if (!head)
-        head = "";
 
     char onto[128] = "";
     if (!boardmerge_base(c, onto, sizeof onto) || !onto[0])
@@ -484,11 +486,10 @@ static char *first_turn(const struct board_card *c)
     if (c->stuck[0])
         return landing_turn(c);
 
-    const struct board_profile *p = boardcfg_for(BOARD_WHO_WORKER);
-    const struct board_kind    *k = boardcfg_kind(c->kind);
-    int                         lands = boardcfg_kind_takes(c->kind, BOARD_STEP_WORKTREE);
+    const struct board_kind *k = boardcfg_kind(c->kind);
+    int                      lands = boardcfg_kind_takes(c->kind, BOARD_STEP_WORKTREE);
 
-    const char *head = lands && p->prompt ? p->prompt : "";
+    const char *head = lands ? prompt_of("worker") : "";
     const char *mine = k && k->prompt ? k->prompt : "";
     const char *body = c->body && *c->body ? c->body : c->title;
     const char *card = lands
@@ -519,8 +520,9 @@ static const char *wanted_backend(const struct board_card *c)
 {
     if (c->backend_pin[0])
         return c->backend_pin;
-    const struct board_profile *p = boardcfg_for(BOARD_WHO_WORKER);
-    const char                 *b = c->backend[0] ? c->backend : p->backend;
+    const struct board_profile *p = boardcfg_doing("worker");
+    const char                 *b = c->backend[0] ? c->backend
+                                                  : (p ? p->backend : "");
     return b[0] ? b : "claude";
 }
 
@@ -652,9 +654,9 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
         return 0;
 
     const char *backend = wanted_backend(c);
-    const struct board_profile *p = boardcfg_for_backend(BOARD_WHO_WORKER, backend);
-    const char *model = c->model[0] ? c->model : p->model;
-    const char *effort = c->effort[0] ? c->effort : p->effort;
+    const struct board_profile *p = boardcfg_doing_on("worker", backend);
+    const char *model = c->model[0] ? c->model : (p ? p->model : "");
+    const char *effort = c->effort[0] ? c->effort : (p ? p->effort : "");
 
     int             at;
     struct session *s;

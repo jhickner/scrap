@@ -78,8 +78,8 @@ int boardaudit_wanted(const struct board_card *c)
 
 char *boardaudit_prompt(const struct board_card *c)
 {
-    const struct board_profile *p = boardcfg_for(BOARD_WHO_AUDIT);
-    const char                 *head = p->prompt ? p->prompt : "";
+    const struct board_profile *p = boardcfg_doing("audit");
+    const char                 *head = p && p->prompt ? p->prompt : "";
 
     size_t need = strlen(head) + strlen(c->title) + 256;
     char  *out = malloc(need);
