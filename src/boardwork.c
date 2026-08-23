@@ -23,6 +23,7 @@ struct worker {
     struct session  *session;
     enum board_role  role;
     int              done;
+    int              checked;
 };
 
 static struct worker workers[WORKSPACE_MAX];
@@ -460,6 +461,19 @@ int boardwork_start(const struct board_card *c, char *why, int size)
     return 1;
 }
 
+static enum board_col landed(const struct board_card *c, int *empty_out)
+{
+    int files = 0, lines = 0;
+    int empty = boardcfg_kind_takes(c->kind, BOARD_STEP_WORKTREE) &&
+                c->worktree[0] && c->base[0] &&
+                !boardaudit_size(c, &files, &lines);
+    if (empty_out)
+        *empty_out = empty;
+    if (empty)
+        return BOARD_DOING;
+    return boardflow_from(c->kind, BOARD_STEP_REVIEW, boardaudit_wanted(c));
+}
+
 void boardwork_finished(struct session *s)
 {
     struct worker *w = slot_by_session(s);
@@ -502,16 +516,16 @@ void boardwork_finished(struct session *s)
     boardlog_turn(w->id, "worker", NULL,
                   failed && *failed ? failed : reply);
 
-    int files = 0, lines = 0;
-    int empty = boardcfg_kind_takes(c->kind, BOARD_STEP_WORKTREE) &&
-                c->worktree[0] && c->base[0] &&
-                !boardaudit_size(c, &files, &lines);
+    int            empty = 0;
+    enum board_col next = landed(c, &empty);
 
     if ((!failed || !*failed) && !empty)
-        edited.col = boardflow_from(c->kind, BOARD_STEP_REVIEW,
-                                    boardaudit_wanted(c));
-    board_update(&edited);
+        edited.col = next;
+    int stored = board_update(&edited);
     board_free(cards, n);
+
+    if (!stored)
+        board_note(w->id, "board", "the store did not take the update");
 
     if (failed && *failed) {
         size_t need = strlen(failed) + 32;
@@ -664,6 +678,32 @@ static int at_role(enum board_role role, enum board_col col)
     }
 }
 
+static int reconcile(struct worker *w, const struct board_card *c)
+{
+    if (w->role != BOARD_ROLE_WORKER || c->col != BOARD_DOING)
+        return 0;
+
+    int at = workspace_index_of(w->session);
+    if (at < 0 || session_busy(w->session) || workspace_queued(at)) {
+        w->checked = 0;
+        return 0;
+    }
+    if (w->checked)
+        return 0;
+    w->checked = 1;
+
+    const char *reply = session_last_reply(w->session);
+    if (!reply || !*reply)
+        return 0;
+
+    int            empty = 0;
+    enum board_col next = landed(c, &empty);
+    if (empty)
+        return 0;
+
+    return board_move(c->id, next, "board", "worker turn is over");
+}
+
 int boardwork_poll(void)
 {
     int changed = 0;
@@ -697,8 +737,10 @@ int boardwork_poll(void)
         if (!workers[i].session)
             continue;
         struct board_card *c = board_find(cards, n, workers[i].id);
-        if (c && at_role(workers[i].role, c->col))
+        if (c && at_role(workers[i].role, c->col)) {
+            changed |= reconcile(&workers[i], c);
             continue;
+        }
         boardwork_let_go(workers[i].id);
         changed = 1;
     }

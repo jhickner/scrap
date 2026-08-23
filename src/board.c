@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "boardlog.h"
@@ -350,7 +351,23 @@ static int save_locked(const struct board_card *v, int n)
     return 1;
 }
 
-unsigned long board_revision(void) { return revision; }
+unsigned long board_revision(void)
+{
+    static ino_t  seen;
+    static off_t  size;
+    static time_t when;
+
+    struct stat st;
+    if (stat(board_path(), &st) == 0 &&
+        (st.st_ino != seen || st.st_size != size || st.st_mtime != when)) {
+        if (seen)
+            revision++;
+        seen = st.st_ino;
+        size = st.st_size;
+        when = st.st_mtime;
+    }
+    return revision;
+}
 
 int board_load(struct board_card **out)
 {
