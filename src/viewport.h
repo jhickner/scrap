@@ -42,6 +42,8 @@ void viewport_touch(void);
 void viewport_chrome(char **rows, int n, int caret_row, int caret_col);
 void viewport_chrome_clear(void);
 
+int viewport_chrome_top(void);
+
 void viewport_chrome_row(int at, const char *s);
 
 void viewport_chrome_keep(int keep);

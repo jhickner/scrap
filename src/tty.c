@@ -327,6 +327,8 @@ static void emit(tty_event *ev, tty_key key)
     ev->key = key;
     ev->cp = 0;
     ev->text = NULL;
+    ev->row = 0;
+    ev->col = 0;
 }
 
 static void read_paste(tty_event *ev)
@@ -394,6 +396,15 @@ static void decode_mouse(tty_event *ev, const int *params, int nparams, int fina
     switch (params[0] & ~0x1c) {
     case 64: emit(ev, TK_SCROLL_UP); return;
     case 65: emit(ev, TK_SCROLL_DOWN); return;
+    case 0:
+        if (nparams < 3) {
+            emit(ev, TK_NONE);
+            return;
+        }
+        emit(ev, TK_MOUSE_DOWN);
+        ev->col = params[1];
+        ev->row = params[2];
+        return;
     default: emit(ev, TK_NONE); return;
     }
 }

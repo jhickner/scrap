@@ -10,6 +10,9 @@
 #include "text.h"
 #include "tty.h"
 #include "ui.h"
+#include "viewport.h"
+
+#define HIT_MAX 128
 
 struct view {
     int top;
@@ -29,6 +32,7 @@ struct view {
     int slash;
     int searching;
     char query[64];
+    short hit[HIT_MAX];
 };
 
 #define LIVE_POLL_MS 500
@@ -232,7 +236,11 @@ static void paint(void *ud)
 
     int    columns = ui_columns();
     int    rows = 0;
+    int    base = chrome_gap();
     size_t pad_to = align_width(v, columns);
+
+    for (int i = 0; i < HIT_MAX; i++)
+        v->hit[i] = -1;
 
     ui_esc(ui_style(UI_CHROME));
     ui_put(UI_BAR);
@@ -277,6 +285,9 @@ static void paint(void *ud)
             ui_put("\n");
             rows++;
         }
+        if (base + rows >= 0 && base + rows < HIT_MAX)
+            v->hit[base + rows] = (short)row;
+
         int selected = (row == sel);
         ui_esc(ui_style(selected ? UI_ACCENT : UI_RESET));
         ui_put(selected ? "  \xe2\x86\x92 " : "    ");
@@ -585,6 +596,19 @@ static int run(const char *title, const struct pick_item *items, int count,
                 settle(&v, 1);
             }
             break;
+        case TK_MOUSE_DOWN: {
+            int top = viewport_chrome_top();
+            if (top < 0)
+                continue;
+            int at = ev.row - 1 - top;
+            if (at < 0 || at >= HIT_MAX)
+                continue;
+            int row = v.hit[at];
+            if (row < 0 || row >= v.count || row_heading(&v, row))
+                continue;
+            v.sel = row;
+            break;
+        }
         case TK_RESIZE:
             refilter(&v);
             break;

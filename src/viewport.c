@@ -55,6 +55,7 @@ static int in_render;
 static char **chrome_rows;
 static int    chrome_n, chrome_cap;
 static int    chrome_caret_row, chrome_caret_col = -1;
+static int    chrome_top = -1;
 
 static int held;
 static int active;
@@ -942,6 +943,8 @@ void viewport_paint(void)
     int body = g.body;
     int skip = g.skip;
 
+    chrome_top = chrome_shown > 0 ? body : -1;
+
     struct frame all = {0};
     for (int r = g.first; r < g.total && r <= nitems; r++) {
         item_rows(item_at(r, &pending), W);
@@ -1061,6 +1064,11 @@ void viewport_chrome(char **rows_in, int n, int caret_row, int caret_col)
     dirty = 1;
 }
 
+int viewport_chrome_top(void)
+{
+    return chrome_top;
+}
+
 void viewport_chrome_row(int at, const char *s)
 {
     if (at < 0 || at >= chrome_n || !s)
@@ -1093,6 +1101,7 @@ void viewport_chrome_keep(int keep)
 
 void viewport_chrome_clear(void)
 {
+    chrome_top = -1;
     for (int i = 0; i < chrome_n; i++)
         free(chrome_rows[i]);
     chrome_n = 0;

@@ -31,6 +31,7 @@ typedef enum {
     TK_EOF,
     TK_SCROLL_UP,
     TK_SCROLL_DOWN,
+    TK_MOUSE_DOWN,
 
     TK_NONE,
 } tty_key;
@@ -39,6 +40,8 @@ typedef struct {
     tty_key   key;
     uint32_t  cp;
     char     *text;
+    int       row;
+    int       col;
 } tty_event;
 
 int  tty_raw_begin(void);
