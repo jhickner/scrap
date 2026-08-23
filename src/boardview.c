@@ -333,6 +333,10 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             const char *question = c->col == BOARD_UNCLEAR ? asked(c) : NULL;
             if (question)
                 r->detail = dsprintf("%s", question);
+            // A card that could not land sits in `doing` looking like one being
+            // worked on. It says which it is until a worker takes it.
+            else if (c->stuck[0])
+                r->detail = dsprintf("stuck · %s", c->stuck);
             else if (waiting[0])
                 r->detail = dsprintf("waiting · %s", waiting);
             else if (c->col == BOARD_REVIEW && c->worktree[0]) {
@@ -419,6 +423,7 @@ static int board_tick(void *ud)
     // no redraw of the rows we built can show. The list has to be built again.
     int moved = board_reap();
     moved |= boardwork_poll();
+    moved |= boardwork_pump();
     // One card lands at a time, and the next one starts when it is done.
     moved |= boardmerge_pump();
     moved |= boardaudit_pump();

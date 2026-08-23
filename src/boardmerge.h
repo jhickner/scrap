@@ -2,6 +2,8 @@
 #ifndef BOARDMERGE_H
 #define BOARDMERGE_H
 
+#include <stddef.h>
+
 struct board_card;
 
 // Landing the work. Serialized, one card at a time: parallel workers all
@@ -14,6 +16,10 @@ struct board_card;
 
 // Starts the next card in `merging` if nothing is already landing. Nonzero
 // once one is going.
+// The branch a card is going back onto, which is whatever the repo itself has
+// checked out. Zero when that cannot be worked out.
+int boardmerge_base(const struct board_card *c, char *out, size_t size);
+
 int boardmerge_pump(void);
 
 // Whether this card is the one currently landing.

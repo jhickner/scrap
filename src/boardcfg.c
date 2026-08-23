@@ -6,12 +6,13 @@
 #include <unistd.h>
 
 #include "text.h"
+#include "mdcfg.h"
 #include "vendor/cJSON.h"
 
 #define CFG_MAX_BYTES (1u << 20)
 
 static const char *const WHO_NAMES[BOARD_WHO] = {"triage", "worker", "audit",
-                                                 "sweep"};
+                                                 "sweep", "merge"};
 
 const char *boardcfg_who_name(enum board_who who)
 {
@@ -87,6 +88,19 @@ static const char TRIAGE_PROMPT[] =
 // worker writes it where it goes and the card is done. Work kinds go through
 // the gate.
 #define ALL_STEPS ((1u << BOARD_STEPS) - 1u)
+
+// Sent in when the queue could not land a card by itself: a rebase that
+// conflicted, a check that failed, a merge that would not go. It is not asked
+// to land the card -- the queue does that once the branch is clean again.
+static const char MERGE_PROMPT[] =
+    "This branch could not be landed. What the attempt said is below.\n"
+    "\n"
+    "Rebase onto the branch it is going back to, resolve whatever is in the "
+    "way, and make the check pass. Commit the result on the branch you are "
+    "already on, then stop and say what you had to change.\n"
+    "\n"
+    "Do not merge it yourself, do not switch branches, and do not touch the "
+    "main branch: the board lands it once the branch is clean.";
 
 static const char *const STEP_NAMES[BOARD_STEPS] = {
     "worktree", "review", "audit", "merge",
@@ -186,20 +200,6 @@ static char *dup_or_null(const char *s)
     return s ? strdup(s) : NULL;
 }
 
-// The prompt each job has when nothing has been written over it. Kept
-// reachable so a saved copy identical to it can be recognised and left out of
-// the file -- otherwise opening the config screen once would freeze the
-// defaults as they were that day, and a better one written later would never
-// reach anybody.
-static const char *default_prompt(enum board_who who)
-{
-    switch (who) {
-    case BOARD_WHO_WORKER: return WORKER_PROMPT;
-    case BOARD_WHO_AUDIT:  return AUDIT_PROMPT;
-    case BOARD_WHO_SWEEP:  return SWEEP_PROMPT;
-    default:               return TRIAGE_PROMPT;
-    }
-}
 
 static void defaults(struct board_cfg *c)
 {
@@ -233,18 +233,11 @@ static void defaults(struct board_cfg *c)
     snprintf(c->who[BOARD_WHO_TRIAGE].effort, sizeof c->who[BOARD_WHO_TRIAGE].effort, "low");
     snprintf(c->who[BOARD_WHO_AUDIT].effort, sizeof c->who[BOARD_WHO_AUDIT].effort, "high");
 
+    c->who[BOARD_WHO_MERGE].prompt = dup_or_null(MERGE_PROMPT);
     c->who[BOARD_WHO_TRIAGE].prompt = dup_or_null(TRIAGE_PROMPT);
     c->who[BOARD_WHO_WORKER].prompt = dup_or_null(WORKER_PROMPT);
     c->who[BOARD_WHO_AUDIT].prompt = dup_or_null(AUDIT_PROMPT);
     c->who[BOARD_WHO_SWEEP].prompt = dup_or_null(SWEEP_PROMPT);
-}
-
-static const char *path(void)
-{
-    static char p[4200];
-    if (!p[0] && !path_config_file(p, sizeof p, "board.json"))
-        snprintf(p, sizeof p, "/tmp/board.json");
-    return p;
 }
 
 static void set_str(char *dst, size_t n, const cJSON *o, const char *key)
@@ -261,8 +254,8 @@ static void set_int(int *dst, const cJSON *o, const char *key)
         *dst = (int)j->valuedouble;
 }
 
-// Read over the defaults rather than in place of them, so a file written by an
-// older build, or half-edited by hand, still yields a working board.
+// The board.json this used to be kept in, read once so a board configured
+// before the files existed carries over. Nothing writes it any more.
 static void overlay(struct board_cfg *c, const cJSON *o)
 {
     set_int(&c->workers, o, "workers");
@@ -336,6 +329,274 @@ static void overlay(struct board_cfg *c, const cJSON *o)
     }
 }
 
+/* ---- the files a person edits ------------------------------------------- */
+
+// One directory, and nothing in it a person cannot open in an editor:
+//
+//   board/settings.md          the numbers, the delegation order, the check
+//   board/roles/<who>.md       what runs each stage, and what it is told
+//   board/kinds/<name>.md      a class of card: what it means, what it takes
+//
+// Everything is written out, whether or not it differs from the built-in
+// default, because a file that is not there is a file nobody can edit.
+
+#define BOARD_DIR "board"
+
+static int board_path(char *out, size_t size, const char *leaf, const char *name)
+{
+    char dir[4096];
+    if (!mdcfg_dir(dir, sizeof dir, leaf))
+        return 0;
+    return (size_t)snprintf(out, size, "%s/%s.md", dir, name) < size;
+}
+
+// "worktree, review, merge" -> a mask. An empty list is a kind that takes no
+// step at all, which is not the same as one that did not say.
+static unsigned steps_of(const char *list)
+{
+    unsigned mask = 0;
+    char     copy[256];
+    snprintf(copy, sizeof copy, "%s", list);
+
+    for (char *p = copy; *p;) {
+        while (*p == ' ' || *p == ',')
+            p++;
+        char *start = p;
+        while (*p && *p != ',')
+            p++;
+        char *end = p;
+        while (end > start && end[-1] == ' ')
+            end--;
+        char kept = *end;
+        *end = '\0';
+        if (*start) {
+            enum board_step at = boardcfg_step_from_name(start);
+            if (at < BOARD_STEPS)
+                mask |= 1u << at;
+        }
+        *end = kept;
+    }
+    return mask;
+}
+
+static void steps_str(unsigned mask, char *out, size_t size)
+{
+    size_t at = 0;
+    out[0] = '\0';
+    for (int i = 0; i < BOARD_STEPS && at < size; i++)
+        if (mask & (1u << i))
+            at += (size_t)snprintf(out + at, size - at, "%s%s", at ? ", " : "",
+                                   boardcfg_step_name((enum board_step)i));
+}
+
+static void read_settings(struct board_cfg *c)
+{
+    char path[4300];
+    if (!board_path(path, sizeof path, BOARD_DIR, "settings"))
+        return;
+
+    struct mdcfg m;
+    if (!mdcfg_load(&m, path))
+        return;
+
+    c->workers = mdcfg_int(&m, "workers", c->workers);
+    c->usage_ceiling = mdcfg_int(&m, "usage ceiling", c->usage_ceiling);
+    c->reset_hold = mdcfg_int(&m, "reset hold", c->reset_hold);
+    c->audit_files = mdcfg_int(&m, "audit files", c->audit_files);
+    c->audit_lines = mdcfg_int(&m, "audit lines", c->audit_lines);
+    c->sweep_every = mdcfg_int(&m, "sweep every", c->sweep_every);
+    c->archive_after = mdcfg_int(&m, "archive after", c->archive_after);
+
+    const char *chain = mdcfg_get(&m, "delegation");
+    if (*chain) {
+        // Written with spaces because a person wrote it; stored without.
+        size_t at = 0;
+        for (const char *p = chain; *p && at + 1 < sizeof c->delegation; p++)
+            if (*p != ' ')
+                c->delegation[at++] = *p;
+        c->delegation[at] = '\0';
+    }
+    snprintf(c->verify, sizeof c->verify, "%s", mdcfg_get(&m, "check"));
+    mdcfg_free(&m);
+}
+
+static void read_roles(struct board_cfg *c)
+{
+    for (int i = 0; i < BOARD_WHO; i++) {
+        char path[4300];
+        if (!board_path(path, sizeof path, BOARD_DIR "/roles", WHO_NAMES[i]))
+            continue;
+
+        struct mdcfg m;
+        if (!mdcfg_load(&m, path))
+            continue;
+
+        const char *backend = mdcfg_get(&m, "backend");
+        if (*backend)
+            snprintf(c->who[i].backend, sizeof c->who[i].backend, "%s", backend);
+        snprintf(c->who[i].model, sizeof c->who[i].model, "%s", mdcfg_get(&m, "model"));
+        snprintf(c->who[i].effort, sizeof c->who[i].effort, "%s", mdcfg_get(&m, "effort"));
+
+        if (m.body && *m.body) {
+            char *kept = dup_or_null(m.body);
+            if (kept) {
+                free(c->who[i].prompt);
+                c->who[i].prompt = kept;
+            }
+        }
+        mdcfg_free(&m);
+    }
+}
+
+static void read_kinds(struct board_cfg *c)
+{
+    char dir[4096];
+    if (!mdcfg_dir(dir, sizeof dir, BOARD_DIR "/kinds"))
+        return;
+
+    char names[BOARD_KINDS_MAX][MDCFG_NAME];
+    int  found = mdcfg_list(dir, names, BOARD_KINDS_MAX);
+    if (!found)
+        return;
+
+    // The files are the list: a kind whose file was deleted is a kind the
+    // board no longer has.
+    for (int i = 0; i < c->kinds_n; i++) {
+        free(c->kinds[i].means);
+        free(c->kinds[i].prompt);
+    }
+    memset(c->kinds, 0, sizeof c->kinds);
+    c->kinds_n = 0;
+
+    for (int i = 0; i < found; i++) {
+        char path[4300];
+        if (!board_path(path, sizeof path, BOARD_DIR "/kinds", names[i]))
+            continue;
+
+        struct mdcfg m;
+        if (!mdcfg_load(&m, path))
+            continue;
+
+        struct board_kind *k = &c->kinds[c->kinds_n++];
+        snprintf(k->name, sizeof k->name, "%s", names[i]);
+        k->means = dup_or_null(mdcfg_get(&m, "means"));
+        k->prompt = dup_or_null(m.body ? m.body : "");
+        k->priority = mdcfg_int(&m, "priority", 0);
+        k->steps = steps_of(mdcfg_get(&m, "steps"));
+        mdcfg_free(&m);
+    }
+}
+
+static int write_settings(const struct board_cfg *c)
+{
+    char path[4300];
+    if (!board_path(path, sizeof path, BOARD_DIR, "settings"))
+        return 0;
+
+    char nums[7][32], chain[256];
+    snprintf(nums[0], sizeof nums[0], "%d", c->workers);
+    snprintf(nums[1], sizeof nums[1], "%d", c->usage_ceiling);
+    snprintf(nums[2], sizeof nums[2], "%d", c->reset_hold);
+    snprintf(nums[3], sizeof nums[3], "%d", c->audit_files);
+    snprintf(nums[4], sizeof nums[4], "%d", c->audit_lines);
+    snprintf(nums[5], sizeof nums[5], "%d", c->sweep_every);
+    snprintf(nums[6], sizeof nums[6], "%d", c->archive_after);
+
+    size_t at = 0;
+    chain[0] = '\0';
+    for (const char *p = c->delegation; *p && at + 2 < sizeof chain; p++) {
+        chain[at++] = *p;
+        if (*p == ',')
+            chain[at++] = ' ';
+    }
+    chain[at] = '\0';
+
+    const char *keys[] = {"workers", "usage ceiling", "reset hold", "audit files",
+                          "audit lines", "sweep every", "archive after",
+                          "delegation", "check"};
+    const char *vals[] = {nums[0], nums[1], nums[2], nums[3], nums[4], nums[5],
+                          nums[6], chain, c->verify};
+
+    return mdcfg_write(path, keys, vals, 9,
+        "How many workers may run at once, the percent of quota above which\n"
+        "nothing starts, and how close to a reset is worth waiting for rather\n"
+        "than handing on. A diff over either audit threshold is read before it\n"
+        "lands; zero turns that half off. A sweep comes due every so many cards\n"
+        "landed in a repo. Done cards leave the board after so many days.\n"
+        "\n"
+        "delegation is who takes over when a backend runs out, in order.\n"
+        "check is run in the worktree before a card lands, and it does not land\n"
+        "if that fails.\n");
+}
+
+static int write_roles(const struct board_cfg *c)
+{
+    int ok = 1;
+    for (int i = 0; i < BOARD_WHO; i++) {
+        char path[4300];
+        if (!board_path(path, sizeof path, BOARD_DIR "/roles", WHO_NAMES[i])) {
+            ok = 0;
+            continue;
+        }
+        const char *keys[] = {"backend", "model", "effort"};
+        const char *vals[] = {c->who[i].backend, c->who[i].model, c->who[i].effort};
+        if (!mdcfg_write(path, keys, vals, 3, c->who[i].prompt))
+            ok = 0;
+    }
+    return ok;
+}
+
+static int write_kinds(const struct board_cfg *c)
+{
+    char dir[4096];
+    if (!mdcfg_dir(dir, sizeof dir, BOARD_DIR "/kinds"))
+        return 0;
+
+    // A kind edited into a different name leaves its old file behind, and a
+    // deleted one leaves all of it, so what is no longer configured goes.
+    char names[BOARD_KINDS_MAX * 2][MDCFG_NAME];
+    int  had = mdcfg_list(dir, names, BOARD_KINDS_MAX * 2);
+    for (int i = 0; i < had; i++) {
+        int still = 0;
+        for (int j = 0; j < c->kinds_n && !still; j++)
+            still = !strcmp(c->kinds[j].name, names[i]);
+        if (still)
+            continue;
+        char gone[4300];
+        if (board_path(gone, sizeof gone, BOARD_DIR "/kinds", names[i]))
+            unlink(gone);
+    }
+
+    int ok = 1;
+    for (int i = 0; i < c->kinds_n; i++) {
+        char path[4300];
+        if (!board_path(path, sizeof path, BOARD_DIR "/kinds", c->kinds[i].name)) {
+            ok = 0;
+            continue;
+        }
+        char steps[128], priority[16];
+        steps_str(c->kinds[i].steps, steps, sizeof steps);
+        snprintf(priority, sizeof priority, "%d", c->kinds[i].priority);
+
+        const char *keys[] = {"means", "priority", "steps"};
+        const char *vals[] = {c->kinds[i].means ? c->kinds[i].means : "",
+                              priority, steps};
+        if (!mdcfg_write(path, keys, vals, 3, c->kinds[i].prompt))
+            ok = 0;
+    }
+    return ok;
+}
+
+static int write_out(const struct board_cfg *c)
+{
+    int ok = write_settings(c);
+    if (!write_roles(c))
+        ok = 0;
+    if (!write_kinds(c))
+        ok = 0;
+    return ok;
+}
+
 static struct board_cfg cache;
 static int              loaded;
 
@@ -346,16 +607,33 @@ static void load(void)
     loaded = 1;
     defaults(&cache);
 
-    size_t len = 0;
-    char  *text = text_slurp(path(), CFG_MAX_BYTES, &len);
-    if (!text)
-        return;
-    cJSON *o = cJSON_Parse(text);
-    free(text);
-    if (o) {
-        overlay(&cache, o);
-        cJSON_Delete(o);
+    // A board.json from before the files existed is read once, so what was
+    // configured then carries over, and then set aside.
+    char old[4300];
+    if (path_config_file(old, sizeof old, "board.json")) {
+        char  *text = text_slurp(old, CFG_MAX_BYTES, NULL);
+        cJSON *o = text ? cJSON_Parse(text) : NULL;
+        free(text);
+        if (o) {
+            overlay(&cache, o);
+            cJSON_Delete(o);
+            write_out(&cache);
+            char aside[4400];
+            snprintf(aside, sizeof aside, "%s.replaced", old);
+            rename(old, aside);
+            return;
+        }
     }
+
+    read_settings(&cache);
+    read_roles(&cache);
+    read_kinds(&cache);
+
+    // Nothing there to read means nothing there to edit, so the defaults are
+    // written out the first time rather than waiting for a change.
+    char seed[4300];
+    if (board_path(seed, sizeof seed, BOARD_DIR, "settings") && access(seed, F_OK))
+        write_out(&cache);
 }
 
 const struct board_cfg *boardcfg(void)
@@ -450,80 +728,6 @@ void boardcfg_free(struct board_cfg *c)
         free(c->kinds[i].prompt);
     }
     free(c);
-}
-
-static int write_out(const struct board_cfg *c)
-{
-    cJSON *o = cJSON_CreateObject();
-    if (!o)
-        return 0;
-
-    cJSON_AddNumberToObject(o, "workers", c->workers);
-    cJSON_AddNumberToObject(o, "usage_ceiling", c->usage_ceiling);
-    cJSON_AddNumberToObject(o, "reset_hold", c->reset_hold);
-    cJSON_AddNumberToObject(o, "audit_files", c->audit_files);
-    cJSON_AddNumberToObject(o, "audit_lines", c->audit_lines);
-    cJSON_AddNumberToObject(o, "sweep_every", c->sweep_every);
-    cJSON_AddNumberToObject(o, "archive_after", c->archive_after);
-
-    cJSON *kinds = cJSON_AddArrayToObject(o, "kinds");
-    for (int i = 0; kinds && i < c->kinds_n; i++) {
-        cJSON *k = cJSON_CreateObject();
-        if (!k)
-            break;
-        cJSON_AddStringToObject(k, "name", c->kinds[i].name);
-        cJSON_AddStringToObject(k, "means", c->kinds[i].means ? c->kinds[i].means : "");
-        cJSON_AddNumberToObject(k, "priority", c->kinds[i].priority);
-        cJSON *steps = cJSON_AddArrayToObject(k, "steps");
-        for (int j = 0; steps && j < BOARD_STEPS; j++)
-            if (c->kinds[i].steps & (1u << j))
-                cJSON_AddItemToArray(steps,
-                    cJSON_CreateString(boardcfg_step_name((enum board_step)j)));
-        cJSON_AddStringToObject(k, "prompt", c->kinds[i].prompt ? c->kinds[i].prompt : "");
-        cJSON_AddItemToArray(kinds, k);
-    }
-    cJSON_AddStringToObject(o, "delegation", c->delegation);
-    cJSON_AddStringToObject(o, "verify", c->verify);
-
-    cJSON *who = cJSON_AddObjectToObject(o, "who");
-    if (!who) {
-        cJSON_Delete(o);
-        return 0;
-    }
-    for (int i = 0; i < BOARD_WHO; i++) {
-        cJSON *p = cJSON_AddObjectToObject(who, WHO_NAMES[i]);
-        if (!p)
-            break;
-        cJSON_AddStringToObject(p, "backend", c->who[i].backend);
-        cJSON_AddStringToObject(p, "model", c->who[i].model);
-        cJSON_AddStringToObject(p, "effort", c->who[i].effort);
-        // Only a prompt somebody has actually changed is written down.
-        const char *prompt = c->who[i].prompt;
-        const char *stock = default_prompt((enum board_who)i);
-        if (prompt && strcmp(prompt, stock))
-            cJSON_AddStringToObject(p, "prompt", prompt);
-    }
-
-    char *text = cJSON_Print(o);
-    cJSON_Delete(o);
-    if (!text)
-        return 0;
-
-    char tmp[4300];
-    snprintf(tmp, sizeof tmp, "%s.tmp", path());
-    FILE *f = fopen(tmp, "wb");
-    int   ok = f != NULL;
-    if (ok && fprintf(f, "%s\n", text) < 0)
-        ok = 0;
-    if (f && fclose(f) != 0)
-        ok = 0;
-    free(text);
-
-    if (!ok || rename(tmp, path()) != 0) {
-        unlink(tmp);
-        return 0;
-    }
-    return 1;
 }
 
 int boardcfg_set(const struct board_cfg *c)

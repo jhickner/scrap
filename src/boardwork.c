@@ -11,6 +11,7 @@
 #include "boardcfg.h"
 #include "boardaudit.h"
 #include "boardflow.h"
+#include "boardmerge.h"
 #include "session.h"
 #include "text.h"
 #include "workspace.h"
@@ -178,8 +179,35 @@ static void write_card_file(const char *path, const struct board_card *c)
 // A kind that does not land is not given the standing instructions at all --
 // they are about worktrees, branches and commits, and a note being filed has
 // none of those.
+// A card that could not land is not being built again: it is being got into a
+// state the queue can land, which is a different job and a different prompt.
+static char *landing_turn(const struct board_card *c)
+{
+    const struct board_profile *p = boardcfg_for(BOARD_WHO_MERGE);
+    const char                 *head = p->prompt ? p->prompt : "";
+    const char                 *body = c->body && *c->body ? c->body : c->title;
+
+    char onto[128] = "";
+    if (!boardmerge_base(c, onto, sizeof onto) || !onto[0])
+        snprintf(onto, sizeof onto, "the branch it came from");
+
+    size_t need = strlen(head) + strlen(body) + strlen(c->title) +
+                  strlen(c->stuck) + sizeof onto + 256;
+    char  *out = malloc(need);
+    if (!out)
+        return NULL;
+    snprintf(out, need,
+             "%s\n\nIt is going back onto %s. The attempt said:\n\n%s\n\n"
+             "The card it was built for:\n\n# %s\n\n%s\n",
+             head, onto, c->stuck, c->title, body);
+    return out;
+}
+
 static char *first_turn(const struct board_card *c)
 {
+    if (c->stuck[0])
+        return landing_turn(c);
+
     const struct board_profile *p = boardcfg_for(BOARD_WHO_WORKER);
     const struct board_kind    *k = boardcfg_kind(c->kind);
     int                         lands = boardcfg_kind_takes(c->kind, BOARD_STEP_WORKTREE);
@@ -378,6 +406,8 @@ int boardwork_start(const struct board_card *c, char *why, int size)
 
     struct board_card edited = *c;
     edited.col = BOARD_DOING;
+    // Somebody has it now, so it is no longer waiting for somebody.
+    edited.stuck[0] = '\0';
     snprintf(edited.worktree, sizeof edited.worktree, "%s", lands ? path : "");
     snprintf(edited.base, sizeof edited.base, "%s", base);
     snprintf(edited.backend, sizeof edited.backend, "%s", backend);
@@ -444,6 +474,30 @@ void boardwork_finished(struct session *s)
 
 // A worker whose tab has gone -- closed by hand, or lost with a restart --
 // leaves a card in `doing` that nothing is working on.
+// A card that could not land is waiting for a worker rather than being worked
+// on, and it waits in `doing` where that is not obvious. This is what makes
+// the difference go away.
+int boardwork_pump(void)
+{
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+
+    int started = 0;
+    for (int i = 0; i < n && !started; i++) {
+        if (cards[i].col != BOARD_DOING || !cards[i].stuck[0])
+            continue;
+        if (boardwork_tab(cards[i].id) >= 0)
+            continue;
+
+        char why[256];
+        // Blocked on the worker cap or on quota is not a failure: it comes
+        // round again every turn of the board.
+        started = boardwork_start(&cards[i], why, sizeof why);
+    }
+    board_free(cards, n);
+    return started;
+}
+
 int boardwork_poll(void)
 {
     int changed = 0;

@@ -191,6 +191,7 @@ static int card_from_json(const cJSON *o, struct board_card *c)
     set_str(c->session, sizeof c->session, json_str(o, "session"));
     set_str(c->worktree, sizeof c->worktree, json_str(o, "worktree"));
     set_str(c->base, sizeof c->base, json_str(o, "base"));
+    set_str(c->stuck, sizeof c->stuck, json_str(o, "stuck"));
 
     c->priority = (int)json_num(o, "priority");
     c->cost_usd = json_num(o, "cost_usd");
@@ -240,6 +241,7 @@ static cJSON *card_to_json(const struct board_card *c)
     cJSON_AddStringToObject(o, "session", c->session);
     cJSON_AddStringToObject(o, "worktree", c->worktree);
     cJSON_AddStringToObject(o, "base", c->base);
+    cJSON_AddStringToObject(o, "stuck", c->stuck);
     cJSON_AddNumberToObject(o, "cost_usd", c->cost_usd);
     cJSON_AddNumberToObject(o, "created", (double)c->created);
     cJSON_AddNumberToObject(o, "updated", (double)c->updated);

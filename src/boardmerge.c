@@ -44,6 +44,14 @@ static int base_branch(const char *root, char *out, size_t size)
     return gitcmd_line(root, "rev-parse --abbrev-ref HEAD", out, size);
 }
 
+int boardmerge_base(const struct board_card *c, char *out, size_t size)
+{
+    char root[4096];
+    if (!c || !gitcmd_root(c->cwd, root, sizeof root))
+        return 0;
+    return base_branch(root, out, size);
+}
+
 // Rebase, check, merge, tidy up. Written out as one script so the output says
 // which step it got to, and so a failure leaves the worktree as it was rather
 // than half-rebased.
@@ -150,6 +158,15 @@ static void tail_of(const char *text, char *out, size_t size)
     text_chomp(out);
 }
 
+static const char *last_line(const char *text)
+{
+    const char *at = text;
+    for (const char *p = text; *p; p++)
+        if (*p == '\n' && p[1])
+            at = p + 1;
+    return at;
+}
+
 int boardmerge_take(const char *key, const char *out, int ok)
 {
     size_t mark = strlen(MERGE_KEY);
@@ -180,7 +197,23 @@ int boardmerge_take(const char *key, const char *out, int ok)
         // that brings a look over the whole of it due.
         boardsweep_landed(landed_in);
     } else {
-        board_move(id, BOARD_DOING, "board", said);
+        // Nothing here can resolve a conflict or make a check pass. The card
+        // says why it could not land and goes back to being worked on; a
+        // worker is sent in for it on the next turn of the board.
+        struct board_card *cards = NULL;
+        int                n = board_load(&cards);
+        struct board_card *c = board_find(cards, n, id);
+        if (c) {
+            struct board_card edited = *c;
+            edited.col = BOARD_DOING;
+            // The script's own verdict is its last line; everything above it
+            // is git explaining itself, which the note keeps and the worker
+            // can see for itself in the worktree.
+            snprintf(edited.stuck, sizeof edited.stuck, "%s", last_line(said));
+            board_update(&edited);
+        }
+        board_free(cards, n);
+        board_note(id, "board", said);
     }
     return 1;
 }

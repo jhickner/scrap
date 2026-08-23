@@ -41,6 +41,9 @@ int boardwork_tab(const char *id);
 // changed. A slot no card holds any more is one no card can wait for.
 int boardwork_poll(void);
 
+// Sends a worker in for any card that could not land. Nonzero when one went.
+int boardwork_pump(void);
+
 // Done with it: the tab closes and the worker is freed. `audit` sends the
 // change for a second pass first; without it the card goes straight to the
 // merge queue.

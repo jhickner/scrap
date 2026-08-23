@@ -11,13 +11,15 @@
 // Absent or half-written, the defaults below stand, so the board works before
 // anything has been configured.
 
-// Who runs what. Triage classifies, a worker builds, an audit reads a diff,
-// a sweep looks over a repo for what the others left behind.
+// Who runs what. Triage classifies, a worker builds, an audit reads a diff, a
+// sweep looks over a repo for what the others left behind, and a merge worker
+// is sent in when the queue could not land a card on its own.
 enum board_who {
     BOARD_WHO_TRIAGE,
     BOARD_WHO_WORKER,
     BOARD_WHO_AUDIT,
     BOARD_WHO_SWEEP,
+    BOARD_WHO_MERGE,
     BOARD_WHO,
 };
 

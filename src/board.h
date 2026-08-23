@@ -56,6 +56,11 @@ struct board_card {
     char   session[128];    /* the backend's id for the worker's conversation */
     char   worktree[4096];
     char   base[24];        /* the sha the worktree branched from */
+
+    // Why the card could not land, when it could not. A card in `doing` with
+    // this set is one nothing is working on yet, and it is what the worker
+    // sent to sort it out is told.
+    char stuck[256];
     double cost_usd;
 
     time_t created, updated;
