@@ -12,7 +12,7 @@ where your judgement is the thing that is actually needed.
 ## The flow
 
 ```
-new → unclear → backlog → doing → review → [audit] → merging → done
+new → unclear → backlog → active → review → [audit] → merge → done
         ↑__________|         ↑_______|________|_________|
 ```
 
@@ -23,10 +23,10 @@ could not parse goes to `unclear` and waits for a sentence from you.
 A worker takes a card from `backlog`, works in a worktree of its own, and puts
 it in `review` when it has something testable. You approve, reject, or send
 feedback. Approval optionally routes through an `audit` — an LLM pass over the
-diff — and then through `merging`, which is serialized, because parallel
+diff — and then through `merge`, which is serialized, because parallel
 workers branched off the same base do not land cleanly on their own.
 
-Every arrow back to `doing` carries the reason with it, in the card's log, so
+Every arrow back to `active` carries the reason with it, in the card's log, so
 whoever picks the card up next reads why it bounced.
 
 ## Cards
@@ -39,7 +39,7 @@ does not know which repo it belongs to yet, which is the whole reason triage
 exists, so the store cannot be the thing that answers it.
 
 ```json
-{"id":"c7f2","col":"doing","kind":"feature","title":"...","body":"...",
+{"id":"c7f2","col":"active","kind":"feature","title":"...","body":"...",
  "cwd":"/Users/jhickner/working/mux","priority":0,
  "backend":null,"model":null,"effort":null,
  "session":"<backend session id>","worktree":".claude/worktrees/c7f2",
@@ -86,7 +86,7 @@ hand, rather than burning tokens in a loop over text that structurally will not
 parse.
 
 `unclear` is narrowly about text that did not parse. A worker that errors or
-stalls stays in `doing` with a mark against it, because the context you need to
+stalls stays in `active` with a mark against it, because the context you need to
 fix that is the tab and its transcript, not a field on a card.
 
 ## Workers
@@ -163,11 +163,11 @@ never a surprise.
 
 An audit is a worker in the same worktree running the review skills already
 installed, scoped to architecture, duplicated mechanisms, memory, and security.
-Findings go in the log and the card returns to `doing`; clean passes go on.
+Findings go in the log and the card returns to `active`; clean passes go on.
 Audit workers need skills, so they cannot run in safe mode.
 
-`merging` is serialized, one card at a time: rebase onto master, build, test,
-merge, remove the worktree. Any step failing sends the card back to `doing`
+`merge` is serialized, one card at a time: rebase onto master, build, test,
+merge, remove the worktree. Any step failing sends the card back to `active`
 with the output logged and the worktree kept.
 
 Findings accumulate per-cwd, and a refactor sweep reads them. Incremental work
@@ -195,7 +195,7 @@ renderer until the list actually annoys someone.
     ● telegram menus lose the cancel row  bug · 3h
     ● worktree cleanup after approve      waiting on quota · 14:20
 
-  doing
+  active
   → ⣾ kanban store and /card capture      tab 2 · 4m
 
   review
@@ -233,7 +233,7 @@ There is no REPL inside a card. Opening the worker calls `workspace_show()` and
 puts you in its actual tab — full transcript, full prompt, type whatever you
 want at it — and the left arrow brings you back. Feedback from the board is for
 when you would rather not leave: a line, logged, sent with `workspace_send()`,
-card back to `doing`.
+card back to `active`.
 
 Configuration lives on the board too, behind `c`, rather than being scattered
 into settings: worker cap, usage ceiling and reset hold, audit thresholds,

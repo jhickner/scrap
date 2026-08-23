@@ -17,10 +17,10 @@ enum board_col {
     BOARD_NEW,
     BOARD_UNCLEAR,
     BOARD_BACKLOG,
-    BOARD_DOING,
+    BOARD_DOING,      /* `active`: a worker has it */
     BOARD_REVIEW,
     BOARD_AUDIT,
-    BOARD_MERGING,
+    BOARD_MERGING,    /* `merge`: queued to land */
     BOARD_DONE,
     BOARD_COLS,
 };

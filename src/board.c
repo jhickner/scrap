@@ -14,7 +14,17 @@
 #define BOARD_PATH_MAX  4300
 
 static const char *const COL_NAMES[BOARD_COLS] = {
-    "new", "unclear", "backlog", "doing", "review", "audit", "merging", "done",
+    "new", "unclear", "backlog", "active", "review", "audit", "merge", "done",
+};
+
+// What those columns were called before. A board written by an older build
+// still reads, rather than every card in it landing back in `new`.
+static const struct {
+    const char    *was;
+    enum board_col is;
+} COL_WAS[] = {
+    {"doing", BOARD_DOING},
+    {"merging", BOARD_MERGING},
 };
 
 const char *board_col_name(enum board_col col)
@@ -26,10 +36,14 @@ const char *board_col_name(enum board_col col)
 
 enum board_col board_col_from_name(const char *name)
 {
-    if (name)
+    if (name) {
         for (int i = 0; i < BOARD_COLS; i++)
             if (!strcmp(name, COL_NAMES[i]))
                 return (enum board_col)i;
+        for (size_t i = 0; i < sizeof COL_WAS / sizeof *COL_WAS; i++)
+            if (!strcmp(name, COL_WAS[i].was))
+                return COL_WAS[i].is;
+    }
     return BOARD_NEW;
 }
 
