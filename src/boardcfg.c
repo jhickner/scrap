@@ -282,7 +282,7 @@ static void defaults(struct board_cfg *c)
 
     static const enum board_tier WHO_TIERS[BOARD_WHO] = {
         [BOARD_WHO_TRIAGE] = BOARD_TIER_LOW,
-        [BOARD_WHO_WORKER] = BOARD_TIER_HIGH,
+        [BOARD_WHO_WORKER] = BOARD_TIER_MED,
         [BOARD_WHO_AUDIT]  = BOARD_TIER_HIGH,
         [BOARD_WHO_SWEEP]  = BOARD_TIER_MED,
         [BOARD_WHO_MERGE]  = BOARD_TIER_MED,
