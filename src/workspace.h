@@ -50,6 +50,16 @@ int  workspace_close(int index);
 int  workspace_send(int index, const char *line, const char *shown);
 int  workspace_queued(int index);
 
+// One of those lines, in the order they will be sent, for a caller that shows
+// what is waiting. `i` runs to workspace_queued(index) - 1. What comes back is
+// what the sticky prompt would say it is, not always the line itself.
+const char *workspace_pending_at(int index, int i);
+
+// Takes the last of them back off the queue, for a prompt putting it back in
+// the editor to be fixed. What comes back is what was typed, and the caller
+// frees it; NULL when nothing is waiting.
+char *workspace_unqueue(int index);
+
 // Waits for a tab's turn to end, for a caller that has to run one of its own
 // on this thread. Its output goes to its own screen, as ever.
 void workspace_settle(struct session *s);

@@ -51,6 +51,10 @@ struct prompt {
     char       **queued;
     int          queued_count;
     int          queued_cap;
+    int        (*q_count)(void *ud);
+    const char *(*q_at)(void *ud, int i);
+    char      *(*q_take)(void *ud);
+    void        *q_ud;
     char        *file_root;
     char      *(*external)(void *ud);
     void        *external_ud;
@@ -243,25 +247,52 @@ int prompt_busy(struct prompt *p)
     return p && p->idle_busy && p->idle_busy(p->idle_ud);
 }
 
+void prompt_set_queued_source(struct prompt *p, int (*count)(void *ud),
+                              const char *(*at)(void *ud, int i),
+                              char *(*take_last)(void *ud), void *ud)
+{
+    if (!p)
+        return;
+    p->q_count = count;
+    p->q_at = at;
+    p->q_take = take_last;
+    p->q_ud = ud;
+}
+
+// The tab's waiting lines, then the prompt's own.
+static int queued_total(struct prompt *p)
+{
+    return (p->q_count ? p->q_count(p->q_ud) : 0) + p->queued_count;
+}
+
+static const char *queued_line(struct prompt *p, int i)
+{
+    int theirs = p->q_count ? p->q_count(p->q_ud) : 0;
+    return i < theirs ? p->q_at(p->q_ud, i) : p->queued[i - theirs];
+}
+
 int prompt_queued_rows(struct prompt *p, int cols)
 {
-    if (!p || p->queued_count == 0)
+    int n = p ? queued_total(p) : 0;
+    if (n == 0)
         return 0;
     size_t budget = queued_budget(cols);
-    int rows = p->queued_count - 1;      /* the blank between each pair */
-    for (int i = 0; i < p->queued_count; i++)
-        rows += painted_rows(p->queued[i], budget, QUEUED_LINES, NULL);
+    int rows = n - 1;                    /* the blank between each pair */
+    for (int i = 0; i < n; i++)
+        rows += painted_rows(queued_line(p, i), budget, QUEUED_LINES, NULL);
     return rows;
 }
 
 void prompt_paint_queued(struct prompt *p, int room)
 {
-    if (!p || p->queued_count == 0)
+    int n = p ? queued_total(p) : 0;
+    if (n == 0)
         return;
     size_t budget = queued_budget(ui_columns());
     int used = 0;
-    for (int i = 0; i < p->queued_count; i++) {
-        int need = painted_rows(p->queued[i], budget, QUEUED_LINES, NULL);
+    for (int i = 0; i < n; i++) {
+        const char *line = queued_line(p, i);
+        int need = painted_rows(line, budget, QUEUED_LINES, NULL);
         if (i)
             need++;                      /* the blank above this one */
         if (used + need > room)
@@ -269,7 +300,7 @@ void prompt_paint_queued(struct prompt *p, int room)
         used += need;
         if (i)
             ui_put("\n");
-        paint_bars(p->queued[i], budget, UI_DIM, QUEUED_LINES, NULL);
+        paint_bars(line, budget, UI_DIM, QUEUED_LINES, NULL);
     }
 }
 
@@ -762,6 +793,8 @@ static int overlay_open(const struct prompt *p)
     return p->repl.dropdown_open || p->repl.searching;
 }
 
+static int recall_queued(struct prompt *p);
+
 static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
 {
     switch (ev->key) {
@@ -914,6 +947,10 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             p->switcher(p->switcher_ud);
             return KEY_OK;
         }
+
+        if (ev->key == TK_UP && p->repl.len == 0 && !overlay_open(p) &&
+            recall_queued(p))
+            return KEY_OK;
 
         static const ReplKey MAP[] = {
             [TK_NEWLINE] = REPL_KEY_NEWLINE,   [TK_BACKSPACE] = REPL_KEY_BACKSPACE,
@@ -1194,15 +1231,20 @@ char *prompt_take_queued(struct prompt *p)
     return line;
 }
 
+// Up with nothing typed takes the last waiting line back into the editor: the
+// one you meant to fix, not the one before it in history. The prompt's own
+// come off first — they are the newer ones, drawn under the tab's.
 static int recall_queued(struct prompt *p)
 {
-    if (p->queued_count == 0)
-        return 0;
     const char *live = repl_line(&p->repl);
     if (live && *live)
         return 0;
 
-    char *line = p->queued[--p->queued_count];
+    char *line = p->queued_count ? p->queued[--p->queued_count]
+               : p->q_take       ? p->q_take(p->q_ud)
+                                 : NULL;
+    if (!line)
+        return 0;
     p->frame_ok = 0;
     repl_reset(&p->repl);
     repl_insert_text(&p->repl, line);

@@ -334,6 +334,26 @@ static void turn_done(struct session *s)
     cmd_run_deferred(s);
 }
 
+// What is waiting behind the turn in flight: submitted lines wait at the tab
+// they were sent to, not at the prompt.
+static int tab_queued(void *ud)
+{
+    (void)ud;
+    return workspace_queued(workspace_index());
+}
+
+static const char *tab_queued_at(void *ud, int i)
+{
+    (void)ud;
+    return workspace_pending_at(workspace_index(), i);
+}
+
+static char *tab_unqueue(void *ud)
+{
+    (void)ud;
+    return workspace_unqueue(workspace_index());
+}
+
 static int live_command(void *ud, const char *line)
 {
     (void)ud;
@@ -564,6 +584,7 @@ int main(int argc, char **argv)
     chrome_bind(prompt);
     chrome_modal_interrupt(handoff_wanted);
     prompt_set_live_command(prompt, live_command, NULL);
+    prompt_set_queued_source(prompt, tab_queued, tab_queued_at, tab_unqueue, NULL);
     prompt_set_echo_filter(prompt, echo_filter, NULL);
     prompt_set_idle(prompt, idle_fds, idle_render, idle_busy, NULL);
     prompt_set_restart(prompt, restart_pending, idle_restart, NULL);

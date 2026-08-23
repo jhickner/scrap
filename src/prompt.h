@@ -44,6 +44,17 @@ void prompt_paint_input(struct prompt *p, int rows, int *caret_row, int *caret_c
 
 int  prompt_queued_rows(struct prompt *p, int cols);
 void prompt_paint_queued(struct prompt *p, int room);
+
+// Where the waiting lines come from. The prompt holds the ones it took but
+// could not submit — a chat line that arrived while something was half-typed —
+// but a line submitted behind a running turn waits at the tab it was sent to,
+// which is the window's to report. Both are drawn, the tab's first: those were
+// submitted earlier and go first.
+// `take_last` hands the newest waiting line back for editing and drops it from
+// the queue; the prompt frees it.
+void prompt_set_queued_source(struct prompt *p, int (*count)(void *ud),
+                              const char *(*at)(void *ud, int i),
+                              char *(*take_last)(void *ud), void *ud);
 int  prompt_busy(struct prompt *p);
 
 

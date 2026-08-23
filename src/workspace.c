@@ -1,6 +1,5 @@
 #include "workspace.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -529,6 +528,28 @@ int workspace_send(int index, const char *line, const char *shown)
 int workspace_queued(int index)
 {
     return index >= 0 && index < ntabs ? tabs[index].npending : 0;
+}
+
+const char *workspace_pending_at(int index, int i)
+{
+    if (index < 0 || index >= ntabs || i < 0 || i >= tabs[index].npending)
+        return NULL;
+    const struct pending *p = &tabs[index].pending[i];
+    return p->shown ? p->shown : p->line;
+}
+
+char *workspace_unqueue(int index)
+{
+    if (index < 0 || index >= ntabs || !tabs[index].npending)
+        return NULL;
+    struct pending *p = &tabs[index].pending[--tabs[index].npending];
+    // A bash escape was sent as its output and shown as the command; the
+    // command is what was typed, so the command is what goes back.
+    char *back = p->shown ? p->shown : p->line;
+    if (p->shown)
+        free(p->line);
+    p->line = p->shown = NULL;
+    return back;
 }
 
 const char *workspace_status(const struct session *s)
