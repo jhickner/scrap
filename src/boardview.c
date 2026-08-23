@@ -42,7 +42,7 @@
 #define KEY_SERVE    'b'
 #define KEY_ALL      '*'
 
-#define BOARD_KEYS "ndtsgarxflcb*"
+#define BOARD_KEYS "ndtsgarxflcb*\t"
 
 #define BOARD_RECENT 3
 

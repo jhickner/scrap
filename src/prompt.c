@@ -64,6 +64,8 @@ struct prompt {
     void        *takeover_ud;
     void       (*switcher)(void *ud);
     void        *switcher_ud;
+    void       (*board)(void *ud);
+    void        *board_ud;
     void       (*split)(void *ud, int quiet);
     void        *split_ud;
     void       (*another)(void *ud);
@@ -763,6 +765,10 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             viewport_scroll_end();
             return KEY_SUBMIT;
         }
+        if (!live && p->board && p->repl.len == 0 && !overlay_open(p)) {
+            chrome_clear();
+            p->board(p->board_ud);
+        }
         return KEY_OK;
 
     case TK_ESCAPE:
@@ -912,6 +918,12 @@ void prompt_set_switcher(struct prompt *p, void (*fn)(void *ud), void *ud)
 {
     p->switcher = fn;
     p->switcher_ud = ud;
+}
+
+void prompt_set_board(struct prompt *p, void (*fn)(void *ud), void *ud)
+{
+    p->board = fn;
+    p->board_ud = ud;
 }
 
 void prompt_set_another(struct prompt *p, void (*fn)(void *ud), void *ud)

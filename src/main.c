@@ -200,6 +200,17 @@ static void replay(void *ud)      { (void)ud; session_replay(workspace_current()
 static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
 static void switcher(void *ud)    { (void)ud; sessionswitch_run(); }
 
+static void board(void *ud)
+{
+    (void)ud;
+    struct session *here = workspace_current();
+    if (!here)
+        return;
+    int tab = boardview_run(session_cwd(here));
+    if (tab >= 0)
+        workspace_show(tab);
+}
+
 static void another(void *ud)
 {
     (void)ud;
@@ -598,6 +609,7 @@ int main(int argc, char **argv)
     prompt_set_switcher(prompt, switcher, NULL);
     prompt_set_split(prompt, splitter, NULL);
     prompt_set_another(prompt, another, NULL);
+    prompt_set_board(prompt, board, NULL);
     prompt_set_cancel(prompt, cancel_turn, NULL);
     workspace_on_finish(turn_done);
 

@@ -61,6 +61,8 @@ void prompt_set_cancel(struct prompt *p, int (*fn)(void *ud), void *ud);
 
 void prompt_set_switcher(struct prompt *p, void (*fn)(void *ud), void *ud);
 
+void prompt_set_board(struct prompt *p, void (*fn)(void *ud), void *ud);
+
 void prompt_set_another(struct prompt *p, void (*fn)(void *ud), void *ud);
 
 void prompt_set_split(struct prompt *p, void (*fn)(void *ud, int quiet), void *ud);

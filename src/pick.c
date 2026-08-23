@@ -611,6 +611,12 @@ static int run(const char *title, const struct pick_item *items, int count,
             if (pressed && shortcuts && strchr(shortcuts, PICK_KEY_RIGHT))
                 *pressed = PICK_KEY_RIGHT;
             goto done;
+        case TK_TAB:
+            if (!shortcuts || !strchr(shortcuts, '\t'))
+                break;
+            if (pressed)
+                *pressed = '\t';
+            goto done;
         case TK_NEWLINE:
 
             if (!shortcuts || !strchr(shortcuts, '\n'))
