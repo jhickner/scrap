@@ -47,6 +47,26 @@ enum board_col board_col_from_name(const char *name)
     return BOARD_NEW;
 }
 
+static time_t stamped(const struct board_card *c)
+{
+    return c->updated ? c->updated : c->created;
+}
+
+int board_cmp_col(const struct board_card *a, const struct board_card *b)
+{
+    if (a->col == BOARD_DONE && b->col == BOARD_DONE) {
+        time_t ta = stamped(a), tb = stamped(b);
+        if (ta != tb)
+            return ta < tb ? 1 : -1;
+        return strcmp(a->id, b->id);
+    }
+    if (a->priority != b->priority)
+        return b->priority - a->priority;
+    if (a->created != b->created)
+        return a->created < b->created ? -1 : 1;
+    return strcmp(a->id, b->id);
+}
+
 const char *board_path(void)
 {
     static char path[4200];
@@ -564,7 +584,7 @@ int board_archive(int days)
     for (int i = 0; i < n; i++) {
         if (v[i].col != BOARD_DONE)
             continue;
-        time_t when = v[i].updated ? v[i].updated : v[i].created;
+        time_t when = stamped(&v[i]);
         if (when > cutoff)
             continue;
 

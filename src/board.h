@@ -56,6 +56,8 @@ struct board_card {
     int                log_n;
 };
 
+int board_cmp_col(const struct board_card *a, const struct board_card *b);
+
 const char *board_path(void);
 
 int  board_load(struct board_card **out);

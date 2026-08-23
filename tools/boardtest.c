@@ -653,6 +653,32 @@ static void test_sweep_files_against_the_repo(void)
            "and not against the worktree it was found in");
 }
 
+static void test_done_lists_newest_first(void)
+{
+    struct board_card older = {0}, newer = {0}, high = {0}, low = {0};
+
+    older.col = newer.col = BOARD_DONE;
+    snprintf(older.id, sizeof older.id, "old");
+    snprintf(newer.id, sizeof newer.id, "new");
+    older.created = 100;
+    newer.created = 200;
+    older.updated = 1000;
+    newer.updated = 2000;
+    older.priority = 9;
+    newer.priority = 0;
+    expect(board_cmp_col(&newer, &older) < 0, "newer done card sorts first");
+    expect(board_cmp_col(&older, &newer) > 0, "older done card sorts second");
+
+    high.col = low.col = BOARD_BACKLOG;
+    snprintf(high.id, sizeof high.id, "hi");
+    snprintf(low.id, sizeof low.id, "lo");
+    high.priority = 2;
+    low.priority = 1;
+    high.created = 300;
+    low.created = 100;
+    expect(board_cmp_col(&high, &low) < 0, "higher priority still leads the backlog");
+}
+
 static void test_revision_tracks_writes(void)
 {
     unsigned long before = board_revision();
@@ -698,6 +724,7 @@ int main(void)
     test_kinds();
     test_archive();
     test_empty_and_missing();
+    test_done_lists_newest_first();
     test_revision_tracks_writes();
 
     cleanup();

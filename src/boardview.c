@@ -268,14 +268,10 @@ static const char *step_of(const char *id)
     return NULL;
 }
 
-static int by_priority(const void *a, const void *b)
+static int by_col(const void *a, const void *b)
 {
     const struct board_card *const *x = a, *const *y = b;
-    if ((*x)->priority != (*y)->priority)
-        return (*y)->priority - (*x)->priority;
-    if ((*x)->created != (*y)->created)
-        return (*x)->created < (*y)->created ? -1 : 1;
-    return strcmp((*x)->id, (*y)->id);
+    return board_cmp_col(*x, *y);
 }
 
 static int build_board(struct vlist *l, struct board_card *cards, int n,
@@ -293,7 +289,7 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
                 in[k++] = &cards[i];
         if (!k)
             continue;
-        qsort(in, (size_t)k, sizeof *in, by_priority);
+        qsort(in, (size_t)k, sizeof *in, by_col);
 
         shown += k;
         row_heading(l, board_col_name((enum board_col)col));
