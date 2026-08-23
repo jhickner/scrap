@@ -74,17 +74,17 @@ static char *script_for(const struct board_card *c, const char *root,
         "echo '== rebase onto %s'\n"
         "git fetch . %s:%s >/dev/null 2>&1 || true\n"
         "git rebase %s || { git rebase --abort >/dev/null 2>&1; "
-        "echo 'the rebase did not go through'; exit 1; }\n",
+        "echo 'rebase failed'; exit 1; }\n",
         base, base, base, base);
 
     if (verify)
         at += snprintf(out + at, need - (size_t)at,
             "echo '== check'\n"
-            "%s || { echo 'the check did not pass'; exit 1; }\n", verify);
+            "%s || { echo 'check failed'; exit 1; }\n", verify);
 
     at += snprintf(out + at, need - (size_t)at,
         "echo '== merge'\n"
-        "git -C %s merge --ff-only %s || { echo 'the merge did not go through'; exit 1; }\n"
+        "git -C %s merge --ff-only %s || { echo 'merge failed'; exit 1; }\n"
         "echo '== tidy'\n"
         "git -C %s worktree remove --force %s >/dev/null 2>&1\n"
         "git -C %s branch -d %s >/dev/null 2>&1\n"
@@ -118,7 +118,7 @@ int boardmerge_pump(void)
     if (!gitcmd_root(next->cwd, root, sizeof root) ||
         !base_branch(root, base, sizeof base)) {
         board_move(next->id, BOARD_DOING, "board",
-                   "could not tell what to land it on");
+                   "no base branch");
         board_free(cards, n);
         return 1;
     }

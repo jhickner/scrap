@@ -251,7 +251,7 @@ int boardsweep_take(const char *key, const char *reply)
 
         char id[BOARD_ID_MAX];
         if (board_add(text, cwd, id))
-            board_note(id, "sweep", "found while looking over the repo");
+            board_note(id, "sweep", "raised by a sweep");
     }
     cJSON_Delete(o);
     return 1;

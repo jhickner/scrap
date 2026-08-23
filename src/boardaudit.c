@@ -160,7 +160,7 @@ int boardaudit_pump(void)
         if (!started && !cards[i].worktree[0]) {
             board_move(cards[i].id,
                        boardflow_from(cards[i].kind, BOARD_STEP_MERGE, 0),
-                       "board", "nothing to audit");
+                       "board", "no diff to audit");
             started = 1;
         }
     }
@@ -218,7 +218,7 @@ int boardaudit_take(const char *key, const char *reply)
     const char *id = key + mark;
     cJSON      *o = replyjson_parse(reply);
     if (!o) {
-        board_note(id, "audit", "the audit did not answer; going on without it");
+        board_note(id, "audit", "no verdict; not held");
         board_move(id, next_after_audit(id), "audit", NULL);
         return 1;
     }
@@ -240,7 +240,7 @@ int boardaudit_take(const char *key, const char *reply)
     cJSON_Delete(o);
 
     if (passed) {
-        board_note(id, "audit", "nothing worth stopping for");
+        board_note(id, "audit", "no findings");
         board_move(id, next_after_audit(id), "audit", NULL);
     } else {
         board_move(id, BOARD_DOING, "audit", NULL);

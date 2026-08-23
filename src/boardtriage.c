@@ -113,7 +113,7 @@ static int apply(const char *id, const cJSON *o)
     if (unsure) {
         edited.col = BOARD_UNCLEAR;
         snprintf(said, sizeof said, "%s",
-                 *question ? question : "could not tell what this card is");
+                 *question ? question : "could not classify it");
     } else {
         snprintf(edited.kind, sizeof edited.kind, "%s", kind);
 

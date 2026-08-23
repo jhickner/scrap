@@ -574,7 +574,7 @@ static void card_form(const struct board_card *c)
     board_free(cards, n);
 
     if (ok && answered) {
-        board_note(c->id, "you", "answered, and sent back to triage");
+        board_note(c->id, "you", "spec edited; re-triaging");
         struct board_card *again = NULL;
         int                m = board_load(&again);
         struct board_card *fresh = board_find(again, m, c->id);

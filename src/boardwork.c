@@ -377,11 +377,11 @@ int boardwork_start(const struct board_card *c, char *why, int size)
         int spent = 0;
         quota_get(wanted, &spent, NULL);
         char said[256];
-        snprintf(said, sizeof said, "%s was at %d%%, so %s took it", wanted,
+        snprintf(said, sizeof said, "%s at %d%%; started on %s", wanted,
                  spent, backend);
         board_note(c->id, "board", said);
     } else {
-        board_note(c->id, "board", "a worker took it");
+        board_note(c->id, "board", "started");
     }
     return 1;
 }
@@ -439,7 +439,7 @@ void boardwork_finished(struct session *s)
                    reply && *reply ? reply : "finished without saying anything");
     }
     if (empty)
-        board_note(w->id, "board", "nothing was committed, so it stays here");
+        board_note(w->id, "board", "no commit on the branch");
 }
 
 int boardwork_pump(void)
@@ -505,7 +505,7 @@ int boardwork_poll(void)
         struct board_card *c = board_find(cards, n, workers[i].id);
         if (c && c->col == BOARD_DOING) {
             board_move(workers[i].id, BOARD_BACKLOG, "board",
-                       "the worker went away before it finished");
+                       "worker session ended");
             changed = 1;
         }
         board_free(cards, n);
@@ -519,7 +519,7 @@ int boardwork_poll(void)
             continue;
         if (!boardwork_release(&cards[i]))
             continue;
-        board_note(cards[i].id, "board", "worktree dropped; it starts again clean");
+        board_note(cards[i].id, "board", "worktree removed");
         changed = 1;
     }
     board_free(cards, n);
