@@ -121,6 +121,8 @@ static void step(struct view *v, int dir)
 static int visible_cap(const struct view *v)
 {
     int rows = tty_rows() - 3 - chrome_gap();
+    if (v->live && v->live->hint && *v->live->hint)
+        rows -= 2;
     if (v->heading) {
         int breaks = 0;
         for (int i = 0; i < v->count; i++)
@@ -343,6 +345,16 @@ static void paint(void *ud)
         ui_esc(ui_style(UI_RESET));
         ui_put("\n");
         rows++;
+    }
+
+    if (v->live && v->live->hint && *v->live->hint) {
+        ui_put("\n");
+        ui_esc(ui_style(UI_DIM));
+        ui_put("    ");
+        size_t budget = columns > 6 ? (size_t)(columns - 6) : 1;
+        ui_putn(v->live->hint, ui_fit_bytes(v->live->hint, budget));
+        ui_esc(ui_style(UI_RESET));
+        rows += 2;
     }
 
     (void)rows;

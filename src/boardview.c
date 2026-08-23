@@ -1,3 +1,4 @@
+#include "app.h"
 #include "boardview.h"
 
 #include <stdarg.h>
@@ -9,6 +10,7 @@
 #include "ask.h"
 #include "board.h"
 #include "confirm.h"
+#include "form.h"
 #include "pick.h"
 #include "text.h"
 #include "ui.h"
@@ -17,13 +19,14 @@
 // The list holds letters for itself, so searching is behind '/' and a typed
 // letter means the key it stands for.
 #define KEY_NEW    'n'
-#define KEY_MOVE   'm'
-#define KEY_EDIT   'e'
-#define KEY_REPO   'w'
 #define KEY_DELETE 'd'
 #define KEY_ALL    '*'
 
-#define BOARD_KEYS "nmewd*"
+#define BOARD_KEYS "nd*"
+
+// Letters are shortcuts here rather than a search, so without a line saying
+// so the list gives no sign it has any keys at all.
+#define BOARD_HINT "enter edit  ·  n new  ·  d delete  ·  * all repos  ·  / search"
 
 // How wide a card's title may grow before the meta beside it stops lining up.
 #define TITLE_SHARE(cols) ((cols) * 3 / 5)
@@ -82,17 +85,6 @@ static void row_heading(struct vlist *l, const char *text)
     }
 }
 
-// Indented under the heading it sits below, to the depth pick draws its own
-// rows at, so content and choices line up as one column.
-static void row_text(struct vlist *l, const char *text)
-{
-    struct vrow *r = row_add(l);
-    if (r) {
-        r->label = dsprintf("  %s", text);
-        r->heading = PICK_TEXT;
-    }
-}
-
 // A row the highlight passes over, which is not the same as a row set apart:
 // PICK_APART rows are ordinary choices that merely want a gap above them.
 static int is_text(const struct vrow *r)
@@ -113,7 +105,7 @@ static void vlist_free(struct vlist *l)
 // Runs a built list through the picker, which wants its columns as separate
 // arrays. Returns the row that was chosen, or -1.
 static int vlist_run(const char *title, struct vlist *l, int initial,
-                     const char *shortcuts, int *pressed)
+                     const char *hint, const char *shortcuts, int *pressed)
 {
     struct pick_item *items = calloc((size_t)l->n, sizeof *items);
     unsigned char    *heading = calloc((size_t)l->n, 1);
@@ -139,6 +131,7 @@ static int vlist_run(const char *title, struct vlist *l, int initial,
         .heading = heading,
         .mark = mark,
         .mark_role = role,
+        .hint = hint,
     };
     int at = pick_run_live(title, items, l->n, initial, &live, PICK_SEARCH_SLASH,
                            shortcuts, pressed);
@@ -369,46 +362,6 @@ static void do_new(const char *cwd, char *sel_id)
     free(text);
 }
 
-static void do_move(const struct board_card *c)
-{
-    struct pick_item cols[BOARD_COLS];
-    for (int i = 0; i < BOARD_COLS; i++) {
-        cols[i].label = board_col_name((enum board_col)i);
-        cols[i].detail = NULL;
-    }
-    int at = pick_run("move to", cols, BOARD_COLS, (int)c->col);
-    if (at >= 0 && at != (int)c->col)
-        board_move(c->id, (enum board_col)at, "you", NULL);
-}
-
-static void do_edit(const struct board_card *c)
-{
-    char *title = ask_run("title", c->title);
-    if (!title)
-        return;
-    if (*title) {
-        struct board_card edited = *c;
-        snprintf(edited.title, sizeof edited.title, "%s", title);
-        board_update(&edited);
-    }
-    free(title);
-}
-
-static void do_repo(const struct board_card *c)
-{
-    char *path = ask_run("repo", c->cwd);
-    if (!path)
-        return;
-    char *full = path_expand_home(path);
-    if (full && *full) {
-        struct board_card edited = *c;
-        snprintf(edited.cwd, sizeof edited.cwd, "%s", full);
-        board_update(&edited);
-    }
-    free(full);
-    free(path);
-}
-
 static int do_delete(const struct board_card *c)
 {
     char question[280];
@@ -418,145 +371,156 @@ static int do_delete(const struct board_card *c)
     return board_remove(c->id);
 }
 
-/* ---- the detail screen ------------------------------------------------ */
+/* ---- the card, as a form --------------------------------------------- */
 
-enum {
-    ACT_NONE,
-    ACT_MOVE,
-    ACT_EDIT,
-    ACT_REPO,
-    ACT_DELETE,
+// What triage may call a card. Empty leads, because a card that has not been
+// sorted yet has no kind and saying so is not the same as guessing one.
+static const char *const KINDS[] = {
+    "", "todo", "data", "reference", "feature", "bug", "chore",
 };
 
-static void row_action(struct vlist *l, int action, const char *label, const char *key)
+static const char *const PRIORITIES[] = {"0", "1", "2", "3"};
+
+#define NOTES_MAX 48
+
+static void note_line(const char **notes, int *n, char **owned, const char *text)
 {
-    struct vrow *r = row_add(l);
-    if (!r)
+    if (*n >= NOTES_MAX)
         return;
-    r->label = dsprintf("%s", label);
-    r->detail = dsprintf("%s", key);
-    r->action = action;
-    // The first of them takes the blank line that sets the actions off from
-    // whatever the card had to say.
-    if (l->n == 1 || l->v[l->n - 2].action == ACT_NONE)
-        r->heading = PICK_APART;
+    char *copy = dsprintf("%s", text);
+    owned[*n] = copy;
+    notes[*n] = copy ? copy : "";
+    (*n)++;
 }
 
-// A paragraph as rows, so it reads as one block rather than a truncated line.
-static void row_paragraph(struct vlist *l, const char *text)
+// The parts of a card that are read rather than edited: what it says, and
+// what has happened to it.
+// A spec of one line is edited here like anything else. One of several is
+// left to be read: flattening it into a field would lose the shape of it.
+static int spec_is_field(const struct board_card *c)
 {
-    size_t budget = (size_t)ui_columns() - 8;
-    if ((int)budget < 8)
-        budget = 8;
-
-    const char *p = text;
-    size_t      left = strlen(text);
-    int         rows = 0;
-
-    while (left && rows < 40) {
-        size_t skip = 0;
-        size_t take = ui_wrap_row(p, left, budget, &skip, NULL);
-        if (!take && !skip)
-            break;
-
-        char line[1024];
-        size_t n = take < sizeof line - 1 ? take : sizeof line - 1;
-        memcpy(line, p, n);
-        line[n] = '\0';
-        row_text(l, line);
-        rows++;
-
-        p += take + skip;
-        left -= take + skip;
-    }
+    return !c->body || !strchr(c->body, '\n');
 }
 
-static void build_detail(struct vlist *l, const struct board_card *c)
+static int build_notes(const struct board_card *c, const char **notes, char **owned)
 {
-    if (c->body && *c->body && strcmp(c->body, c->title)) {
-        row_heading(l, "spec");
-        row_paragraph(l, c->body);
-    }
+    int n = 0;
 
-    row_heading(l, "where");
-    char where[512];
-    path_home_relative(c->cwd, where, sizeof where);
-    row_text(l, where[0] ? where : "(nowhere yet)");
-
-    if (c->log_n) {
-        row_heading(l, "log");
-        for (int i = 0; i < c->log_n; i++) {
-            struct tm when;
-            char      stamp[16] = "     ";
-            if (c->log[i].ts) {
-                localtime_r(&c->log[i].ts, &when);
-                strftime(stamp, sizeof stamp, "%H:%M", &when);
-            }
+    if (!spec_is_field(c) && c->body && *c->body && strcmp(c->body, c->title)) {
+        size_t budget = (size_t)ui_columns() - 6;
+        if ((int)budget < 8)
+            budget = 8;
+        const char *p = c->body;
+        size_t      left = strlen(c->body);
+        while (left && n < NOTES_MAX - 2) {
+            size_t skip = 0;
+            size_t take = ui_wrap_row(p, left, budget, &skip, NULL);
+            if (!take && !skip)
+                break;
             char line[1024];
-            snprintf(line, sizeof line, "%s  %-6s %s", stamp, c->log[i].who,
-                     c->log[i].text ? c->log[i].text : "");
-            row_text(l, line);
+            size_t k = take < sizeof line - 1 ? take : sizeof line - 1;
+            memcpy(line, p, k);
+            line[k] = '\0';
+            note_line(notes, &n, owned, line);
+            p += take + skip;
+            left -= take + skip;
         }
     }
 
-    row_action(l, ACT_MOVE, "move to another column", "m");
-    row_action(l, ACT_EDIT, "edit the title", "e");
-    row_action(l, ACT_REPO, "set the repo", "w");
-    row_action(l, ACT_DELETE, "delete", "d");
+    for (int i = 0; i < c->log_n && n < NOTES_MAX; i++) {
+        if (i == 0)
+            note_line(notes, &n, owned, "");
+        struct tm when;
+        char      stamp[16] = "     ";
+        if (c->log[i].ts) {
+            localtime_r(&c->log[i].ts, &when);
+            strftime(stamp, sizeof stamp, "%H:%M", &when);
+        }
+        char line[1024];
+        snprintf(line, sizeof line, "%s  %-6s %s", stamp, c->log[i].who,
+                 c->log[i].text ? c->log[i].text : "");
+        note_line(notes, &n, owned, line);
+    }
+    return n;
 }
 
-// Returns zero when the card is gone, so the board does not try to put the
-// highlight back on it.
-static int detail_run(const char *id)
+// Everything a card can be changed to, on one screen, tab between them.
+static void card_form(const struct board_card *c)
 {
-    for (;;) {
-        struct board_card *cards = NULL;
-        int                n = board_load(&cards);
-        struct board_card *c = board_find(cards, n, id);
-        if (!c) {
-            board_free(cards, n);
-            return 0;
-        }
+    const char *cols[BOARD_COLS];
+    for (int i = 0; i < BOARD_COLS; i++)
+        cols[i] = board_col_name((enum board_col)i);
 
-        struct vlist l = {0};
-        build_detail(&l, c);
-        align(&l);
+    char title[BOARD_TITLE_MAX];
+    char spec[1024];
+    char kind[16];
+    char column[16];
+    char where[4096];
+    char priority[8];
 
-        char title[600];
-        snprintf(title, sizeof title, "%s · %s · %s", c->id,
-                 c->kind[0] ? c->kind : "unsorted", board_col_name(c->col));
+    snprintf(title, sizeof title, "%s", c->title);
+    snprintf(spec, sizeof spec, "%s", c->body ? c->body : "");
+    snprintf(kind, sizeof kind, "%s", c->kind);
+    snprintf(column, sizeof column, "%s", board_col_name(c->col));
+    path_home_relative(c->cwd, where, sizeof where);
+    snprintf(priority, sizeof priority, "%d", c->priority);
 
-        int pressed = 0;
-        int at = vlist_run(title, &l, row_of(&l, NULL), BOARD_KEYS, &pressed);
+    struct form_field fields[6];
+    int               fields_n = 0;
 
-        int action = ACT_NONE;
-        if (at < 0) {
-            vlist_free(&l);
-            board_free(cards, n);
-            return 1;
-        }
-        switch (pressed) {
-        case KEY_MOVE:   action = ACT_MOVE; break;
-        case KEY_EDIT:   action = ACT_EDIT; break;
-        case KEY_REPO:   action = ACT_REPO; break;
-        case KEY_DELETE: action = ACT_DELETE; break;
-        case 0:          action = l.v[at].action; break;
-        default:         break;
-        }
-        vlist_free(&l);
+    fields[fields_n++] = (struct form_field){"title", FORM_TEXT, title,
+                                             sizeof title, NULL, 0};
+    if (spec_is_field(c))
+        fields[fields_n++] = (struct form_field){"spec", FORM_TEXT, spec,
+                                                 sizeof spec, NULL, 0};
+    fields[fields_n++] = (struct form_field){"kind", FORM_CHOICE, kind,
+                                             sizeof kind, KINDS, COUNT(KINDS)};
+    fields[fields_n++] = (struct form_field){"column", FORM_CHOICE, column,
+                                             sizeof column, cols, BOARD_COLS};
+    fields[fields_n++] = (struct form_field){"repo", FORM_TEXT, where,
+                                             sizeof where, NULL, 0};
+    fields[fields_n++] = (struct form_field){"priority", FORM_CHOICE, priority,
+                                             sizeof priority, PRIORITIES,
+                                             COUNT(PRIORITIES)};
 
-        int gone = 0;
-        switch (action) {
-        case ACT_MOVE:   do_move(c); break;
-        case ACT_EDIT:   do_edit(c); break;
-        case ACT_REPO:   do_repo(c); break;
-        case ACT_DELETE: gone = do_delete(c); break;
-        default:         break;
-        }
-        board_free(cards, n);
-        if (gone)
-            return 0;
-    }
+    const char *notes[NOTES_MAX] = {0};
+    char       *owned[NOTES_MAX] = {0};
+    int         notes_n = build_notes(c, notes, owned);
+
+    char heading[600];
+    snprintf(heading, sizeof heading, "%s · %s", c->id,
+             c->kind[0] ? c->kind : "unsorted");
+
+    struct form f = {
+        .title = heading,
+        .notes = notes,
+        .notes_n = notes_n,
+        .fields = fields,
+        .fields_n = fields_n,
+    };
+    int kept = form_run(&f);
+
+    for (int i = 0; i < notes_n; i++)
+        free(owned[i]);
+    if (!kept)
+        return;
+
+    struct board_card edited = *c;
+    snprintf(edited.title, sizeof edited.title, "%s", title);
+    snprintf(edited.kind, sizeof edited.kind, "%s", kind);
+    // The spec is what a worker is handed, so it is the thing that must not
+    // drift from the title quietly.
+    if (spec_is_field(c))
+        edited.body = spec;
+    edited.col = board_col_from_name(column);
+    edited.priority = atoi(priority);
+
+    char *full = path_expand_home(where);
+    if (full && *full)
+        snprintf(edited.cwd, sizeof edited.cwd, "%s", full);
+    free(full);
+
+    board_update(&edited);
 }
 
 /* ---- the board -------------------------------------------------------- */
@@ -614,7 +578,8 @@ void boardview_run(const char *cwd)
             snprintf(title, sizeof title, "board · %s · %d of %d", where, shown, n);
 
         int pressed = 0;
-        int at = vlist_run(title, &l, row_of(&l, sel_id), BOARD_KEYS, &pressed);
+        int at = vlist_run(title, &l, row_of(&l, sel_id), BOARD_HINT, BOARD_KEYS,
+                           &pressed);
         if (at >= 0)
             snprintf(sel_id, sizeof sel_id, "%s", l.v[at].id);
         vlist_free(&l);
@@ -627,23 +592,11 @@ void boardview_run(const char *cwd)
         struct board_card *c = board_find(cards, n, sel_id);
         switch (pressed) {
         case 0:
-            if (c && !detail_run(c->id))
-                sel_id[0] = '\0';
+            if (c)
+                card_form(c);
             break;
         case KEY_NEW:
             do_new(filter[0] ? filter : here, sel_id);
-            break;
-        case KEY_MOVE:
-            if (c)
-                do_move(c);
-            break;
-        case KEY_EDIT:
-            if (c)
-                do_edit(c);
-            break;
-        case KEY_REPO:
-            if (c)
-                do_repo(c);
             break;
         case KEY_DELETE:
             if (c && do_delete(c))

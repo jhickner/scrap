@@ -47,6 +47,9 @@ struct pick_live {
     const unsigned char *spin;
     const char *const   *mark;
     const unsigned char *mark_role;
+    // A dim line under the list saying what the keys do. Without it a list
+    // whose shortcuts are letters gives no sign that it has any.
+    const char *hint;
     // Called on the spinner's frames. Nonzero means the caller has changed
     // what the rows say, and the list is drawn again.
     int  (*tick)(void *ud);
