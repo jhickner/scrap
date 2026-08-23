@@ -298,7 +298,7 @@ static int worktree_make(const char *root, const char *id, const char *path,
     char qroot[4200], qpath[4200];
     if (!text_shell_quote(root, qroot, sizeof qroot) ||
         !text_shell_quote(path, qpath, sizeof qpath)) {
-        snprintf(why, (size_t)size, "the path does not fit");
+        snprintf(why, (size_t)size, "worktree path too long");
         return 0;
     }
 
@@ -475,7 +475,7 @@ int boardwork_blocked(const struct board_card *c, char *why, int size)
         return 1;
 
     if (boardsweep_is(c)) {
-        snprintf(why, (size_t)size, "a sweep starts itself");
+        snprintf(why, (size_t)size, "a sweep card starts on its own");
         return 1;
     }
 
@@ -484,7 +484,7 @@ int boardwork_blocked(const struct board_card *c, char *why, int size)
         return 1;
     }
     if (slot_of(c->id)) {
-        snprintf(why, (size_t)size, "a worker already has it");
+        snprintf(why, (size_t)size, "already assigned to a worker");
         return 1;
     }
 
@@ -494,7 +494,7 @@ int boardwork_blocked(const struct board_card *c, char *why, int size)
         return 1;
     }
     if (workspace_count() >= WORKSPACE_MAX) {
-        snprintf(why, (size_t)size, "no room for another tab");
+        snprintf(why, (size_t)size, "no free tab");
         return 1;
     }
 
@@ -706,7 +706,7 @@ static int pull_pump(const struct board_card *cards, int n)
         return 1;
 
     snprintf(pull_failed, sizeof pull_failed, "%s", c->id);
-    board_note(c->id, "board", why[0] ? why : "could not start it");
+    board_note(c->id, "board", why[0] ? why : "could not start the card");
     return 1;
 }
 

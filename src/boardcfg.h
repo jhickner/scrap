@@ -90,6 +90,10 @@ struct board_cfg {
 
 const struct board_cfg *boardcfg(void);
 
+void boardcfg_reload(void);
+
+int boardcfg_missing(char *out, size_t size);
+
 struct board_cfg *boardcfg_copy(void);
 void              boardcfg_free(struct board_cfg *c);
 

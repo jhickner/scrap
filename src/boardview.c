@@ -570,13 +570,13 @@ static void do_serve(char *notice, size_t size)
     int waiting = 0;
     int moved = boardwork_serve(&waiting);
 
-    size_t used = (size_t)snprintf(notice, size, "%s is serving", name);
+    size_t used = (size_t)snprintf(notice, size, "serving %s", name);
     if (moved)
         used += (size_t)snprintf(notice + used, size - used,
                                  " · %d worker%s switched", moved,
                                  moved == 1 ? "" : "s");
     if (waiting)
-        snprintf(notice + used, size - used, " · %d after its turn", waiting);
+        snprintf(notice + used, size - used, " · %d after their current card", waiting);
 }
 
 static int do_delete(const struct board_card *c)
@@ -819,6 +819,15 @@ static void close_list(void)
 
 int boardview_run(const char *cwd)
 {
+    boardcfg_reload();
+
+    char why[4400];
+    if (boardcfg_missing(why, sizeof why)) {
+        close_list();
+        note("%s", why);
+        return -1;
+    }
+
     char here[4096];
     snprintf(here, sizeof here, "%s", cwd ? cwd : "");
 
@@ -857,7 +866,7 @@ int boardview_run(const char *cwd)
                 continue;
             }
             close_list();
-            note("the board is empty — /card <text> adds one");
+            note("no cards yet; /card <text> adds one");
             return -1;
         }
 
@@ -949,9 +958,9 @@ int boardview_run(const char *cwd)
                 close_list();
                 const char *step = step_of(c->id);
                 if (step)
-                    note("%s in the background — no tab", step);
+                    note("%s is running without a tab", step);
                 else
-                    note("no worker has that card");
+                    note("no worker on that card");
             }
             break;
         }
@@ -975,7 +984,7 @@ int boardview_run(const char *cwd)
                 boardsweep_reject(c);
             } else if (c && (c->col == BOARD_REVIEW || c->col == BOARD_DOING)) {
                 close_list();
-                char *why = ask_run("why it is going back", NULL);
+                char *why = ask_run("reason for sending it back", NULL);
                 if (why) {
                     boardwork_reject(c, why);
                     free(why);
@@ -985,10 +994,10 @@ int boardview_run(const char *cwd)
         case KEY_FEEDBACK:
             if (c && boardwork_tab(c->id) >= 0) {
                 close_list();
-                char *say = ask_run("what it should do", NULL);
+                char *say = ask_run("feedback for the worker", NULL);
                 if (say) {
                     if (!boardwork_feedback(c, say))
-                        note("the worker did not take it");
+                        note("could not send feedback to the worker");
                     free(say);
                 }
             }
@@ -1005,7 +1014,7 @@ int boardview_run(const char *cwd)
             if (c) {
                 close_list();
                 if (boardlog_path(c->id, path, sizeof path) && !edit_open(path))
-                    note("nothing has happened to this card yet");
+                    note("no log for this card yet");
             }
             break;
         }

@@ -51,65 +51,7 @@ const struct board_backend *boardcfg_backend(const struct board_cfg *c,
     return NULL;
 }
 
-static const char TRIAGE_PROMPT[] =
-    "You are sorting one card on a work board. Read it and answer with JSON only, no prose and no code fence.\n"
-    "\n"
-    "  {\"kind\":\"...\",\"title\":\"...\",\"spec\":\"...\",\"cwd\":\"...\",\"confidence\":0.0,\"question\":\"\"}\n"
-    "\n"
-    "{kinds}"
-    "\n"
-    "title is a short name for the card, under 60 characters.\n"
-    "spec is what the card asks for, in a few sentences. Do not invent\n"
-    "  requirements the card does not imply.\n"
-    "cwd is the absolute path of the repo it belongs to.\n"
-    "confidence is 0.0 to 1.0.\n"
-    "question is the one thing you would have to ask, or \"\".\n"
-    "\n"
-    "Almost every card can be placed. You are deciding two things only: which\n"
-    "kind it is, and which repo it belongs to. You are NOT deciding how the\n"
-    "work should be done.\n"
-    "\n"
-    "A card that says what it wants but not how is a normal card. Missing\n"
-    "detail is not a reason to be unsure -- whoever picks the card up will\n"
-    "work the detail out, and asking them to specify it up front defeats the\n"
-    "point of capturing a thought quickly. Do not ask which component, which\n"
-    "approach, how something should behave, or what a word meant if the\n"
-    "sentence is plain. Set confidence high and write the spec from what the\n"
-    "card actually says.\n"
-    "\n"
-    "todo, data and reference are notes to keep. They need no understanding at\n"
-    "all: a number with no context is still data, a link with no explanation\n"
-    "is still reference. Never ask what a note is for -- file it.\n"
-    "\n"
-    "The card was captured in a directory, given below. Unless the card names\n"
-    "somewhere else, that is the repo, and you should say so rather than\n"
-    "leaving cwd empty.\n"
-    "\n"
-    "Ask only when the card names no subject you could point at, or leans on\n"
-    "context that is not written in the card. Not when it names a subject and\n"
-    "leaves the details open -- that is most cards.\n"
-    "\n"
-    "  \"fix the thing with the tabs\"       place it. Tabs are a thing here.\n"
-    "  \"make the retry logic exponential\"  place it. Retry logic is a thing.\n"
-    "  \"cachegrind: 4.2ms warm\"            place it. Data needs no subject.\n"
-    "  \"the board should remember filters\" place it. Says what it wants.\n"
-    "  \"it's broken again\"                 ask. Nothing at all is named.\n"
-    "  \"do the thing we talked about\"      ask. The subject is not in the card.\n"
-    "  \"sync\"                              ask. A word, not a card.\n"
-    "\n"
-    "When you ask, set confidence below 0.5. Otherwise set it above 0.7 and\n"
-    "leave question empty";
-
 #define ALL_STEPS ((1u << BOARD_STEPS) - 1u)
-
-static const char MERGE_PROMPT[] =
-    "This branch could not be landed. What the attempt said is below.\n"
-    "\n"
-    "Rebase onto the branch it is going back to, resolve whatever is in the "
-    "way, and make the check pass. Commit the result on the branch you are "
-    "already on, then stop and say what you had to change.\n"
-    "\n"
-    "Do not merge it yourself: the board lands it once the branch is clean.";
 
 static const char *const STEP_NAMES[BOARD_STEPS] = {
     "worktree", "review", "audit", "merge",
@@ -131,102 +73,6 @@ enum board_step boardcfg_step_from_name(const char *name)
     return BOARD_STEPS;
 }
 
-static const struct {
-    const char *name, *means, *prompt;
-    int         priority;
-    unsigned    steps;
-} KINDS[] = {
-    {"todo", "something the person means to do, off the computer or on it",
-     "Use the wiki skill to add this to the todo list. Add it, say where it "
-     "went, and stop. Do not do the thing itself.", 0, 0},
-
-    {"data", "a measurement, a number, a result, a scrap worth keeping",
-     "Use the wiki skill to file this where it belongs, compiling it into the "
-     "article it bears on rather than leaving it loose. Say where it went and "
-     "stop.", 0, 0},
-
-    {"reference", "a link, a name, a fact, something to look up again later",
-     "Use the wiki skill to file this as reference. Follow a link if there is "
-     "one and write down what it actually says, rather than filing the bare "
-     "URL. Say where it went and stop.", 0, 0},
-
-    {"feature", "something that should exist and does not", "", 1, ALL_STEPS},
-    {"bug", "something that exists and is wrong", "", 2, ALL_STEPS},
-    {"chore", "upkeep: a rename, a bump, a cleanup", "", 0, ALL_STEPS},
-};
-
-static const char WORKER_PROMPT[] =
-    "You are working one card from a board, alone, in a worktree of your own "
-    "and on a branch of its own.\n"
-    "\n"
-    "Reach a state someone else can test, commit it to the branch you are "
-    "already on, and then stop and say how to test it. Commit even when the "
-    "work is unfinished: uncommitted work does not exist to anything "
-    "downstream.\n"
-    "\n"
-    "Do not merge, do not switch branches, do not touch the main branch, and "
-    "do not start work the card does not ask for.\n"
-    "\n"
-    "The CLAUDE.md files in scope are binding, not advisory. Two rules they "
-    "state are broken most often, so they are repeated here as tests you can "
-    "apply to your own diff before you commit:\n"
-    "\n"
-    "Comments. Default to none. A comment may record why something is as it "
-    "is -- a constraint, a trap, a decision that looks wrong and is not. It "
-    "may not say what the code does; the code says that. Before keeping one, "
-    "delete it and ask what a reader lost: if the answer is nothing, leave it "
-    "deleted. No rhetorical framing, no restating the signature, no explaining "
-    "the obvious. Brief and technical.\n"
-    "\n"
-    "Commits. Read the last twenty messages in the log and write like them. "
-    "The subject is `area: what changed`, lower case, no trailing full stop, "
-    "naming the change rather than passing judgement on it: `sessions: close "
-    "keeps the list open` and not `sessions: make closing behave sensibly`. "
-    "Add a body only where the subject cannot carry it, and then it is more "
-    "of what changed -- the functions, files and behaviour added, removed or "
-    "replaced -- not an argument for the change, not what the reader gains, "
-    "and not an account of how you worked. No co-author trailers and no "
-    "attribution to a tool.";
-
-static const char AUDIT_PROMPT[] =
-    "Review the change on this branch against the commit it branched from. "
-    "Answer with JSON only, no prose and no code fence:\n"
-    "\n"
-    "  {\"clean\":true,\"findings\":[]}\n"
-    "  {\"clean\":false,\"findings\":[\"src/a.c: frees buf twice on the error path\"]}\n"
-    "\n"
-    "Look for: a mechanism duplicated that should be one, structure that "
-    "fights the code around it, memory handled wrongly, and anything with a "
-    "security cost.\n"
-    "\n"
-    "Also look for the repo's own rules being broken. The CLAUDE.md files in "
-    "scope state them; breaking one is a finding however small it looks. "
-    "Comments that say what the code does rather than why, comments that "
-    "could be deleted without a reader losing anything, and commit messages "
-    "carrying tool attribution are the usual ones.\n"
-    "\n"
-    "A finding is something you would stop the merge for, written as one "
-    "sentence naming the file. Naming and taste are not findings; a stated "
-    "rule is not taste. If "
-    "there are none, say clean and mean it -- a gate that never opens is a "
-    "gate nobody keeps.";
-
-static const char SWEEP_PROMPT[] =
-    "Look over this repo for what incremental work leaves behind. Answer with "
-    "JSON only, no prose and no code fence:\n"
-    "\n"
-    "  {\"cards\":[\"...\",\"...\"]}\n"
-    "\n"
-    "Each card is a proposal a person reads before it goes on the board, one "
-    "sentence: what should change, and where. Look for two "
-    "mechanisms doing one job, a thing done three different ways, a helper "
-    "copied instead of shared, and structure that has drifted from what the "
-    "code around it does.\n"
-    "\n"
-    "Only what you would actually spend an afternoon on. Not style, not "
-    "naming, not anything you would call a nitpick. Five at the very most, "
-    "and an empty list is a fine answer -- a sweep that always finds "
-    "something is one nobody will read twice.";
 
 static char *dup_or_null(const char *s)
 {
@@ -249,6 +95,15 @@ static void backend_defaults(struct board_backend *b, const char *name)
         snprintf(b->level[BOARD_TIER_LOW].model, sizeof b->level[0].model, "terra");
         snprintf(b->level[BOARD_TIER_MED].model, sizeof b->level[0].model, "sol");
         snprintf(b->level[BOARD_TIER_HIGH].model, sizeof b->level[0].model, "sol");
+    } else if (!strcmp(name, "pi")) {
+        snprintf(b->level[BOARD_TIER_LOW].model, sizeof b->level[0].model,
+                 "openrouter/moonshotai/kimi-k3");
+        snprintf(b->level[BOARD_TIER_MED].model, sizeof b->level[0].model,
+                 "openrouter/openai/gpt-5.6-terra");
+        snprintf(b->level[BOARD_TIER_HIGH].model, sizeof b->level[0].model,
+                 "openrouter/openai/gpt-5.6-sol");
+        snprintf(b->level[BOARD_TIER_MED].effort, sizeof b->level[0].effort, "medium");
+        snprintf(b->level[BOARD_TIER_HIGH].effort, sizeof b->level[0].effort, "medium");
     }
 }
 
@@ -261,17 +116,6 @@ static void defaults(struct board_cfg *c)
     c->sweep_every = 8;
     c->archive_after = 14;
     c->verify[0] = '\0';
-
-    c->kinds_n = (int)(sizeof KINDS / sizeof *KINDS);
-    if (c->kinds_n > BOARD_KINDS_MAX)
-        c->kinds_n = BOARD_KINDS_MAX;
-    for (int i = 0; i < c->kinds_n; i++) {
-        snprintf(c->kinds[i].name, sizeof c->kinds[i].name, "%s", KINDS[i].name);
-        c->kinds[i].means = dup_or_null(KINDS[i].means);
-        c->kinds[i].prompt = dup_or_null(KINDS[i].prompt);
-        c->kinds[i].priority = KINDS[i].priority;
-        c->kinds[i].steps = KINDS[i].steps;
-    }
 
     snprintf(c->serving, sizeof c->serving, "claude");
     for (const char *const *b = backend_names(); *b && c->backends_n < BOARD_BACKENDS_MAX; b++)
@@ -288,11 +132,6 @@ static void defaults(struct board_cfg *c)
         snprintf(c->who[i].tier, sizeof c->who[i].tier, "%s",
                  boardcfg_tier_name(WHO_TIERS[i]));
 
-    c->who[BOARD_WHO_MERGE].prompt = dup_or_null(MERGE_PROMPT);
-    c->who[BOARD_WHO_TRIAGE].prompt = dup_or_null(TRIAGE_PROMPT);
-    c->who[BOARD_WHO_WORKER].prompt = dup_or_null(WORKER_PROMPT);
-    c->who[BOARD_WHO_AUDIT].prompt = dup_or_null(AUDIT_PROMPT);
-    c->who[BOARD_WHO_SWEEP].prompt = dup_or_null(SWEEP_PROMPT);
 }
 
 static void set_str(char *dst, size_t n, const cJSON *o, const char *key)
@@ -517,15 +356,6 @@ static void read_kinds(struct board_cfg *c)
 
     char names[BOARD_KINDS_MAX][MDCFG_NAME];
     int  found = mdcfg_list(dir, names, BOARD_KINDS_MAX);
-    if (!found)
-        return;
-
-    for (int i = 0; i < c->kinds_n; i++) {
-        free(c->kinds[i].means);
-        free(c->kinds[i].prompt);
-    }
-    memset(c->kinds, 0, sizeof c->kinds);
-    c->kinds_n = 0;
 
     for (int i = 0; i < found; i++) {
         char path[4300];
@@ -699,8 +529,19 @@ static void resolve(void)
     }
 }
 
+static void cache_free(void)
+{
+    for (int i = 0; i < BOARD_WHO; i++)
+        free(cache.who[i].prompt);
+    for (int i = 0; i < cache.kinds_n; i++) {
+        free(cache.kinds[i].means);
+        free(cache.kinds[i].prompt);
+    }
+}
+
 static void read_all(void)
 {
+    cache_free();
     defaults(&cache);
 
     char old[4300];
@@ -738,10 +579,44 @@ static void load(void)
     resolve();
 }
 
+void boardcfg_reload(void)
+{
+    loaded = 1;
+    read_all();
+    resolve();
+}
+
 const struct board_cfg *boardcfg(void)
 {
     load();
     return &cache;
+}
+
+int boardcfg_missing(char *out, size_t size)
+{
+    load();
+
+    char full[4096], dir[4096];
+    if (!mdcfg_dir(full, sizeof full, BOARD_DIR))
+        return 0;
+    path_home_relative(full, dir, sizeof dir);
+
+    if (!cache.kinds_n) {
+        snprintf(out, size, "no kinds in %s/kinds", dir);
+        return 1;
+    }
+
+    char   who[128] = "";
+    size_t at = 0;
+    for (int i = 0; i < BOARD_WHO; i++)
+        if (!cache.who[i].prompt || !*cache.who[i].prompt)
+            at += (size_t)snprintf(who + at, sizeof who - at, "%s%s", at ? ", " : "",
+                                   WHO_NAMES[i]);
+    if (at) {
+        snprintf(out, size, "no prompt in %s/roles: %s", dir, who);
+        return 1;
+    }
+    return 0;
 }
 
 const struct board_kind *boardcfg_kind(const char *name)
