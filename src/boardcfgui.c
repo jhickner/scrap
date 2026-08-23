@@ -1,0 +1,284 @@
+#include "boardcfgui.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "app.h"
+#include "ask.h"
+#include "boardcfg.h"
+#include "edit.h"
+#include "form.h"
+#include "pick.h"
+#include "vendor/agents/backend.h"
+
+#define CFG_HINT "enter change  ·  esc done"
+
+enum row_kind {
+    ROW_HEAD,
+    ROW_COUNT,      /* a number, asked for */
+    ROW_PROFILE,    /* backend, model and effort, as a form */
+    ROW_PROMPT,     /* several paragraphs, in $EDITOR */
+    ROW_CHAIN,      /* the delegation order */
+};
+
+struct row {
+    enum row_kind kind;
+    const char   *label;
+    const char   *about;
+
+    int *count;         /* ROW_COUNT */
+    int  low, high;
+    const char *units;
+
+    enum board_who who; /* ROW_PROFILE, ROW_PROMPT */
+};
+
+#define ROWS_MAX 24
+
+static void head(struct row *rows, int *n, const char *label)
+{
+    rows[*n].kind = ROW_HEAD;
+    rows[*n].label = label;
+    (*n)++;
+}
+
+static void count_row(struct row *rows, int *n, const char *label, int *value,
+                      int low, int high, const char *units)
+{
+    rows[*n].kind = ROW_COUNT;
+    rows[*n].label = label;
+    rows[*n].count = value;
+    rows[*n].low = low;
+    rows[*n].high = high;
+    rows[*n].units = units;
+    (*n)++;
+}
+
+static void build(struct row *rows, int *n, struct board_cfg *c)
+{
+    *n = 0;
+
+    head(rows, n, "workers");
+    count_row(rows, n, "how many at once", &c->workers, 1, 11, NULL);
+    count_row(rows, n, "do not start above", &c->usage_ceiling, 1, 100, "% of quota");
+    count_row(rows, n, "wait if quota resets within", &c->reset_hold, 0, 240, "min");
+
+    head(rows, n, "audit");
+    count_row(rows, n, "audit a diff over", &c->audit_files, 0, 500, "files");
+    count_row(rows, n, "audit a diff over", &c->audit_lines, 0, 100000, "lines");
+
+    head(rows, n, "sweep");
+    count_row(rows, n, "look for duplication every", &c->sweep_every, 0, 500, "cards done");
+
+    head(rows, n, "who runs what");
+    for (int i = 0; i < BOARD_WHO; i++) {
+        rows[*n].kind = ROW_PROFILE;
+        rows[*n].label = boardcfg_who_name((enum board_who)i);
+        rows[*n].who = (enum board_who)i;
+        (*n)++;
+    }
+
+    head(rows, n, "what they are told");
+    for (int i = 0; i < BOARD_WHO; i++) {
+        rows[*n].kind = ROW_PROMPT;
+        rows[*n].label = boardcfg_who_name((enum board_who)i);
+        rows[*n].who = (enum board_who)i;
+        (*n)++;
+    }
+
+    head(rows, n, "when quota runs out");
+    rows[*n].kind = ROW_CHAIN;
+    rows[*n].label = "hand the card on to";
+    (*n)++;
+}
+
+// What a row is set to, as the list shows it on the right.
+static void value_of(const struct row *r, const struct board_cfg *c,
+                     char *out, size_t size)
+{
+    switch (r->kind) {
+    case ROW_COUNT:
+        if (!*r->count && r->low == 0)
+            snprintf(out, size, "never");
+        else if (r->units)
+            snprintf(out, size, "%d%s%s", *r->count,
+                     r->units[0] == '%' ? "" : " ", r->units);
+        else
+            snprintf(out, size, "%d", *r->count);
+        break;
+    case ROW_PROFILE: {
+        const struct board_profile *p = &c->who[r->who];
+        snprintf(out, size, "%s · %s%s%s", p->backend[0] ? p->backend : "claude",
+                 p->model[0] ? p->model : "default",
+                 p->effort[0] ? " · " : "", p->effort);
+        break;
+    }
+    case ROW_PROMPT: {
+        const char *text = c->who[r->who].prompt;
+        int         lines = 1;
+        for (const char *s = text; s && *s; s++)
+            lines += *s == '\n';
+        snprintf(out, size, "%d line%s", lines, lines == 1 ? "" : "s");
+        break;
+    }
+    case ROW_CHAIN: {
+        // Commas are how it is stored; arrows are what it means.
+        char shown[256];
+        snprintf(shown, sizeof shown, "%s", c->delegation);
+        for (char *p = shown; *p; p++)
+            if (*p == ',')
+                *p = '\0';
+        out[0] = '\0';
+        size_t at = 0;
+        for (char *p = shown; p < shown + strlen(c->delegation);) {
+            size_t k = strlen(p);
+            at += (size_t)snprintf(out + at, size - at, "%s%s", at ? " → " : "", p);
+            p += k + 1;
+        }
+        break;
+    }
+    default:
+        out[0] = '\0';
+        break;
+    }
+}
+
+/* ---- changing one ------------------------------------------------------- */
+
+static void edit_count(struct row *r)
+{
+    char now[64], title[160];
+    snprintf(now, sizeof now, "%d", *r->count);
+    snprintf(title, sizeof title, "%s%s%s", r->label,
+             r->units ? " — " : "", r->units ? r->units : "");
+
+    char *said = ask_run(title, now);
+    if (!said)
+        return;
+    char *end = NULL;
+    long  want = strtol(said, &end, 10);
+    free(said);
+    if (end == NULL || want < r->low || want > r->high)
+        return;
+    *r->count = (int)want;
+}
+
+static void edit_profile(struct board_cfg *c, enum board_who who)
+{
+    struct board_profile *p = &c->who[who];
+
+    const char *backends[8];
+    int         nbackends = 0;
+    for (const char *const *b = backend_names(); *b && nbackends < 8; b++)
+        backends[nbackends++] = *b;
+
+    static const char *const EFFORTS[] = {
+        "", "low", "medium", "high", "xhigh", "max",
+    };
+
+    char backend[32], model[128], effort[32];
+    snprintf(backend, sizeof backend, "%s", p->backend[0] ? p->backend : "claude");
+    snprintf(model, sizeof model, "%s", p->model);
+    snprintf(effort, sizeof effort, "%s", p->effort);
+
+    struct form_field fields[] = {
+        {"backend", FORM_CHOICE, backend, sizeof backend, backends, nbackends},
+        {"model", FORM_TEXT, model, sizeof model, NULL, 0},
+        {"effort", FORM_CHOICE, effort, sizeof effort, EFFORTS, COUNT(EFFORTS)},
+    };
+
+    char title[128];
+    snprintf(title, sizeof title, "%s · what runs it", boardcfg_who_name(who));
+
+    static const char *const NOTES[] = {
+        "an empty model or effort is whatever the backend does by default",
+    };
+
+    struct form f = {
+        .title = title,
+        .notes = NOTES,
+        .notes_n = 1,
+        .fields = fields,
+        .fields_n = COUNT(fields),
+    };
+    if (!form_run(&f))
+        return;
+
+    snprintf(p->backend, sizeof p->backend, "%s", backend);
+    snprintf(p->model, sizeof p->model, "%s", model);
+    snprintf(p->effort, sizeof p->effort, "%s", effort);
+}
+
+static void edit_prompt(struct board_cfg *c, enum board_who who)
+{
+    char *text = edit_run(c->who[who].prompt, ".md");
+    if (!text)
+        return;
+    free(c->who[who].prompt);
+    c->who[who].prompt = text;
+}
+
+static void edit_chain(struct board_cfg *c)
+{
+    char *said = ask_run("backends in order, comma separated", c->delegation);
+    if (!said)
+        return;
+    // Spaces are how it reads; commas are how it is stored.
+    char packed[256];
+    size_t at = 0;
+    for (const char *p = said; *p && at + 1 < sizeof packed; p++)
+        if (*p != ' ')
+            packed[at++] = *p;
+    packed[at] = '\0';
+    free(said);
+    snprintf(c->delegation, sizeof c->delegation, "%s", packed);
+}
+
+/* ---- the screen --------------------------------------------------------- */
+
+void boardcfgui_run(void)
+{
+    struct board_cfg *c = boardcfg_copy();
+    if (!c)
+        return;
+
+    struct row rows[ROWS_MAX];
+    int        n = 0;
+    int        at = 0;
+    int        touched = 0;
+
+    for (;;) {
+        build(rows, &n, c);
+
+        struct pick_item items[ROWS_MAX];
+        unsigned char    heading[ROWS_MAX];
+        char             values[ROWS_MAX][256];
+
+        for (int i = 0; i < n; i++) {
+            items[i].label = rows[i].label;
+            value_of(&rows[i], c, values[i], sizeof values[i]);
+            items[i].detail = values[i][0] ? values[i] : NULL;
+            heading[i] = rows[i].kind == ROW_HEAD ? PICK_HEADING : 0;
+        }
+
+        struct pick_live live = {.heading = heading, .hint = CFG_HINT, .align = 1};
+        int              pressed = 0;
+        at = pick_run_live("board config", items, n, at, &live, PICK_SEARCH_SLASH,
+                           "", &pressed);
+        if (at < 0)
+            break;
+
+        switch (rows[at].kind) {
+        case ROW_COUNT:   edit_count(&rows[at]); touched = 1; break;
+        case ROW_PROFILE: edit_profile(c, rows[at].who); touched = 1; break;
+        case ROW_PROMPT:  edit_prompt(c, rows[at].who); touched = 1; break;
+        case ROW_CHAIN:   edit_chain(c); touched = 1; break;
+        default:          break;
+        }
+    }
+
+    if (touched)
+        boardcfg_set(c);
+    boardcfg_free(c);
+}

@@ -9,6 +9,7 @@
 
 #include "ask.h"
 #include "board.h"
+#include "boardcfgui.h"
 #include "boardtriage.h"
 #include "boardwork.h"
 #include "confirm.h"
@@ -30,19 +31,17 @@
 #define KEY_APPROVE  'a'
 #define KEY_REJECT   'r'
 #define KEY_FEEDBACK 'f'
+#define KEY_CONFIG   'c'
 #define KEY_ALL      '*'
 
-#define BOARD_KEYS "ndtsgarf*"
+#define BOARD_KEYS "ndtsgarfc*"
 
 // Letters are shortcuts here rather than a search, so without a line saying
 // so the list gives no sign it has any keys at all.
 #define BOARD_HINT \
     "enter edit  ·  s start a worker  ·  g go to it  ·  "                     \
     "a approve  ·  f feedback  ·  r reject\n"                                 \
-    "n new  ·  t triage  ·  d delete  ·  * all repos  ·  / search"
-
-// How wide a card's title may grow before the meta beside it stops lining up.
-#define TITLE_SHARE(cols) ((cols) * 3 / 5)
+    "n new  ·  t triage  ·  d delete  ·  c config  ·  * all repos  ·  / search"
 
 /* ---- rows ------------------------------------------------------------- */
 
@@ -151,6 +150,7 @@ static int vlist_run(const char *title, struct vlist *l, int initial,
         .mark = mark,
         .mark_role = role,
         .hint = hint,
+        .align = 1,
         .tick = tick,
         .ud = tick_ud,
     };
@@ -328,59 +328,6 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
     }
     free(in);
     return shown;
-}
-
-// Pads every card's title to one width, so the meta beside them reads as a
-// column rather than as ragged tails. Headings are left where they are.
-static void align(struct vlist *l)
-{
-    size_t width = 0;
-    size_t cap = (size_t)TITLE_SHARE(ui_columns());
-
-    for (int i = 0; i < l->n; i++) {
-        if (is_text(&l->v[i]) || !l->v[i].detail)
-            continue;
-        size_t cells = ui_cells(l->v[i].label);
-        if (cells > width)
-            width = cells;
-    }
-    if (width > cap)
-        width = cap;
-    if (!width)
-        return;
-
-    for (int i = 0; i < l->n; i++) {
-        if (is_text(&l->v[i]) || !l->v[i].detail)
-            continue;
-        size_t cells = ui_cells(l->v[i].label);
-        if (cells == width)
-            continue;
-
-        // Over the width, a title is cut rather than left to run into what
-        // sits beside it: a card keeps the words it was written with, and the
-        // row is only how they read in a list.
-        if (cells > width) {
-            size_t fit = ui_fit_bytes(l->v[i].label, width - 1);
-            char  *cut = malloc(fit + sizeof "…");
-            if (!cut)
-                continue;
-            memcpy(cut, l->v[i].label, fit);
-            strcpy(cut + fit, "…");
-            free(l->v[i].label);
-            l->v[i].label = cut;
-            continue;
-        }
-
-        size_t len = strlen(l->v[i].label);
-        char  *padded = malloc(len + (width - cells) + 1);
-        if (!padded)
-            continue;
-        memcpy(padded, l->v[i].label, len);
-        memset(padded + len, ' ', width - cells);
-        padded[len + (width - cells)] = '\0';
-        free(l->v[i].label);
-        l->v[i].label = padded;
-    }
 }
 
 static int row_of(const struct vlist *l, const char *id)
@@ -695,7 +642,6 @@ int boardview_run(const char *cwd)
 
         struct vlist l = {0};
         int          shown = build_board(&l, cards, n, filter, !filter[0]);
-        align(&l);
 
         if (!l.n) {
             vlist_free(&l);
@@ -797,6 +743,9 @@ int boardview_run(const char *cwd)
         case KEY_DELETE:
             if (c && do_delete(c))
                 sel_id[0] = '\0';
+            break;
+        case KEY_CONFIG:
+            boardcfgui_run();
             break;
         case KEY_ALL:
             if (filter[0])

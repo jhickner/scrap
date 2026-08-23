@@ -60,6 +60,30 @@ static int item_apart(const struct view *v, int i)
     return v->heading && v->heading[i] == PICK_APART;
 }
 
+// The share of the width a label may take before the details beside them stop
+// having room to say anything.
+#define LABEL_SHARE(cols) ((cols) * 3 / 5)
+
+// The width every label is padded out to, for a list that asked to line its
+// details up. Zero for one that did not.
+static size_t align_width(const struct view *v, int columns)
+{
+    if (!v->live || !v->live->align)
+        return 0;
+
+    size_t width = 0;
+    for (int row = 0; row < v->count; row++) {
+        int i = v->order[row];
+        if (item_heading(v, i) || !v->items[i].detail || !*v->items[i].detail)
+            continue;
+        size_t cells = ui_cells(v->items[i].label);
+        if (cells > width)
+            width = cells;
+    }
+    size_t cap = (size_t)LABEL_SHARE(columns);
+    return width > cap ? cap : width;
+}
+
 static int item_spins(const struct view *v, int i)
 {
     return v->live && v->live->spin && v->live->spin[i];
@@ -231,8 +255,9 @@ static void paint(void *ud)
     if (v->top < 0)
         v->top = 0;
 
-    int columns = ui_columns();
-    int rows = 0;
+    int    columns = ui_columns();
+    int    rows = 0;
+    size_t pad_to = align_width(v, columns);
 
     ui_esc(ui_style(UI_CHROME));
     ui_put(UI_BAR);
@@ -307,14 +332,24 @@ static void paint(void *ud)
         }
 
         size_t label_budget = columns > 5 + (int)status ? (size_t)(columns - 5 - (int)status) : 1;
+        // Aligned, a label is cut at the column the details start on rather
+        // than running into them.
+        if (pad_to && items[i].detail && *items[i].detail && label_budget > pad_to)
+            label_budget = pad_to;
         size_t label_n = ui_fit_bytes(items[i].label, label_budget);
         ui_putn(items[i].label, label_n);
         if (items[i].label[label_n])
             ui_put("…");
         ui_esc(ui_style(UI_RESET));
 
-        size_t used = 4 + status + ui_cells_n(items[i].label, label_n) +
-                      (items[i].label[label_n] ? 1 : 0);
+        size_t shown = ui_cells_n(items[i].label, label_n) +
+                       (items[i].label[label_n] ? 1 : 0);
+        if (pad_to && items[i].detail && *items[i].detail && shown < pad_to) {
+            ui_pad((int)(pad_to - shown));
+            shown = pad_to;
+        }
+
+        size_t used = 4 + status + shown;
 
         if (items[i].detail && *items[i].detail) {
             int budget = columns - (int)used - 4;

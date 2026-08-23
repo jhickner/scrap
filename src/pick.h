@@ -55,6 +55,10 @@ struct pick_live {
     // Without them a list whose shortcuts are letters gives no sign it has
     // any.
     const char *hint;
+    // Pad every label out to the widest of them, so the details beside them
+    // read as a column rather than as ragged tails. A label wider than the
+    // share a label may take is cut to it.
+    int align;
     // Called on the spinner's frames. Nonzero means the caller has changed
     // what the rows say, and the list is drawn again. PICK_TICK_REOPEN means
     // more than that: the rows themselves are stale and only the caller can
