@@ -166,6 +166,7 @@ struct codex_client {
     size_t len, cap;
     char err[CX_ERR_MAX];
     size_t err_len;
+    char turn_err[CX_ERR_MAX];
     char warning[CX_WARNING_MAX];
     codex_event_kind warning_kind;
     int warning_ready;
@@ -317,6 +318,19 @@ static void cx_strip_trust_warning(codex_client *c) {
     size_t used = (size_t)(end - block);
     memmove(block, end, strlen(end) + 1);
     c->err_len -= used;
+}
+
+/* The app-server wraps the provider's refusal in a JSON envelope. Report the
+ * innermost message: the envelope says nothing a caller can act on. */
+static void cx_note_turn_error(codex_client *c, cJSON *error) {
+    const char *message = error ? cJSON_GetStringValue(
+        cJSON_GetObjectItemCaseSensitive(error, "message")) : NULL;
+    if (!message || !*message) return;
+    cJSON *inner = cJSON_Parse(message);
+    const char *nested = inner ? cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(
+        cJSON_GetObjectItemCaseSensitive(inner, "error"), "message")) : NULL;
+    snprintf(c->turn_err, sizeof c->turn_err, "%s", nested && *nested ? nested : message);
+    cJSON_Delete(inner);
 }
 
 static void cx_queue_warning(codex_client *c, codex_event_kind kind, const char *text) {
@@ -731,6 +745,7 @@ int codex_trust_project(codex_client *c, const char *path) {
 
 const char *codex_last_error(codex_client *c) {
     if (!c) return NULL;
+    if (c->turn_err[0]) return c->turn_err;
     cx_drain_stderr(c);
     cx_strip_trust_warning(c);
     while (c->err_len && (c->err[c->err_len - 1] == '\n' ||
@@ -1171,6 +1186,7 @@ char *codex_send_ex(codex_client *c, const char *user_text, codex_result *meta) 
     if (meta) memset(meta, 0, sizeof *meta);
     if (!c || !user_text) return NULL;
     if (!cx_await_ready(c)) return NULL;
+    c->turn_err[0] = '\0';
     if (!c->session_id[0] && !cx_open_thread(c, NULL)) return NULL;
     cJSON *p = cJSON_CreateObject(), *input = cJSON_CreateArray();
     cJSON *text = cJSON_CreateObject();
@@ -1234,6 +1250,9 @@ char *codex_send_ex(codex_client *c, const char *user_text, codex_result *meta) 
             cx_item_event(c, params, 0, &fallback);
         } else if (method && !strcmp(method, "rawResponseItem/completed")) {
             cx_raw_item_event(c, params);
+        } else if (method && !strcmp(method, "error")) {
+            cx_note_turn_error(c, params ? cJSON_GetObjectItemCaseSensitive(
+                params, "error") : NULL);
         } else if (method && !strcmp(method, "turn/completed")) {
             cJSON *t = params ? cJSON_GetObjectItemCaseSensitive(params, "turn") : NULL;
             const char *status = t ? cJSON_GetStringValue(
@@ -1241,6 +1260,8 @@ char *codex_send_ex(codex_client *c, const char *user_text, codex_result *meta) 
             if (status && !strcmp(status, "interrupted")) {
                 if (meta) meta->interrupted = 1;
             } else if (!status || strcmp(status, "completed")) {
+                cx_note_turn_error(c, t ? cJSON_GetObjectItemCaseSensitive(t, "error")
+                                        : NULL);
                 failed = 1;
             }
             completed = 1;

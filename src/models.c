@@ -331,3 +331,35 @@ int models_for(const char *backend, const struct pick_item **out)
     *out = l->items;
     return l->n;
 }
+
+/* Codex takes only the full slug: `sol` reaches the API and comes back a 400.
+ * Expand a bare family name against the cached catalogue when exactly one slug
+ * ends in it. */
+int models_codex_slug(const char *model, char *out, size_t size)
+{
+    if (!model || !*model)
+        return 0;
+
+    const struct pick_item *items = NULL;
+    int                     n = models_for("codex", &items);
+    size_t                  len = strlen(model);
+    const char             *hit = NULL;
+
+    for (int i = 0; i < n; i++) {
+        const char *slug = items[i].label;
+        size_t      at = strlen(slug);
+
+        if (!strcmp(slug, model))
+            return 0;
+        if (at <= len || slug[at - len - 1] != '-' || strcmp(slug + at - len, model))
+            continue;
+        if (hit)
+            return 0;
+        hit = slug;
+    }
+    if (!hit)
+        return 0;
+
+    snprintf(out, size, "%s", hit);
+    return 1;
+}

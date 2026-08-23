@@ -22,6 +22,7 @@
 #include "livelist.h"
 #include "restart.h"
 #include "md.h"
+#include "models.h"
 #include "sessionprefs.h"
 #include "sessionview.h"
 #include "viewport.h"
@@ -675,6 +676,17 @@ static int abort_check(void)
     return interrupt;
 }
 
+static char *dup_model(const char *backend, const char *model)
+{
+    char slug[128];
+
+    if (!model)
+        return NULL;
+    if (!strcmp(backend, "codex") && models_codex_slug(model, slug, sizeof slug))
+        return strdup(slug);
+    return strdup(model);
+}
+
 struct session *session_new(const char *backend, const char *cwd, const char *model,
                             const char *effort)
 {
@@ -689,7 +701,7 @@ struct session *session_new(const char *backend, const char *cwd, const char *mo
         return NULL;
     }
     s->cwd = cwd ? strdup(cwd) : NULL;
-    s->model = model ? strdup(model) : NULL;
+    s->model = dup_model(s->backend, model);
     s->effort = effort ? strdup(effort) : NULL;
     s->thinking = 1;
     return s;
@@ -970,7 +982,7 @@ int session_set_model(struct session *s, const char *model)
     if (!b)
         return 0;
 
-    char *next = model ? strdup(model) : NULL;
+    char *next = dup_model(s->backend, model);
     if (model && !next)
         return 0;
     char *previous = s->model;

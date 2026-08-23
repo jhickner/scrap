@@ -93,9 +93,9 @@ static void backend_defaults(struct board_backend *b, const char *name)
         snprintf(b->level[BOARD_TIER_MED].model, sizeof b->level[0].model, "opus[1m]");
         snprintf(b->level[BOARD_TIER_HIGH].model, sizeof b->level[0].model, "opus[1m]");
     } else if (!strcmp(name, "codex")) {
-        snprintf(b->level[BOARD_TIER_LOW].model, sizeof b->level[0].model, "terra");
-        snprintf(b->level[BOARD_TIER_MED].model, sizeof b->level[0].model, "sol");
-        snprintf(b->level[BOARD_TIER_HIGH].model, sizeof b->level[0].model, "sol");
+        snprintf(b->level[BOARD_TIER_LOW].model, sizeof b->level[0].model, "gpt-5.6-terra");
+        snprintf(b->level[BOARD_TIER_MED].model, sizeof b->level[0].model, "gpt-5.6-sol");
+        snprintf(b->level[BOARD_TIER_HIGH].model, sizeof b->level[0].model, "gpt-5.6-sol");
     } else if (!strcmp(name, "pi")) {
         snprintf(b->level[BOARD_TIER_LOW].model, sizeof b->level[0].model,
                  "openrouter/moonshotai/kimi-k3");
