@@ -36,22 +36,23 @@
 #define KEY_APPROVE  'a'
 #define KEY_REJECT   'r'
 #define KEY_UNSTART  'x'
+#define KEY_REOPEN   'u'
 #define KEY_FEEDBACK 'f'
 #define KEY_LOG      'l'
 #define KEY_CONFIG   'c'
 #define KEY_SERVE    'b'
 #define KEY_ALL      '*'
 
-#define BOARD_KEYS "ndtsgarxflcb*\t"
+#define BOARD_KEYS "ndtsgarxuflcb*\t"
 
 #define BOARD_RECENT 3
 
 #define BOARD_RECENT_INDENT 6
 
 #define BOARD_HINT \
-    "enter edit  ·  s start  ·  g worker  ·  "                                \
-    "a approve  ·  f feedback  ·  r reject  ·  x cancel start\n"              \
-    "n new  ·  t triage  ·  l log  ·  d delete  ·  c config  ·  "               \
+    "enter edit  ·  s start  ·  g worker  ·  a approve  ·  f feedback  ·  "    \
+    "r reject  ·  x cancel start  ·  u not done\n"                             \
+    "n new  ·  t triage  ·  l log  ·  d delete  ·  c config  ·  "              \
     "b backend  ·  * all repos  ·  / search"
 
 struct vrow {
@@ -1132,6 +1133,16 @@ int boardview_run(const char *cwd)
                 char *why = ask_run("reason for sending it back", NULL);
                 if (why) {
                     boardwork_reject(c, why);
+                    free(why);
+                }
+            }
+            break;
+        case KEY_REOPEN:
+            if (c && c->col == BOARD_DONE && !boardsweep_is(c)) {
+                close_list();
+                char *why = ask_run("reason for sending it back", NULL);
+                if (why) {
+                    boardwork_reopen(c, why);
                     free(why);
                 }
             }

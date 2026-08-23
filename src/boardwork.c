@@ -940,6 +940,16 @@ int boardwork_reject(const struct board_card *c, const char *why)
                       why && *why ? why : "rejected");
 }
 
+int boardwork_reopen(const struct board_card *c, const char *why)
+{
+    if (!c || c->col != BOARD_DONE)
+        return 0;
+    if (c->worktree[0])
+        boardwork_release(c);
+    return board_move(c->id, BOARD_BACKLOG, "you",
+                      why && *why ? why : "sent back as incomplete");
+}
+
 int boardwork_feedback(const struct board_card *c, const char *text)
 {
     if (!c || !text || !*text)
