@@ -434,6 +434,17 @@ int boardwork_release(const struct board_card *c)
     return board_update(&edited);
 }
 
+static void let_go(const char *id)
+{
+    struct worker *w = slot_of(id);
+    if (!w)
+        return;
+    int at = workspace_index_of(w->session);
+    memset(w, 0, sizeof *w);
+    if (at >= 0 && workspace_count() > 1)
+        workspace_close(at);
+}
+
 int boardwork_poll(void)
 {
     int changed = 0;
@@ -457,6 +468,17 @@ int boardwork_poll(void)
 
     struct board_card *cards = NULL;
     int                n = board_load(&cards);
+
+    for (int i = 0; i < WORKSPACE_MAX; i++) {
+        if (!workers[i].session)
+            continue;
+        struct board_card *c = board_find(cards, n, workers[i].id);
+        if (c && (c->col == BOARD_DOING || c->col == BOARD_REVIEW))
+            continue;
+        let_go(workers[i].id);
+        changed = 1;
+    }
+
     for (int i = 0; i < n; i++) {
         if (!cards[i].worktree[0])
             continue;
@@ -469,17 +491,6 @@ int boardwork_poll(void)
     }
     board_free(cards, n);
     return changed;
-}
-
-static void let_go(const char *id)
-{
-    struct worker *w = slot_of(id);
-    if (!w)
-        return;
-    int at = workspace_index_of(w->session);
-    memset(w, 0, sizeof *w);
-    if (at >= 0 && workspace_count() > 1)
-        workspace_close(at);
 }
 
 void boardwork_discard(const struct board_card *c)
