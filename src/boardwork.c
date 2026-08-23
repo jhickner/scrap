@@ -9,6 +9,7 @@
 #include "gitcmd.h"
 #include "boardcfg.h"
 #include "boardaudit.h"
+#include "child.h"
 #include "boardflow.h"
 #include "boardlog.h"
 #include "boardmerge.h"
@@ -457,7 +458,9 @@ int boardwork_poll(void)
     struct board_card *cards = NULL;
     int                n = board_load(&cards);
     for (int i = 0; i < n; i++) {
-        if (cards[i].col != BOARD_BACKLOG || !cards[i].worktree[0])
+        if (!cards[i].worktree[0])
+            continue;
+        if (cards[i].col != BOARD_BACKLOG && cards[i].col != BOARD_DONE)
             continue;
         if (!boardwork_release(&cards[i]))
             continue;
@@ -483,6 +486,14 @@ void boardwork_discard(const struct board_card *c)
 {
     if (!c)
         return;
+
+    static const char *const STAGES[] = {"triage:", "audit:", "merge:", "sweep:"};
+    for (size_t i = 0; i < sizeof STAGES / sizeof *STAGES; i++) {
+        char key[CHILD_KEY_MAX];
+        snprintf(key, sizeof key, "%s%s", STAGES[i], c->id);
+        child_stop(key);
+    }
+
     let_go(c->id);
     if (c->worktree[0])
         drop_worktree(c);

@@ -15,6 +15,8 @@ int child_busy(void);
 
 int child_reap(char *key, size_t keysize, char **out, int *ok);
 
+int child_stop(const char *key);
+
 void child_close_all(void);
 
 #endif

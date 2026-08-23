@@ -174,6 +174,23 @@ int child_reap(char *key, size_t keysize, char **out, int *ok)
     return 0;
 }
 
+int child_stop(const char *key)
+{
+    if (!key || !*key)
+        return 0;
+    for (int i = 0; i < CHILD_SLOTS; i++) {
+        if (!slots[i].pid || strcmp(slots[i].key, key))
+            continue;
+        if (!slots[i].done) {
+            kill(slots[i].pid, SIGTERM);
+            waitpid(slots[i].pid, NULL, 0);
+        }
+        slot_free(&slots[i]);
+        return 1;
+    }
+    return 0;
+}
+
 void child_close_all(void)
 {
     for (int i = 0; i < CHILD_SLOTS; i++) {
