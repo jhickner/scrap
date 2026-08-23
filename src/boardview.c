@@ -44,6 +44,8 @@
 
 #define BOARD_RECENT 3
 
+#define BOARD_RECENT_INDENT 6
+
 #define BOARD_HINT \
     "enter edit  ·  s start  ·  g worker  ·  "                                \
     "a approve  ·  f feedback  ·  r reject\n"                                 \
@@ -353,7 +355,7 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
                     if (!t)
                         break;
                     t->heading = PICK_TEXT;
-                    t->label = dsprintf("    %s", said[j]);
+                    t->label = dsprintf("%*s%s", BOARD_RECENT_INDENT, "", said[j]);
                 }
             }
         }
