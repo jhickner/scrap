@@ -104,6 +104,11 @@ const struct board_profile *boardcfg_for(enum board_who who);
 const struct board_profile *boardcfg_for_backend(enum board_who who,
                                                  const char *backend);
 
+#define BOARDCFG_ARGV_MAX 9
+
+int boardcfg_argv(const struct board_profile *p, const char *prompt, char **out,
+                  int max);
+
 const char *boardcfg_serving(void);
 
 int boardcfg_set_serving(const char *backend);

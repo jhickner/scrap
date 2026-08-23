@@ -8,11 +8,11 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "app.h"
 #include "board.h"
 #include "child.h"
 #include "boardcfg.h"
 #include "boardlog.h"
-#include "sessionfork.h"
 #include "replyjson.h"
 #include "vendor/cJSON.h"
 
@@ -150,23 +150,11 @@ int boardtriage_start(const struct board_card *c)
     if (!prompt)
         return 0;
 
-    const struct board_profile *p = boardcfg_for(BOARD_WHO_TRIAGE);
-
-    char *argv[16];
-    int   n = 0;
-    argv[n++] = (char *)sessionfork_program();
-    argv[n++] = (char *)"-b";
-    argv[n++] = (char *)(p->backend[0] ? p->backend : "claude");
-    if (p->model[0] && strcmp(p->model, "default")) {
-        argv[n++] = (char *)"-m";
-        argv[n++] = (char *)p->model;
+    char *argv[BOARDCFG_ARGV_MAX];
+    if (!boardcfg_argv(boardcfg_for(BOARD_WHO_TRIAGE), prompt, argv, COUNT(argv))) {
+        free(prompt);
+        return 0;
     }
-    if (p->effort[0] && strcmp(p->effort, "default")) {
-        argv[n++] = (char *)"-e";
-        argv[n++] = (char *)p->effort;
-    }
-    argv[n++] = prompt;
-    argv[n] = NULL;
 
     int ok = child_start(key, argv, c->cwd[0] ? c->cwd : NULL);
     if (ok)
