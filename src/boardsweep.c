@@ -8,12 +8,19 @@
 #include "boardcfg.h"
 #include "boardlog.h"
 #include "child.h"
+#include "gitcmd.h"
 #include "replyjson.h"
 #include "sessionfork.h"
 #include "vendor/cJSON.h"
 
 #define SWEEP_KEY  "sweep:"
 #define SWEEP_MARK "swept"
+
+static void sweep_root(const char *cwd, char *out, size_t size)
+{
+    if (!cwd || !*cwd || !gitcmd_root(cwd, out, size))
+        snprintf(out, size, "%s", cwd ? cwd : "");
+}
 
 static void sweep_key(const char *id, char *out, size_t size)
 {
@@ -136,7 +143,10 @@ static int sweep_start(const struct board_card *c, const struct board_card *card
     argv[k++] = prompt;
     argv[k] = NULL;
 
-    int ok = child_start(key, argv, c->cwd);
+    char root[4096];
+    sweep_root(c->cwd, root, sizeof root);
+
+    int ok = child_start(key, argv, root);
     if (ok)
         boardlog_turn(c->id, "sweep", prompt, NULL);
     free(prompt);
@@ -185,6 +195,9 @@ int boardsweep_take(const char *key, const char *reply)
 
     mark_swept(cwd);
 
+    char root[4096];
+    sweep_root(cwd, root, sizeof root);
+
     cJSON *o = replyjson_parse(reply);
     if (!o)
         return 1;
@@ -196,7 +209,7 @@ int boardsweep_take(const char *key, const char *reply)
             continue;
 
         char id[BOARD_ID_MAX];
-        if (board_add(text, cwd, id))
+        if (board_add(text, root, id))
             board_note(id, "sweep", "raised by a sweep");
     }
     cJSON_Delete(o);

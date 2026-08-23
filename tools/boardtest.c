@@ -539,6 +539,72 @@ static void test_sweep_counts_landed_cards(void)
     }
 }
 
+static int make_repo_with_worktree(char *root, size_t rsize, char *tree, size_t tsize)
+{
+    snprintf(root, rsize, "%s/repo", home);
+    snprintf(tree, tsize, "%s/repo/wt", home);
+
+    char cmd[2048];
+    snprintf(cmd, sizeof cmd,
+             "git init -q %s >/dev/null 2>&1 && "
+             "git -C %s -c user.email=t@t -c user.name=t commit -q --allow-empty "
+             "-m base >/dev/null 2>&1 && "
+             "git -C %s worktree add -q -b wt %s >/dev/null 2>&1",
+             root, root, root, tree);
+    if (system(cmd) != 0)
+        return 0;
+
+    char real[4096];
+    if (realpath(root, real))
+        snprintf(root, rsize, "%s", real);
+    return 1;
+}
+
+static void test_sweep_files_against_the_repo(void)
+{
+    char root[4096], tree[4096];
+    if (!make_repo_with_worktree(root, sizeof root, tree, sizeof tree)) {
+        fprintf(stderr, "skipping worktree sweep test: no git\n");
+        return;
+    }
+
+    int every = boardcfg()->sweep_every;
+    for (int i = 0; i < every; i++) {
+        char id[BOARD_ID_MAX] = {0}, text[64];
+        snprintf(text, sizeof text, "worktree card %d", i);
+        expect(board_add(text, tree, id), "capture");
+        expect(board_move(id, BOARD_DONE, "board", NULL), "landed");
+    }
+    expect(boardsweep_pump(), "the interval starts a sweep");
+
+    char host[BOARD_ID_MAX], key[64];
+    sweep_host(tree, host);
+    snprintf(key, sizeof key, "sweep:%s", host);
+    expect(boardsweep_take(key, "{\"cards\":[\"a finding from the worktree\"]}"),
+           "the sweep's cards are taken");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v), at_root = 0, at_tree = 0;
+    for (int i = 0; i < n; i++) {
+        if (strstr(v[i].title, "a finding from the worktree") == NULL)
+            continue;
+        at_root += !strcmp(v[i].cwd, root);
+        at_tree += !strcmp(v[i].cwd, tree);
+    }
+    board_free(v, n);
+    expect(at_root == 1, "a finding is filed against the main repo");
+    expect(at_tree == 0, "and not against the worktree it was found in");
+
+    for (;;) {
+        char  gone[CHILD_KEY_MAX];
+        char *out = NULL;
+        int   ok = 0;
+        if (!child_reap(gone, sizeof gone, &out, &ok))
+            break;
+        free(out);
+    }
+}
+
 int main(void)
 {
     if (!mkdtemp(home)) {
@@ -557,6 +623,7 @@ int main(void)
     test_attempts_reset_when_answered();
     test_audit_verdict();
     test_sweep_counts_landed_cards();
+    test_sweep_files_against_the_repo();
     test_reply_json();
     test_kinds();
     test_archive();
