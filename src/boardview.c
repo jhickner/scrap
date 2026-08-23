@@ -249,6 +249,17 @@ static int shows(const struct board_card *c, const char *filter)
     return !filter || !*filter || !strcmp(c->cwd, filter);
 }
 
+static const char *step_of(const char *id)
+{
+    if (boardtriage_running(id))
+        return "triaging";
+    if (boardmerge_running(id))
+        return "landing";
+    if (boardaudit_running(id))
+        return "auditing";
+    return NULL;
+}
+
 static int by_priority(const void *a, const void *b)
 {
     const struct board_card *const *x = a, *const *y = b;
@@ -286,20 +297,15 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             snprintf(r->id, sizeof r->id, "%s", c->id);
             r->label = dsprintf("%s", c->title[0] ? c->title : "(untitled)");
             column_mark(c->col, &r->mark, &r->mark_role);
-            int tab = boardwork_tab(c->id);
-            r->spin = (unsigned char)(boardtriage_running(c->id) ||
-                                      boardmerge_running(c->id) ||
-                                      boardaudit_running(c->id) ||
+            int         tab = boardwork_tab(c->id);
+            const char *step = step_of(c->id);
+            r->spin = (unsigned char)(step ||
                                       (tab >= 0 && session_busy(workspace_at(tab))));
 
             char ts[32], when[64];
             ago(c->updated ? c->updated : c->created, ts, sizeof ts);
-            if (boardtriage_running(c->id))
-                snprintf(when, sizeof when, "triaging…");
-            else if (boardmerge_running(c->id))
-                snprintf(when, sizeof when, "landing…");
-            else if (boardaudit_running(c->id))
-                snprintf(when, sizeof when, "auditing…");
+            if (step)
+                snprintf(when, sizeof when, "%s…", step);
             else if (tab >= 0)
                 snprintf(when, sizeof when, "tab %d · %s", tab + 1, ts);
             else
@@ -793,8 +799,13 @@ int boardview_run(const char *cwd)
                 board_free(cards, n);
                 return tab;
             }
-            if (c)
-                note("no worker has that card");
+            if (c) {
+                const char *step = step_of(c->id);
+                if (step)
+                    note("%s in the background — no tab", step);
+                else
+                    note("no worker has that card");
+            }
             break;
         }
         case KEY_APPROVE:
