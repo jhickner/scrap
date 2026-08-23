@@ -184,23 +184,30 @@ static void write_card_file(const char *path, const struct board_card *c)
 // state the queue can land, which is a different job and a different prompt.
 static char *landing_turn(const struct board_card *c)
 {
-    const struct board_profile *p = boardcfg_for(BOARD_WHO_MERGE);
-    const char                 *head = p->prompt ? p->prompt : "";
-    const char                 *body = c->body && *c->body ? c->body : c->title;
+    // The standing instructions first: getting a branch to land is still work
+    // on a branch, and the house rules apply to it the same way.
+    const char *standing = boardcfg_for(BOARD_WHO_WORKER)->prompt;
+    const char *head = boardcfg_for(BOARD_WHO_MERGE)->prompt;
+    const char *body = c->body && *c->body ? c->body : c->title;
+
+    if (!standing)
+        standing = "";
+    if (!head)
+        head = "";
 
     char onto[128] = "";
     if (!boardmerge_base(c, onto, sizeof onto) || !onto[0])
         snprintf(onto, sizeof onto, "the branch it came from");
 
-    size_t need = strlen(head) + strlen(body) + strlen(c->title) +
-                  strlen(c->stuck) + sizeof onto + 256;
+    size_t need = strlen(standing) + strlen(head) + strlen(body) +
+                  strlen(c->title) + strlen(c->stuck) + sizeof onto + 256;
     char  *out = malloc(need);
     if (!out)
         return NULL;
     snprintf(out, need,
-             "%s\n\nIt is going back onto %s. The attempt said:\n\n%s\n\n"
+             "%s\n\n%s\n\nIt is going back onto %s. The attempt said:\n\n%s\n\n"
              "The card it was built for:\n\n# %s\n\n%s\n",
-             head, onto, c->stuck, c->title, body);
+             standing, head, onto, c->stuck, c->title, body);
     return out;
 }
 

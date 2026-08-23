@@ -99,8 +99,7 @@ static const char MERGE_PROMPT[] =
     "way, and make the check pass. Commit the result on the branch you are "
     "already on, then stop and say what you had to change.\n"
     "\n"
-    "Do not merge it yourself, do not switch branches, and do not touch the "
-    "main branch: the board lands it once the branch is clean.";
+    "Do not merge it yourself: the board lands it once the branch is clean.";
 
 static const char *const STEP_NAMES[BOARD_STEPS] = {
     "worktree", "review", "audit", "merge",
@@ -156,7 +155,22 @@ static const char WORKER_PROMPT[] =
     "downstream.\n"
     "\n"
     "Do not merge, do not switch branches, do not touch the main branch, and "
-    "do not start work the card does not ask for.";
+    "do not start work the card does not ask for.\n"
+    "\n"
+    "The CLAUDE.md files in scope are binding, not advisory. Two rules they "
+    "state are broken most often, so they are repeated here as tests you can "
+    "apply to your own diff before you commit:\n"
+    "\n"
+    "Comments. Default to none. A comment may record why something is as it "
+    "is -- a constraint, a trap, a decision that looks wrong and is not. It "
+    "may not say what the code does; the code says that. Before keeping one, "
+    "delete it and ask what a reader lost: if the answer is nothing, leave it "
+    "deleted. No rhetorical framing, no restating the signature, no explaining "
+    "the obvious. Brief and technical.\n"
+    "\n"
+    "Commits. The message says what changed, briefly and technically. No "
+    "co-author trailers, no attribution to a tool, no summary of your own "
+    "process.";
 
 // The audit is a gate, so it has to answer a question rather than write an
 // essay: findings are things that would stop a merge, and everything else is
@@ -171,8 +185,15 @@ static const char AUDIT_PROMPT[] =
     "fights the code around it, memory handled wrongly, and anything with a "
     "security cost.\n"
     "\n"
+    "Also look for the repo's own rules being broken. The CLAUDE.md files in "
+    "scope state them; breaking one is a finding however small it looks. "
+    "Comments that say what the code does rather than why, comments that "
+    "could be deleted without a reader losing anything, and commit messages "
+    "carrying tool attribution are the usual ones.\n"
+    "\n"
     "A finding is something you would stop the merge for, written as one "
-    "sentence naming the file. Style, naming and taste are not findings. If "
+    "sentence naming the file. Naming and taste are not findings; a stated "
+    "rule is not taste. If "
     "there are none, say clean and mean it -- a gate that never opens is a "
     "gate nobody keeps.";
 
