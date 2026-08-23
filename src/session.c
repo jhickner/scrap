@@ -1892,6 +1892,11 @@ const char *session_failed_prompt(const struct session *s)
     return s ? s->failed_prompt : NULL;
 }
 
+double session_cost(const struct session *s)
+{
+    return s ? s->cost_usd : 0;
+}
+
 int session_context_percent(const struct session *s)
 {
     long used = s->context_tokens, window = s->context_window;

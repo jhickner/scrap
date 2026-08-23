@@ -324,6 +324,19 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
                 r->detail = dsprintf("%s", question);
             else if (waiting[0])
                 r->detail = dsprintf("waiting · %s", waiting);
+            else if (c->cost_usd > 0 &&
+                     (c->col == BOARD_REVIEW || c->col == BOARD_DONE)) {
+                // What it cost is the thing worth knowing about work that is
+                // finished, so it takes the place of the age.
+                char head[320] = "";
+                if (where[0] && c->kind[0])
+                    snprintf(head, sizeof head, "%s · %s · ", where, c->kind);
+                else if (where[0])
+                    snprintf(head, sizeof head, "%s · ", where);
+                else if (c->kind[0])
+                    snprintf(head, sizeof head, "%s · ", c->kind);
+                r->detail = dsprintf("%s$%.2f · %s", head, c->cost_usd, when);
+            }
             else if (where[0] && c->kind[0])
                 r->detail = dsprintf("%s · %s · %s", where, c->kind, when);
             else if (where[0])

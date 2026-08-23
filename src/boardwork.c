@@ -429,7 +429,9 @@ void boardwork_finished(struct session *s)
     struct board_card edited = *c;
     if (sid && *sid)
         snprintf(edited.session, sizeof edited.session, "%s", sid);
-    edited.cost_usd = c->cost_usd;
+    // A worker session is one card, so what the session has cost is what the
+    // card has cost.
+    edited.cost_usd = session_cost(s);
 
     // An errored turn is not a finished one: the card stays where it is,
     // marked, because what is needed to fix it is the tab and not a field.
