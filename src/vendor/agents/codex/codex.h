@@ -150,7 +150,7 @@ struct codex_client {
     int (*abort)(void);
     void (*on_event)(void *ud, const codex_event *ev);
     void *on_event_ud;
-    char *model, *effort, *sandbox, *sys, *resume, *project;
+    char *model, *effort, *sandbox, *sys, *resume, *project, *cli;
     int effort_changed, ephemeral;
     char session_id[128];
     char resolved[32];         /* config or stream effort when none was set */
@@ -166,7 +166,7 @@ struct codex_client {
     size_t len, cap;
     char err[CX_ERR_MAX];
     size_t err_len;
-    char turn_err[CX_ERR_MAX];
+    char fault[CX_ERR_MAX];
     char warning[CX_WARNING_MAX];
     codex_event_kind warning_kind;
     int warning_ready;
@@ -320,19 +320,6 @@ static void cx_strip_trust_warning(codex_client *c) {
     c->err_len -= used;
 }
 
-/* The app-server wraps the provider's refusal in a JSON envelope. Report the
- * innermost message: the envelope says nothing a caller can act on. */
-static void cx_note_turn_error(codex_client *c, cJSON *error) {
-    const char *message = error ? cJSON_GetStringValue(
-        cJSON_GetObjectItemCaseSensitive(error, "message")) : NULL;
-    if (!message || !*message) return;
-    cJSON *inner = cJSON_Parse(message);
-    const char *nested = inner ? cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(
-        cJSON_GetObjectItemCaseSensitive(inner, "error"), "message")) : NULL;
-    snprintf(c->turn_err, sizeof c->turn_err, "%s", nested && *nested ? nested : message);
-    cJSON_Delete(inner);
-}
-
 static void cx_queue_warning(codex_client *c, codex_event_kind kind, const char *text) {
     if (!text || !*text || !c->warning_mu_ready) return;
     int signal = 0;
@@ -397,6 +384,43 @@ static int cx_request(codex_client *c, const char *method, cJSON *params) {
 }
 
 /* Read one JSONL message. Return 1/message, 0/abort predicate, -1/error. */
+/* The app-server wraps the provider's refusal in a JSON envelope. Report the
+ * innermost message: the envelope says nothing a caller can act on. */
+static void cx_note_fault(codex_client *c, cJSON *error) {
+    const char *message = error ? cJSON_GetStringValue(
+        cJSON_GetObjectItemCaseSensitive(error, "message")) : NULL;
+    if (!message || !*message) return;
+    cJSON *inner = cJSON_Parse(message);
+    const char *nested = inner ? cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(
+        cJSON_GetObjectItemCaseSensitive(inner, "error"), "message")) : NULL;
+    snprintf(c->fault, sizeof c->fault, "%s", nested && *nested ? nested : message);
+    cJSON_Delete(inner);
+}
+
+/* Stdout closing means the CLI is gone. Its exit status is the only account of
+ * why when it never got far enough to log anything. */
+static void cx_note_exit(codex_client *c) {
+    if (c->fault[0] || c->pid <= 0) return;
+    int status = 0;
+    for (int waited = 0; waited < 200; waited += 5) {
+        if (waitpid(c->pid, &status, WNOHANG) == c->pid) { c->pid = 0; break; }
+        usleep(5000);
+    }
+    if (c->pid > 0) return;
+    const char *cli = c->cli ? c->cli : "codex";
+    if (WIFSIGNALED(status))
+        snprintf(c->fault, sizeof c->fault, "the %s CLI was killed by signal %d",
+                 cli, WTERMSIG(status));
+    else if (WIFEXITED(status) && WEXITSTATUS(status) == 127)
+        snprintf(c->fault, sizeof c->fault, "no %s CLI on PATH", cli);
+    else if (WIFEXITED(status) && WEXITSTATUS(status) == 126)
+        snprintf(c->fault, sizeof c->fault, "the %s CLI could not be started in %s",
+                 cli, c->project ? c->project : "this folder");
+    else if (WIFEXITED(status))
+        snprintf(c->fault, sizeof c->fault, "the %s CLI exited with status %d",
+                 cli, WEXITSTATUS(status));
+}
+
 static int cx_read(codex_client *c, cJSON **out, int honor_abort) {
     *out = NULL;
     for (;;) {
@@ -428,7 +452,7 @@ static int cx_read(codex_client *c, cJSON **out, int honor_abort) {
         }
         if (!(p[0].revents & (POLLIN | POLLHUP))) continue;
         char tmp[8192]; ssize_t nr = read(c->out_fd, tmp, sizeof tmp);
-        if (nr <= 0) return -1;
+        if (nr <= 0) { cx_drain_stderr(c); cx_note_exit(c); return -1; }
         if (c->len + (size_t)nr + 1 > c->cap) {
             size_t nc = (c->len + (size_t)nr + 1) * 2;
             char *nb = realloc(c->buf, nc);
@@ -519,7 +543,9 @@ static int cx_handle_notification(codex_client *c, cJSON *msg) {
     return 0;
 }
 
-static cJSON *cx_wait_response(codex_client *c, int want) {
+/* `note` is off for probes whose failure is expected on an older app-server:
+ * their error is not the story of the turn. */
+static cJSON *cx_wait_response(codex_client *c, int want, int note) {
     for (;;) {
         cJSON *msg;
         if (cx_read(c, &msg, 0) != 1) return NULL;
@@ -527,6 +553,8 @@ static cJSON *cx_wait_response(codex_client *c, int want) {
         cJSON *method = cJSON_GetObjectItemCaseSensitive(msg, "method");
         if (id && cJSON_IsNumber(id) && id->valueint == want && !method) {
             if (cJSON_GetObjectItemCaseSensitive(msg, "error")) {
+                if (note)
+                    cx_note_fault(c, cJSON_GetObjectItemCaseSensitive(msg, "error"));
                 cJSON_Delete(msg); return NULL;
             }
             return msg;
@@ -549,7 +577,7 @@ static int cx_initialize(codex_client *c) {
     cJSON_AddBoolToObject(capabilities, "experimentalApi", 1);
     cJSON_AddItemToObject(p, "capabilities", capabilities);
     int id = cx_request(c, "initialize", p);
-    cJSON *r = id ? cx_wait_response(c, id) : NULL;
+    cJSON *r = id ? cx_wait_response(c, id, 1) : NULL;
     if (!r) return 0;
     cJSON_Delete(r);
     cJSON *note = cJSON_CreateObject();
@@ -559,7 +587,7 @@ static int cx_initialize(codex_client *c) {
 
 static void cx_read_rate_limit(codex_client *c) {
     int id = cx_request(c, "account/rateLimits/read", cJSON_CreateNull());
-    cJSON *r = id ? cx_wait_response(c, id) : NULL;
+    cJSON *r = id ? cx_wait_response(c, id, 0) : NULL;
     if (!r) return;                 /* older app-server: quota stays unavailable */
     cJSON *result = cJSON_GetObjectItemCaseSensitive(r, "result");
     cx_note_rate_limit(c, result);
@@ -579,7 +607,7 @@ static int cx_open_thread(codex_client *c, const char *resume) {
         if (c->ephemeral) cJSON_AddBoolToObject(p, "ephemeral", 1);
     }
     int id = cx_request(c, resume && *resume ? "thread/resume" : "thread/start", p);
-    cJSON *r = id ? cx_wait_response(c, id) : NULL;
+    cJSON *r = id ? cx_wait_response(c, id, 1) : NULL;
     if (!r) return 0;
     cJSON *result = cJSON_GetObjectItemCaseSensitive(r, "result");
     cJSON *thread = result ? cJSON_GetObjectItemCaseSensitive(result, "thread") : NULL;
@@ -633,6 +661,7 @@ codex_client *codex_start(const codex_opts *opts) {
     cx_seed_effort(c, o.cwd);
     c->resume = cx_dup(o.resume_session);
     c->project = cx_dup(o.cwd);
+    c->cli = cx_dup(cli);
     c->sandbox = strdup(o.bypass_approvals ? "danger-full-access" :
                         (o.sandbox && *o.sandbox ? o.sandbox : "workspace-write"));
     if (!c->sandbox) { codex_stop(c); return NULL; }
@@ -733,7 +762,7 @@ int codex_trust_project(codex_client *c, const char *path) {
     cJSON_AddItemToObject(p, "value", projects);
     cJSON_AddStringToObject(p, "mergeStrategy", "upsert");
     int id = cx_request(c, "config/value/write", p);
-    cJSON *r = id ? cx_wait_response(c, id) : NULL;
+    cJSON *r = id ? cx_wait_response(c, id, 1) : NULL;
     if (!r) return 0;
     cJSON *result = cJSON_GetObjectItemCaseSensitive(r, "result");
     const char *status = result ? cJSON_GetStringValue(
@@ -745,7 +774,7 @@ int codex_trust_project(codex_client *c, const char *path) {
 
 const char *codex_last_error(codex_client *c) {
     if (!c) return NULL;
-    if (c->turn_err[0]) return c->turn_err;
+    if (c->fault[0]) return c->fault;
     cx_drain_stderr(c);
     cx_strip_trust_warning(c);
     while (c->err_len && (c->err[c->err_len - 1] == '\n' ||
@@ -1186,7 +1215,7 @@ char *codex_send_ex(codex_client *c, const char *user_text, codex_result *meta) 
     if (meta) memset(meta, 0, sizeof *meta);
     if (!c || !user_text) return NULL;
     if (!cx_await_ready(c)) return NULL;
-    c->turn_err[0] = '\0';
+    c->fault[0] = '\0';
     if (!c->session_id[0] && !cx_open_thread(c, NULL)) return NULL;
     cJSON *p = cJSON_CreateObject(), *input = cJSON_CreateArray();
     cJSON *text = cJSON_CreateObject();
@@ -1204,7 +1233,7 @@ char *codex_send_ex(codex_client *c, const char *user_text, codex_result *meta) 
     c->mark_cache_read = c->total_cache_read;
     c->mark_cache_write = c->total_cache_write;
     int id = cx_request(c, "turn/start", p);
-    cJSON *response = id ? cx_wait_response(c, id) : NULL;
+    cJSON *response = id ? cx_wait_response(c, id, 1) : NULL;
     if (!response) return NULL;
     cJSON *result = cJSON_GetObjectItemCaseSensitive(response, "result");
     cJSON *turn = result ? cJSON_GetObjectItemCaseSensitive(result, "turn") : NULL;
@@ -1251,7 +1280,7 @@ char *codex_send_ex(codex_client *c, const char *user_text, codex_result *meta) 
         } else if (method && !strcmp(method, "rawResponseItem/completed")) {
             cx_raw_item_event(c, params);
         } else if (method && !strcmp(method, "error")) {
-            cx_note_turn_error(c, params ? cJSON_GetObjectItemCaseSensitive(
+            cx_note_fault(c, params ? cJSON_GetObjectItemCaseSensitive(
                 params, "error") : NULL);
         } else if (method && !strcmp(method, "turn/completed")) {
             cJSON *t = params ? cJSON_GetObjectItemCaseSensitive(params, "turn") : NULL;
@@ -1260,8 +1289,8 @@ char *codex_send_ex(codex_client *c, const char *user_text, codex_result *meta) 
             if (status && !strcmp(status, "interrupted")) {
                 if (meta) meta->interrupted = 1;
             } else if (!status || strcmp(status, "completed")) {
-                cx_note_turn_error(c, t ? cJSON_GetObjectItemCaseSensitive(t, "error")
-                                        : NULL);
+                cx_note_fault(c, t ? cJSON_GetObjectItemCaseSensitive(t, "error")
+                                   : NULL);
                 failed = 1;
             }
             completed = 1;
@@ -1318,7 +1347,7 @@ void codex_stop(codex_client *c) {
     if (c->notice_fd[0] >= 0) close(c->notice_fd[0]);
     if (c->notice_fd[1] >= 0) close(c->notice_fd[1]);
     free(c->model); free(c->effort); free(c->sandbox); free(c->sys); free(c->resume);
-    free(c->project); free(c->buf);
+    free(c->project); free(c->cli); free(c->buf);
     if (c->warning_mu_ready) pthread_mutex_destroy(&c->warning_mu);
     free(c);
 }
