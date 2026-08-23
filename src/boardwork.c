@@ -548,12 +548,10 @@ int boardwork_start(const struct board_card *c, char *why, int size)
         snprintf(path, sizeof path, "%s", c->cwd);
     }
 
-    const char *wanted = wanted_backend(c);
-    const struct board_profile *p = boardcfg_for_backend(BOARD_WHO_WORKER, wanted);
+    const char *backend = wanted_backend(c);
+    const struct board_profile *p = boardcfg_for_backend(BOARD_WHO_WORKER, backend);
     const char *model = c->model[0] ? c->model : p->model;
     const char *effort = c->effort[0] ? c->effort : p->effort;
-
-    const char *backend = wanted;
 
     int front = workspace_index();
 
@@ -954,15 +952,4 @@ int boardwork_feedback(const struct board_card *c, const char *text)
     board_note(c->id, "you", text);
     workspace_send(at, text, NULL);
     return board_move(c->id, BOARD_DOING, "you", NULL);
-}
-
-void boardwork_begin(void)
-{
-    memset(workers, 0, sizeof workers);
-    pull_failed[0] = '\0';
-}
-
-void boardwork_close_all(void)
-{
-    memset(workers, 0, sizeof workers);
 }

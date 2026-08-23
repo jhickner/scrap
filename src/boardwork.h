@@ -13,8 +13,6 @@ enum board_role {
     BOARD_ROLE_SWEEP,
 };
 
-void boardwork_begin(void);
-
 void boardwork_finished(struct session *s);
 
 int boardwork_start(const struct board_card *c, char *why, int size);
@@ -59,7 +57,5 @@ int boardwork_approve(const struct board_card *c, int audit);
 int boardwork_reject(const struct board_card *c, const char *why);
 
 int boardwork_feedback(const struct board_card *c, const char *text);
-
-void boardwork_close_all(void);
 
 #endif
