@@ -87,7 +87,7 @@ static char *script_for(const struct board_card *c, const char *root,
         "echo '== tidy'\n"
         "git -C %s worktree remove --force %s >/dev/null 2>&1\n"
         "git -C %s branch -d %s >/dev/null 2>&1\n"
-        "echo landed\n",
+        "echo merged\n",
         qroot, branch, qroot, qtree, qroot, branch);
 
     return out;
@@ -179,14 +179,25 @@ int boardmerge_take(const char *key, const char *out, int ok)
         struct board_card *cards = NULL;
         int                n = board_load(&cards);
         struct board_card *c = board_find(cards, n, id);
+
+        char into[128] = "";
         if (c) {
+            boardmerge_base(c, into, sizeof into);
+
             struct board_card edited = *c;
             edited.col = BOARD_DONE;
             edited.worktree[0] = '\0';
             board_update(&edited);
         }
         board_free(cards, n);
-        board_note(id, "board", "landed");
+
+        char note[256];
+        if (into[0])
+            snprintf(note, sizeof note, "merged into %s", into);
+        else
+            snprintf(note, sizeof note, "merged");
+        board_note(id, "board", note);
+
     } else {
         struct board_card *cards = NULL;
         int                n = board_load(&cards);

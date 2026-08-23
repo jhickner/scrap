@@ -63,8 +63,8 @@ void boardlog_turn(const char *id, const char *stage, const char *prompt,
         return;
 
     fprintf(f, "\n## %s \xc2\xb7 %s\n", stamp, stage ? stage : "?");
-    put_block(f, "asked", prompt);
-    put_block(f, "answered", reply);
+    put_block(f, "prompt", prompt);
+    put_block(f, "response", reply);
     fclose(f);
 }
 
@@ -78,7 +78,7 @@ void boardlog_note(const char *id, const char *who, const char *text)
     const char *nl = text ? strchr(text, '\n') : NULL;
     if (nl && nl[1]) {
         fprintf(f, "\n## %s \xc2\xb7 %s\n", stamp, who ? who : "board");
-        put_block(f, "said", text);
+        put_block(f, "note", text);
     } else {
         fprintf(f, "\n- `%s` **%s** %s\n", stamp, who ? who : "board",
                 text ? text : "");

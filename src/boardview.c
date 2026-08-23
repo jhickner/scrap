@@ -478,9 +478,58 @@ static void note_line(const char **notes, int *n, char **owned, const char *text
     (*n)++;
 }
 
+static int stage_ran(const struct board_card *c, const char *who)
+{
+    for (int i = 0; i < c->log_n; i++)
+        if (!strcmp(c->log[i].who, who))
+            return 1;
+    return 0;
+}
+
+static void build_stages(const struct board_card *c, const char **notes, int *n,
+                         char **owned)
+{
+    static const struct {
+        const char     *name;
+        enum board_col  at;
+        enum board_step step;
+        const char     *who;
+    } STAGE[] = {
+        {"triage", BOARD_NEW,     BOARD_STEPS,       "triage"},
+        {"worker", BOARD_DOING,   BOARD_STEPS,       "worker"},
+        {"review", BOARD_REVIEW,  BOARD_STEP_REVIEW, "you"},
+        {"audit",  BOARD_AUDIT,   BOARD_STEP_AUDIT,  "audit"},
+        {"merge",  BOARD_MERGING, BOARD_STEP_MERGE,  NULL},
+    };
+
+    for (size_t i = 0; i < sizeof STAGE / sizeof *STAGE; i++) {
+        if (STAGE[i].step != BOARD_STEPS &&
+            !boardcfg_kind_takes(c->kind, STAGE[i].step))
+            continue;
+
+        const char *state;
+        int         here = c->col == STAGE[i].at ||
+                           (STAGE[i].at == BOARD_NEW && c->col == BOARD_UNCLEAR);
+        if (here)
+            state = "current";
+        else if (c->col < STAGE[i].at)
+            state = "pending";
+        else if (STAGE[i].who && !stage_ran(c, STAGE[i].who))
+            state = "skipped";
+        else
+            state = "done";
+
+        char *line = dsprintf("  %-8s %s", STAGE[i].name, state);
+        note_line(notes, n, owned, line ? line : "");
+        free(line);
+    }
+}
+
 static int build_notes(const struct board_card *c, const char **notes, char **owned)
 {
     int n = 0;
+
+    build_stages(c, notes, &n, owned);
 
     for (int i = 0; i < c->log_n && n < NOTES_MAX; i++) {
         if (i == 0)
