@@ -766,6 +766,7 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             return KEY_SUBMIT;
         }
         if (!live && p->board && p->repl.len == 0 && !overlay_open(p)) {
+            viewport_defer();
             chrome_clear();
             p->board(p->board_ud);
         }
@@ -784,6 +785,7 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
         if (p->blank && p->repl.len == 0 && !overlay_open(p)) {
             if (live)
                 status_pause();
+            viewport_defer();
             chrome_clear();
             p->blank(p->blank_ud);
             if (live)
@@ -1028,9 +1030,11 @@ static char *read_loop(struct prompt *p)
         case KEY_SUBMIT: {
             p->external_taken = 0;
             char *out = take_line(p);
+            viewport_defer();
             chrome_clear();
             if (out && prompt_echoes(p, out))
                 prompt_echo_message(out);
+            viewport_flush();
             return out;
         }
 

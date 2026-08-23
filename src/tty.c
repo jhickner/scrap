@@ -10,6 +10,8 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include "viewport.h"
+
 #define BRACKETED_PASTE_ON  "\x1b[?2004h"
 #define BRACKETED_PASTE_OFF "\x1b[?2004l"
 
@@ -295,6 +297,8 @@ static int refill(int timeout_ms)
     if (pending_pos < pending_len)
         return (int)(pending_len - pending_pos);
     pending_pos = pending_len = 0;
+
+    viewport_flush();
 
     int ready = wait_readable(timeout_ms);
     if (ready <= 0)

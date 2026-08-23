@@ -59,6 +59,8 @@ void chrome_modal(chrome_modal_fn fn, void *ud)
 {
     modal = fn;
     modal_ud = ud;
+    if (!fn)
+        viewport_defer();
     chrome_paint();
 }
 

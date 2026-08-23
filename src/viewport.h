@@ -36,6 +36,9 @@ void viewport_resume(void);
 
 void viewport_paint(void);
 
+void viewport_defer(void);
+void viewport_flush(void);
+
 void viewport_forget(void);
 void viewport_touch(void);
 

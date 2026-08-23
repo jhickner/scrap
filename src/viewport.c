@@ -63,6 +63,7 @@ static int handed;
 static int suspended;
 static int scrolled;
 static int dirty;
+static int deferred;
 
 static unsigned anchor_id;
 static int      anchor_skip;
@@ -919,9 +920,23 @@ void viewport_forget(void)
     frame_reset(&shown);
 }
 
+void viewport_defer(void)
+{
+    deferred = 1;
+}
+
+void viewport_flush(void)
+{
+    if (!deferred)
+        return;
+    deferred = 0;
+    if (dirty)
+        viewport_paint();
+}
+
 void viewport_paint(void)
 {
-    if (!active || suspended || held || in_render)
+    if (!active || suspended || held || in_render || deferred)
         return;
 
     int H = tty_rows(), W = tty_screen_columns();
@@ -1143,6 +1158,7 @@ void viewport_end(void)
     if (!active && !handed)
         return;
     active = 0;
+    deferred = 0;
     handed = 0;
     suspended = 0;
     direct_str(MOUSE_OFF);
@@ -1156,6 +1172,7 @@ void viewport_handoff(void)
     if (!active)
         return;
     active = 0;
+    deferred = 0;
     handed = 1;
     suspended = 0;
     direct_str(MOUSE_OFF);
@@ -1225,6 +1242,7 @@ void viewport_suspend(void)
     if (!active || suspended)
         return;
     suspended = 1;
+    deferred = 0;
     direct_str(MOUSE_OFF);
     direct_str("\x1b[?25h");
     direct_str("\x1b[?1049l");
