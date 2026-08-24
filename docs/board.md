@@ -193,9 +193,10 @@ duplicates mechanisms; the sweep looks for that, so the board feeds itself. It
 is a worker like any other: a card of its own in `active`, a tab `g` reaches,
 and what it proposes waits on that card in `review`. Approving files the
 proposals as ordinary cards in `new`, rejecting drops them, and editing the
-card's spec first is how you drop one of several. `w` runs one on the spot for the selected
-card's repo, whatever the count stands at. It counts cards rather than minutes — mux has no daemon and the board only exists while it is open, so a
-timer would fire when nothing was watching, while a counter trips exactly when
+card's spec first is how you drop one of several. `w` runs one on the spot for
+the selected card's repo, whatever the count stands at. It counts cards rather
+than minutes — mux has no daemon and the board only exists while it is open, so
+a timer would fire when nothing was watching, while a counter trips exactly when
 you have been using the thing.
 
 ## The view
