@@ -163,7 +163,7 @@ static int install_reply(const char *reply)
 {
     cJSON *root = cJSON_Parse(json_start(reply));
     if (!root) {
-        ui_error("that did not come back as a matrix");
+        ui_error("could not parse the matrix");
         ui_put("\n");
         ui_flush();
         return 0;
@@ -193,7 +193,7 @@ static int install_reply(const char *reply)
     cJSON_Delete(root);
 
     if (!kept) {
-        ui_error("nothing usable came back");
+        ui_error("no usable rows");
         ui_put("\n");
         ui_flush();
     }
