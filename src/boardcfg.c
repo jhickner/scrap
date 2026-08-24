@@ -127,6 +127,8 @@ static void defaults(struct board_cfg *c)
     c->audit_lines = 200;
     c->sweep_every = 8;
     c->archive_after = 14;
+    c->done_shown = 20;
+    c->backlog_shown = 20;
     c->verify[0] = '\0';
     snprintf(c->projects, sizeof c->projects, "~/working");
 
@@ -158,6 +160,8 @@ static void overlay(struct board_cfg *c, const cJSON *o)
     set_int(&c->audit_lines, o, "audit_lines");
     set_int(&c->sweep_every, o, "sweep_every");
     set_int(&c->archive_after, o, "archive_after");
+    set_int(&c->done_shown, o, "done_shown");
+    set_int(&c->backlog_shown, o, "backlog_shown");
     set_str(c->verify, sizeof c->verify, o, "verify");
 
     const cJSON *kinds = cJSON_GetObjectItem((cJSON *)o, "kinds");
@@ -277,6 +281,8 @@ static void read_settings(struct board_cfg *c)
     c->audit_lines = mdcfg_int(&m, "audit lines", c->audit_lines);
     c->sweep_every = mdcfg_int(&m, "sweep every", c->sweep_every);
     c->archive_after = mdcfg_int(&m, "archive after", c->archive_after);
+    c->done_shown = mdcfg_int(&m, "done shown", c->done_shown);
+    c->backlog_shown = mdcfg_int(&m, "backlog shown", c->backlog_shown);
 
     const char *serving = mdcfg_get(&m, "serving");
     if (*serving)
@@ -396,7 +402,7 @@ static int write_settings(const struct board_cfg *c)
     if (!board_path(path, sizeof path, BOARD_DIR, "settings"))
         return 0;
 
-    char nums[7][32];
+    char nums[9][32];
     snprintf(nums[0], sizeof nums[0], "%d", c->workers);
     snprintf(nums[1], sizeof nums[1], "%d", c->auto_pull);
     snprintf(nums[2], sizeof nums[2], "%d", c->auto_pick);
@@ -404,14 +410,18 @@ static int write_settings(const struct board_cfg *c)
     snprintf(nums[4], sizeof nums[4], "%d", c->audit_lines);
     snprintf(nums[5], sizeof nums[5], "%d", c->sweep_every);
     snprintf(nums[6], sizeof nums[6], "%d", c->archive_after);
+    snprintf(nums[7], sizeof nums[7], "%d", c->done_shown);
+    snprintf(nums[8], sizeof nums[8], "%d", c->backlog_shown);
 
     const char *keys[] = {"serving", "workers", "auto pull", "auto pick",
                           "audit files", "audit lines", "sweep every",
-                          "archive after", "check", "projects"};
+                          "archive after", "done shown", "backlog shown",
+                          "check", "projects"};
     const char *vals[] = {c->serving, nums[0], nums[1], nums[2], nums[3],
-                          nums[4], nums[5], nums[6], c->verify, c->projects};
+                          nums[4], nums[5], nums[6], nums[7], nums[8],
+                          c->verify, c->projects};
 
-    return mdcfg_write(path, keys, vals, 10,
+    return mdcfg_write(path, keys, vals, 12,
         "serving is the backend every tiered role runs on.\n"
         "workers is how many may run at once.\n"
         "auto pull is 1 to start backlog cards on a free worker, 0 to wait to\n"
@@ -423,6 +433,8 @@ static int write_settings(const struct board_cfg *c)
         "that half off.\n"
         "sweep every is cards landed in a repo before a sweep of it; zero never.\n"
         "archive after is days a done card stays on the board; zero forever.\n"
+        "done shown and backlog shown are how many cards those columns list;\n"
+        "zero lists them all.\n"
         "check is run in the worktree before a card lands, and it does not land\n"
         "if that fails.\n"
         "projects is the directory the repos sit in; triage sets a card cwd\n"
@@ -963,6 +975,8 @@ int boardcfg_set(const struct board_cfg *c)
     cache.audit_lines = c->audit_lines;
     cache.sweep_every = c->sweep_every;
     cache.archive_after = c->archive_after;
+    cache.done_shown = c->done_shown;
+    cache.backlog_shown = c->backlog_shown;
 
     for (int i = 0; i < cache.kinds_n; i++) {
         free(cache.kinds[i].means);

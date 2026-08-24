@@ -75,6 +75,8 @@ struct board_cfg {
     int audit_lines;
     int sweep_every;
     int archive_after;
+    int done_shown;
+    int backlog_shown;
 
     char verify[256];
     char projects[512];
