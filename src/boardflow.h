@@ -17,6 +17,8 @@ const char *boardflow_fail(const struct board_card *c);
 
 enum board_runs boardflow_runs(const struct board_card *c);
 
+int boardflow_waits_on_you(const struct board_card *c);
+
 const struct board_role *boardflow_role(const struct board_card *c);
 
 char *boardflow_approval(const struct board_card *c);

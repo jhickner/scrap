@@ -19,6 +19,11 @@ enum board_runs boardflow_runs(const struct board_card *c)
     return p ? p->runs : BOARD_RUNS_MODES;
 }
 
+int boardflow_waits_on_you(const struct board_card *c)
+{
+    return boardflow_runs(c) == BOARD_RUNS_PERSON;
+}
+
 const char *boardflow_next(const struct board_card *c, const char *after,
                            int force)
 {

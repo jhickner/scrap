@@ -1,6 +1,7 @@
 #include "text.h"
 
 #include <ctype.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +11,16 @@
 #include <unistd.h>
 
 #include "app.h"
+
+char *text_dsprintf(const char *fmt, ...)
+{
+    char    buf[4096];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    return strdup(buf);
+}
 
 void text_one_line(const char *in, char *out, size_t size)
 {

@@ -13,6 +13,9 @@ void text_block(const char *in, char *out, size_t size);
 
 void text_chomp(char *s);
 
+__attribute__((format(printf, 1, 2)))
+char *text_dsprintf(const char *fmt, ...);
+
 char *text_slurp(const char *path, size_t max_bytes, size_t *len_out);
 
 int text_spit(const char *path, int (*fill)(FILE *f, void *ud), void *ud);
