@@ -714,6 +714,35 @@ static void write_the_shipped_kinds(void)
     boardcfg_reload();
 }
 
+static void test_a_named_kind_skips_triage(void)
+{
+    write_the_shipped_kinds();
+
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("bug: the list scrolls past its end\n\nhow to repeat it",
+                     "/tmp/repo", id),
+           "capture");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    expect(boardtriage_start(board_find(v, n, id)), "the named kind is taken");
+    board_free(v, n);
+
+    n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    expect(c && !strcmp(c->kind, "bug"), "the card is the kind it named");
+    expect(c && c->col == BOARD_BACKLOG, "and skips new for backlog");
+    expect(c && c->priority == boardcfg_priority("bug"),
+           "at the priority of that kind");
+    expect(c && !strcmp(c->title, "the list scrolls past its end"),
+           "the title drops the prefix");
+    expect(c && c->body && strstr(c->body, "how to repeat it") != NULL,
+           "the body is left whole");
+    board_free(v, n);
+
+    board_remove(id);
+}
+
 static void test_projects_block(void)
 {
     char dir[4096];
@@ -1385,6 +1414,7 @@ int main(void)
     test_plan_files_a_card();
     test_reply_json();
     test_kinds();
+    test_a_named_kind_skips_triage();
     test_projects_block();
     test_a_kind_file_carries_its_approval_prompt();
     test_a_kind_prompt_takes_the_card_id();

@@ -150,10 +150,47 @@ static void failed(const char *id, const char *why)
     board_move(id, BOARD_UNCLEAR, NULL, "triage", why);
 }
 
+static int kind_prefix(const char *title, char *out, size_t size)
+{
+    size_t n = strcspn(title, ":\n");
+    if (!n || title[n] != ':' || n >= size)
+        return 0;
+    memcpy(out, title, n);
+    out[n] = 0;
+    return boardcfg_kind(out) != NULL;
+}
+
+static int classify_as(const struct board_card *c, const char *kind)
+{
+    struct board_card edited = *c;
+    snprintf(edited.kind, sizeof edited.kind, "%s", kind);
+    edited.priority = boardcfg_priority(kind);
+    edited.col = BOARD_BACKLOG;
+
+    const char *rest = c->title + strlen(kind) + 1;
+    while (*rest == ' ')
+        rest++;
+    if (*rest)
+        snprintf(edited.title, sizeof edited.title, "%s", rest);
+
+    if (!board_update(&edited))
+        return 0;
+
+    char said[256];
+    snprintf(said, sizeof said, "%s · %s · priority %d", kind,
+             boardflow_lands(kind) ? "to build" : "to file", edited.priority);
+    board_note(c->id, "triage", said);
+    return 1;
+}
+
 int boardtriage_start(const struct board_card *c)
 {
     if (!c)
         return 0;
+
+    char named[sizeof c->kind];
+    if (kind_prefix(c->title, named, sizeof named))
+        return classify_as(c, named);
 
     char key[CHILD_KEY_MAX];
     triage_key(c->id, key, sizeof key);

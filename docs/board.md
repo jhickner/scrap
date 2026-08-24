@@ -71,6 +71,12 @@ and `question`. Priority is not among them: it follows from the kind, out of
 the table in the config screen, so the classifier is not asked to invent a
 number on top of everything else. A card can still be given one by hand.
 
+A card whose first line begins with a configured kind and a colon -- `bug: the
+list scrolls past its end` -- is classified as that kind without the model
+running at all: the prefix comes off the title, the card takes that kind's
+priority and goes straight to `backlog`. The body is left whole, so nothing the
+capture said is lost.
+
 `cwd` is not the directory the card was captured in. The `projects` setting
 names the directory the repos sit in, `~/working` by default, and its
 subdirectories are listed to the classifier with the card so a card thrown from
