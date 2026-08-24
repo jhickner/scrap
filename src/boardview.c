@@ -54,6 +54,8 @@
 
 #define BOARD_RECENT 3
 
+#define DONE_SHOWN 20
+
 #define BOARD_RECENT_INDENT 6
 
 #define BOARD_HINT \
@@ -320,6 +322,8 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
         if (!k)
             continue;
         qsort(in, (size_t)k, sizeof *in, by_col);
+        if (col == BOARD_DONE && k > DONE_SHOWN)
+            k = DONE_SHOWN;
 
         shown += k;
         row_heading(l, board_col_name((enum board_col)col));
