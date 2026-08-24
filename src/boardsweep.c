@@ -191,8 +191,11 @@ static const char *next_line(const char *at, char *out, size_t size)
 
     const char *end = strchr(at, '\n');
     size_t      len = end ? (size_t)(end - at) : strlen(at);
-    if (len >= size)
+    if (len >= size) {
         len = size - 1;
+        while (len && ((unsigned char)at[len] & 0xC0) == 0x80)
+            len--;
+    }
     memcpy(out, at, len);
     out[len] = '\0';
     return end ? end + 1 : at + strlen(at);
