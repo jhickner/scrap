@@ -10,6 +10,7 @@
 #include "app.h"
 #include "ask.h"
 #include "cmd.h"
+#include "models.h"
 #include "pick.h"
 #include "session.h"
 #include "settings.h"
@@ -245,9 +246,7 @@ static const char *short_model(const struct mux_spec *m)
 {
     if (!*m->model)
         return "default";
-    if (!strcmp(m->backend, "claude") && !strncmp(m->model, "claude-", 7) && m->model[7])
-        return m->model + 7;
-    return m->model;
+    return models_short_name(m->backend, m->model);
 }
 
 void muxcfg_label(const struct mux_spec *m, char *out, size_t cap)

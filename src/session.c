@@ -1765,9 +1765,7 @@ static void await_model(struct session *s)
 
 const char *session_model_short(const struct session *s, const char *model)
 {
-    if (strcmp(s->backend, "claude") == 0 && strncmp(model, "claude-", 7) == 0 && model[7])
-        return model + 7;
-    return model;
+    return models_short_name(s->backend, model);
 }
 
 const char *session_model_label(const struct session *s)

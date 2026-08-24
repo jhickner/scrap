@@ -332,6 +332,13 @@ int models_for(const char *backend, const struct pick_item **out)
     return l->n;
 }
 
+const char *models_short_name(const char *backend, const char *model)
+{
+    if (!strcmp(backend, "claude") && !strncmp(model, "claude-", 7) && model[7])
+        return model + 7;
+    return model;
+}
+
 /* Codex takes only the full slug: `sol` reaches the API and comes back a 400.
  * Expand a bare family name against the cached catalogue when exactly one slug
  * ends in it. */

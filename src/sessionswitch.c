@@ -16,6 +16,7 @@
 #include "hud.h"
 #include "boardwork.h"
 #include "livelist.h"
+#include "models.h"
 #include "pick.h"
 #include "scrollback.h"
 #include "sessionload.h"
@@ -58,13 +59,6 @@ struct row {
     char label[256];
     char detail[512];
 };
-
-static const char *short_model(const char *backend, const char *model)
-{
-    if (!strcmp(backend, "claude") && !strncmp(model, "claude-", 7) && model[7])
-        return model + 7;
-    return model;
-}
 
 static void row_status(struct row *r, const char *status)
 {
@@ -166,12 +160,12 @@ static void fill_live(struct row *r, const struct live_session *v)
     if (v->card[0])
         snprintf(r->detail, sizeof r->detail, "card %s \xc2\xb7 %s %s \xc2\xb7 %s%s",
                  v->card, v->backend,
-                 short_model(v->backend, v->label[0] ? v->label : v->model),
+                 models_short_name(v->backend, v->label[0] ? v->label : v->model),
                  where, when);
     else
         snprintf(r->detail, sizeof r->detail, "%s %s \xc2\xb7 %s%s",
                  v->backend,
-                 short_model(v->backend, v->label[0] ? v->label : v->model),
+                 models_short_name(v->backend, v->label[0] ? v->label : v->model),
                  where, when);
     row_status(r, v->status);
 }
