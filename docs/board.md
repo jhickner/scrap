@@ -62,6 +62,12 @@ and `question`. Priority is not among them: it follows from the kind, out of
 the table in the config screen, so the classifier is not asked to invent a
 number on top of everything else. A card can still be given one by hand.
 
+`cwd` is not the directory the card was captured in. The `projects` setting
+names the directory the repos sit in, `~/working` by default, and its
+subdirectories are listed to the classifier with the card so a card thrown from
+the phone, or from the wrong repo, lands on the project it names. Nothing there
+matches, or the setting is empty, and the capture directory stands.
+
 Kinds are configuration, not code. `board.json` holds the list: each has a
 name, what the classifier is told it means, a priority, the prompt a worker
 gets, the steps a card of that kind takes once a worker has had it --

@@ -34,18 +34,31 @@ static char *build_prompt(const struct board_card *c)
     char kinds[4096];
     boardcfg_kinds_block(kinds, sizeof kinds);
 
+    char projects[8192];
+    boardcfg_projects_block(projects, sizeof projects);
+
+    char where[8600] = {0};
+    if (projects[0])
+        snprintf(where, sizeof where,
+                 "\n\ncwd is the directory of the project the card is about, "
+                 "which need not be the one it was captured in. Match the "
+                 "project the card names against this list and answer with its "
+                 "path; if none of them is it, keep the capture directory.\n%s",
+                 projects);
+
     const char *mark = strstr(head, "{kinds}");
     size_t      lead = mark ? (size_t)(mark - head) : strlen(head);
     const char *rest = mark ? mark + strlen("{kinds}") : "";
 
-    size_t need = strlen(head) + strlen(kinds) + strlen(body) + strlen(c->cwd) + 128;
+    size_t need = strlen(head) + strlen(kinds) + strlen(where) + strlen(body) +
+                  strlen(c->cwd) + 128;
     char  *out = malloc(need);
     if (!out)
         return NULL;
     snprintf(out, need,
-             "%.*s%s%s%s\n\nThe card was captured in: %s\n\ncard:\n%s\n",
+             "%.*s%s%s%s\n\nThe card was captured in: %s%s\n\ncard:\n%s\n",
              (int)lead, head, kinds, mark ? "" : "\n", rest,
-             c->cwd[0] ? c->cwd : "(nowhere in particular)", body);
+             c->cwd[0] ? c->cwd : "(nowhere in particular)", where, body);
     return out;
 }
 

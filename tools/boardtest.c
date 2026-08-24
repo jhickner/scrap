@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "board.h"
@@ -506,6 +507,55 @@ static void write_the_shipped_kinds(void)
     boardcfg_reload();
 }
 
+static void test_projects_block(void)
+{
+    char dir[4096];
+    snprintf(dir, sizeof dir, "%s/working", home);
+    mkdir(dir, 0700);
+
+    char path[4300];
+    snprintf(path, sizeof path, "%s/alpha", dir);
+    mkdir(path, 0700);
+    snprintf(path, sizeof path, "%s/mux", dir);
+    mkdir(path, 0700);
+    snprintf(path, sizeof path, "%s/.hidden", dir);
+    mkdir(path, 0700);
+    snprintf(path, sizeof path, "%s/notes.txt", dir);
+    fclose(fopen(path, "w"));
+
+    boardcfg_reload();
+
+    char block[8192];
+    boardcfg_projects_block(block, sizeof block);
+
+    char want[4300];
+    snprintf(want, sizeof want, "%s/mux", dir);
+    expect(strstr(block, want) != NULL, "a project is listed by its path");
+    expect(!strstr(block, "notes.txt"), "a file is not a project");
+    expect(!strstr(block, ".hidden"), "nor is a dotted directory");
+
+    snprintf(want, sizeof want, "%s/alpha", dir);
+    const char *first = strstr(block, want);
+    snprintf(want, sizeof want, "%s/mux", dir);
+    expect(first && first < strstr(block, want), "the list is sorted");
+
+    struct board_cfg *c = boardcfg_copy();
+    c->projects[0] = '\0';
+    expect(boardcfg_set(c), "the directory writes back");
+    boardcfg_free(c);
+    boardcfg_reload();
+    expect(boardcfg()->projects[0] == '\0', "an empty directory survives a reload");
+
+    boardcfg_projects_block(block, sizeof block);
+    expect(block[0] == '\0', "and lists nothing");
+
+    c = boardcfg_copy();
+    snprintf(c->projects, sizeof c->projects, "~/working");
+    boardcfg_set(c);
+    boardcfg_free(c);
+    boardcfg_reload();
+}
+
 static void test_kinds(void)
 {
     write_the_shipped_kinds();
@@ -1007,6 +1057,7 @@ int main(void)
     test_sweep_files_against_the_repo();
     test_reply_json();
     test_kinds();
+    test_projects_block();
     test_a_kind_file_carries_its_approval_prompt();
     test_archive();
     test_empty_and_missing();

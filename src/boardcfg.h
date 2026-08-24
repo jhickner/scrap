@@ -76,6 +76,7 @@ struct board_cfg {
     int archive_after;
 
     char verify[256];
+    char projects[512];
 
     struct board_kind kinds[BOARD_KINDS_MAX];
     int               kinds_n;
@@ -124,5 +125,7 @@ int boardcfg_priority(const char *kind);
 int boardcfg_kind_takes(const char *kind, enum board_step step);
 
 void boardcfg_kinds_block(char *out, size_t size);
+
+void boardcfg_projects_block(char *out, size_t size);
 
 #endif

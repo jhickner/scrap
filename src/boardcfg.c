@@ -1,8 +1,10 @@
 #include "boardcfg.h"
 
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "text.h"
@@ -126,6 +128,7 @@ static void defaults(struct board_cfg *c)
     c->sweep_every = 8;
     c->archive_after = 14;
     c->verify[0] = '\0';
+    snprintf(c->projects, sizeof c->projects, "~/working");
 
     snprintf(c->serving, sizeof c->serving, "claude");
     for (const char *const *b = backend_names(); *b && c->backends_n < BOARD_BACKENDS_MAX; b++)
@@ -280,6 +283,8 @@ static void read_settings(struct board_cfg *c)
         snprintf(c->serving, sizeof c->serving, "%s", serving);
 
     snprintf(c->verify, sizeof c->verify, "%s", mdcfg_get(&m, "check"));
+    if (mdcfg_has(&m, "projects"))
+        snprintf(c->projects, sizeof c->projects, "%s", mdcfg_get(&m, "projects"));
     mdcfg_free(&m);
 }
 
@@ -401,11 +406,11 @@ static int write_settings(const struct board_cfg *c)
 
     const char *keys[] = {"serving", "workers", "auto pull", "auto pick",
                           "audit files", "audit lines", "sweep every",
-                          "archive after", "check"};
+                          "archive after", "check", "projects"};
     const char *vals[] = {c->serving, nums[0], nums[1], nums[2], nums[3],
-                          nums[4], nums[5], nums[6], c->verify};
+                          nums[4], nums[5], nums[6], c->verify, c->projects};
 
-    return mdcfg_write(path, keys, vals, 9,
+    return mdcfg_write(path, keys, vals, 10,
         "serving is the backend every tiered role runs on.\n"
         "workers is how many may run at once.\n"
         "auto pull is 1 to start backlog cards on a free worker, 0 to wait to\n"
@@ -418,7 +423,9 @@ static int write_settings(const struct board_cfg *c)
         "sweep every is cards landed in a repo before a sweep of it; zero never.\n"
         "archive after is days a done card stays on the board; zero forever.\n"
         "check is run in the worktree before a card lands, and it does not land\n"
-        "if that fails.\n");
+        "if that fails.\n"
+        "projects is the directory the repos sit in; triage sets a card cwd\n"
+        "from the project it names. Empty leaves the cwd it was captured in.\n");
 }
 
 static int write_roles(const struct board_cfg *c)
@@ -712,6 +719,70 @@ void boardcfg_kinds_block(char *out, size_t size)
                                c->kinds[i].means ? c->kinds[i].means : "");
 }
 
+#define PROJECTS_MAX 128
+#define PROJECT_NAME 128
+
+static int by_name(const void *a, const void *b)
+{
+    return strcmp((const char *)a, (const char *)b);
+}
+
+void boardcfg_projects_block(char *out, size_t size)
+{
+    if (!size)
+        return;
+    out[0] = '\0';
+
+    const struct board_cfg *c = boardcfg();
+    if (!c->projects[0])
+        return;
+
+    char       *full = path_expand_home(c->projects);
+    const char *root = full ? full : c->projects;
+
+    DIR *d = opendir(root);
+    if (!d) {
+        free(full);
+        return;
+    }
+
+    char names[PROJECTS_MAX][PROJECT_NAME];
+    int  found = 0;
+
+    const struct dirent *e;
+    while ((e = readdir(d)) && found < PROJECTS_MAX) {
+        if (e->d_name[0] == '.')
+            continue;
+
+        char path[4096];
+        if ((size_t)snprintf(path, sizeof path, "%s/%s", root, e->d_name) >= sizeof path)
+            continue;
+
+        struct stat st;
+        if (stat(path, &st) || !S_ISDIR(st.st_mode))
+            continue;
+        if ((size_t)snprintf(names[found], PROJECT_NAME, "%s", e->d_name) >= PROJECT_NAME)
+            continue;
+        found++;
+    }
+    closedir(d);
+
+    if (!found) {
+        free(full);
+        return;
+    }
+    qsort(names, (size_t)found, PROJECT_NAME, by_name);
+
+    size_t at = (size_t)snprintf(out, size, "projects:\n");
+    for (int i = 0; i < found; i++) {
+        int n = snprintf(NULL, 0, "  %s/%s\n", root, names[i]);
+        if (at + (size_t)n >= size)
+            break;
+        at += (size_t)snprintf(out + at, size - at, "  %s/%s\n", root, names[i]);
+    }
+    free(full);
+}
+
 const struct board_role *boardcfg_for_job(const char *job)
 {
     load();
@@ -872,6 +943,7 @@ int boardcfg_set(const struct board_cfg *c)
     }
 
     snprintf(cache.verify, sizeof cache.verify, "%s", c->verify);
+    snprintf(cache.projects, sizeof cache.projects, "%s", c->projects);
     snprintf(cache.serving, sizeof cache.serving, "%s", c->serving);
     cache.backends_n = c->backends_n;
     memcpy(cache.backends, c->backends, sizeof cache.backends);

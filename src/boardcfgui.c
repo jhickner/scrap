@@ -23,6 +23,7 @@ enum row_kind {
     ROW_BACKEND,
     ROW_PROMPT,
     ROW_VERIFY,
+    ROW_PROJECTS,
     ROW_KIND,
     ROW_KIND_NEW,
 };
@@ -85,6 +86,11 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
 
     head(rows, n, "sweep");
     count_row(rows, n, "interval", &c->sweep_every, 0, 500, "cards");
+
+    head(rows, n, "triage");
+    rows[*n].kind = ROW_PROJECTS;
+    rows[*n].label = "projects";
+    (*n)++;
 
     head(rows, n, "kinds");
     for (int i = 0; i < c->kinds_n && *n < ROWS_MAX - 2; i++) {
@@ -193,6 +199,9 @@ static void value_of(const struct row *r, const struct board_cfg *c,
     }
     case ROW_VERIFY:
         snprintf(out, size, "%s", c->verify[0] ? c->verify : "none");
+        break;
+    case ROW_PROJECTS:
+        snprintf(out, size, "%s", c->projects[0] ? c->projects : "none");
         break;
     case ROW_KIND: {
         const struct board_kind *k = &c->kinds[r->kind_at];
@@ -322,6 +331,15 @@ static void edit_prompt(struct board_cfg *c, int at)
         return;
     free(c->roles[at].prompt);
     c->roles[at].prompt = text;
+}
+
+static void edit_projects(struct board_cfg *c)
+{
+    char *said = ask_run("directory the projects sit in", c->projects);
+    if (!said)
+        return;
+    snprintf(c->projects, sizeof c->projects, "%s", said);
+    free(said);
 }
 
 static void edit_verify(struct board_cfg *c)
@@ -489,6 +507,7 @@ void boardcfgui_run(void)
         case ROW_BACKEND: edit_backend(c, rows[at].backend_at); touched = 1; break;
         case ROW_PROMPT:  edit_prompt(c, rows[at].role_at); touched = 1; break;
         case ROW_VERIFY:  edit_verify(c); touched = 1; break;
+        case ROW_PROJECTS: edit_projects(c); touched = 1; break;
         case ROW_KIND:    edit_kind(c, rows[at].kind_at); touched = 1; break;
         case ROW_KIND_NEW: add_kind(c); touched = 1; break;
         default:          break;
