@@ -11,6 +11,10 @@ int boardaudit_is_marker(const char *text);
 
 int boardaudit_size(const struct board_card *c, int *files, int *lines);
 
+/* the same count, at most once every few seconds per card: the board redraws on
+ * a tick and the diff is a fork. */
+int boardaudit_size_cached(const struct board_card *c, int *files, int *lines);
+
 int boardaudit_wanted(const struct board_card *c);
 
 char *boardaudit_prompt(const struct board_card *c);
