@@ -110,6 +110,12 @@ for it. `next kind` on the kind file says what that card is -- `next kind:
 feature` puts it straight in `backlog` at that kind's priority, and an empty
 one sends it through `new` and triage like any other capture.
 
+`dossier` is research written up rather than acted on. It takes `steps: review`
+and no worktree: the worker reads what answers the card and stops with the
+report as its whole reply, which is what you read in review. Approving it sends
+the report -- the `message` skill when the card asked to be texted, the `email`
+skill otherwise -- and the card is done with where it went in the log.
+
 The third outcome is the important one. A cheap classifier told only to pick a
 kind will always pick one, so the prompt licenses "I don't know" explicitly:
 low confidence, or a question, puts the card in `unclear` with the question
