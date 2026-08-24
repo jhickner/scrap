@@ -33,6 +33,7 @@ struct line {
     size_t                from, len;
     int                   row;
     int                   indent;
+    enum ui_role          role;
 };
 
 struct lines {
@@ -130,7 +131,8 @@ static struct line *line_add(struct lines *l)
     return r;
 }
 
-static void wrap_notes(struct lines *out, const struct md_text *note, int budget)
+static void wrap_notes(struct lines *out, const struct md_text *note, int budget,
+                       enum ui_role role)
 {
     size_t      rest = 0;
     const char *text = md_text_plain(note, &rest);
@@ -164,6 +166,7 @@ static void wrap_notes(struct lines *out, const struct md_text *note, int budget
         l->from = at;
         l->len = got;
         l->indent = first ? 0 : (int)lead;
+        l->role = role;
         at += got + skip;
         first = 0;
     }
@@ -181,7 +184,8 @@ static int layout(struct state *st, int columns)
         note_budget = 8;
 
     for (int i = 0; i < form->notes_n; i++)
-        wrap_notes(out, st->notes ? st->notes[i] : NULL, note_budget);
+        wrap_notes(out, st->notes ? st->notes[i] : NULL, note_budget,
+                   form->note_roles ? form->note_roles[i] : UI_DIM);
     if (form->notes_n) {
         struct line *l = line_add(out);
         if (l)
@@ -376,7 +380,7 @@ static void paint(void *ud)
         if (l->field < 0) {
             if (l->len) {
                 ui_pad(FORM_INDENT + l->indent);
-                md_text_put(l->note, l->from, l->len, UI_DIM);
+                md_text_put(l->note, l->from, l->len, l->role);
             }
             ui_put("\n");
             continue;

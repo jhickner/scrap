@@ -808,13 +808,14 @@ static int start_max(const struct board_card *cards, int n, const char *filter,
 static const char *const PRIORITIES[] = {"0", "1", "2", "3"};
 
 struct notes {
-    const char **v;
-    char       **owned;
-    int          n, cap;
+    const char   **v;
+    char         **owned;
+    enum ui_role  *roles;
+    int            n, cap;
 };
 
 /* takes ownership of text */
-static void note_line(struct notes *l, char *text)
+static void note_role(struct notes *l, char *text, enum ui_role role)
 {
     if (l->n == l->cap) {
         int          cap = l->cap ? l->cap * 2 : 32;
@@ -824,7 +825,10 @@ static void note_line(struct notes *l, char *text)
         char **owned = realloc(l->owned, (size_t)cap * sizeof *owned);
         if (owned)
             l->owned = owned;
-        if (!v || !owned) {
+        enum ui_role *roles = realloc(l->roles, (size_t)cap * sizeof *roles);
+        if (roles)
+            l->roles = roles;
+        if (!v || !owned || !roles) {
             free(text);
             return;
         }
@@ -832,7 +836,13 @@ static void note_line(struct notes *l, char *text)
     }
     l->owned[l->n] = text;
     l->v[l->n] = text ? text : "";
+    l->roles[l->n] = role;
     l->n++;
+}
+
+static void note_line(struct notes *l, char *text)
+{
+    note_role(l, text, UI_DIM);
 }
 
 static void notes_free(struct notes *l)
@@ -840,6 +850,7 @@ static void notes_free(struct notes *l)
     for (int i = 0; i < l->n; i++)
         free(l->owned[i]);
     free(l->owned);
+    free(l->roles);
     free(l->v);
     memset(l, 0, sizeof *l);
 }
@@ -1008,6 +1019,27 @@ static void note_entry(struct notes *notes, const char *stamp, const char *who,
     } while (at);
 }
 
+/* A worker's final message is a whole turn, not a lifecycle line: the stamp
+   stands alone and the message sits under it at the card's own indent. */
+static void note_message(struct notes *notes, const char *stamp,
+                         const char *who, const char *text)
+{
+    note_line(notes, dsprintf("%s  %s", stamp, who));
+
+    const char *at = text;
+    do {
+        const char *nl = strchr(at, '\n');
+        size_t      len = nl ? (size_t)(nl - at) : strlen(at);
+
+        if (len)
+            note_role(notes, dsprintf("  %.*s", (int)len, at), UI_BODY);
+        else
+            note_line(notes, NULL);
+
+        at = nl ? nl + 1 : NULL;
+    } while (at);
+}
+
 static void build_proposals(const struct board_card *c, struct notes *notes)
 {
     char line[BOARD_TITLE_MAX];
@@ -1035,7 +1067,10 @@ static void build_notes(const struct board_card *c, struct notes *notes)
             strftime(stamp, sizeof stamp, "%H:%M", &when);
         }
         char *text = clean(c->log[i].text ? c->log[i].text : "");
-        note_entry(notes, stamp, c->log[i].who, text ? text : "");
+        if (!strcmp(c->log[i].who, "worker"))
+            note_message(notes, stamp, c->log[i].who, text ? text : "");
+        else
+            note_entry(notes, stamp, c->log[i].who, text ? text : "");
         free(text);
     }
 }
@@ -1136,6 +1171,7 @@ static void card_form(const struct board_card *c)
     struct form f = {
         .title = heading,
         .notes = notes.v,
+        .note_roles = notes.roles,
         .notes_n = notes.n,
         .fields = fields,
         .fields_n = fields_n,
