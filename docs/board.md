@@ -247,8 +247,9 @@ A step nothing claims does not run: a kind may list it, and the card walks
 past. Two files claiming the same step, or a kind listing one no file claims,
 is what the board reports as misconfiguration rather than guessing.
 
-The files that ship are in `board/` in this repo, and `make install` copies any
-the config does not have yet. It never overwrites one you have edited.
+The files that ship are in `board/` in this repo and are compiled into the
+binary. A run that finds no `.md` file in `board/roles` or `board/kinds` writes
+the ones it carries there; a directory that already holds one is left alone.
 
 ## Merge and the sweep
 

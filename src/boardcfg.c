@@ -9,6 +9,7 @@
 
 #include "text.h"
 #include "mdcfg.h"
+#include "boarddefaults.h"
 #include "sessionfork.h"
 #include "vendor/agents/backend.h"
 
@@ -178,6 +179,60 @@ static int board_path(char *out, size_t size, const char *leaf, const char *name
     if (!mdcfg_dir(dir, sizeof dir, leaf))
         return 0;
     return (size_t)snprintf(out, size, "%s/%s.md", dir, name) < size;
+}
+
+static int dir_has_md(const char *leaf)
+{
+    char dir[4096];
+    if (!mdcfg_dir(dir, sizeof dir, leaf))
+        return 1;
+
+    char names[1][MDCFG_NAME];
+    return mdcfg_list(dir, names, 1) > 0;
+}
+
+static int write_body(FILE *f, void *ud)
+{
+    return fputs(ud, f) >= 0;
+}
+
+#define SEED_DIRS 8
+
+static void seed_defaults(void)
+{
+    char seen[SEED_DIRS][64];
+    int  copy[SEED_DIRS], n = 0;
+
+    for (int i = 0; i < board_defaults_n; i++) {
+        const char *file = strrchr(board_defaults[i].path, '/');
+        if (!file)
+            continue;
+
+        char leaf[64];
+        snprintf(leaf, sizeof leaf, BOARD_DIR "/%.*s",
+                 (int)(file - board_defaults[i].path), board_defaults[i].path);
+
+        int at = -1;
+        for (int j = 0; j < n && at < 0; j++)
+            if (!strcmp(seen[j], leaf))
+                at = j;
+        if (at < 0) {
+            if (n == SEED_DIRS)
+                continue;
+            at = n++;
+            snprintf(seen[at], sizeof seen[at], "%s", leaf);
+            copy[at] = !dir_has_md(leaf);
+        }
+        if (!copy[at])
+            continue;
+
+        char dir[4096], path[4300];
+        if (!mdcfg_dir(dir, sizeof dir, leaf))
+            continue;
+        if ((size_t)snprintf(path, sizeof path, "%s/%s", dir, file + 1) >= sizeof path)
+            continue;
+        text_spit(path, write_body, (void *)board_defaults[i].text);
+    }
 }
 
 void boardcfg_kind_steps(struct board_kind *k, const char *list)
@@ -636,6 +691,7 @@ static void read_all(void)
 {
     cache_free();
     defaults(&cache);
+    seed_defaults();
 
     read_settings(&cache);
     int aged = read_roles(&cache);
