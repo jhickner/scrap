@@ -13,6 +13,7 @@ enum board_tier {
 
 const char     *boardcfg_tier_name(enum board_tier tier);
 enum board_tier boardcfg_tier_from_name(const char *name);
+enum board_tier boardcfg_tier_or_med(const char *name);
 
 struct board_level {
     char model[128];

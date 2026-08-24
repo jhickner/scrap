@@ -31,6 +31,12 @@ enum board_tier boardcfg_tier_from_name(const char *name)
     return BOARD_TIERS;
 }
 
+enum board_tier boardcfg_tier_or_med(const char *name)
+{
+    enum board_tier tier = boardcfg_tier_from_name(name);
+    return tier < BOARD_TIERS ? tier : BOARD_TIER_MED;
+}
+
 const struct board_backend *boardcfg_backend(const struct board_cfg *c,
                                              const char *name)
 {
@@ -542,9 +548,7 @@ static void resolve(void)
     for (int i = 0; i < cache.roles_n; i++) {
         serving_roles[i] = cache.roles[i];
 
-        enum board_tier tier = boardcfg_tier_from_name(cache.roles[i].tier);
-        if (tier >= BOARD_TIERS)
-            tier = BOARD_TIER_MED;
+        enum board_tier tier = boardcfg_tier_or_med(cache.roles[i].tier);
 
         snprintf(serving_roles[i].backend, sizeof serving_roles[i].backend, "%s",
                  cache.serving[0] ? cache.serving : "claude");
@@ -744,9 +748,7 @@ const struct board_profile *boardcfg_for_backend(const char *job,
     if (!b)
         return p;
 
-    enum board_tier tier = boardcfg_tier_from_name(p->tier);
-    if (tier >= BOARD_TIERS)
-        tier = BOARD_TIER_MED;
+    enum board_tier tier = boardcfg_tier_or_med(p->tier);
 
     out = *p;
     snprintf(out.backend, sizeof out.backend, "%s", backend);

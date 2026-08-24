@@ -164,9 +164,7 @@ static void value_of(const struct row *r, const struct board_cfg *c,
         break;
     case ROW_PROFILE: {
         const struct board_profile *p = &c->roles[r->role_at];
-        enum board_tier             tier = boardcfg_tier_from_name(p->tier);
-        if (tier >= BOARD_TIERS)
-            tier = BOARD_TIER_MED;
+        enum board_tier             tier = boardcfg_tier_or_med(p->tier);
         const struct board_backend *b = boardcfg_backend(c, c->serving);
         const char                 *model = b ? b->level[tier].model : "";
         snprintf(out, size, "%s · %s · %s", boardcfg_tier_name(tier), c->serving,
