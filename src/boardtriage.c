@@ -186,16 +186,12 @@ int boardtriage_running(const char *id)
 
 int boardtriage_take(const char *key, const char *reply)
 {
-    {
-        size_t mark = strlen(TRIAGE_KEY);
-        if (key && !strncmp(key, TRIAGE_KEY, mark))
-            boardlog_turn(key + mark, "triage", NULL, reply);
-    }
     size_t mark = strlen(TRIAGE_KEY);
     if (!key || strncmp(key, TRIAGE_KEY, mark))
         return 0;
 
     const char *id = key + mark;
+    boardlog_turn(id, "triage", NULL, reply);
     cJSON      *o = replyjson_parse(reply);
     if (o) {
         apply(id, o);
