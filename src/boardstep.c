@@ -8,19 +8,6 @@
 #include "boardflow.h"
 #include "boardlog.h"
 
-const char *boardstep_before(const struct board_card *c)
-{
-    if (!c)
-        return NULL;
-    for (int at = boardcfg_kind_step_at(c->kind, c->step) - 1; at >= 0; at--) {
-        const struct board_role *p = boardcfg_for_step(boardcfg_kind_step(c->kind, at));
-        const char              *said = p ? board_said(c, p->job) : NULL;
-        if (said)
-            return said;
-    }
-    return NULL;
-}
-
 char *boardstep_since(const struct board_card *c, const char *job)
 {
     if (!c || !job || !*job)
@@ -29,7 +16,7 @@ char *boardstep_since(const struct board_card *c, const char *job)
     int from = -1;
     for (int i = c->log_n - 1; i >= 0 && from < 0; i--)
         if (!strcmp(c->log[i].who, job))
-            from = i + 1;
+            from = i;
     if (from < 0)
         return NULL;
 
@@ -60,15 +47,18 @@ char *boardstep_prompt(const struct board_card *c, const struct board_role *p)
     if (!c || !p)
         return NULL;
 
-    const char *head = p->prompt ? p->prompt : "";
-    const char *body = c->body && *c->body ? c->body : c->title;
-    const char *said = boardstep_before(c);
+    const struct board_role *mine = boardcfg_worker();
+    const char              *head = p->prompt ? p->prompt : "";
+    const char              *body = c->body && *c->body ? c->body : c->title;
+    char *said = boardstep_since(c, mine ? mine->job : "worker");
 
     size_t need = strlen(head) + strlen(body) + strlen(c->title) +
                   (said ? strlen(said) : 0) + sizeof c->base + 256;
     char *out = malloc(need);
-    if (!out)
+    if (!out) {
+        free(said);
         return NULL;
+    }
 
     int at = snprintf(out, need,
                       "%s\n\nThe branch came off %s. The card it was built "
@@ -76,7 +66,8 @@ char *boardstep_prompt(const struct board_card *c, const struct board_role *p)
                       head, c->base, c->title, body);
     if (said)
         snprintf(out + at, need - (size_t)at,
-                 "\nThe step before this one said:\n\n%s\n", said);
+                 "\nWhat has been said about it so far:\n\n%s", said);
+    free(said);
     return out;
 }
 

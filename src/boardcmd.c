@@ -220,7 +220,9 @@ static void failed(const char *id, const char *said)
     struct board_card *c = board_find(cards, n, id);
     if (c && boardflow_runs(c) != BOARD_RUNS_COMMAND)
         c = NULL;
-    const char *back = c ? boardflow_fail(c) : NULL;
+
+    const struct board_role *p = c ? boardflow_role(c) : NULL;
+    const char              *back = c ? boardflow_fail(c) : NULL;
     if (c) {
         struct board_card edited = *c;
         snprintf(edited.stuck, sizeof edited.stuck, "%s", last_line(said));
@@ -229,8 +231,8 @@ static void failed(const char *id, const char *said)
     }
     board_free(cards, n);
 
-    board_note(id, "board", last_line(said));
-    board_move_back(id, back, "board", NULL);
+    board_note(id, p ? p->job : "board", said);
+    board_move_back(id, back, p ? p->job : "board", NULL);
 }
 
 int boardcmd_take(const char *key, const char *out, int ok)

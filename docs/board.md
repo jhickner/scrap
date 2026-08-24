@@ -223,14 +223,14 @@ it:
   be sent feedback. Every card starts here, whatever its kind lists; listing
   the step is what says the worker gets a worktree to work in.
 - `agent` is one turn in that worktree, given the body, the card, the commit
-  the branch came off, and what the step before it answered. What it answers
-  goes on the card. `test.md` and `audit.md` are this.
+  the branch came off, and everything said about the card since its worker
+  spoke. What it answers goes on the card. `test.md` and `audit.md` are this.
 - `person` runs nothing. The card waits, and the two labelled answers are the
   approve row in the detail view. `review.md` is this and nothing else.
 - `command` is a shell script, expanded with `{id}`, `{root}`, `{tree}`,
   `{branch}` and `{base}` and run in the worktree. Its exit status is the
-  answer, its output goes on the card, and `lock: repo` is what makes landing
-  one card at a time. `merge.md` is this: rebase, check, merge, remove the
+  answer, its output goes on the card under the step's own name, and
+  `lock: repo` is what makes landing one card at a time. `merge.md` is this: rebase, check, merge, remove the
   worktree.
 
 An answer that fails sends the card to `fail step`, or to `backlog` if the file

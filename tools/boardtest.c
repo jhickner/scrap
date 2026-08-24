@@ -946,7 +946,7 @@ static void test_a_step_is_a_file(void)
            "the file is what the worker at that step is told");
     expect(prompt && strstr(prompt, "the tab strip wraps"), "with the card");
     expect(prompt && strstr(prompt, "run mux and widen"),
-           "and what the step before it said");
+           "and what has been said about it since its worker had it");
     free(prompt);
 
     expect(boardstep_finished(c, boardcfg_for_step("test"),
