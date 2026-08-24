@@ -865,6 +865,13 @@ int cmd_runs_mid_turn(const char *line)
     return c && !(c->flags & CMD_QUITS);
 }
 
+int cmd_runs_live(const char *line)
+{
+    const char       *arg;
+    const struct cmd *c = cmd_for_line(line, &arg);
+    return c && (c->flags & CMD_LIVE);
+}
+
 #define DEFERRED_MAX 8
 static struct {
     char           *line;

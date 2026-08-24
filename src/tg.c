@@ -28,6 +28,7 @@
 #include "cmd.h"
 #include "frontend.h"
 #include "gitinfo.h"
+#include "prompt.h"
 #include "reminders.h"
 #include "handoff.h"
 #include "restart.h"
@@ -224,6 +225,31 @@ static char *inbox_take(int *quiet, int *tap)
             *tap = inbox[inbox_head].tap;
         inbox_head = (inbox_head + 1) % INBOX_MAX;
         inbox_count--;
+    }
+    int remaining = inbox_count;
+    pthread_mutex_unlock(&inbox_lock);
+    if (text) {
+        wake_drain();
+        if (remaining)
+            wake_up();
+    }
+    return text;
+}
+
+static char *inbox_take_live(void)
+{
+    pthread_mutex_lock(&inbox_lock);
+    char *text = NULL;
+    for (int k = 0; k < inbox_count; k++) {
+        int at = (inbox_head + k) % INBOX_MAX;
+        if (inbox[at].tap || !cmd_runs_live(inbox[at].text))
+            continue;
+        text = inbox[at].text;
+        for (int j = k; j + 1 < inbox_count; j++)
+            inbox[(inbox_head + j) % INBOX_MAX] =
+                inbox[(inbox_head + j + 1) % INBOX_MAX];
+        inbox_count--;
+        break;
     }
     int remaining = inbox_count;
     pthread_mutex_unlock(&inbox_lock);
@@ -893,11 +919,49 @@ static void on_event(void *ud, const backend_event *ev)
     typing();
 }
 
+static void run_live_lines(void)
+{
+    static int running;
+    if (running || !sess)
+        return;
+    running = 1;
+
+    char *line;
+    while ((line = inbox_take_live()) != NULL) {
+        int was = from_chat;
+        from_chat = 1;
+        frontend_push(0);
+        status_pause();
+        if (!cmd_self_echoes(line))
+            prompt_echo_message(line);
+
+        ui_sink_begin_tee();
+        cmd_dispatch_live(sess, line);
+        char *shown = ui_sink_end();
+
+        status_resume();
+        frontend_pop();
+        from_chat = was;
+
+        strip_ansi(shown);
+        if (shown && *shown)
+            send_pre(shown);
+        else
+            send_note("ok");
+        free(shown);
+        free(line);
+    }
+    running = 0;
+}
+
 static int on_abort(void *ud)
 {
     const struct session *s = ud;
     if (mirroring())
         typing();
+
+    if (s == sess)
+        run_live_lines();
 
     if (stop_wanted && (!s || s == sess)) {
         stop_wanted = 0;
