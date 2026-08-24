@@ -162,7 +162,7 @@ shape:
 
 ```json
 {"profiles": {
-  "triage": {"backend":"claude","model":"haiku","effort":"low"},
+  "triage": {"backend":"claude","model":"sonnet","effort":"low"},
   "bug":    {"backend":"claude","model":"opus","effort":"high"},
   "feature":{"backend":"claude","model":"opus"},
   "chore":  {"backend":"claude","model":"sonnet"},
