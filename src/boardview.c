@@ -405,10 +405,15 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             else
                 r->detail = dsprintf("%s", when);
 
-            if (c->backend_pin[0]) {
+            if (c->backend_pin[0] || c->tier_pin[0]) {
                 char *was = r->detail;
+                char  pin[48];
+                snprintf(pin, sizeof pin, "%s%s%s",
+                         c->backend_pin[0] ? c->backend_pin : "",
+                         c->backend_pin[0] && c->tier_pin[0] ? " " : "",
+                         c->tier_pin[0] ? c->tier_pin : "");
                 r->detail = dsprintf("%s%s%s", was ? was : "",
-                                     was && *was ? " · " : "", c->backend_pin);
+                                     was && *was ? " · " : "", pin);
                 free(was);
             }
 
@@ -580,15 +585,71 @@ static void note(const char *fmt, ...)
     ui_flush();
 }
 
+static int backend_choices(const struct board_cfg *cfg, const char **out)
+{
+    int n = 0;
+    out[n++] = "";
+    for (int i = 0; i < cfg->backends_n; i++)
+        out[n++] = cfg->backends[i].name;
+    return n;
+}
+
+static int tier_choices(const char **out)
+{
+    int n = 0;
+    out[n++] = "";
+    for (int t = 0; t < BOARD_TIERS; t++)
+        out[n++] = boardcfg_tier_name((enum board_tier)t);
+    return n;
+}
+
+static void pin_card(const char *id, const char *backend, const char *tier)
+{
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    struct board_card *c = board_find(cards, n, id);
+    if (c) {
+        struct board_card edited = *c;
+        snprintf(edited.backend_pin, sizeof edited.backend_pin, "%s", backend);
+    snprintf(edited.tier_pin, sizeof edited.tier_pin, "%s", tier);
+        snprintf(edited.tier_pin, sizeof edited.tier_pin, "%s", tier);
+        board_update(&edited);
+    }
+    board_free(cards, n);
+}
+
 static void do_new(const char *cwd, char *sel_id)
 {
-    char *text = ask_run("new card", NULL);
-    if (!text)
+    const struct board_cfg *cfg = boardcfg();
+
+    const char *backends[BOARD_BACKENDS_MAX + 1];
+    int         backends_n = backend_choices(cfg, backends);
+    const char *tiers[BOARD_TIERS + 1];
+    int         tiers_n = tier_choices(tiers);
+
+    char spec[8192] = "";
+    char backend[32] = "";
+    char tier[8] = "";
+
+    struct form_field fields[] = {
+        {"spec", FORM_TEXT, spec, sizeof spec, NULL, 0},
+        {"backend", FORM_CHOICE, backend, sizeof backend, backends, backends_n},
+        {"tier", FORM_CHOICE, tier, sizeof tier, tiers, tiers_n},
+    };
+    struct form f = {
+        .title = "new card",
+        .fields = fields,
+        .fields_n = COUNT(fields),
+    };
+    if (!form_run(&f) || !spec[0])
         return;
+
     char id[BOARD_ID_MAX] = {0};
-    if (board_add(text, cwd, id))
-        snprintf(sel_id, BOARD_ID_MAX, "%s", id);
-    free(text);
+    if (!board_add(spec, cwd, id))
+        return;
+    snprintf(sel_id, BOARD_ID_MAX, "%s", id);
+    if (backend[0] || tier[0])
+        pin_card(id, backend, tier);
 }
 
 static void do_serve(char *notice, size_t size)
@@ -979,10 +1040,9 @@ static void card_form(const struct board_card *c)
         kinds[kinds_n++] = cfg->kinds[i].name;
 
     const char *backends[BOARD_BACKENDS_MAX + 1];
-    int         backends_n = 0;
-    backends[backends_n++] = "";
-    for (int i = 0; i < cfg->backends_n; i++)
-        backends[backends_n++] = cfg->backends[i].name;
+    int         backends_n = backend_choices(cfg, backends);
+    const char *tiers[BOARD_TIERS + 1];
+    int         tiers_n = tier_choices(tiers);
 
     char spec[8192];
     char kind[16];
@@ -990,6 +1050,7 @@ static void card_form(const struct board_card *c)
     char where[4096];
     char priority[8];
     char backend[32];
+    char tier[8];
 
     snprintf(spec, sizeof spec, "%s", c->body ? c->body : "");
     snprintf(kind, sizeof kind, "%s", c->kind);
@@ -997,13 +1058,14 @@ static void card_form(const struct board_card *c)
     path_home_relative(c->cwd, where, sizeof where);
     snprintf(priority, sizeof priority, "%d", c->priority);
     snprintf(backend, sizeof backend, "%s", c->backend_pin);
+    snprintf(tier, sizeof tier, "%s", c->tier_pin);
 
     char unstart_at[2] = "";
     char approve_at[2] = "";
 
     int proposals = c->col == BOARD_REVIEW && boardsweep_is(c);
 
-    struct form_field fields[8];
+    struct form_field fields[9];
     int               fields_n = 0;
 
     if (!proposals)
@@ -1021,6 +1083,8 @@ static void card_form(const struct board_card *c)
     fields[fields_n++] = (struct form_field){"backend", FORM_CHOICE, backend,
                                              sizeof backend, backends,
                                              backends_n};
+    fields[fields_n++] = (struct form_field){"tier", FORM_CHOICE, tier,
+                                             sizeof tier, tiers, tiers_n};
     if (c->col == BOARD_DOING && !boardsweep_is(c))
         fields[fields_n++] = (struct form_field){
             "cancel starting, back to backlog", FORM_BUTTON, unstart_at,
@@ -1085,6 +1149,7 @@ static void card_form(const struct board_card *c)
     struct board_card edited = *live;
     snprintf(edited.kind, sizeof edited.kind, "%s", kind);
     snprintf(edited.backend_pin, sizeof edited.backend_pin, "%s", backend);
+    snprintf(edited.tier_pin, sizeof edited.tier_pin, "%s", tier);
     edited.col = board_col_from_name(column);
     edited.priority = atoi(priority);
 
@@ -1114,7 +1179,8 @@ static void card_form(const struct board_card *c)
     if (answered)
         edited.col = BOARD_NEW;
 
-    int repin = strcmp(edited.backend_pin, live->backend_pin) != 0;
+    int repin = strcmp(edited.backend_pin, live->backend_pin) != 0 ||
+                strcmp(edited.tier_pin, live->tier_pin) != 0;
     int adopted = planned != NULL;
     int ok = board_update(&edited);
     board_free(cards, n);

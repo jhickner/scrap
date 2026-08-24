@@ -855,24 +855,33 @@ const struct board_role *boardcfg_for_step(enum board_step step)
 }
 
 const struct board_role *boardcfg_for_backend(const char *job,
-                                                 const char *backend)
+                                                 const char *backend,
+                                                 const char *tier)
 {
     static struct board_role out;
 
     const struct board_role *p = boardcfg_for_job(job);
-    if (!p || !backend || !*backend || !strcmp(backend, cache.serving))
+    if (!p)
+        return NULL;
+
+    int named = backend && *backend && strcmp(backend, cache.serving);
+    int levelled = tier && *tier && strcmp(tier, p->tier);
+    if (!named && !levelled)
         return p;
 
-    const struct board_backend *b = boardcfg_backend(&cache, backend);
+    const char *name = named ? backend
+                             : (cache.serving[0] ? cache.serving : "claude");
+    const struct board_backend *b = boardcfg_backend(&cache, name);
     if (!b)
         return p;
 
-    enum board_tier tier = boardcfg_tier_or_med(p->tier);
+    enum board_tier at = boardcfg_tier_or_med(levelled ? tier : p->tier);
 
     out = *p;
-    snprintf(out.backend, sizeof out.backend, "%s", backend);
-    snprintf(out.model, sizeof out.model, "%s", b->level[tier].model);
-    snprintf(out.effort, sizeof out.effort, "%s", b->level[tier].effort);
+    snprintf(out.backend, sizeof out.backend, "%s", name);
+    snprintf(out.tier, sizeof out.tier, "%s", boardcfg_tier_name(at));
+    snprintf(out.model, sizeof out.model, "%s", b->level[at].model);
+    snprintf(out.effort, sizeof out.effort, "%s", b->level[at].effort);
     return &out;
 }
 

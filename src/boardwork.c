@@ -274,21 +274,24 @@ static void card_backend(const char *id, const char *backend)
     board_free(cards, n);
 }
 
-static void card_pin(const char *id, char *out, size_t size)
+static void card_pins(const char *id, char *backend, size_t backend_size,
+                      char *tier, size_t tier_size)
 {
     struct board_card *cards = NULL;
     int                n = board_load(&cards);
     struct board_card *c = board_find(cards, n, id);
-    snprintf(out, size, "%s", c ? c->backend_pin : "");
+    snprintf(backend, backend_size, "%s", c ? c->backend_pin : "");
+    snprintf(tier, tier_size, "%s", c ? c->tier_pin : "");
     board_free(cards, n);
 }
 
 static const struct board_role *worker_role(const struct worker *w)
 {
-    char pin[32] = "";
+    char backend[32] = "";
+    char tier[8] = "";
     if (w->role == BOARD_JOB_WORKER)
-        card_pin(w->id, pin, sizeof pin);
-    return boardcfg_for_backend(job_of(w->role), pin);
+        card_pins(w->id, backend, sizeof backend, tier, sizeof tier);
+    return boardcfg_for_backend(job_of(w->role), backend, tier);
 }
 
 static int handover(struct worker *w)
@@ -708,7 +711,8 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
         return 0;
 
     const char *backend = wanted_backend(c);
-    const struct board_role *p = boardcfg_for_backend("worker", backend);
+    const struct board_role *p = boardcfg_for_backend("worker", backend,
+                                                     c->tier_pin);
     const char *model = c->model[0] ? c->model : (p ? p->model : "");
     const char *effort = c->effort[0] ? c->effort : (p ? p->effort : "");
 

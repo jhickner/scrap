@@ -107,7 +107,8 @@ const struct board_role *boardcfg_for_job(const char *job);
 const struct board_role *boardcfg_for_step(enum board_step step);
 
 const struct board_role *boardcfg_for_backend(const char *job,
-                                              const char *backend);
+                                              const char *backend,
+                                              const char *tier);
 
 #define BOARDCFG_ARGV_MAX 9
 

@@ -41,6 +41,7 @@ struct board_card {
 
     char backend[32];
     char backend_pin[32];
+    char tier_pin[8];
     char model[128];
     char effort[32];
 
