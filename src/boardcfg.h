@@ -27,12 +27,48 @@ struct board_backend {
     struct board_level level[BOARD_TIERS];
 };
 
+#define BOARD_STEP_NAME  32
+#define BOARD_KIND_STEPS 12
+
+enum board_runs {
+    BOARD_RUNS_AGENT,
+    BOARD_RUNS_WORKER,
+    BOARD_RUNS_PERSON,
+    BOARD_RUNS_COMMAND,
+    BOARD_RUNS_MODES,
+};
+
+const char     *boardcfg_runs_name(enum board_runs runs);
+enum board_runs boardcfg_runs_from_name(const char *name);
+
+enum board_lock {
+    BOARD_LOCK_NONE,
+    BOARD_LOCK_REPO,
+    BOARD_LOCK_MACHINE,
+    BOARD_LOCKS,
+};
+
+const char     *boardcfg_lock_name(enum board_lock lock);
+enum board_lock boardcfg_lock_from_name(const char *name);
+
 struct board_role {
-    char  name[32];
-    char  job[32];
-    char  tier[8];
-    char  step[16];
-    int   skippable;
+    char name[32];
+    char job[32];
+    char step[BOARD_STEP_NAME];
+    char tier[8];
+    int  skippable;
+
+    enum board_runs runs;
+    enum board_lock lock;
+
+    char fail_marker[64];
+    char fail_step[BOARD_STEP_NAME];
+    char fail_prompt[32];
+    char pass_label[32];
+    char fail_label[32];
+    int  over_files;
+    int  over_lines;
+
     char  backend[32];
     char  model[128];
     char  effort[32];
@@ -43,17 +79,6 @@ struct board_role {
 
 #define BOARD_KINDS_MAX 16
 
-enum board_step {
-    BOARD_STEP_WORKTREE,
-    BOARD_STEP_REVIEW,
-    BOARD_STEP_AUDIT,
-    BOARD_STEP_MERGE,
-    BOARD_STEPS,
-};
-
-const char     *boardcfg_step_name(enum board_step step);
-enum board_step boardcfg_step_from_name(const char *name);
-
 struct board_kind {
     char  name[32];
     char *means;
@@ -62,7 +87,8 @@ struct board_kind {
     char  next_kind[32];
     int   priority;
 
-    unsigned steps;
+    char steps[BOARD_KIND_STEPS][BOARD_STEP_NAME];
+    int  steps_n;
 };
 
 struct board_cfg {
@@ -71,14 +97,11 @@ struct board_cfg {
     int workers;
     int auto_pull;
     int auto_pick;
-    int audit_files;
-    int audit_lines;
     int sweep_every;
     int archive_after;
     int done_shown;
     int backlog_shown;
 
-    char verify[256];
     char projects[512];
 
     struct board_kind kinds[BOARD_KINDS_MAX];
@@ -104,11 +127,15 @@ int boardcfg_set(const struct board_cfg *c);
 
 const struct board_role *boardcfg_for_job(const char *job);
 
-const struct board_role *boardcfg_for_step(enum board_step step);
+const struct board_role *boardcfg_for_step(const char *step);
+
+const struct board_role *boardcfg_worker(void);
 
 const struct board_role *boardcfg_for_backend(const char *job,
                                               const char *backend,
                                               const char *tier);
+
+int boardcfg_steps(const char *const **out);
 
 #define BOARDCFG_ARGV_MAX 9
 
@@ -126,7 +153,15 @@ const struct board_kind *boardcfg_kind(const char *name);
 
 int boardcfg_priority(const char *kind);
 
-int boardcfg_kind_takes(const char *kind, enum board_step step);
+int boardcfg_kind_takes(const char *kind, const char *step);
+
+const char *boardcfg_kind_step(const char *kind, int at);
+
+int boardcfg_kind_step_at(const char *kind, const char *step);
+
+void boardcfg_kind_steps(struct board_kind *k, const char *list);
+
+void boardcfg_kind_steps_default(struct board_kind *k);
 
 void boardcfg_kinds_block(char *out, size_t size);
 

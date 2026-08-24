@@ -5,7 +5,8 @@
 #include <string.h>
 
 #include "board.h"
-#include "boardaudit.h"
+#include "boardcfg.h"
+#include "boardflow.h"
 #include "boardcfg.h"
 #include "boardlog.h"
 #include "gitcmd.h"
@@ -73,6 +74,10 @@ static int readable(const char *text)
 
 static char *findings_for(const struct board_card *cards, int n, const char *cwd)
 {
+    const struct board_role *p = boardcfg_for_job("audit");
+    if (p && !p->fail_marker[0])
+        p = NULL;
+
     size_t cap = 4096, len = 0;
     char  *out = malloc(cap);
     if (!out)
@@ -84,8 +89,8 @@ static char *findings_for(const struct board_card *cards, int n, const char *cwd
             continue;
         for (int j = 0; j < cards[i].log_n; j++) {
             const char *text = cards[i].log[j].text;
-            if (strcmp(cards[i].log[j].who, "audit") || !text ||
-                boardaudit_is_marker(text) || !readable(text))
+            if (!p || strcmp(cards[i].log[j].who, p->job) || !text ||
+                !strstr(text, p->fail_marker) || !readable(text))
                 continue;
             char one[1024];
             text_one_line(text, one, sizeof one);
@@ -161,7 +166,8 @@ int boardsweep_open(const char *cwd, char *id, size_t size)
     int                ok = 0;
     if (c) {
         struct board_card edited = *c;
-        edited.col = BOARD_DOING;
+        edited.col = BOARD_STEP;
+        snprintf(edited.step, sizeof edited.step, "%s", SWEEP_KIND);
         edited.body = NULL;
         snprintf(edited.kind, sizeof edited.kind, "%s", SWEEP_KIND);
         ok = board_update(&edited);
@@ -251,7 +257,7 @@ int boardsweep_finished(const char *id, const char *reply)
     if (!raised) {
         free(body);
         board_note(id, "sweep", "nothing to raise");
-        return board_move(id, BOARD_DONE, "sweep", NULL);
+        return board_move(id, BOARD_DONE, NULL, "sweep", NULL);
     }
 
     struct board_card *v = NULL;
@@ -268,7 +274,13 @@ int boardsweep_finished(const char *id, const char *reply)
     char said[64];
     snprintf(said, sizeof said, "proposed %d card%s", raised, raised == 1 ? "" : "s");
     board_note(id, "sweep", said);
-    return board_move(id, BOARD_REVIEW, "sweep", NULL);
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    const char *next = c ? boardflow_next(c, c->step, 0) : NULL;
+    int         moved = board_move_to(id, next, "sweep", NULL);
+    board_free(v, n);
+    return moved;
 }
 
 int boardsweep_approve(const struct board_card *c)
@@ -290,12 +302,12 @@ int boardsweep_approve(const struct board_card *c)
     char said[64];
     snprintf(said, sizeof said, "raised %d card%s", raised, raised == 1 ? "" : "s");
     board_note(c->id, "you", said);
-    return board_move(c->id, BOARD_DONE, "you", NULL);
+    return board_move(c->id, BOARD_DONE, NULL, "you", NULL);
 }
 
 int boardsweep_reject(const struct board_card *c)
 {
     if (!boardsweep_is(c))
         return 0;
-    return board_move(c->id, BOARD_DONE, "you", "proposals dropped");
+    return board_move(c->id, BOARD_DONE, NULL, "you", "proposals dropped");
 }

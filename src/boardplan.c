@@ -22,13 +22,7 @@ int boardplan_named(const char *kind)
    after the worker has answered, and then the answer is the plan. */
 const char *boardplan_said(const struct board_card *c)
 {
-    if (!c)
-        return NULL;
-    for (int i = c->log_n - 1; i >= 0; i--)
-        if (!strcmp(c->log[i].who, "worker") && c->log[i].text &&
-            *c->log[i].text)
-            return c->log[i].text;
-    return NULL;
+    return board_said(c, "worker");
 }
 
 int boardplan_approve(const struct board_card *c)
@@ -63,5 +57,5 @@ int boardplan_approve(const struct board_card *c)
     char said[64];
     snprintf(said, sizeof said, "filed card %s", id);
     board_note(c->id, "you", said);
-    return board_move(c->id, BOARD_DONE, "you", NULL);
+    return board_move(c->id, BOARD_DONE, NULL, "you", NULL);
 }

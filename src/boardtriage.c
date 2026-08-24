@@ -12,6 +12,7 @@
 #include "board.h"
 #include "child.h"
 #include "boardcfg.h"
+#include "boardflow.h"
 #include "boardlog.h"
 #include "replyjson.h"
 #include "vendor/cJSON.h"
@@ -132,7 +133,7 @@ static int apply(const char *id, const cJSON *o)
 
         edited.col = BOARD_BACKLOG;
         snprintf(said, sizeof said, "%s · %s · priority %d", kind,
-                 boardcfg_kind_takes(kind, BOARD_STEP_WORKTREE) ? "to build" : "to file",
+                 boardflow_lands(kind) ? "to build" : "to file",
                  edited.priority);
     }
 
@@ -146,7 +147,7 @@ static int apply(const char *id, const cJSON *o)
 
 static void failed(const char *id, const char *why)
 {
-    board_move(id, BOARD_UNCLEAR, "triage", why);
+    board_move(id, BOARD_UNCLEAR, NULL, "triage", why);
 }
 
 int boardtriage_start(const struct board_card *c)

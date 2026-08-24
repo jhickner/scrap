@@ -112,7 +112,7 @@ $(BUILD)/muxcfgtest: tools/muxcfgtest.c src/muxcfg.o src/settings.o src/text.o s
 $(BUILD)/telegramtest: tools/telegramtest.c src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
-$(BUILD)/boardtest: tools/boardtest.c src/board.o src/boardtriage.o src/boardaudit.o src/boardsweep.o src/boardplan.o src/boardcfg.o src/boardflow.o src/boardlog.o src/mdcfg.o src/replyjson.o src/child.o src/gitcmd.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
+$(BUILD)/boardtest: tools/boardtest.c src/board.o src/boardtriage.o src/boarddiff.o src/boardstep.o src/boardsweep.o src/boardplan.o src/boardcfg.o src/boardflow.o src/boardlog.o src/mdcfg.o src/replyjson.o src/child.o src/gitcmd.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
 $(BUILD)/highlighttest: tools/highlighttest.c src/highlight.o | $(BUILD)
@@ -125,9 +125,24 @@ CHECKS  := viewporttest imagerowtest chrometest imagefittest mdtest reflowtest t
 check: $(addprefix $(BUILD)/,$(CHECKS))
 	@for t in $^; do echo "$$t"; ./$$t || exit 1; done
 
+# What a card's steps do, and which steps each kind takes, are the files under
+# board/. Any the config does not have yet are copied in; the ones already
+# there are left alone, being the ones that have been edited.
+CONFIG := $(HOME)/.config/mux
+
 install: $(BIN)
 	install -d $(PREFIX)/bin
 	install -m 755 $(BIN) $(PREFIX)/bin/$(BIN)
+	@for f in board/roles/*.md board/kinds/*.md; do \
+	    to="$(CONFIG)/$$f"; \
+	    if [ ! -e "$$to" ]; then \
+	        install -d "$$(dirname "$$to")"; \
+	        install -m 644 "$$f" "$$to"; \
+	        echo "added $$to"; \
+	    elif grep -q '^runs:' "$$f" && ! grep -q '^runs:' "$$to"; then \
+	        echo "$$to predates runs:, and $$f is the one that ships"; \
+	    fi; \
+	done
 	@# -URG would parse as -U RG, a user. -a because the mux running this is an
 	@# ancestor of pkill, and ancestors are excluded by default.
 	@pkill -SIGURG -a -x $(BIN) || true

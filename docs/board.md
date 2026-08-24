@@ -12,21 +12,28 @@ where your judgement is the thing that is actually needed.
 ## The flow
 
 ```
-new → unclear → backlog → active → review → [audit] → merge → done
-        ↑__________|         ↑_______|________|_________|
+new → unclear → backlog → [ the steps its kind lists ] → done
+        ↑__________|                  ↑_____|
 ```
 
 Triage moves a card out of `new`. Work kinds land in `backlog` and wait for a
 worker; wiki kinds are filed and go straight to `done`; anything the classifier
 could not parse goes to `unclear` and waits for a sentence from you.
 
-A worker takes a card from `backlog`, works in a worktree of its own, and puts
-it in `review` when it has something testable. You approve, reject, or send
-feedback. Approval optionally routes through an `audit` — an LLM pass over the
-diff — and then through `merge`, which is serialized, because parallel
-workers branched off the same base do not land cleanly on their own.
+What happens between `backlog` and `done` is not in the board. A kind file
+lists the steps a card of that kind takes, in order, and each step names a file
+in `board/roles` that says what running it means. The steps that ship are
+`worktree`, `test`, `review`, `audit` and `merge`, and a card of an ordinary
+work kind walks all five: its own worker builds it in a worktree, a second
+worker devises a test and runs it, you read both and approve, an audit reads
+the diff if the diff is big enough, and the landing script rebases, checks and
+merges it.
 
-Every arrow back to `active` carries the reason with it, in the card's log, so
+Adding a sixth is adding a file. Nothing about `test` is in the board -- it is
+`roles/test.md` and the word `test` in a kind's `steps:` line -- and a step of
+your own is the same two things.
+
+A step that sends a card back carries the reason with it, in the card's log, so
 whoever picks the card up next reads why it bounced.
 
 ## Cards
@@ -39,7 +46,7 @@ does not know which repo it belongs to yet, which is the whole reason triage
 exists, so the store cannot be the thing that answers it.
 
 ```json
-{"id":"c7f2","col":"active","kind":"feature","title":"...","body":"...",
+{"id":"c7f2","col":"worktree","kind":"feature","title":"...","body":"...",
  "cwd":"/Users/jhickner/working/mux","priority":0,
  "backend":null,"model":null,"effort":null,
  "session":"<backend session id>","worktree":".claude/worktrees/c7f2",
@@ -68,25 +75,26 @@ subdirectories are listed to the classifier with the card so a card thrown from
 the phone, or from the wrong repo, lands on the project it names. Nothing there
 matches, or the setting is empty, and the capture directory stands.
 
-Kinds are configuration, not code. `board.json` holds the list: each has a
-name, what the classifier is told it means, a priority, the prompt a worker
-gets, the steps a card of that kind takes once a worker has had it --
-`worktree`, `review`, `audit`, `merge` -- and the prompt approving one in
-review sends. The triage prompt is written with a `{kinds}` mark where the list goes,
-so editing the kinds edits what the classifier is told.
+Kinds are configuration, not code. `board/kinds/` holds one file each: a name,
+what the classifier is told it means, a priority, the prompt a worker gets, the
+ordered list of steps a card of that kind walks, and the prompt approving one
+in review sends. The order in `steps:` is the order the card goes in, so two
+kinds may walk the same steps differently. The triage prompt is written with a
+`{kinds}` mark where the list goes, so editing the kinds edits what the
+classifier is told.
 
 Every card goes to `backlog` and waits for a worker; nothing is filed without
 one. What differs is what the worker is told and what happens after it stops.
 `todo`, `data` and `reference` take no steps at all: the worker writes the note
 into the wiki with the `w` skill and the card is done. `feature`, `bug` and
-`chore` take all four, so they get a worktree, stop for a person, may be
-audited, and land through the queue. A kind between the two -- landing without
-a human stop, say -- is a matter of which steps it lists.
+`chore` take the rest, so they get a worktree, are tested, stop for a person,
+may be audited, and land through the queue. A kind between the two -- landing
+without a human stop, say -- is a matter of which steps it lists.
 
 `prompt` is what a worker is told when it takes the card; `approval prompt` is
 what it is told when you approve one in review. A kind that carries the second
-is not finished by `a`: the worker is sent it and the card goes back to
-`active`. The prompt is sent once -- the card's log is what says whether it has
+is not finished by `a`: the worker is sent it and the card goes back to the
+step its worker is at. The prompt is sent once -- the card's log is what says whether it has
 been -- so the turn answering it does not stop in `review` a second time. It
 goes on to whatever step follows, which for a kind that takes no others is
 `done`, with what the worker did in the log. `buy.md` is that shape --
@@ -125,7 +133,7 @@ hand, rather than burning tokens in a loop over text that structurally will not
 parse.
 
 `unclear` is narrowly about text that did not parse. A worker that errors or
-stalls stays in `active` with a mark against it, because the context you need to
+stalls stays at its own step with a mark against it, because the context you need to
 fix that is the tab and its transcript, not a field on a card.
 
 ## Workers
@@ -148,8 +156,8 @@ parse. `mux --card-log <id> <text>` and `mux --card-status <id> <state>` let it
 say what it is doing and when it is ready, which is the useful half of treating
 the tracker as external memory.
 
-`workspace_on_finish()` moves a finished card to `review` with the last reply
-logged. A turn that ends without the worker saying ready, or a worker with no
+`workspace_on_finish()` moves a finished card to the first step its kind lists
+after the one its worker was at, with the last reply logged. A turn that ends without the worker saying ready, or a worker with no
 events for long enough, gets a mark and — past a timeout — is reaped back to
 `backlog` with the reason logged, so a stalled agent cannot hold a slot
 forever.
@@ -184,41 +192,72 @@ grok` — hands the card to the first link that does, and logs why. Backends
 reporting `available == 0` do not report limits at all, which makes them the
 natural tail of the chain: the escape hatch when everything metered is spent.
 
-## Audit and merge
+## Steps
 
-The audit is a gate a card may skip, not a stage every card walks. `git diff
---stat` against the card's `base` decides: past a file or line threshold it
-runs, under it the card goes straight on. You can always force one, and always
-skip one, from the approve row — which says which it will do, so pressing it is
-never a surprise. A card sitting in a step is skipped with `k`, which stops
-whatever is running for it and moves it on to whatever its kind takes next.
+A step is a file in `board/roles/`. The file says what the step runs, what its
+answer means, and what a worker at it is told; the body is the prompt, or the
+script, or what a person reads. Everything else has a default, so a new step is
+usually a body and one line of front matter.
 
-Which steps that works on is configuration, not code. Roles are the files in
-`board/roles/`, one file to a role, and the file carries the whole definition:
-`job` is the work it performs, `tier` how much model it is given, `step` the
-stage of the flow it stands in, `skippable` whether that stage may be passed
-by hand, and the body is its prompt. A field left out follows from the file
-name — `audit.md` takes the `audit` job, and a job named after a step stands
-in that step.
+```
+runs:        agent | worker | person | command   what runs the step
+tier:        low | med | high                    how much model it is given
+fail marker: FINDINGS                            the word in an answer that fails a card
+fail step:   worktree                            where a failed card goes
+fail prompt: landing                             the job whose prompt goes with it
+pass label:  approve                             what a person's two answers are called
+fail label:  send back
+over files:  5                                   don't run under this size of diff
+over lines:  200
+lock:        repo | machine                      one card at a time
+skippable:   1                                   whether k may pass it by hand
+job:         audit                               what it does, if not the file name
+step:        worktree                            the step it stands in, if not the job
+```
 
-No list of roles exists in the board. `boardcfg_for_job("audit")` returns the
-role whose file claims that job, so `audit.md` renamed to `reviewer.md` with
-`job: audit` audits exactly as before, and a file dropped into `roles/` is a
-role on the same terms as the ones that shipped. A job no file claims does not
-run.
+The four run modes are the board's, and a file picks one rather than defining
+it:
 
-An audit is a worker in the same worktree running the review skills already
-installed, scoped to architecture, duplicated mechanisms, memory, and security.
-Findings go in the log and the card returns to `active`; clean passes go on.
-Audit workers need skills, so they cannot run in safe mode.
+- `worker` is the card's own tab. It makes the worktree, writes `CARD.md`,
+  sends the body as the first turn, and stays open afterwards so the card can
+  be sent feedback. Every card starts here, whatever its kind lists; listing
+  the step is what says the worker gets a worktree to work in.
+- `agent` is one turn in that worktree, given the body, the card, the commit
+  the branch came off, and what the step before it answered. What it answers
+  goes on the card. `test.md` and `audit.md` are this.
+- `person` runs nothing. The card waits, and the two labelled answers are the
+  approve row in the detail view. `review.md` is this and nothing else.
+- `command` is a shell script, expanded with `{id}`, `{root}`, `{tree}`,
+  `{branch}` and `{base}` and run in the worktree. Its exit status is the
+  answer, its output goes on the card, and `lock: repo` is what makes landing
+  one card at a time. `merge.md` is this: rebase, check, merge, remove the
+  worktree.
 
-`merge` is serialized, one card at a time: rebase onto master, build, test,
-merge, remove the worktree. Any step failing sends the card back to `active`
-with the output logged and the worktree kept.
+An answer that fails sends the card to `fail step` with what it said, or to
+`backlog` if the file names none. `fail prompt` names a role whose body goes to
+the worker that picks it up -- `merge.md` names `landing.md`, which is the
+advice for a branch that would not land.
+
+A step nothing claims does not run: a kind may list it, and the card walks
+past. Two files claiming the same step, or a kind listing one no file claims,
+is what the board reports as misconfiguration rather than guessing.
+
+The files that ship are in `board/` in this repo, and `make install` copies any
+the config does not have yet. It never overwrites one you have edited.
+
+## Merge and the sweep
+
+`merge.md` is a script and `lock: repo` makes it one card at a time in a
+repository: rebase onto the base branch, run the check, merge, remove the
+worktree. A line failing sends the card back to the worker with the output
+logged and the worktree kept. The board reads the repository's head either
+side of any command step, so `u` can put back what one landed whatever the
+script did.
 
 Findings accumulate per-cwd, and a refactor sweep reads them. Incremental work
 duplicates mechanisms; the sweep looks for that, so the board feeds itself. It
-is a worker like any other: a card of its own in `active`, a tab `g` reaches,
+is a worker like any other: a card of its own at the `sweep` step, a tab `g`
+reaches,
 and what it proposes waits on that card in `review`. Approving files the
 proposals as ordinary cards in `new`, rejecting drops them, and editing the
 card's spec first is how you drop one of several. `w` runs one on the spot for
@@ -247,7 +286,7 @@ renderer until the list actually annoys someone.
   backlog
     ● telegram menus lose the cancel row  bug · 3h
 
-  active
+  worktree
   → ⣾ kanban store and /card capture      tab 2 · 4m
 
   review
@@ -286,7 +325,7 @@ There is no REPL inside a card. Opening the worker calls `workspace_show()` and
 puts you in its actual tab — full transcript, full prompt, type whatever you
 want at it — and the left arrow brings you back. Feedback from the board is for
 when you would rather not leave: a line, logged, sent with `workspace_send()`,
-card back to `active`. Approving a card from inside its own worker closes the
+card back to its worker. Approving a card from inside its own worker closes the
 tab under you, so you land on a session that is not a worker — one in the
 card's repo if there is one, any other otherwise, and a new session there if
 there is none.
@@ -331,3 +370,5 @@ keeps it.
 7. Kinds as configuration: the classes, what they mean, their prompts, and
    the steps each takes.
 8. A transcript per card, and a worker for the cards the queue cannot land.
+9. Steps as configuration: what a step runs, what its answer means, and where
+   a failed card goes, all in the file that stands in it.

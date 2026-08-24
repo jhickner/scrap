@@ -7,11 +7,13 @@
 #include "board.h"
 #include "child.h"
 #include "text.h"
-#include "boardaudit.h"
+#include "boarddiff.h"
 #include "boardcfg.h"
 #include "boardflow.h"
+#include "boardstep.h"
 #include "boardplan.h"
 #include "boardsweep.h"
+#include "boardstep.h"
 #include "boardtriage.h"
 #include "gitcmd.h"
 #include "mdcfg.h"
@@ -53,6 +55,22 @@ static int count_in(struct board_card *v, int n, enum board_col col)
     for (int i = 0; i < n; i++)
         k += v[i].col == col;
     return k;
+}
+
+static const char *where(const char *id)
+{
+    static char out[BOARD_STEP_NAME];
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    snprintf(out, sizeof out, "%s", c ? board_where(c) : "");
+    board_free(v, n);
+    return out;
+}
+
+static int at(const char *id, const char *place)
+{
+    return !strcmp(where(id), place);
 }
 
 static void test_capture(void)
@@ -110,9 +128,9 @@ static void test_note_and_move(void)
     expect(board_add("worktree cleanup after approve", "/tmp/repo", id), "capture");
 
     expect(board_note(id, "triage", "feature, mux, priority 0"), "note appends");
-    expect(board_move(id, BOARD_BACKLOG, "triage", "classified as feature"),
+    expect(board_move(id, BOARD_BACKLOG, NULL, "triage", "classified as feature"),
            "move with a reason");
-    expect(board_move(id, BOARD_DOING, "you", NULL), "move without a reason");
+    expect(board_move(id, BOARD_STEP, "worktree", "you", NULL), "move without a reason");
 
     struct board_card *v = NULL;
     int                n = board_load(&v);
@@ -122,7 +140,7 @@ static void test_note_and_move(void)
         board_free(v, n);
         return;
     }
-    expect(c->col == BOARD_DOING, "column follows the last move");
+    expect(board_at(c, "worktree"), "column follows the last move");
     expect(c->log_n == 2, "a move with no reason logs nothing");
     expect(!strcmp(c->log[0].who, "triage"), "note records who");
     expect(strstr(c->log[1].text, "classified") != NULL, "move logs its reason");
@@ -152,7 +170,7 @@ static void test_update_preserves_created(void)
     c->cost_usd = 0.42;
     c->tokens_in = 12345;
     c->tokens_out = 678;
-    c->col = BOARD_REVIEW;
+    board_put(c, "review");
     expect(board_update(c), "update writes back");
     board_free(v, n);
 
@@ -169,7 +187,7 @@ static void test_update_preserves_created(void)
     expect(c->priority == 2, "priority round-trips");
     expect(c->cost_usd > 0.41 && c->cost_usd < 0.43, "cost round-trips");
     expect(c->tokens_in == 12345 && c->tokens_out == 678, "tokens round-trip");
-    expect(c->col == BOARD_REVIEW, "column round-trips");
+    expect(board_at(c, "review"), "column round-trips");
     expect(c->created == created, "update leaves created alone");
     board_free(v, n);
 }
@@ -190,7 +208,8 @@ static void test_update_leaves_others_alone(void)
     int intact = 1;
     for (int i = 0; i < n_before; i++) {
         struct board_card *c = board_find(after, n_after, before[i].id);
-        if (!c || c->col != before[i].col || strcmp(c->title, before[i].title) ||
+        if (!c || strcmp(board_where(c), board_where(&before[i])) ||
+            strcmp(c->title, before[i].title) ||
             c->log_n != before[i].log_n)
             intact = 0;
     }
@@ -223,16 +242,29 @@ static void test_remove(void)
 
 static void test_columns(void)
 {
-    expect(board_col_from_name("merging") == BOARD_MERGING, "column by name");
-    expect(board_col_from_name("unclear") == BOARD_UNCLEAR, "unclear by name");
-    expect(board_col_from_name("nonsense") == BOARD_NEW, "unknown falls back to new");
-    expect(!strcmp(board_col_name(BOARD_REVIEW), "review"), "column to name");
+    struct board_card where_at = {0};
 
-    for (int i = 0; i < BOARD_COLS; i++)
-        if ((int)board_col_from_name(board_col_name((enum board_col)i)) != i) {
+    board_put(&where_at, "unclear");
+    expect(where_at.col == BOARD_UNCLEAR, "one of the board's own columns by name");
+    board_put(&where_at, "nonsense");
+    expect(board_at(&where_at, "nonsense"),
+           "a column the board does not know is a step it has not read yet");
+    board_put(&where_at, "review");
+    expect(board_at(&where_at, "review"), "a step is a column of its own");
+    board_put(&where_at, "merging");
+    expect(board_at(&where_at, "merge"), "a column the store used to write");
+    board_put(&where_at, "active");
+    expect(board_at(&where_at, "worktree"), "and the one a working card had");
+
+    for (int i = 0; i < BOARD_COLS; i++) {
+        if (i == BOARD_STEP)
+            continue;
+        board_put(&where_at, board_col_name((enum board_col)i));
+        if ((int)where_at.col != i) {
             fail("every column round-trips");
             break;
         }
+    }
 
     struct board_card *v = NULL;
     int                n = board_load(&v);
@@ -251,7 +283,7 @@ static void test_attempts_reset_when_answered(void)
            "a fresh card has had no turns");
     board_free(v, n);
 
-    board_move(id, BOARD_UNCLEAR, "triage", "which thing?");
+    board_move(id, BOARD_UNCLEAR, NULL, "triage", "which thing?");
     n = board_load(&v);
     expect(boardtriage_attempts(board_find(v, n, id)) == 1, "unclear counts a turn");
     board_free(v, n);
@@ -268,7 +300,7 @@ static void test_attempts_reset_when_answered(void)
            "answering it makes it new again");
     board_free(v, n);
 
-    board_move(id, BOARD_UNCLEAR, "triage", "still cannot tell");
+    board_move(id, BOARD_UNCLEAR, NULL, "triage", "still cannot tell");
     n = board_load(&v);
     expect(boardtriage_attempts(board_find(v, n, id)) == 1,
            "the next turn counts from the answer");
@@ -295,7 +327,7 @@ static void test_archive(void)
     char busy[BOARD_ID_MAX] = {0}, fresh[BOARD_ID_MAX] = {0};
     expect(board_add("still being worked on", "/tmp/repo", busy), "capture");
     expect(board_add("finished just now", "/tmp/repo", fresh), "capture");
-    expect(board_move(fresh, BOARD_DONE, "you", NULL), "done");
+    expect(board_move(fresh, BOARD_DONE, NULL, "you", NULL), "done");
     plant_stale("aged");
 
     struct board_card *v = NULL;
@@ -339,64 +371,109 @@ static void test_empty_and_missing(void)
     board_free(v, n);
 }
 
-static void test_audit_verdict(void)
+static void role_add(struct board_cfg *cfg, const char *name, const char *job,
+                     const char *prompt);
+
+static void write_kind(const char *name, const char *const *keys,
+                       const char *const *vals, int n, const char *body);
+
+static struct board_card of_kind(const char *kind)
 {
+    struct board_card c = {0};
+    snprintf(c.kind, sizeof c.kind, "%s", kind);
+    return c;
+}
+
+static int goes(const char *kind, const char *from, const char *want)
+{
+    struct board_card c = of_kind(kind);
+    const char       *next = boardflow_next(&c, from, 1);
+    if (!want)
+        return next == NULL;
+    return next && !strcmp(next, want);
+}
+
+static void steps_for(const char *kind, const char *steps)
+{
+    const char *keys[] = {"means", "priority", "steps"};
+    const char *vals[] = {"a kind a test made up", "1", steps};
+    write_kind(kind, keys, vals, 3, "");
+    boardcfg_reload();
+}
+
+static struct board_cfg *with_roles(void)
+{
+    struct board_cfg *cfg = boardcfg_copy();
+    cfg->roles_n = 0;
+    role_add(cfg, "worker", "worker", "work the card");
+    cfg->roles[cfg->roles_n - 1].runs = BOARD_RUNS_WORKER;
+    snprintf(cfg->roles[cfg->roles_n - 1].step, BOARD_STEP_NAME, "worktree");
+    role_add(cfg, "test", "test", "test the change");
+    role_add(cfg, "review", "review", "");
+    cfg->roles[cfg->roles_n - 1].runs = BOARD_RUNS_PERSON;
+    role_add(cfg, "audit", "audit", "read the diff");
+    snprintf(cfg->roles[cfg->roles_n - 1].fail_marker,
+             sizeof cfg->roles[0].fail_marker, "FINDINGS");
+    snprintf(cfg->roles[cfg->roles_n - 1].fail_step,
+             sizeof cfg->roles[0].fail_step, "worktree");
+    role_add(cfg, "merge", "merge", "land it");
+    cfg->roles[cfg->roles_n - 1].runs = BOARD_RUNS_COMMAND;
+    return cfg;
+}
+
+static void test_a_step_answers_for_itself(void)
+{
+    struct board_cfg *cfg = with_roles();
+    expect(boardcfg_set(cfg), "the roles are written out");
+    boardcfg_free(cfg);
+    boardcfg_reload();
+    steps_for("audited", "worktree, review, audit, merge");
+
     char id[BOARD_ID_MAX] = {0};
     expect(board_add("a card to audit", "/tmp/repo", id), "capture");
-    expect(board_move(id, BOARD_AUDIT, "you", NULL), "into audit");
-
-    expect(!boardaudit_finished("", "{}"), "a verdict needs a card");
-
-    expect(boardaudit_finished(id, "{\"clean\":false,"
-                                   "\"findings\":[\"src/a.c: leaks the buffer\"]}"),
-           "a verdict is taken");
 
     struct board_card *v = NULL;
     int                n = board_load(&v);
     struct board_card *c = board_find(v, n, id);
     if (!c) {
-        fail("card survives the audit");
+        fail("the card is stored");
         board_free(v, n);
         return;
     }
-    expect(c->col == BOARD_DOING, "findings send it back to be worked on");
-    int said = 0;
-    for (int i = 0; i < c->log_n; i++)
-        if (!strcmp(c->log[i].who, "audit") && strstr(c->log[i].text, "leaks"))
-            said = 1;
-    expect(said, "the finding is on the card");
+    struct board_card edited = *c;
+    snprintf(edited.kind, sizeof edited.kind, "audited");
+    board_put(&edited, "audit");
+    expect(board_update(&edited), "the card sits at the audit step");
     board_free(v, n);
 
-    expect(board_move(id, BOARD_AUDIT, "you", NULL), "back into audit");
-    expect(boardaudit_finished(id, "{\"clean\":true,\"findings\":[]}"), "clean verdict");
     n = board_load(&v);
     c = board_find(v, n, id);
-    expect(c && c->col == BOARD_MERGING, "clean sends it on to land");
+    expect(boardstep_finished(c, boardcfg_for_step("audit"),
+                              "src/a.c leaks the buffer\nFINDINGS"),
+           "an answer is taken");
     board_free(v, n);
 
-    expect(board_move(id, BOARD_AUDIT, "you", NULL), "into audit once more");
-    expect(boardaudit_finished(id, "{\"clean\":false,\"findings\":["
-                                   "{\"file\":\"src/b.c\",\"finding\":\"restates the code\"}]}"),
-           "an object verdict is taken");
+    expect(at(id, "worktree"), "the marker sends the card back to its worker");
     n = board_load(&v);
     c = board_find(v, n, id);
-    said = 0;
-    if (c)
-        for (int i = 0; i < c->log_n; i++)
-            if (!strcmp(c->log[i].who, "audit") &&
-                strstr(c->log[i].text, "src/b.c") &&
-                strstr(c->log[i].text, "restates the code"))
-                said = 1;
-    expect(said, "the finding reaches the card whatever shape it came in");
-    expect(c && c->col == BOARD_DOING, "and still sends it back");
+    expect(c && board_said(c, "audit") &&
+               strstr(board_said(c, "audit"), "leaks"),
+           "with what it found on the card");
     board_free(v, n);
 
-    expect(board_move(id, BOARD_AUDIT, "you", NULL), "into audit again");
-    expect(boardaudit_finished(id, "the model wandered off"), "unparsable verdict");
+    expect(board_move(id, BOARD_STEP, "audit", "you", NULL), "back into audit");
     n = board_load(&v);
     c = board_find(v, n, id);
-    expect(c && c->col == BOARD_MERGING, "an unreadable audit does not hold it");
+    expect(boardstep_finished(c, boardcfg_for_step("audit"), "nothing to report"), "a clean answer");
     board_free(v, n);
+    expect(at(id, "merge"), "sends the card on to the step after it");
+
+    expect(board_move(id, BOARD_STEP, "audit", "you", NULL), "into audit again");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(boardstep_finished(c, boardcfg_for_step("audit"), NULL), "a turn that said nothing");
+    board_free(v, n);
+    expect(at(id, "merge"), "does not hold the card either");
 
     board_remove(id);
 }
@@ -450,10 +527,8 @@ static void test_plan_files_a_card(void)
 
     const struct board_kind *k = boardcfg_kind("plan");
     expect(k && !strcmp(k->next_kind, "feature"), "next kind comes off the file");
-    expect(!boardcfg_kind_takes("plan", BOARD_STEP_WORKTREE),
-           "a plan gets no worktree");
-    expect(boardflow_from("plan", BOARD_STEP_REVIEW, 1) == BOARD_REVIEW,
-           "and stops for a person");
+    expect(!boardcfg_kind_takes("plan", "worktree"), "a plan gets no worktree");
+    expect(goes("plan", NULL, "review"), "and stops for a person");
 
     char id[BOARD_ID_MAX] = {0};
     expect(board_add("plan the telegram menus", "/tmp/planrepo", id), "capture");
@@ -469,7 +544,7 @@ static void test_plan_files_a_card(void)
 
     struct board_card edited = *c;
     snprintf(edited.kind, sizeof edited.kind, "plan");
-    edited.col = BOARD_REVIEW;
+    board_put(&edited, "review");
     edited.body = (char *)"1. read the menu code\n2. rewrite the cancel row";
     expect(board_update(&edited), "the plan lands on the card");
     board_free(v, n);
@@ -511,23 +586,24 @@ static void test_a_kind_file_carries_its_approval_prompt(void)
         return;
     }
     expect(k->priority == 1, "priority comes off the file");
-    expect(boardcfg_kind_takes("buy", BOARD_STEP_REVIEW), "so does the step it stops at");
-    expect(!boardcfg_kind_takes("buy", BOARD_STEP_WORKTREE), "and the ones it skips");
-    expect(boardflow_from("buy", BOARD_STEP_REVIEW, 1) == BOARD_REVIEW,
-           "the card waits in review");
+    expect(boardcfg_kind_takes("buy", "review"), "so does the step it stops at");
+    expect(!boardcfg_kind_takes("buy", "worktree"), "and the ones it skips");
+    expect(goes("buy", NULL, "review"), "the card waits in review");
     expect(k->approval_prompt && !strcmp(k->approval_prompt, vals[3]),
            "the approval prompt is read whole");
 
-    struct board_card card = {0};
-    snprintf(card.kind, sizeof card.kind, "buy");
-    expect(boardflow_after_turn(&card) == BOARD_STEP_REVIEW,
+    struct board_card card = of_kind("buy");
+    snprintf(card.step, sizeof card.step, "worktree");
+    card.col = BOARD_STEP;
+    expect(boardflow_after_turn(&card) &&
+               !strcmp(boardflow_after_turn(&card), "review"),
            "the first turn stops for a person");
 
     struct board_note said = {0, "you", (char *)vals[3]};
     card.log = &said;
     card.log_n = 1;
     expect(boardflow_approval(&card) == NULL, "the approval prompt is sent once");
-    expect(boardflow_from("buy", boardflow_after_turn(&card), 1) == BOARD_DONE,
+    expect(boardflow_after_turn(&card) == NULL,
            "and the turn answering it ends the card");
 
     char block[4096];
@@ -658,23 +734,20 @@ static void test_kinds(void)
            "a feature comes before a chore");
     expect(boardcfg_priority("nonsense") == 0, "an unknown kind is worth nothing");
 
-    expect(boardcfg_kind_takes("bug", BOARD_STEP_WORKTREE), "work gets a worktree");
-    expect(boardcfg_kind_takes("bug", BOARD_STEP_MERGE), "and lands through the queue");
-    expect(!boardcfg_kind_takes("reference", BOARD_STEP_WORKTREE),
+    expect(boardcfg_kind_takes("bug", "worktree"), "work gets a worktree");
+    expect(boardcfg_kind_takes("bug", "merge"), "and lands through the queue");
+    expect(!boardcfg_kind_takes("reference", "worktree"),
            "a note to file gets neither");
-    expect(!boardcfg_kind_takes("reference", BOARD_STEP_REVIEW), "nor a review");
-    expect(boardcfg_kind_takes("nonsense", BOARD_STEP_MERGE),
-           "an unknown kind takes every step, which is the careful way round");
+    expect(!boardcfg_kind_takes("reference", "review"), "nor a review");
+    expect(boardcfg_kind_takes("nonsense", "merge"),
+           "an unknown kind walks the board's own steps, which is the careful "
+           "way round");
 
-    expect(boardflow_from("bug", BOARD_STEP_REVIEW, 1) == BOARD_REVIEW,
-           "work stops for a person first");
-    expect(boardflow_from("bug", BOARD_STEP_AUDIT, 1) == BOARD_AUDIT,
-           "then for an audit when the diff is worth it");
-    expect(boardflow_from("bug", BOARD_STEP_AUDIT, 0) == BOARD_MERGING,
-           "and straight to the queue when it is not");
-    expect(boardflow_from("bug", BOARD_STEP_MERGE, 0) == BOARD_MERGING,
-           "the queue is the last of it");
-    expect(boardflow_from("reference", BOARD_STEP_REVIEW, 1) == BOARD_DONE,
+    expect(goes("bug", "worktree", "review"), "work stops for a person first");
+    expect(goes("bug", "review", "audit"), "then for an audit");
+    expect(goes("bug", "audit", "merge"), "then for the queue");
+    expect(goes("bug", "merge", NULL), "the queue is the last of it");
+    expect(goes("reference", NULL, NULL),
            "a filed note is done when the worker stops");
 
     char block[4096];
@@ -724,18 +797,8 @@ static void land_cards(const char *cwd, int count, const char *what)
         char id[BOARD_ID_MAX] = {0}, text[64];
         snprintf(text, sizeof text, "%s %d", what, i);
         expect(board_add(text, cwd, id), "capture");
-        expect(board_move(id, BOARD_DONE, "board", NULL), "landed");
+        expect(board_move(id, BOARD_DONE, NULL, "board", NULL), "landed");
     }
-}
-
-static enum board_col col_of(const char *id)
-{
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    struct board_card *c = board_find(v, n, id);
-    enum board_col     col = c ? c->col : BOARD_COLS;
-    board_free(v, n);
-    return col;
 }
 
 static int skip_card(const char *id)
@@ -779,22 +842,146 @@ static void test_roles_are_what_the_files_say(void)
     expect(p && p->prompt && strstr(p->prompt, "read the diff"),
            "the body of the file is its prompt");
     expect(boardcfg_for_job("triage") == NULL, "a job no role does has no role");
-    expect(boardcfg_for_step(BOARD_STEP_AUDIT) == p,
-           "the step it stands in is its own");
+    expect(boardcfg_for_step("audit") == p, "the step it stands in is its own");
+    expect(boardcfg_for_step("auditor") == NULL,
+           "which is the job it does, not the file it is in");
+}
+
+static void test_a_step_that_fails_with_nowhere_to_send_it(void)
+{
+    struct board_cfg *cfg = with_roles();
+    for (int i = 0; i < cfg->roles_n; i++)
+        cfg->roles[i].fail_step[0] = '\0';
+    expect(boardcfg_set(cfg), "an audit with no fail step");
+    boardcfg_free(cfg);
+    boardcfg_reload();
+    steps_for("nowhere", "worktree, review, audit, merge");
+
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("a card with nowhere to go back to", "/tmp/repo", id),
+           "capture");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    if (c) {
+        struct board_card edited = *c;
+        snprintf(edited.kind, sizeof edited.kind, "nowhere");
+        board_put(&edited, "audit");
+        board_update(&edited);
+    }
+    board_free(v, n);
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(boardstep_finished(c, boardcfg_for_step("audit"), "FINDINGS"),
+           "the answer fails the card");
+    board_free(v, n);
+    expect(at(id, "backlog"), "and it waits in the backlog for a worker");
+
+    board_remove(id);
+}
+
+static void test_a_step_is_a_file(void)
+{
+    struct board_cfg *cfg = with_roles();
+    expect(boardcfg_set(cfg), "the roles are written out");
+    boardcfg_free(cfg);
+    boardcfg_reload();
+    steps_for("tested", "worktree, test, review, audit, merge");
+    steps_for("untested", "worktree, review, audit, merge");
+    steps_for("filed", "");
+
+    const struct board_role *p = boardcfg_for_step("test");
+    expect(p != NULL, "a file standing in a step is the step");
+    expect(p && p->runs == BOARD_RUNS_AGENT, "an agent runs it unless it says");
+    expect(p && p->skippable, "and it may be skipped by hand");
+    expect(goes("tested", "worktree", "test"), "the kind that lists it walks it");
+    expect(goes("untested", "worktree", "review"),
+           "and the kind that does not walks past");
+    expect(goes("tested", "test", "review"), "the step before the person's");
+
+    expect(boardcfg_for_step("review") &&
+               boardcfg_for_step("review")->runs == BOARD_RUNS_PERSON,
+           "a step nothing runs waits for a person");
+    expect(boardcfg_for_step("merge") &&
+               boardcfg_for_step("merge")->runs == BOARD_RUNS_COMMAND,
+           "and one that is a script is a command");
+    expect(boardflow_lands("tested"), "a kind listing the worker's step gets a "
+                                      "worktree");
+    expect(!boardflow_lands("filed"), "and one that lists no steps at all does "
+                                      "not");
+    expect(goes("filed", NULL, NULL), "nor does it stop anywhere");
+
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("the tab strip wraps at 80 columns", "/tmp/repo", id),
+           "capture");
+    expect(board_note(id, "worker", "fixed the wrap; run mux and widen"),
+           "the worker says how to test it");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    if (!c) {
+        fail("the card is stored");
+        board_free(v, n);
+        return;
+    }
+    struct board_card edited = *c;
+    snprintf(edited.kind, sizeof edited.kind, "tested");
+    snprintf(edited.base, sizeof edited.base, "b519936");
+    board_put(&edited, "test");
+    expect(board_update(&edited), "the card sits at the test step");
+    board_free(v, n);
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    char *prompt = boardstep_prompt(c, boardcfg_for_step("test"));
+    expect(prompt && strstr(prompt, "test the change"),
+           "the file is what the worker at that step is told");
+    expect(prompt && strstr(prompt, "the tab strip wraps"), "with the card");
+    expect(prompt && strstr(prompt, "run mux and widen"),
+           "and what the step before it said");
+    free(prompt);
+
+    expect(boardstep_finished(c, boardcfg_for_step("test"),
+                              "ran mux at 60 columns; the strip held"),
+           "its answer moves the card on");
+    board_free(v, n);
+    expect(at(id, "review"), "to the person");
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && board_said(c, "test") && board_said(c, "worker"),
+           "with what both of them said on the card");
+    board_free(v, n);
+
+    board_remove(id);
 }
 
 static void test_skipping_a_step(void)
 {
+    struct board_cfg *cfg = with_roles();
+    expect(boardcfg_set(cfg), "roles for the steps a card walks");
+    boardcfg_free(cfg);
+    boardcfg_reload();
+    steps_for("skipped", "worktree, review, audit, merge");
+
     char id[BOARD_ID_MAX] = {0};
     expect(board_add("a card to skip past", "/tmp/repo", id), "capture");
-    expect(board_move(id, BOARD_AUDIT, "you", NULL), "into audit");
 
-    expect(boardflow_step_at(BOARD_AUDIT) == BOARD_STEP_AUDIT,
-           "a card in audit waits on the audit step");
-    expect(boardflow_step_at(BOARD_BACKLOG) == BOARD_STEPS,
-           "a card waiting for a worker waits on no step");
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    if (c) {
+        struct board_card edited = *c;
+        snprintf(edited.kind, sizeof edited.kind, "skipped");
+        board_put(&edited, "audit");
+        board_update(&edited);
+    }
+    board_free(v, n);
 
-    struct board_cfg *cfg = boardcfg_copy();
+    cfg = boardcfg_copy();
     for (int i = 0; i < cfg->roles_n; i++)
         cfg->roles[i].skippable = 0;
     boardcfg_set(cfg);
@@ -808,14 +995,13 @@ static void test_skipping_a_step(void)
     boardcfg_free(cfg);
 
     expect(skip_card(id), "a skippable step is skipped");
-    expect(col_of(id) == BOARD_MERGING, "skipping the audit sends it on to land");
+    expect(at(id, "merge"), "skipping the audit sends it on to land");
     expect(skip_card(id), "and the next step skips too");
-    expect(col_of(id) == BOARD_DONE, "skipping the merge is the end of it");
+    expect(at(id, "done"), "skipping the last of them is the end of it");
 
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    struct board_card *c = board_find(v, n, id);
-    int                said = 0;
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    int said = 0;
     if (c)
         for (int i = 0; i < c->log_n; i++)
             if (strstr(c->log[i].text, "audit skipped"))
@@ -839,6 +1025,12 @@ static void test_sweep_counts_landed_cards(void)
     expect(sweep_due(due, sizeof due) && !strcmp(due, cwd),
            "the interval makes the repo due");
 
+    const char *sweep_keys[] = {"means", "priority", "steps"};
+    const char *sweep_vals[] = {"a card the board raised itself", "0",
+                                "sweep, review"};
+    write_kind("sweep", sweep_keys, sweep_vals, 3, "");
+    boardcfg_reload();
+
     char id[BOARD_ID_MAX] = {0};
     expect(boardsweep_open(cwd, id, sizeof id), "a sweep card is minted");
     expect(sweep_mark_count(cwd) == every,
@@ -848,7 +1040,7 @@ static void test_sweep_counts_landed_cards(void)
     struct board_card *v = NULL;
     int                n = board_load(&v);
     struct board_card *c = board_find(v, n, id);
-    expect(c && c->col == BOARD_DOING, "the sweep card starts in doing");
+    expect(c && board_at(c, "sweep"), "the sweep card starts at its own step");
     expect(c && boardsweep_is(c), "and is a sweep");
     board_free(v, n);
 
@@ -858,7 +1050,7 @@ static void test_sweep_counts_landed_cards(void)
 
     n = board_load(&v);
     c = board_find(v, n, id);
-    expect(c && c->col == BOARD_REVIEW, "what it raised goes to review");
+    expect(c && board_at(c, "review"), "what it raised goes to review");
     expect(c && boardsweep_proposed(c) == 1, "with the proposal on it");
     expect(!card_titled("two ways to spell a worktree", cwd),
            "and nothing on the board yet");
@@ -1114,7 +1306,7 @@ static void test_revision_tracks_writes(void)
     expect(board_revision() == added, "a read leaves the revision alone");
     board_free(v, n);
 
-    expect(board_move(id, BOARD_REVIEW, "worker", "finished"), "move");
+    expect(board_move(id, BOARD_STEP, "review", "worker", "finished"), "move");
     expect(board_revision() != added, "a move moves the revision");
 
     board_remove(id);
@@ -1136,9 +1328,12 @@ int main(void)
     test_remove();
     test_columns();
     test_attempts_reset_when_answered();
-    test_audit_verdict();
+    test_a_step_answers_for_itself();
     test_roles_are_what_the_files_say();
+    test_a_step_is_a_file();
+    test_a_step_that_fails_with_nowhere_to_send_it();
     test_skipping_a_step();
+
     test_sweep_counts_landed_cards();
     test_sweep_review_can_refuse();
     test_sweep_with_nothing_to_raise();

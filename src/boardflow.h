@@ -6,17 +6,27 @@
 
 struct board_card;
 
-enum board_col boardflow_from(const char *kind, enum board_step from,
-                              int audit_worth_it);
+const char *boardflow_next(const struct board_card *c, const char *after,
+                           int force);
+
+const char *boardflow_start(void);
+
+const char *boardflow_after_turn(const struct board_card *c);
+
+const char *boardflow_fail(const struct board_card *c);
+
+enum board_runs boardflow_runs(const struct board_card *c);
+
+const struct board_role *boardflow_role(const struct board_card *c);
 
 char *boardflow_approval(const struct board_card *c);
-
-enum board_step boardflow_after_turn(const struct board_card *c);
-
-enum board_step boardflow_step_at(enum board_col col);
 
 int boardflow_skippable(const struct board_card *c);
 
 int boardflow_skip(const struct board_card *c);
+
+int boardflow_lands(const char *kind);
+
+const char *boardflow_person(const char *kind);
 
 #endif

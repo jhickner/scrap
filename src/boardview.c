@@ -12,10 +12,10 @@
 #include "boardcfg.h"
 #include "boardlog.h"
 #include "edit.h"
-#include "boardaudit.h"
+#include "boarddiff.h"
 #include "boardcfgui.h"
 #include "boardflow.h"
-#include "boardmerge.h"
+#include "boardcmd.h"
 #include "boardplan.h"
 #include "boardsweep.h"
 #include "boardtriage.h"
@@ -53,13 +53,15 @@
 
 #define BOARD_KEYS "ndtsSgarxflcbw*Aiuk\t"
 
+#define STEPS_SHOWN (BOARD_KINDS_MAX * BOARD_KIND_STEPS)
+
 #define BOARD_RECENT 3
 
 #define BOARD_RECENT_INDENT 6
 
 #define BOARD_HINT \
     "enter edit  ·  s start  ·  S start max  ·  g worker  ·  "                \
-    "a approve  ·  A approve all  ·  i audit\n"                               \
+    "a approve  ·  A approve all  ·  i approve, skipping nothing\n"           \
     "f feedback  ·  r send back  ·  x cancel start  ·  u undo  ·  "          \
     "k skip step\n"                                                            \
     "n new  ·  t triage  ·  l log  ·  d delete  ·  w sweep  ·  c config  ·  "  \
@@ -216,9 +218,16 @@ static void ago(time_t then, int done, char *out, size_t size)
         snprintf(out, size, "%ldd%s", gap / 86400, done ? " ago" : "");
 }
 
-static void column_mark(enum board_col col, const char **mark, unsigned char *role)
+static void column_mark(const struct board_card *c, const char **mark,
+                        unsigned char *role)
 {
-    switch (col) {
+    if (boardflow_runs(c) == BOARD_RUNS_PERSON) {
+        *mark = "\xe2\x9c\x93";
+        *role = UI_OK;
+        return;
+    }
+
+    switch (c->col) {
     case BOARD_UNCLEAR:
         *mark = "?";
         *role = UI_ACCENT;
@@ -226,10 +235,6 @@ static void column_mark(enum board_col col, const char **mark, unsigned char *ro
     case BOARD_BACKLOG:
         *mark = "●";
         *role = UI_DIM;
-        break;
-    case BOARD_REVIEW:
-        *mark = "✓";
-        *role = UI_OK;
         break;
     case BOARD_DONE:
         *mark = "✓";
@@ -273,10 +278,7 @@ static void short_repo(const char *cwd, char *out, size_t size)
 
 static const char *asked(const struct board_card *c)
 {
-    for (int i = c->log_n - 1; i >= 0; i--)
-        if (!strcmp(c->log[i].who, "triage") && c->log[i].text)
-            return c->log[i].text;
-    return NULL;
+    return board_said(c, "triage");
 }
 
 static int shows(const struct board_card *c, const char *filter)
@@ -284,17 +286,18 @@ static int shows(const struct board_card *c, const char *filter)
     return !filter || !*filter || !strcmp(c->cwd, filter);
 }
 
+static int waits_on_you(const struct board_card *c)
+{
+    return boardflow_runs(c) == BOARD_RUNS_PERSON;
+}
+
 static const char *step_of(const char *id)
 {
     if (boardtriage_running(id))
         return "triaging";
-    if (boardmerge_running(id))
+    if (boardcmd_running(id))
         return "landing";
-    if (boardwork_auditing(id))
-        return "auditing";
-    if (boardwork_sweeping(id))
-        return "sweeping";
-    return NULL;
+    return boardwork_step_job(id);
 }
 
 static int by_col(const void *a, const void *b)
@@ -313,22 +316,34 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
 
     stamp_due = 0;
 
-    for (int col = 0; col < BOARD_COLS; col++) {
+    const char *const *walk = NULL;
+    int                walk_n = boardcfg_steps(&walk);
+
+    for (int col = 0; col < BOARD_COLS - 1 + walk_n; col++) {
+        enum board_col at = col < BOARD_STEP            ? (enum board_col)col
+                            : col < BOARD_STEP + walk_n ? BOARD_STEP
+                                          : (enum board_col)(col - walk_n + 1);
+        const char *step = at == BOARD_STEP ? walk[col - BOARD_STEP] : NULL;
+
         int k = 0;
-        for (int i = 0; i < n; i++)
-            if ((int)cards[i].col == col && shows(&cards[i], filter))
-                in[k++] = &cards[i];
+        for (int i = 0; i < n; i++) {
+            if (cards[i].col != at || !shows(&cards[i], filter))
+                continue;
+            if (step && strcmp(cards[i].step, step))
+                continue;
+            in[k++] = &cards[i];
+        }
         if (!k)
             continue;
         qsort(in, (size_t)k, sizeof *in, by_col);
-        int cap = col == BOARD_DONE      ? boardcfg()->done_shown
-                  : col == BOARD_BACKLOG ? boardcfg()->backlog_shown
-                                         : 0;
+        int cap = at == BOARD_DONE      ? boardcfg()->done_shown
+                  : at == BOARD_BACKLOG ? boardcfg()->backlog_shown
+                                        : 0;
         if (cap > 0 && k > cap)
             k = cap;
 
         shown += k;
-        row_heading(l, board_col_name((enum board_col)col));
+        row_heading(l, step ? step : board_col_name(at));
         for (int i = 0; i < k; i++) {
             const struct board_card *c = in[i];
             struct vrow             *r = row_add(l);
@@ -337,11 +352,11 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             snprintf(r->id, sizeof r->id, "%s", c->id);
             r->col = (unsigned char)c->col;
             r->label = dsprintf("%s", c->title[0] ? c->title : "(untitled)");
-            column_mark(c->col, &r->mark, &r->mark_role);
+            column_mark(c, &r->mark, &r->mark_role);
             int         tab = boardwork_tab(c->id);
             const char *step = step_of(c->id);
             r->spin = (unsigned char)(step ||
-                                      (c->col == BOARD_DOING && tab >= 0 &&
+                                      (tab >= 0 && c->col == BOARD_STEP &&
                                        session_busy(workspace_at(tab))));
 
             char ts[32], when[64];
@@ -375,18 +390,18 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
                 r->detail = dsprintf("stuck · %s", c->stuck);
             else if (waiting[0])
                 r->detail = dsprintf("waiting · %s", waiting);
-            else if (c->col == BOARD_REVIEW && boardsweep_is(c)) {
+            else if (waits_on_you(c) && boardsweep_is(c)) {
                 int raised = boardsweep_proposed(c);
                 r->detail = dsprintf("%d card%s proposed", raised,
                                      raised == 1 ? "" : "s");
-            } else if (c->col == BOARD_REVIEW && c->worktree[0]) {
+            } else if (waits_on_you(c) && c->worktree[0]) {
                 int files = 0, lines = 0;
-                boardaudit_size_cached(c, &files, &lines);
+                boarddiff_size_cached(c, &files, &lines);
                 r->detail = dsprintf("%d file%s, %d line%s", files,
                                      files == 1 ? "" : "s", lines,
                                      lines == 1 ? "" : "s");
             } else if (c->cost_usd > 0 &&
-                     (c->col == BOARD_REVIEW || c->col == BOARD_DONE)) {
+                     (waits_on_you(c) || c->col == BOARD_DONE)) {
                 char head[320] = "";
                 if (where[0] && c->kind[0])
                     snprintf(head, sizeof head, "%s · %s · ", where, c->kind);
@@ -512,7 +527,7 @@ static int board_reap(void)
         if (!child_reap(key, sizeof key, &out, &ok))
             break;
         changed |= boardtriage_take(key, out);
-        changed |= boardmerge_take(key, out, ok);
+        changed |= boardcmd_take(key, out, ok);
         free(out);
     }
     return changed;
@@ -530,8 +545,7 @@ static int board_tick(void *ud)
     moved |= boardwork_poll();
     moved |= boardwork_pump();
 
-    moved |= boardmerge_pump();
-    moved |= boardwork_audit_pump();
+    moved |= boardcmd_pump();
     moved |= boardwork_sweep_pump();
 
     static int seen;
@@ -711,14 +725,14 @@ static int do_delete(const struct board_card *c)
  * is sent the prompt and the card ends on what it did. */
 static char *approval_prompt_of(const struct board_card *c)
 {
-    if (!c || c->col != BOARD_REVIEW)
+    if (boardflow_runs(c) != BOARD_RUNS_PERSON)
         return NULL;
     return boardflow_approval(c);
 }
 
-static int approve(const struct board_card *c, int audit)
+static int approve(const struct board_card *c, int force)
 {
-    if (!c || c->col != BOARD_REVIEW)
+    if (!waits_on_you(c))
         return 0;
     if (boardsweep_is(c)) {
         boardwork_leave(c);
@@ -737,7 +751,7 @@ static int approve(const struct board_card *c, int audit)
     char *say = approval_prompt_of(c);
     int   moved;
     if (!say)
-        moved = boardwork_approve(c, audit);
+        moved = boardwork_approve(c, force);
     else if (!(moved = boardwork_feedback(c, say)))
         note("no worker left to take it on");
     free(say);
@@ -748,7 +762,7 @@ static int in_review(const struct board_card *cards, int n, const char *filter)
 {
     int ready = 0;
     for (int i = 0; i < n; i++)
-        if (cards[i].col == BOARD_REVIEW && shows(&cards[i], filter))
+        if (waits_on_you(&cards[i]) && shows(&cards[i], filter))
             ready++;
     return ready;
 }
@@ -757,7 +771,7 @@ static int approve_all(const struct board_card *cards, int n, const char *filter
 {
     int did = 0;
     for (int i = 0; i < n; i++) {
-        if (cards[i].col != BOARD_REVIEW || !shows(&cards[i], filter))
+        if (!waits_on_you(&cards[i]) || !shows(&cards[i], filter))
             continue;
         approve(&cards[i], 0);
         did++;
@@ -863,43 +877,70 @@ static int stage_ran(const struct board_card *c, const char *who)
     return 0;
 }
 
+struct stage {
+    const char *name;
+    const char *step;
+    const char *who;
+};
+
+static int stages_of(const struct board_card *c, struct stage *out, int max)
+{
+    int n = 0;
+    out[n++] = (struct stage){"triage", NULL, "triage"};
+
+    for (int at = 0; n < max; at++) {
+        const char *step = boardcfg_kind_step(c->kind, at);
+        if (!step)
+            break;
+        const struct board_role *p = boardcfg_for_step(step);
+        if (!p)
+            continue;
+        out[n++] = (struct stage){step, step,
+                                  p->runs == BOARD_RUNS_PERSON  ? "you"
+                                  : p->runs == BOARD_RUNS_COMMAND ? NULL
+                                                                  : p->job};
+    }
+    return n;
+}
+
+static int stage_rank(const struct board_card *c, const struct stage *st)
+{
+    if (!st->step)
+        return c->col > BOARD_NEW && c->col != BOARD_UNCLEAR ? 1 : 0;
+    if (board_at(c, st->step))
+        return 0;
+    if (c->col == BOARD_DONE)
+        return 1;
+    if (c->col < BOARD_STEP)
+        return -1;
+
+    int here = boardcfg_kind_step_at(c->kind, c->step);
+    int there = boardcfg_kind_step_at(c->kind, st->step);
+    if (here < 0)
+        return -1;
+    return here > there ? 1 : -1;
+}
+
 static void build_stages(const struct board_card *c, struct notes *notes)
 {
-    static const struct {
-        const char     *name;
-        enum board_col  at;
-        enum board_step step;
-        const char     *who;
-    } STAGE[] = {
-        {"triage", BOARD_NEW,     BOARD_STEPS,       "triage"},
-        {"worker", BOARD_DOING,   BOARD_STEPS,       "worker"},
-        {"review", BOARD_REVIEW,  BOARD_STEP_REVIEW, "you"},
-        {"audit",  BOARD_AUDIT,   BOARD_STEP_AUDIT,  "audit"},
-        {"merge",  BOARD_MERGING, BOARD_STEP_MERGE,  NULL},
-    };
+    struct stage STAGE[BOARD_KIND_STEPS + 1];
+    int          stages = stages_of(c, STAGE, BOARD_KIND_STEPS + 1);
 
     char   line[512];
     size_t at = (size_t)snprintf(line, sizeof line, "  %-8s", "flow");
     int    any = 0;
 
-    for (size_t i = 0; i < sizeof STAGE / sizeof *STAGE; i++) {
-        if (STAGE[i].step != BOARD_STEPS &&
-            !boardcfg_kind_takes(c->kind, STAGE[i].step))
-            continue;
-        if (boardsweep_is(c) && STAGE[i].at != BOARD_DOING &&
-            STAGE[i].at != BOARD_REVIEW)
-            continue;
+    for (int i = 0; i < stages; i++) {
         if (at >= sizeof line)
             break;
 
         const char *mark;
         int         strong;
-        int         here = c->col == STAGE[i].at ||
-                           (STAGE[i].at == BOARD_NEW && c->col == BOARD_UNCLEAR);
-        if (here) {
+        int         rank = stage_rank(c, &STAGE[i]);
+        if (rank == 0) {
             mark = "\xe2\x96\xb8";
             strong = 1;
-        } else if (c->col < STAGE[i].at) {
+        } else if (rank < 0) {
             mark = "\xe2\x97\x8b";
             strong = 0;
         } else if (STAGE[i].who && !stage_ran(c, STAGE[i].who)) {
@@ -1051,7 +1092,7 @@ static void build_proposals(const struct board_card *c, struct notes *notes)
 
 static void build_notes(const struct board_card *c, struct notes *notes)
 {
-    if (c->col == BOARD_REVIEW && boardsweep_is(c))
+    if (waits_on_you(c) && boardsweep_is(c))
         build_proposals(c, notes);
     build_stages(c, notes);
     build_backend(c, notes);
@@ -1067,8 +1108,8 @@ static void build_notes(const struct board_card *c, struct notes *notes)
             strftime(stamp, sizeof stamp, "%H:%M", &when);
         }
         char *text = clean(c->log[i].text ? c->log[i].text : "");
-        if (!strcmp(c->log[i].who, "worker"))
-            note_message(notes, stamp, c->log[i].who, text ? text : "");
+        if (text && strchr(text, '\n'))
+            note_message(notes, stamp, c->log[i].who, text);
         else
             note_entry(notes, stamp, c->log[i].who, text ? text : "");
         free(text);
@@ -1077,16 +1118,25 @@ static void build_notes(const struct board_card *c, struct notes *notes)
 
 static int unstart(const struct board_card *c)
 {
-    if (!c || c->col != BOARD_DOING || boardsweep_is(c))
+    if (boardflow_runs(c) != BOARD_RUNS_WORKER || boardsweep_is(c))
         return 0;
     return boardwork_reject(c, "cancelled start");
 }
 
 static void card_form(const struct board_card *c)
 {
-    const char *cols[BOARD_COLS];
-    for (int i = 0; i < BOARD_COLS; i++)
-        cols[i] = board_col_name((enum board_col)i);
+    const char        *cols[BOARD_COLS + STEPS_SHOWN];
+    const char *const *walk = NULL;
+    int                walk_n = boardcfg_steps(&walk);
+    int                cols_n = 0;
+    for (int i = 0; i < BOARD_COLS; i++) {
+        if (i == BOARD_STEP) {
+            for (int j = 0; j < walk_n && j < STEPS_SHOWN; j++)
+                cols[cols_n++] = walk[j];
+            continue;
+        }
+        cols[cols_n++] = board_col_name((enum board_col)i);
+    }
 
     const struct board_cfg *cfg = boardcfg();
     const char             *kinds[BOARD_KINDS_MAX + 1];
@@ -1110,7 +1160,7 @@ static void card_form(const struct board_card *c)
 
     snprintf(spec, sizeof spec, "%s", c->body ? c->body : "");
     snprintf(kind, sizeof kind, "%s", c->kind);
-    snprintf(column, sizeof column, "%s", board_col_name(c->col));
+    snprintf(column, sizeof column, "%s", board_where(c));
     path_home_relative(c->cwd, where, sizeof where);
     snprintf(priority, sizeof priority, "%d", c->priority);
     snprintf(backend, sizeof backend, "%s", c->backend_pin);
@@ -1119,7 +1169,7 @@ static void card_form(const struct board_card *c)
     char unstart_at[2] = "";
     char approve_at[2] = "";
 
-    int proposals = c->col == BOARD_REVIEW && boardsweep_is(c);
+    int proposals = waits_on_you(c) && boardsweep_is(c);
 
     struct form_field fields[9];
     int               fields_n = 0;
@@ -1130,7 +1180,7 @@ static void card_form(const struct board_card *c)
     fields[fields_n++] = (struct form_field){"kind", FORM_CHOICE, kind,
                                              sizeof kind, kinds, kinds_n};
     fields[fields_n++] = (struct form_field){"column", FORM_CHOICE, column,
-                                             sizeof column, cols, BOARD_COLS};
+                                             sizeof column, cols, cols_n};
     fields[fields_n++] = (struct form_field){"repo", FORM_TEXT, where,
                                              sizeof where, NULL, 0};
     fields[fields_n++] = (struct form_field){"priority", FORM_CHOICE, priority,
@@ -1141,19 +1191,30 @@ static void card_form(const struct board_card *c)
                                              backends_n};
     fields[fields_n++] = (struct form_field){"tier", FORM_CHOICE, tier,
                                              sizeof tier, tiers, tiers_n};
-    if (c->col == BOARD_DOING && !boardsweep_is(c))
+    if (boardflow_runs(c) == BOARD_RUNS_WORKER && !boardsweep_is(c))
         fields[fields_n++] = (struct form_field){
             "cancel starting, back to backlog", FORM_BUTTON, unstart_at,
             sizeof unstart_at, NULL, 0};
-    char approve_label[64] = "approve";
-    if (c->col == BOARD_REVIEW && boardplan_is(c))
+    const struct board_role *waiting = boardflow_role(c);
+    char approve_label[96];
+    snprintf(approve_label, sizeof approve_label, "%s",
+             waiting ? waiting->pass_label : "approve");
+    if (waiting) {
+        const char *next = boardflow_next(c, c->step, 0);
+        const char *most = boardflow_next(c, c->step, 1);
+        if (most && (!next || strcmp(next, most)))
+            snprintf(approve_label + strlen(approve_label),
+                     sizeof approve_label - strlen(approve_label),
+                     " \xc2\xb7 no %s", most);
+    }
+    if (waits_on_you(c) && boardplan_is(c))
         snprintf(approve_label, sizeof approve_label, "approve \xc2\xb7 file a card");
     if (proposals) {
         int raised = boardsweep_proposed(c);
         snprintf(approve_label, sizeof approve_label,
                  "approve · raise %d card%s", raised, raised == 1 ? "" : "s");
     }
-    if (c->col == BOARD_REVIEW)
+    if (waits_on_you(c))
         fields[fields_n++] = (struct form_field){approve_label, FORM_BUTTON,
                                                  approve_at, sizeof approve_at,
                                                  NULL, 0};
@@ -1207,7 +1268,7 @@ static void card_form(const struct board_card *c)
     snprintf(edited.kind, sizeof edited.kind, "%s", kind);
     snprintf(edited.backend_pin, sizeof edited.backend_pin, "%s", backend);
     snprintf(edited.tier_pin, sizeof edited.tier_pin, "%s", tier);
-    edited.col = board_col_from_name(column);
+    board_put(&edited, column);
     edited.priority = atoi(priority);
 
     int respec = !proposals && strcmp(spec, live->body ? live->body : "") != 0;
@@ -1271,9 +1332,9 @@ int boardview_approve(const char *id, char *why, int size)
     int ok = 0;
     if (!c)
         snprintf(why, (size_t)size, "card %s is not on the board", id);
-    else if (c->col != BOARD_REVIEW)
-        snprintf(why, (size_t)size, "card %s is in %s, not review", id,
-                 board_col_name(c->col));
+    else if (!waits_on_you(c))
+        snprintf(why, (size_t)size, "card %s is in %s, which is not yours to "
+                 "answer", id, board_where(c));
     else {
         approve(c, 0);
         ok = 1;
@@ -1498,12 +1559,11 @@ int boardview_run(const char *cwd)
             break;
         case KEY_SKIP:
             if (c) {
-                enum board_step step = boardflow_step_at(c->col);
-                if (step >= BOARD_STEPS)
+                if (c->col != BOARD_STEP)
                     snprintf(notice, sizeof notice, "no step to skip here");
                 else if (!boardflow_skippable(c))
                     snprintf(notice, sizeof notice, "%s is not skippable",
-                             boardcfg_step_name(step));
+                             c->step);
                 else {
                     boardwork_halt(c->id);
                     boardflow_skip(c);
@@ -1532,13 +1592,16 @@ int boardview_run(const char *cwd)
             if (c && boardsweep_is(c)) {
                 boardwork_let_go(c->id);
                 boardsweep_reject(c);
-            } else if (c && (c->col == BOARD_REVIEW || c->col == BOARD_DOING ||
-                             c->col == BOARD_DONE)) {
+            } else if (c && (c->col == BOARD_STEP || c->col == BOARD_DONE)) {
                 close_list();
-                char *why = ask_run(c->col == BOARD_DONE
-                                        ? "why it is not fixed"
-                                        : "reason for sending it back",
-                                    NULL);
+                const struct board_role *at = boardflow_role(c);
+                char                     asked[64];
+                if (c->col == BOARD_DONE)
+                    snprintf(asked, sizeof asked, "why it is not fixed");
+                else
+                    snprintf(asked, sizeof asked, "reason to %s",
+                             at ? at->fail_label : "send it back");
+                char *why = ask_run(asked, NULL);
                 if (why) {
                     boardwork_send_back(c, why);
                     free(why);

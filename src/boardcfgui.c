@@ -22,7 +22,6 @@ enum row_kind {
     ROW_SERVING,
     ROW_BACKEND,
     ROW_PROMPT,
-    ROW_VERIFY,
     ROW_PROJECTS,
     ROW_KIND,
     ROW_KIND_NEW,
@@ -80,10 +79,6 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
     toggle_row(rows, n, "auto pull", &c->auto_pull);
     toggle_row(rows, n, "auto pick", &c->auto_pick);
 
-    head(rows, n, "audit");
-    count_row(rows, n, "file threshold", &c->audit_files, 0, 500, NULL);
-    count_row(rows, n, "line threshold", &c->audit_lines, 0, 100000, NULL);
-
     head(rows, n, "sweep");
     count_row(rows, n, "interval", &c->sweep_every, 0, 500, "cards");
 
@@ -131,14 +126,10 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
         (*n)++;
     }
 
-    int stands = 0;
-    for (int i = 0; i < c->roles_n; i++)
-        stands += c->roles[i].step[0] != '\0';
-    if (stands) {
+    if (c->roles_n) {
         head(rows, n, "skippable");
         for (int i = 0; i < c->roles_n && *n < ROWS_MAX - 1; i++)
-            if (c->roles[i].step[0])
-                toggle_row(rows, n, c->roles[i].name, &c->roles[i].skippable);
+            toggle_row(rows, n, c->roles[i].name, &c->roles[i].skippable);
     }
 
     head(rows, n, "prompts");
@@ -148,11 +139,6 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
         rows[*n].role_at = i;
         (*n)++;
     }
-
-    head(rows, n, "merge");
-    rows[*n].kind = ROW_VERIFY;
-    rows[*n].label = "check";
-    (*n)++;
 
 }
 
@@ -201,20 +187,16 @@ static void value_of(const struct row *r, const struct board_cfg *c,
         snprintf(out, size, "%d line%s", lines, lines == 1 ? "" : "s");
         break;
     }
-    case ROW_VERIFY:
-        snprintf(out, size, "%s", c->verify[0] ? c->verify : "none");
-        break;
     case ROW_PROJECTS:
         snprintf(out, size, "%s", c->projects[0] ? c->projects : "none");
         break;
     case ROW_KIND: {
         const struct board_kind *k = &c->kinds[r->kind_at];
         size_t                   at = (size_t)snprintf(out, size, "p%d", k->priority);
-        for (int i = 0; i < BOARD_STEPS && at < size; i++)
-            if (k->steps & (1u << i))
-                at += (size_t)snprintf(out + at, size - at, " \xc2\xb7 %s",
-                                       boardcfg_step_name((enum board_step)i));
-        if (!k->steps && at < size)
+        for (int i = 0; i < k->steps_n && at < size; i++)
+            at += (size_t)snprintf(out + at, size - at, " \xc2\xb7 %s",
+                                   k->steps[i]);
+        if (!k->steps_n && at < size)
             snprintf(out + at, size - at, " \xc2\xb7 nothing after the worker");
         break;
     }
@@ -346,17 +328,7 @@ static void edit_projects(struct board_cfg *c)
     free(said);
 }
 
-static void edit_verify(struct board_cfg *c)
-{
-    char *said = ask_run("command a card must pass to land", c->verify);
-    if (!said)
-        return;
-    snprintf(c->verify, sizeof c->verify, "%s", said);
-    free(said);
-}
 
-
-static const char *const YES_NO[] = {"no", "yes"};
 static const char *const LEVELS[] = {"0", "1", "2", "3"};
 
 static void edit_kind(struct board_cfg *c, int at)
@@ -364,7 +336,7 @@ static void edit_kind(struct board_cfg *c, int at)
     struct board_kind *k = &c->kinds[at];
 
     char name[32], means[256], priority[8], approval[512], next[32];
-    char steps[BOARD_STEPS][8];
+    char steps[256];
     char *prompt = calloc(1, 8192);
     if (!prompt)
         return;
@@ -375,20 +347,19 @@ static void edit_kind(struct board_cfg *c, int at)
     snprintf(prompt, 8192, "%s", k->prompt ? k->prompt : "");
     snprintf(approval, sizeof approval, "%s", k->approval_prompt ? k->approval_prompt : "");
     snprintf(next, sizeof next, "%s", k->next_kind);
-    for (int i = 0; i < BOARD_STEPS; i++)
-        snprintf(steps[i], sizeof steps[i], "%s",
-                 k->steps & (1u << i) ? "yes" : "no");
+    steps[0] = '\0';
+    for (int i = 0, at = 0; i < k->steps_n && at < (int)sizeof steps; i++)
+        at += snprintf(steps + at, sizeof steps - (size_t)at, "%s%s",
+                       at ? ", " : "", k->steps[i]);
 
-    struct form_field fields[5 + BOARD_STEPS + 1];
+    struct form_field fields[8];
     int               fields_n = 0;
     fields[fields_n++] = (struct form_field){"name", FORM_TEXT, name, sizeof name, NULL, 0};
     fields[fields_n++] = (struct form_field){"means", FORM_TEXT, means, sizeof means, NULL, 0};
     fields[fields_n++] = (struct form_field){"priority", FORM_CHOICE, priority,
                                              sizeof priority, LEVELS, 4};
-    for (int i = 0; i < BOARD_STEPS; i++)
-        fields[fields_n++] = (struct form_field){
-            boardcfg_step_name((enum board_step)i), FORM_CHOICE, steps[i],
-            sizeof steps[i], YES_NO, 2};
+    fields[fields_n++] = (struct form_field){"steps", FORM_TEXT, steps,
+                                             sizeof steps, NULL, 0};
     fields[fields_n++] = (struct form_field){"approval prompt", FORM_TEXT, approval,
                                              sizeof approval, NULL, 0};
     fields[fields_n++] = (struct form_field){"next kind", FORM_TEXT, next,
@@ -398,15 +369,16 @@ static void edit_kind(struct board_cfg *c, int at)
     static const char *const NOTES[] = {
         "means is what the classifier is told this kind is.",
         "prompt is what a worker given one is told, before the card.",
-        "the steps a card of this kind takes once a worker has had it.",
-        "none of them: the worker writes it and the card is done.",
+        "steps are the stages a card of this kind goes through, in order, and",
+        "each names a file in board/roles. None of them: the worker writes it",
+        "and the card is done.",
         "approval prompt is what a worker is told when you approve one in",
         "review; empty finishes the card there instead.",
         "next kind is the kind of the card approving a plan files; empty sends",
         "it through triage.",
     };
 
-    struct form f = {.title = "kind", .notes = NOTES, .notes_n = 8,
+    struct form f = {.title = "kind", .notes = NOTES, .notes_n = 9,
                      .fields = fields, .fields_n = fields_n};
     if (!form_run(&f) || !name[0]) {
         free(prompt);
@@ -416,10 +388,7 @@ static void edit_kind(struct board_cfg *c, int at)
     snprintf(k->name, sizeof k->name, "%s", name);
     snprintf(k->next_kind, sizeof k->next_kind, "%s", next);
     k->priority = atoi(priority);
-    k->steps = 0;
-    for (int i = 0; i < BOARD_STEPS; i++)
-        if (!strcmp(steps[i], "yes"))
-            k->steps |= 1u << i;
+    boardcfg_kind_steps(k, steps);
 
     char *kept_means = strdup(means);
     if (kept_means) {
@@ -441,7 +410,7 @@ static void add_kind(struct board_cfg *c)
         return;
     struct board_kind *k = &c->kinds[c->kinds_n];
     memset(k, 0, sizeof *k);
-    k->steps = (1u << BOARD_STEPS) - 1u;
+    boardcfg_kind_steps_default(k);
     k->means = strdup("");
     k->prompt = strdup("");
     c->kinds_n++;
@@ -516,7 +485,6 @@ void boardcfgui_run(void)
         case ROW_SERVING: edit_serving(c); touched = 1; break;
         case ROW_BACKEND: edit_backend(c, rows[at].backend_at); touched = 1; break;
         case ROW_PROMPT:  edit_prompt(c, rows[at].role_at); touched = 1; break;
-        case ROW_VERIFY:  edit_verify(c); touched = 1; break;
         case ROW_PROJECTS: edit_projects(c); touched = 1; break;
         case ROW_KIND:    edit_kind(c, rows[at].kind_at); touched = 1; break;
         case ROW_KIND_NEW: add_kind(c); touched = 1; break;

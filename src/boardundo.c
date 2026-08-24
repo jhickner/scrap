@@ -5,6 +5,7 @@
 
 #include "board.h"
 #include "boardcfg.h"
+#include "boardflow.h"
 #include "boardwork.h"
 #include "gitcmd.h"
 #include "text.h"
@@ -73,8 +74,11 @@ static int roll_back(const struct board_card *c, char *said, size_t size)
         return 0;
     }
 
+    const char *back = boardflow_person(c->kind);
+
     struct board_card edited = *c;
-    edited.col = BOARD_REVIEW;
+    edited.col = back ? BOARD_STEP : BOARD_BACKLOG;
+    snprintf(edited.step, sizeof edited.step, "%s", back ? back : "");
     snprintf(edited.worktree, sizeof edited.worktree, "%s", path);
     edited.merge_into[0] = '\0';
     edited.merge_from[0] = '\0';
@@ -101,11 +105,11 @@ int boardundo_run(const struct board_card *c, char *said, size_t size)
     }
 
     if (!c->merge_to[0] || !c->merge_from[0] || !c->merge_into[0]) {
-        if (boardcfg_kind_takes(c->kind, BOARD_STEP_WORKTREE)) {
+        if (boardflow_lands(c->kind)) {
             snprintf(said, size, "no merge on record to undo");
             return 0;
         }
-        board_move(c->id, BOARD_BACKLOG, "you", "undone");
+        board_move(c->id, BOARD_BACKLOG, NULL, "you", "undone");
         snprintf(said, size, "back in backlog");
         return 1;
     }

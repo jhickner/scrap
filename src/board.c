@@ -15,16 +15,22 @@
 #define BOARD_MAX_BYTES (1u << 24)
 #define BOARD_PATH_MAX  4300
 
+static void set_str(char *dst, size_t n, const char *src)
+{
+    snprintf(dst, n, "%s", src ? src : "");
+}
+
 static const char *const COL_NAMES[BOARD_COLS] = {
-    "new", "unclear", "backlog", "active", "review", "audit", "merge", "done",
+    "new", "unclear", "backlog", "", "done",
 };
 
 static const struct {
-    const char    *was;
-    enum board_col is;
+    const char *was;
+    const char *is;
 } COL_WAS[] = {
-    {"doing", BOARD_DOING},
-    {"merging", BOARD_MERGING},
+    {"active", "worktree"},
+    {"doing", "worktree"},
+    {"merging", "merge"},
 };
 
 const char *board_col_name(enum board_col col)
@@ -34,17 +40,44 @@ const char *board_col_name(enum board_col col)
     return COL_NAMES[col];
 }
 
-enum board_col board_col_from_name(const char *name)
+const char *board_where(const struct board_card *c)
 {
-    if (name) {
-        for (int i = 0; i < BOARD_COLS; i++)
-            if (!strcmp(name, COL_NAMES[i]))
-                return (enum board_col)i;
-        for (size_t i = 0; i < sizeof COL_WAS / sizeof *COL_WAS; i++)
-            if (!strcmp(name, COL_WAS[i].was))
-                return COL_WAS[i].is;
-    }
-    return BOARD_NEW;
+    if (!c)
+        return COL_NAMES[BOARD_NEW];
+    if (c->col == BOARD_STEP)
+        return c->step;
+    return board_col_name(c->col);
+}
+
+int board_at(const struct board_card *c, const char *step)
+{
+    return c && step && c->col == BOARD_STEP && !strcmp(c->step, step);
+}
+
+static void where_from_name(struct board_card *c, const char *name)
+{
+    c->col = BOARD_NEW;
+    c->step[0] = '\0';
+    if (!name || !*name)
+        return;
+
+    for (int i = 0; i < BOARD_COLS; i++)
+        if (COL_NAMES[i][0] && !strcmp(name, COL_NAMES[i])) {
+            c->col = (enum board_col)i;
+            return;
+        }
+
+    for (size_t i = 0; i < sizeof COL_WAS / sizeof *COL_WAS; i++)
+        if (!strcmp(name, COL_WAS[i].was))
+            name = COL_WAS[i].is;
+
+    c->col = BOARD_STEP;
+    set_str(c->step, sizeof c->step, name);
+}
+
+void board_put(struct board_card *c, const char *name)
+{
+    where_from_name(c, name);
 }
 
 static time_t stamped(const struct board_card *c)
@@ -110,11 +143,6 @@ static char *dup_or_empty(const char *s)
     return out ? out : NULL;
 }
 
-static void set_str(char *dst, size_t n, const char *src)
-{
-    snprintf(dst, n, "%s", src ? src : "");
-}
-
 static void card_wipe(struct board_card *c)
 {
     for (int i = 0; i < c->log_n; i++)
@@ -142,6 +170,16 @@ struct board_card *board_find(struct board_card *cards, int n, const char *id)
     for (int i = 0; i < n; i++)
         if (!strcmp(cards[i].id, id))
             return &cards[i];
+    return NULL;
+}
+
+const char *board_said(const struct board_card *c, const char *who)
+{
+    if (!c || !who)
+        return NULL;
+    for (int i = c->log_n - 1; i >= 0; i--)
+        if (!strcmp(c->log[i].who, who) && c->log[i].text && *c->log[i].text)
+            return c->log[i].text;
     return NULL;
 }
 
@@ -207,7 +245,7 @@ static int card_from_json(const cJSON *o, struct board_card *c)
     if (!c->id[0])
         return 0;
 
-    c->col = board_col_from_name(json_str(o, "col"));
+    where_from_name(c, json_str(o, "col"));
     set_str(c->kind, sizeof c->kind, json_str(o, "kind"));
     set_str(c->title, sizeof c->title, json_str(o, "title"));
     set_str(c->cwd, sizeof c->cwd, json_str(o, "cwd"));
@@ -263,7 +301,7 @@ static cJSON *card_to_json(const struct board_card *c)
         return NULL;
 
     cJSON_AddStringToObject(o, "id", c->id);
-    cJSON_AddStringToObject(o, "col", board_col_name(c->col));
+    cJSON_AddStringToObject(o, "col", board_where(c));
     cJSON_AddStringToObject(o, "kind", c->kind);
     cJSON_AddStringToObject(o, "title", c->title);
     cJSON_AddStringToObject(o, "body", c->body ? c->body : "");
@@ -549,6 +587,7 @@ int board_note(const char *id, const char *who, const char *text)
 
 struct move_args {
     enum board_col col;
+    const char    *step;
     const char    *who;
     const char    *why;
 };
@@ -557,22 +596,43 @@ static int apply_move(struct board_card *c, void *ud)
 {
     const struct move_args *a = ud;
     c->col = a->col;
+    set_str(c->step, sizeof c->step, a->col == BOARD_STEP ? a->step : "");
     if (a->why && *a->why)
         return note_append(c, a->who, a->why);
     return 1;
 }
 
-int board_move(const char *id, enum board_col col, const char *who, const char *why)
+int board_move(const char *id, enum board_col col, const char *step,
+               const char *who, const char *why)
 {
-    struct move_args a = {col, who, why};
+    struct move_args a = {col, step, who, why};
+    if (col == BOARD_STEP && (!step || !*step))
+        return 0;
     if (!with_card(id, apply_move, &a))
         return 0;
 
     char said[512];
-    snprintf(said, sizeof said, "\xe2\x86\x92 %s%s%s", board_col_name(col),
+    snprintf(said, sizeof said, "\xe2\x86\x92 %s%s%s",
+             col == BOARD_STEP ? step : board_col_name(col),
              why && *why ? " \xc2\xb7 " : "", why && *why ? why : "");
     boardlog_note(id, who, said);
     return 1;
+}
+
+int board_move_to(const char *id, const char *step, const char *who,
+                  const char *why)
+{
+    if (step && *step)
+        return board_move(id, BOARD_STEP, step, who, why);
+    return board_move(id, BOARD_DONE, NULL, who, why);
+}
+
+int board_move_back(const char *id, const char *step, const char *who,
+                    const char *why)
+{
+    if (step && *step)
+        return board_move(id, BOARD_STEP, step, who, why);
+    return board_move(id, BOARD_BACKLOG, NULL, who, why);
 }
 
 static const char *archive_path(void)

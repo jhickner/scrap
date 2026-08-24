@@ -4,14 +4,11 @@
 
 #include <stddef.h>
 
+#include "boardcfg.h"
+#include "boardflow.h"
+
 struct board_card;
 struct session;
-
-enum board_job {
-    BOARD_JOB_WORKER,
-    BOARD_JOB_AUDIT,
-    BOARD_JOB_SWEEP,
-};
 
 void boardwork_finished(struct session *s);
 
@@ -37,17 +34,14 @@ int boardwork_tidy_step(const char *root, const char *tree, const char *branch,
 
 int boardwork_tab(const char *id);
 
-int boardwork_auditing(const char *id);
-
-int boardwork_sweeping(const char *id);
-
-int boardwork_audit_pump(void);
+const char *boardwork_step_job(const char *id);
 
 int boardwork_sweep_pump(void);
 
 int boardwork_sweep_now(const char *cwd, char *why, int size);
 
-int boardwork_hold(const char *id, struct session *s, enum board_job role);
+int boardwork_hold(const char *id, struct session *s, const char *job,
+                   const char *step, enum board_runs runs);
 
 void boardwork_leave(const struct board_card *c);
 

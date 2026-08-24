@@ -11,9 +11,6 @@
 #include "mdcfg.h"
 #include "sessionfork.h"
 #include "vendor/agents/backend.h"
-#include "vendor/cJSON.h"
-
-#define CFG_MAX_BYTES (1u << 20)
 
 static const char *const TIER_NAMES[BOARD_TIERS] = {"low", "med", "high"};
 
@@ -50,28 +47,43 @@ const struct board_backend *boardcfg_backend(const struct board_cfg *c,
     return NULL;
 }
 
-#define ALL_STEPS ((1u << BOARD_STEPS) - 1u)
-
-static const char *const STEP_NAMES[BOARD_STEPS] = {
-    "worktree", "review", "audit", "merge",
+static const char *const RUNS_NAMES[BOARD_RUNS_MODES] = {
+    "agent", "worker", "person", "command",
 };
 
-const char *boardcfg_step_name(enum board_step step)
+const char *boardcfg_runs_name(enum board_runs runs)
 {
-    if (step < 0 || step >= BOARD_STEPS)
-        return "";
-    return STEP_NAMES[step];
+    if (runs < 0 || runs >= BOARD_RUNS_MODES)
+        return RUNS_NAMES[BOARD_RUNS_AGENT];
+    return RUNS_NAMES[runs];
 }
 
-enum board_step boardcfg_step_from_name(const char *name)
+enum board_runs boardcfg_runs_from_name(const char *name)
 {
     if (name)
-        for (int i = 0; i < BOARD_STEPS; i++)
-            if (!strcmp(name, STEP_NAMES[i]))
-                return (enum board_step)i;
-    return BOARD_STEPS;
+        for (int i = 0; i < BOARD_RUNS_MODES; i++)
+            if (!strcmp(name, RUNS_NAMES[i]))
+                return (enum board_runs)i;
+    return BOARD_RUNS_AGENT;
 }
 
+static const char *const LOCK_NAMES[BOARD_LOCKS] = {"", "repo", "machine"};
+
+const char *boardcfg_lock_name(enum board_lock lock)
+{
+    if (lock < 0 || lock >= BOARD_LOCKS)
+        return LOCK_NAMES[BOARD_LOCK_NONE];
+    return LOCK_NAMES[lock];
+}
+
+enum board_lock boardcfg_lock_from_name(const char *name)
+{
+    if (name)
+        for (int i = 0; i < BOARD_LOCKS; i++)
+            if (!strcmp(name, LOCK_NAMES[i]))
+                return (enum board_lock)i;
+    return BOARD_LOCK_NONE;
+}
 
 static char *dup_or_null(const char *s)
 {
@@ -106,115 +118,35 @@ static void backend_defaults(struct board_backend *b, const char *name)
     }
 }
 
-/* Fields a role file omits: job is the file's own name, step is the job when
- * the job names one, and a role that stands in a step is skippable. */
+/* Fields a role file omits: job is the file's own name, and the step it stands
+ * in is the job. */
 static void role_defaults(struct board_role *p)
 {
     if (!p->job[0])
         snprintf(p->job, sizeof p->job, "%s", p->name);
     if (!p->tier[0])
         snprintf(p->tier, sizeof p->tier, "%s", boardcfg_tier_name(BOARD_TIER_MED));
-    if (!p->step[0] && boardcfg_step_from_name(p->job) < BOARD_STEPS)
+    if (!p->step[0])
         snprintf(p->step, sizeof p->step, "%s", p->job);
-    p->skippable = p->step[0] != '\0';
+    if (!p->pass_label[0])
+        snprintf(p->pass_label, sizeof p->pass_label, "approve");
+    if (!p->fail_label[0])
+        snprintf(p->fail_label, sizeof p->fail_label, "send back");
 }
 
 static void defaults(struct board_cfg *c)
 {
     memset(c, 0, sizeof *c);
     c->workers = 3;
-    c->audit_files = 5;
-    c->audit_lines = 200;
     c->sweep_every = 8;
     c->archive_after = 14;
     c->done_shown = 20;
     c->backlog_shown = 20;
-    c->verify[0] = '\0';
     snprintf(c->projects, sizeof c->projects, "~/working");
 
     snprintf(c->serving, sizeof c->serving, "claude");
     for (const char *const *b = backend_names(); *b && c->backends_n < BOARD_BACKENDS_MAX; b++)
         backend_defaults(&c->backends[c->backends_n++], *b);
-}
-
-static void set_str(char *dst, size_t n, const cJSON *o, const char *key)
-{
-    const char *s = cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)o, key));
-    if (s)
-        snprintf(dst, n, "%s", s);
-}
-
-static void set_int(int *dst, const cJSON *o, const char *key)
-{
-    const cJSON *j = cJSON_GetObjectItem((cJSON *)o, key);
-    if (j && cJSON_IsNumber(j))
-        *dst = (int)j->valuedouble;
-}
-
-static void overlay(struct board_cfg *c, const cJSON *o)
-{
-    set_int(&c->workers, o, "workers");
-    set_int(&c->auto_pull, o, "auto_pull");
-    set_int(&c->auto_pick, o, "auto_pick");
-    set_int(&c->audit_files, o, "audit_files");
-    set_int(&c->audit_lines, o, "audit_lines");
-    set_int(&c->sweep_every, o, "sweep_every");
-    set_int(&c->archive_after, o, "archive_after");
-    set_int(&c->done_shown, o, "done_shown");
-    set_int(&c->backlog_shown, o, "backlog_shown");
-    set_str(c->verify, sizeof c->verify, o, "verify");
-
-    const cJSON *kinds = cJSON_GetObjectItem((cJSON *)o, "kinds");
-    if (cJSON_IsArray(kinds)) {
-        for (int i = 0; i < c->kinds_n; i++) {
-            free(c->kinds[i].means);
-            free(c->kinds[i].prompt);
-            free(c->kinds[i].approval_prompt);
-        }
-        memset(c->kinds, 0, sizeof c->kinds);
-        c->kinds_n = 0;
-
-        const cJSON *k = NULL;
-        cJSON_ArrayForEach(k, kinds) {
-            if (c->kinds_n >= BOARD_KINDS_MAX)
-                break;
-            const char *name = cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)k, "name"));
-            if (!name || !*name)
-                continue;
-            struct board_kind *into = &c->kinds[c->kinds_n++];
-            snprintf(into->name, sizeof into->name, "%s", name);
-            const char *means = cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)k, "means"));
-            const char *prompt = cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)k, "prompt"));
-            into->means = dup_or_null(means ? means : "");
-            into->prompt = dup_or_null(prompt ? prompt : "");
-            set_int(&into->priority, k, "priority");
-
-            const cJSON *steps = cJSON_GetObjectItem((cJSON *)k, "steps");
-            if (!cJSON_IsArray(steps)) {
-                into->steps = ALL_STEPS;
-            } else {
-                into->steps = 0;
-                const cJSON *e = NULL;
-                cJSON_ArrayForEach(e, steps) {
-                    enum board_step at = boardcfg_step_from_name(cJSON_GetStringValue((cJSON *)e));
-                    if (at < BOARD_STEPS)
-                        into->steps |= 1u << at;
-                }
-            }
-        }
-    }
-
-    const cJSON *who = cJSON_GetObjectItem((cJSON *)o, "who");
-    const cJSON *p = NULL;
-    cJSON_ArrayForEach(p, who) {
-        if (!p->string || !*p->string || c->roles_n >= BOARD_ROLES_MAX)
-            continue;
-        struct board_role *into = &c->roles[c->roles_n++];
-        snprintf(into->name, sizeof into->name, "%s", p->string);
-        into->prompt = dup_or_null(
-            cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)p, "prompt")));
-        role_defaults(into);
-    }
 }
 
 #define BOARD_DIR "board"
@@ -227,13 +159,13 @@ static int board_path(char *out, size_t size, const char *leaf, const char *name
     return (size_t)snprintf(out, size, "%s/%s.md", dir, name) < size;
 }
 
-static unsigned steps_of(const char *list)
+void boardcfg_kind_steps(struct board_kind *k, const char *list)
 {
-    unsigned mask = 0;
-    char     copy[256];
+    char copy[256];
     snprintf(copy, sizeof copy, "%s", list);
 
-    for (char *p = copy; *p;) {
+    k->steps_n = 0;
+    for (char *p = copy; *p && k->steps_n < BOARD_KIND_STEPS;) {
         while (*p == ' ' || *p == ',')
             p++;
         char *start = p;
@@ -244,24 +176,19 @@ static unsigned steps_of(const char *list)
             end--;
         char kept = *end;
         *end = '\0';
-        if (*start) {
-            enum board_step at = boardcfg_step_from_name(start);
-            if (at < BOARD_STEPS)
-                mask |= 1u << at;
-        }
+        if (*start)
+            snprintf(k->steps[k->steps_n++], BOARD_STEP_NAME, "%s", start);
         *end = kept;
     }
-    return mask;
 }
 
-static void steps_str(unsigned mask, char *out, size_t size)
+static void steps_str(const struct board_kind *k, char *out, size_t size)
 {
     size_t at = 0;
     out[0] = '\0';
-    for (int i = 0; i < BOARD_STEPS && at < size; i++)
-        if (mask & (1u << i))
-            at += (size_t)snprintf(out + at, size - at, "%s%s", at ? ", " : "",
-                                   boardcfg_step_name((enum board_step)i));
+    for (int i = 0; i < k->steps_n && at < size; i++)
+        at += (size_t)snprintf(out + at, size - at, "%s%s", at ? ", " : "",
+                               k->steps[i]);
 }
 
 static void read_settings(struct board_cfg *c)
@@ -277,8 +204,6 @@ static void read_settings(struct board_cfg *c)
     c->workers = mdcfg_int(&m, "workers", c->workers);
     c->auto_pull = mdcfg_int(&m, "auto pull", c->auto_pull);
     c->auto_pick = mdcfg_int(&m, "auto pick", c->auto_pick);
-    c->audit_files = mdcfg_int(&m, "audit files", c->audit_files);
-    c->audit_lines = mdcfg_int(&m, "audit lines", c->audit_lines);
     c->sweep_every = mdcfg_int(&m, "sweep every", c->sweep_every);
     c->archive_after = mdcfg_int(&m, "archive after", c->archive_after);
     c->done_shown = mdcfg_int(&m, "done shown", c->done_shown);
@@ -288,7 +213,6 @@ static void read_settings(struct board_cfg *c)
     if (*serving)
         snprintf(c->serving, sizeof c->serving, "%s", serving);
 
-    snprintf(c->verify, sizeof c->verify, "%s", mdcfg_get(&m, "check"));
     if (mdcfg_has(&m, "projects"))
         snprintf(c->projects, sizeof c->projects, "%s", mdcfg_get(&m, "projects"));
     mdcfg_free(&m);
@@ -317,6 +241,20 @@ static int read_roles(struct board_cfg *c)
         snprintf(p->name, sizeof p->name, "%s", names[i]);
         snprintf(p->job, sizeof p->job, "%s", mdcfg_get(&m, "job"));
         snprintf(p->step, sizeof p->step, "%s", mdcfg_get(&m, "step"));
+        snprintf(p->fail_marker, sizeof p->fail_marker, "%s",
+                 mdcfg_get(&m, "fail marker"));
+        snprintf(p->fail_step, sizeof p->fail_step, "%s",
+                 mdcfg_get(&m, "fail step"));
+        snprintf(p->fail_prompt, sizeof p->fail_prompt, "%s",
+                 mdcfg_get(&m, "fail prompt"));
+        snprintf(p->pass_label, sizeof p->pass_label, "%s",
+                 mdcfg_get(&m, "pass label"));
+        snprintf(p->fail_label, sizeof p->fail_label, "%s",
+                 mdcfg_get(&m, "fail label"));
+        p->runs = boardcfg_runs_from_name(mdcfg_get(&m, "runs"));
+        p->lock = boardcfg_lock_from_name(mdcfg_get(&m, "lock"));
+        p->over_files = mdcfg_int(&m, "over files", 0);
+        p->over_lines = mdcfg_int(&m, "over lines", 0);
 
         const char *tier = mdcfg_get(&m, "tier");
         if (boardcfg_tier_from_name(tier) < BOARD_TIERS)
@@ -325,7 +263,7 @@ static int read_roles(struct board_cfg *c)
             aged = 1;
 
         role_defaults(p);
-        p->skippable = mdcfg_int(&m, "skippable", p->skippable);
+        p->skippable = mdcfg_int(&m, "skippable", 1);
 
         if (mdcfg_has(&m, "backend") || mdcfg_has(&m, "model") ||
             mdcfg_has(&m, "effort"))
@@ -391,7 +329,7 @@ static void read_kinds(struct board_cfg *c)
         k->approval_prompt = dup_or_null(mdcfg_get(&m, "approval prompt"));
         snprintf(k->next_kind, sizeof k->next_kind, "%s", mdcfg_get(&m, "next kind"));
         k->priority = mdcfg_int(&m, "priority", 0);
-        k->steps = steps_of(mdcfg_get(&m, "steps"));
+        boardcfg_kind_steps(k, mdcfg_get(&m, "steps"));
         mdcfg_free(&m);
     }
 }
@@ -402,26 +340,22 @@ static int write_settings(const struct board_cfg *c)
     if (!board_path(path, sizeof path, BOARD_DIR, "settings"))
         return 0;
 
-    char nums[9][32];
+    char nums[7][32];
     snprintf(nums[0], sizeof nums[0], "%d", c->workers);
     snprintf(nums[1], sizeof nums[1], "%d", c->auto_pull);
     snprintf(nums[2], sizeof nums[2], "%d", c->auto_pick);
-    snprintf(nums[3], sizeof nums[3], "%d", c->audit_files);
-    snprintf(nums[4], sizeof nums[4], "%d", c->audit_lines);
-    snprintf(nums[5], sizeof nums[5], "%d", c->sweep_every);
-    snprintf(nums[6], sizeof nums[6], "%d", c->archive_after);
-    snprintf(nums[7], sizeof nums[7], "%d", c->done_shown);
-    snprintf(nums[8], sizeof nums[8], "%d", c->backlog_shown);
+    snprintf(nums[3], sizeof nums[3], "%d", c->sweep_every);
+    snprintf(nums[4], sizeof nums[4], "%d", c->archive_after);
+    snprintf(nums[5], sizeof nums[5], "%d", c->done_shown);
+    snprintf(nums[6], sizeof nums[6], "%d", c->backlog_shown);
 
     const char *keys[] = {"serving", "workers", "auto pull", "auto pick",
-                          "audit files", "audit lines", "sweep every",
-                          "archive after", "done shown", "backlog shown",
-                          "check", "projects"};
+                          "sweep every", "archive after", "done shown",
+                          "backlog shown", "projects"};
     const char *vals[] = {c->serving, nums[0], nums[1], nums[2], nums[3],
-                          nums[4], nums[5], nums[6], nums[7], nums[8],
-                          c->verify, c->projects};
+                          nums[4], nums[5], nums[6], c->projects};
 
-    return mdcfg_write(path, keys, vals, 12,
+    return mdcfg_write(path, keys, vals, 9,
         "serving is the backend every tiered role runs on.\n"
         "workers is how many may run at once.\n"
         "auto pull is 1 to start backlog cards on a free worker, 0 to wait to\n"
@@ -429,20 +363,34 @@ static int write_settings(const struct board_cfg *c)
         "auto pick is 1 to hand a worker the next backlog card when its current\n"
         "task completes, switching backends to match the card; 0 to leave it on\n"
         "the card until you take it.\n"
-        "A diff over either audit threshold is read before it lands; zero turns\n"
-        "that half off.\n"
         "sweep every is cards landed in a repo before a sweep of it; zero never.\n"
         "archive after is days a done card stays on the board; zero forever.\n"
         "done shown and backlog shown are how many cards those columns list;\n"
         "zero lists them all.\n"
-        "check is run in the worktree before a card lands, and it does not land\n"
-        "if that fails.\n"
         "projects is the directory the repos sit in; triage sets a card cwd\n"
-        "from the project it names. Empty leaves the cwd it was captured in.\n");
+        "from the project it names. Empty leaves the cwd it was captured in.\n"
+        "\n"
+        "What each step of a card does is in board/roles; which steps a kind\n"
+        "takes, and in what order, is in board/kinds.\n");
 }
 
 static int write_roles(const struct board_cfg *c)
 {
+    char dir[4096];
+    if (!mdcfg_dir(dir, sizeof dir, BOARD_DIR "/roles"))
+        return 0;
+
+    char had[BOARD_ROLES_MAX * 2][MDCFG_NAME];
+    int  found = mdcfg_list(dir, had, BOARD_ROLES_MAX * 2);
+    for (int i = 0; i < found; i++) {
+        int still = 0;
+        for (int j = 0; j < c->roles_n && !still; j++)
+            still = !strcmp(c->roles[j].name, had[i]);
+        char gone[4300];
+        if (!still && board_path(gone, sizeof gone, BOARD_DIR "/roles", had[i]))
+            unlink(gone);
+    }
+
     int ok = 1;
     for (int i = 0; i < c->roles_n; i++) {
         const struct board_role *p = &c->roles[i];
@@ -453,23 +401,56 @@ static int write_roles(const struct board_cfg *c)
             continue;
         }
 
-        char        skip[8];
+        char skip[8], files[16], lines[16];
         snprintf(skip, sizeof skip, "%d", p->skippable);
+        snprintf(files, sizeof files, "%d", p->over_files);
+        snprintf(lines, sizeof lines, "%d", p->over_lines);
 
-        const char *keys[4], *vals[4];
+        const char *keys[12], *vals[12];
         int         n = 0;
+        keys[n] = "runs";
+        vals[n++] = boardcfg_runs_name(p->runs);
         keys[n] = "tier";
         vals[n++] = p->tier;
         if (strcmp(p->job, p->name)) {
             keys[n] = "job";
             vals[n++] = p->job;
         }
-        if (p->step[0]) {
+        if (strcmp(p->step, p->job)) {
             keys[n] = "step";
             vals[n++] = p->step;
-            keys[n] = "skippable";
-            vals[n++] = skip;
         }
+        keys[n] = "skippable";
+        vals[n++] = skip;
+        if (p->runs == BOARD_RUNS_AGENT && p->fail_marker[0]) {
+            keys[n] = "fail marker";
+            vals[n++] = p->fail_marker;
+        }
+        if (p->fail_step[0]) {
+            keys[n] = "fail step";
+            vals[n++] = p->fail_step;
+        }
+        if (p->fail_prompt[0]) {
+            keys[n] = "fail prompt";
+            vals[n++] = p->fail_prompt;
+        }
+        if (p->runs == BOARD_RUNS_PERSON) {
+            keys[n] = "pass label";
+            vals[n++] = p->pass_label;
+            keys[n] = "fail label";
+            vals[n++] = p->fail_label;
+        }
+        if (p->over_files || p->over_lines) {
+            keys[n] = "over files";
+            vals[n++] = files;
+            keys[n] = "over lines";
+            vals[n++] = lines;
+        }
+        if (p->lock != BOARD_LOCK_NONE) {
+            keys[n] = "lock";
+            vals[n++] = boardcfg_lock_name(p->lock);
+        }
+
         if (!mdcfg_write(path, keys, vals, n, p->prompt))
             ok = 0;
     }
@@ -532,7 +513,7 @@ static int write_kinds(const struct board_cfg *c)
             continue;
         }
         char steps[128], priority[16];
-        steps_str(c->kinds[i].steps, steps, sizeof steps);
+        steps_str(&c->kinds[i], steps, sizeof steps);
         snprintf(priority, sizeof priority, "%d", c->kinds[i].priority);
 
         const char *keys[] = {"means", "priority", "steps", "approval prompt",
@@ -562,6 +543,44 @@ static int write_out(const struct board_cfg *c)
 static struct board_cfg  cache;
 static int               loaded;
 static struct board_role serving_roles[BOARD_ROLES_MAX];
+
+#define STEPS_MAX (BOARD_KINDS_MAX * BOARD_KIND_STEPS)
+
+static char        step_names[STEPS_MAX][BOARD_STEP_NAME];
+static const char *steps[STEPS_MAX];
+static int         steps_n;
+
+static void order_steps(const struct board_cfg *c)
+{
+    steps_n = 0;
+    for (int i = 0; i < c->kinds_n; i++) {
+        for (int j = 0; j < c->kinds[i].steps_n; j++) {
+            const char *name = c->kinds[i].steps[j];
+            int         at = -1;
+            for (int k = 0; k < steps_n && at < 0; k++)
+                if (!strcmp(steps[k], name))
+                    at = k;
+            if (at >= 0)
+                continue;
+            if (steps_n >= STEPS_MAX)
+                return;
+
+            int before = steps_n;
+            for (int k = j + 1; k < c->kinds[i].steps_n && before == steps_n; k++)
+                for (int m = 0; m < steps_n; m++)
+                    if (!strcmp(steps[m], c->kinds[i].steps[k])) {
+                        before = m;
+                        break;
+                    }
+
+            for (int m = steps_n; m > before; m--)
+                steps[m] = steps[m - 1];
+            snprintf(step_names[steps_n], BOARD_STEP_NAME, "%s", name);
+            steps[before] = step_names[steps_n];
+            steps_n++;
+        }
+    }
+}
 
 static void resolve(void)
 {
@@ -597,29 +616,15 @@ static void read_all(void)
     cache_free();
     defaults(&cache);
 
-    char old[4300];
-    if (path_config_file(old, sizeof old, "board.json")) {
-        char  *text = text_slurp(old, CFG_MAX_BYTES, NULL);
-        cJSON *o = text ? cJSON_Parse(text) : NULL;
-        free(text);
-        if (o) {
-            overlay(&cache, o);
-            cJSON_Delete(o);
-            write_out(&cache);
-            char aside[4400];
-            snprintf(aside, sizeof aside, "%s.replaced", old);
-            rename(old, aside);
-            return;
-        }
-    }
-
     read_settings(&cache);
     int aged = read_roles(&cache);
     read_backends(&cache);
     read_kinds(&cache);
+    order_steps(&cache);
 
     char seed[4300];
-    if (aged || (board_path(seed, sizeof seed, BOARD_DIR, "settings") && access(seed, F_OK)))
+    if (aged || (board_path(seed, sizeof seed, BOARD_DIR, "settings") &&
+                 access(seed, F_OK)))
         write_out(&cache);
 }
 
@@ -665,23 +670,46 @@ int boardcfg_missing(char *out, size_t size)
     }
 
     for (int i = 0; i < cache.roles_n; i++)
-        for (int j = i + 1; j < cache.roles_n; j++)
+        for (int j = i + 1; j < cache.roles_n; j++) {
             if (!strcmp(cache.roles[i].job, cache.roles[j].job)) {
                 snprintf(out, size, "%s and %s both do %s", cache.roles[i].name,
                          cache.roles[j].name, cache.roles[i].job);
                 return 1;
             }
+            if (!strcmp(cache.roles[i].step, cache.roles[j].step)) {
+                snprintf(out, size, "%s and %s both stand in %s",
+                         cache.roles[i].name, cache.roles[j].name,
+                         cache.roles[i].step);
+                return 1;
+            }
+        }
+
+    if (!boardcfg_worker()) {
+        snprintf(out, size, "no role in %s/roles runs a worker", dir);
+        return 1;
+    }
 
     char   who[128] = "";
     size_t at = 0;
     for (int i = 0; i < cache.roles_n; i++)
-        if (!cache.roles[i].prompt || !*cache.roles[i].prompt)
-            at += (size_t)snprintf(who + at, sizeof who - at, "%s%s", at ? ", " : "",
-                                   cache.roles[i].name);
+        if (cache.roles[i].runs != BOARD_RUNS_PERSON &&
+            (!cache.roles[i].prompt || !*cache.roles[i].prompt))
+            at += (size_t)snprintf(who + at, sizeof who - at, "%s%s",
+                                   at ? ", " : "", cache.roles[i].name);
     if (at) {
-        snprintf(out, size, "no prompt in %s/roles: %s", dir, who);
+        snprintf(out, size, "nothing to run in %s/roles: %s", dir, who);
         return 1;
     }
+
+    for (int i = 0; i < cache.kinds_n; i++)
+        for (int j = 0; j < cache.kinds[i].steps_n; j++)
+            if (!boardcfg_for_step(cache.kinds[i].steps[j])) {
+                snprintf(out, size, "%s takes the %s step, and no role in "
+                         "%s/roles stands in it", cache.kinds[i].name,
+                         cache.kinds[i].steps[j], dir);
+                return 1;
+            }
+
     return 0;
 }
 
@@ -702,12 +730,57 @@ int boardcfg_priority(const char *kind)
     return k ? k->priority : 0;
 }
 
-int boardcfg_kind_takes(const char *kind, enum board_step step)
+static const struct board_kind *kind_or_board(const char *kind)
 {
-    if (step < 0 || step >= BOARD_STEPS)
-        return 0;
+    static struct board_kind board;
     const struct board_kind *k = boardcfg_kind(kind);
-    return k ? (k->steps & (1u << step)) != 0 : 1;
+    if (k)
+        return k;
+
+    board.steps_n = 0;
+    for (int i = 0; i < steps_n && board.steps_n < BOARD_KIND_STEPS; i++)
+        snprintf(board.steps[board.steps_n++], BOARD_STEP_NAME, "%s", steps[i]);
+    return &board;
+}
+
+int boardcfg_kind_step_at(const char *kind, const char *step)
+{
+    if (!step || !*step)
+        return -1;
+    const struct board_kind *k = kind_or_board(kind);
+    for (int i = 0; i < k->steps_n; i++)
+        if (!strcmp(k->steps[i], step))
+            return i;
+    return -1;
+}
+
+int boardcfg_kind_takes(const char *kind, const char *step)
+{
+    return boardcfg_kind_step_at(kind, step) >= 0;
+}
+
+const char *boardcfg_kind_step(const char *kind, int at)
+{
+    const struct board_kind *k = kind_or_board(kind);
+    if (at < 0 || at >= k->steps_n)
+        return NULL;
+    return k->steps[at];
+}
+
+void boardcfg_kind_steps_default(struct board_kind *k)
+{
+    load();
+    k->steps_n = 0;
+    for (int i = 0; i < steps_n && k->steps_n < BOARD_KIND_STEPS; i++)
+        snprintf(k->steps[k->steps_n++], BOARD_STEP_NAME, "%s", steps[i]);
+}
+
+int boardcfg_steps(const char *const **out)
+{
+    load();
+    if (out)
+        *out = steps;
+    return steps_n;
 }
 
 char *boardcfg_expand(const char *text, const char *id)
@@ -842,14 +915,22 @@ const struct board_role *boardcfg_for_job(const char *job)
     return NULL;
 }
 
-const struct board_role *boardcfg_for_step(enum board_step step)
+const struct board_role *boardcfg_for_step(const char *step)
 {
     load();
-    const char *name = boardcfg_step_name(step);
-    if (!*name)
+    if (!step || !*step)
         return NULL;
     for (int i = 0; i < cache.roles_n; i++)
-        if (!strcmp(serving_roles[i].step, name))
+        if (!strcmp(serving_roles[i].step, step))
+            return &serving_roles[i];
+    return NULL;
+}
+
+const struct board_role *boardcfg_worker(void)
+{
+    load();
+    for (int i = 0; i < cache.roles_n; i++)
+        if (serving_roles[i].runs == BOARD_RUNS_WORKER)
             return &serving_roles[i];
     return NULL;
 }
@@ -980,8 +1061,6 @@ int boardcfg_set(const struct board_cfg *c)
     cache.workers = c->workers;
     cache.auto_pull = c->auto_pull;
     cache.auto_pick = c->auto_pick;
-    cache.audit_files = c->audit_files;
-    cache.audit_lines = c->audit_lines;
     cache.sweep_every = c->sweep_every;
     cache.archive_after = c->archive_after;
     cache.done_shown = c->done_shown;
@@ -1001,7 +1080,6 @@ int boardcfg_set(const struct board_cfg *c)
         cache.kinds[i].approval_prompt = dup_or_null(c->kinds[i].approval_prompt);
     }
 
-    snprintf(cache.verify, sizeof cache.verify, "%s", c->verify);
     snprintf(cache.projects, sizeof cache.projects, "%s", c->projects);
     snprintf(cache.serving, sizeof cache.serving, "%s", c->serving);
     cache.backends_n = c->backends_n;
