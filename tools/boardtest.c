@@ -484,8 +484,32 @@ static void test_a_kind_file_carries_its_approval_prompt(void)
            "and survives a write and a reload");
 }
 
+static void write_the_shipped_kinds(void)
+{
+    static const char *const keys[] = {"means", "priority", "steps"};
+    static const char *const work = "worktree, review, audit, merge";
+    static const struct {
+        const char *name, *means, *priority, *steps;
+    } kinds[] = {
+        {"bug", "something that exists and is wrong", "2", NULL},
+        {"feature", "something that should exist and does not", "1", NULL},
+        {"chore", "upkeep: a rename, a bump, a cleanup", "0", NULL},
+        {"todo", "something the person means to do", "0", ""},
+        {"reference", "a link, a name, a fact", "0", ""},
+    };
+
+    for (size_t i = 0; i < sizeof kinds / sizeof *kinds; i++) {
+        const char *vals[] = {kinds[i].means, kinds[i].priority,
+                              kinds[i].steps ? kinds[i].steps : work};
+        write_kind(kinds[i].name, keys, vals, 3, "");
+    }
+    boardcfg_reload();
+}
+
 static void test_kinds(void)
 {
+    write_the_shipped_kinds();
+
     expect(boardcfg_kind("bug") != NULL, "a configured kind is found");
     expect(boardcfg_kind("nonsense") == NULL, "an unconfigured one is not");
     expect(boardcfg_kind("") == NULL, "nor is no kind at all");
