@@ -6,6 +6,7 @@ struct board_card;
 
 #define BOARDAUDIT_PASS       "no findings"
 #define BOARDAUDIT_NO_VERDICT "no verdict; not held"
+#define BOARDAUDIT_FAILED     "the turn failed: "
 
 int boardaudit_is_marker(const char *text);
 

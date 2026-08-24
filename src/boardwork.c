@@ -791,13 +791,17 @@ void boardwork_finished(struct session *s)
     if (w->role == BOARD_JOB_AUDIT) {
         w->done = 1;
         charge_card(w, s);
-        if (failed && *failed)
-            board_note(w->id, "audit", failed);
+        if (failed && *failed) {
+            char said[1024];
+            snprintf(said, sizeof said, "%s%s", BOARDAUDIT_FAILED, failed);
+            board_note(w->id, "audit", said);
+        }
         boardaudit_finished(w->id, failed && *failed ? NULL : reply);
         return;
     }
 
     if (w->role == BOARD_JOB_SWEEP) {
+        w->done = 1;
         charge_card(w, s);
         if (failed && *failed)
             board_note(w->id, "sweep", failed);

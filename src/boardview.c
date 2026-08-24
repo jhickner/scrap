@@ -901,8 +901,19 @@ static void note_entry(struct notes *notes, const char *stamp, const char *who,
     } while (at);
 }
 
+static void build_proposals(const struct board_card *c, struct notes *notes)
+{
+    char line[BOARD_TITLE_MAX];
+    note_line(notes, dsprintf("  proposals"));
+    for (int i = 0; boardsweep_proposal(c, i, line, sizeof line); i++)
+        note_line(notes, dsprintf("  %2d. %s", i + 1, line));
+    note_line(notes, NULL);
+}
+
 static void build_notes(const struct board_card *c, struct notes *notes)
 {
+    if (c->col == BOARD_REVIEW && boardsweep_is(c))
+        build_proposals(c, notes);
     build_stages(c, notes);
     build_backend(c, notes);
     build_spend(c, notes);
@@ -965,11 +976,14 @@ static void card_form(const struct board_card *c)
     char unstart_at[2] = "";
     char approve_at[2] = "";
 
+    int proposals = c->col == BOARD_REVIEW && boardsweep_is(c);
+
     struct form_field fields[8];
     int               fields_n = 0;
 
-    fields[fields_n++] = (struct form_field){"spec", FORM_TEXT, spec,
-                                             sizeof spec, NULL, 0};
+    if (!proposals)
+        fields[fields_n++] = (struct form_field){"spec", FORM_TEXT, spec,
+                                                 sizeof spec, NULL, 0};
     fields[fields_n++] = (struct form_field){"kind", FORM_CHOICE, kind,
                                              sizeof kind, kinds, kinds_n};
     fields[fields_n++] = (struct form_field){"column", FORM_CHOICE, column,
@@ -986,8 +1000,14 @@ static void card_form(const struct board_card *c)
         fields[fields_n++] = (struct form_field){
             "cancel starting, back to backlog", FORM_BUTTON, unstart_at,
             sizeof unstart_at, NULL, 0};
+    char approve_label[64] = "approve";
+    if (proposals) {
+        int raised = boardsweep_proposed(c);
+        snprintf(approve_label, sizeof approve_label,
+                 "approve · raise %d card%s", raised, raised == 1 ? "" : "s");
+    }
     if (c->col == BOARD_REVIEW)
-        fields[fields_n++] = (struct form_field){"approve", FORM_BUTTON,
+        fields[fields_n++] = (struct form_field){approve_label, FORM_BUTTON,
                                                  approve_at, sizeof approve_at,
                                                  NULL, 0};
 
@@ -1041,10 +1061,12 @@ static void card_form(const struct board_card *c)
     edited.col = board_col_from_name(column);
     edited.priority = atoi(priority);
 
-    int respec = strcmp(spec, live->body ? live->body : "") != 0;
-    edited.body = spec;
-    if (!live->kind[0])
-        board_title_of(spec, edited.title, sizeof edited.title);
+    int respec = !proposals && strcmp(spec, live->body ? live->body : "") != 0;
+    if (!proposals) {
+        edited.body = spec;
+        if (!live->kind[0])
+            board_title_of(spec, edited.title, sizeof edited.title);
+    }
 
     char *full = path_expand_home(where);
     if (full && *full)

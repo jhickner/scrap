@@ -60,6 +60,17 @@ static void mark_swept(const char *cwd)
     board_free(cards, n);
 }
 
+/* an escape or a control byte means the note is a dumped error, not a finding */
+static int readable(const char *text)
+{
+    for (const char *p = text; *p; p++) {
+        unsigned char ch = (unsigned char)*p;
+        if (ch == 0x1b || ch == 0x7f || (ch < ' ' && ch != '\n' && ch != '\t'))
+            return 0;
+    }
+    return 1;
+}
+
 static char *findings_for(const struct board_card *cards, int n, const char *cwd)
 {
     size_t cap = 4096, len = 0;
@@ -72,14 +83,18 @@ static char *findings_for(const struct board_card *cards, int n, const char *cwd
         if (strcmp(cards[i].cwd, cwd))
             continue;
         for (int j = 0; j < cards[i].log_n; j++) {
-            if (strcmp(cards[i].log[j].who, "audit") || !cards[i].log[j].text ||
-                boardaudit_is_marker(cards[i].log[j].text))
+            const char *text = cards[i].log[j].text;
+            if (strcmp(cards[i].log[j].who, "audit") || !text ||
+                boardaudit_is_marker(text) || !readable(text))
                 continue;
-            size_t add = strlen(cards[i].log[j].text) + 4;
+            char one[1024];
+            text_one_line(text, one, sizeof one);
+            if (!one[0])
+                continue;
+            size_t add = strlen(one) + 4;
             if (len + add >= cap)
                 break;
-            len += (size_t)snprintf(out + len, cap - len, "- %s\n",
-                                    cards[i].log[j].text);
+            len += (size_t)snprintf(out + len, cap - len, "- %s\n", one);
         }
     }
     return out;
@@ -188,6 +203,22 @@ int boardsweep_proposed(const struct board_card *c)
     while ((at = next_line(at, line, sizeof line)))
         k++;
     return k;
+}
+
+int boardsweep_proposal(const struct board_card *c, int i, char *out, size_t size)
+{
+    if (!boardsweep_is(c) || !c->body || i < 0)
+        return 0;
+
+    const char *at = c->body;
+    for (int k = 0; at; k++) {
+        at = next_line(at, out, size);
+        if (!at)
+            return 0;
+        if (k == i)
+            return 1;
+    }
+    return 0;
 }
 
 int boardsweep_finished(const char *id, const char *reply)

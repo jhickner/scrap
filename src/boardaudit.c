@@ -196,7 +196,8 @@ static int finding_text(cJSON *f, char *out, size_t size)
 int boardaudit_is_marker(const char *text)
 {
     return text && (!strcmp(text, BOARDAUDIT_PASS) ||
-                    !strcmp(text, BOARDAUDIT_NO_VERDICT));
+                    !strcmp(text, BOARDAUDIT_NO_VERDICT) ||
+                    !strncmp(text, BOARDAUDIT_FAILED, strlen(BOARDAUDIT_FAILED)));
 }
 
 int boardaudit_finished(const char *id, const char *reply)

@@ -16,6 +16,8 @@ int boardsweep_is(const struct board_card *c);
 
 int boardsweep_proposed(const struct board_card *c);
 
+int boardsweep_proposal(const struct board_card *c, int i, char *out, size_t size);
+
 int boardsweep_finished(const char *id, const char *reply);
 
 int boardsweep_approve(const struct board_card *c);
