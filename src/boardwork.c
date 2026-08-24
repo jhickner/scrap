@@ -723,7 +723,7 @@ static enum board_col landed(const struct board_card *c, int *empty_out)
         *empty_out = empty;
     if (empty)
         return BOARD_DOING;
-    return boardflow_from(c->kind, BOARD_STEP_REVIEW, boardaudit_wanted(c));
+    return boardflow_from(c->kind, boardflow_after_turn(c), boardaudit_wanted(c));
 }
 
 void boardwork_finished(struct session *s)

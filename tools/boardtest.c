@@ -459,6 +459,18 @@ static void test_a_kind_file_carries_its_approval_prompt(void)
     expect(k->approval_prompt && !strcmp(k->approval_prompt, vals[3]),
            "the approval prompt is read whole");
 
+    struct board_card card = {0};
+    snprintf(card.kind, sizeof card.kind, "buy");
+    expect(boardflow_after_turn(&card) == BOARD_STEP_REVIEW,
+           "the first turn stops for a person");
+
+    struct board_note said = {0, "you", (char *)vals[3]};
+    card.log = &said;
+    card.log_n = 1;
+    expect(boardflow_approval(&card) == NULL, "the approval prompt is sent once");
+    expect(boardflow_from("buy", boardflow_after_turn(&card), 1) == BOARD_DONE,
+           "and the turn answering it ends the card");
+
     char block[4096];
     boardcfg_kinds_block(block, sizeof block);
     expect(strstr(block, "buy") != NULL, "the classifier is told about it");

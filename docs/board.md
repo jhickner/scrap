@@ -79,12 +79,14 @@ a human stop, say -- is a matter of which steps it lists.
 
 `prompt` is what a worker is told when it takes the card; `approval prompt` is
 what it is told when you approve one in review. A kind that carries the second
-is not finished by `a`: the worker is sent it, the card goes back to `active`,
-and it stops in `review` again with what the worker did, where `a` finishes it.
-`buy.md` is that shape -- `steps: review`, a prompt that searches Amazon with
-the `web` skill and stops on a shortlist, and `approval prompt: Order it, and
-say what was ordered.` -- so buying something is a file in `kinds/` rather than
-a branch in the board.
+is not finished by `a`: the worker is sent it and the card goes back to
+`active`. The prompt is sent once -- the card's log is what says whether it has
+been -- so the turn answering it does not stop in `review` a second time. It
+goes on to whatever step follows, which for a kind that takes no others is
+`done`, with what the worker did in the log. `buy.md` is that shape --
+`steps: review`, a prompt that searches Amazon with the `web` skill and stops
+on a shortlist, and `approval prompt: Order it, and say what was ordered.` --
+so buying something is a file in `kinds/` rather than a branch in the board.
 
 The third outcome is the important one. A cheap classifier told only to pick a
 kind will always pick one, so the prompt licenses "I don't know" explicitly:

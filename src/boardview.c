@@ -628,21 +628,12 @@ static int do_delete(const struct board_card *c)
 }
 
 /* A kind with an approval prompt is not finished by approving it: the worker
- * is sent the prompt and the card comes back with what it did. The prompt
- * already sent is in the log, which is what tells that card from this one. */
+ * is sent the prompt and the card ends on what it did. */
 static const char *approval_prompt_of(const struct board_card *c)
 {
     if (!c || c->col != BOARD_REVIEW)
         return NULL;
-
-    const struct board_kind *k = boardcfg_kind(c->kind);
-    if (!k || !k->approval_prompt || !*k->approval_prompt)
-        return NULL;
-
-    for (int i = 0; i < c->log_n; i++)
-        if (c->log[i].text && !strcmp(c->log[i].text, k->approval_prompt))
-            return NULL;
-    return k->approval_prompt;
+    return boardflow_approval(c);
 }
 
 static void approve(const struct board_card *c, int audit)
