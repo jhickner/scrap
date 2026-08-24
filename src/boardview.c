@@ -464,6 +464,18 @@ static void anchor_set(struct anchor *a, const struct vlist *l, int row, int col
         }
 }
 
+/* The card the anchor holds has left the row it was on: rest on what followed
+   it, rather than following it to wherever it went. */
+static void anchor_step(struct anchor *a)
+{
+    const char *to = a->next[0] ? a->next : a->prev;
+    if (!*to)
+        return;
+    snprintf(a->id, sizeof a->id, "%s", to);
+    a->next[0] = '\0';
+    a->col = -1;
+}
+
 static int row_of(const struct vlist *l, const struct anchor *a)
 {
     int at = find_id(l, a->id);
@@ -643,28 +655,30 @@ static char *approval_prompt_of(const struct board_card *c)
     return boardflow_approval(c);
 }
 
-static void approve(const struct board_card *c, int audit)
+static int approve(const struct board_card *c, int audit)
 {
     if (!c || c->col != BOARD_REVIEW)
-        return;
+        return 0;
     if (boardsweep_is(c)) {
         boardwork_let_go(c->id);
-        boardsweep_approve(c);
-        return;
+        return boardsweep_approve(c);
     }
     if (boardplan_is(c)) {
         boardwork_let_go(c->id);
-        if (!boardplan_approve(c))
+        int moved = boardplan_approve(c);
+        if (!moved)
             note("the plan is empty");
-        return;
+        return moved;
     }
 
     char *say = approval_prompt_of(c);
+    int   moved;
     if (!say)
-        boardwork_approve(c, audit);
-    else if (!boardwork_feedback(c, say))
+        moved = boardwork_approve(c, audit);
+    else if (!(moved = boardwork_feedback(c, say)))
         note("no worker left to take it on");
     free(say);
+    return moved;
 }
 
 static int in_review(const struct board_card *cards, int n, const char *filter)
@@ -1336,11 +1350,12 @@ int boardview_run(const char *cwd)
             break;
         }
         case KEY_APPROVE:
-            approve(c, 0);
+            if (approve(c, 0))
+                anchor_step(&cur);
             break;
         case KEY_AUDIT:
-            if (c && !boardsweep_is(c))
-                approve(c, 1);
+            if (c && !boardsweep_is(c) && approve(c, 1))
+                anchor_step(&cur);
             break;
         case KEY_SKIP:
             if (c) {
