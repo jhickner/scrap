@@ -20,9 +20,12 @@ for. The list is not filtered by directory either: a window anywhere on the
 machine is reachable from any other, which is the point of it. Every row leads
 with the directory its session runs in, so that is what survives when a row is
 cut to fit, then the backend and model. Typing narrows the list. `^n` opens a
-new session, `^x` closes the highlighted tab, tab leaves for the board. When the window holds more than one session, a strip above the prompt
-shows them by number and name, coloured by status: accent for the one in
-front, the spinner colour for one that is working, red for one that errored.
+new session, `^x` closes the highlighted tab, tab leaves for the board. Left
+arrow reopens whichever of the list and the board was up last, so a left arrow
+after the board goes back to the board; `/sessions` always opens the list. When
+the window holds more than one session, a strip above the prompt shows them by
+number and name, coloured by status: accent for the one in front, the spinner
+colour for one that is working, red for one that errored.
 
 ## What runs where
 

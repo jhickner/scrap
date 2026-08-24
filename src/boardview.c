@@ -1095,7 +1095,7 @@ int boardview_run(const char *cwd)
     if (boardcfg_missing(why, sizeof why)) {
         close_list();
         note("%s", why);
-        return -1;
+        return BOARDVIEW_NONE;
     }
 
     char here[4096];
@@ -1139,7 +1139,7 @@ int boardview_run(const char *cwd)
             }
             close_list();
             note("no cards yet; /card <text> adds one");
-            return -1;
+            return BOARDVIEW_NONE;
         }
 
         char where[512] = "all repos";

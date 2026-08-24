@@ -5,6 +5,7 @@
 struct session;
 
 #define BOARDVIEW_SESSIONS (-2)
+#define BOARDVIEW_NONE     (-3)
 
 int boardview_run(const char *cwd);
 

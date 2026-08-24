@@ -203,7 +203,7 @@ static void switcher(void *ud)
 {
     (void)ud;
     struct session *here = workspace_current();
-    views_sessions(here ? session_cwd(here) : NULL);
+    views_last(here ? session_cwd(here) : NULL);
 }
 
 static void board(void *ud)
