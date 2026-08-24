@@ -28,8 +28,8 @@ in `board/roles` that says what running it means. The steps that ship are
 `worktree`, `test`, `review`, `audit` and `merge`, and a card of an ordinary
 work kind walks all five: its own worker builds it in a worktree, a second
 worker devises a test and runs it, you read both and approve, an audit reads
-the diff if the diff is big enough, and the landing script rebases, checks and
-merges it.
+the diff if the diff is big enough and commits what it has to fix, and the
+landing script rebases, checks and merges it.
 
 Adding a sixth is adding a file. Nothing about `test` is in the board -- it is
 `roles/test.md` and the word `test` in a kind's `steps:` line -- and a step of
