@@ -336,10 +336,8 @@ const char *models_short_name(const char *backend, const char *model)
 {
     const size_t plen = sizeof "claude-" - 1;
 
-    if (!model)
-        return NULL;
-    if (backend && !strcmp(backend, "claude") && !strncmp(model, "claude-", plen) &&
-        model[plen])
+    if (backend && model && !strcmp(backend, "claude") &&
+        !strncmp(model, "claude-", plen) && model[plen])
         return model + plen;
     return model;
 }

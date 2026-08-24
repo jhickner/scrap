@@ -326,8 +326,7 @@ static int worker_labels(const struct worker *w, int live, char out[4][64],
     snprintf(out[n++], 64, "%s", w->name);
 
     const char *model = *w->resolved ? w->resolved : *w->model ? w->model : "default";
-    if (!strncmp(w->name, "claude", 6))
-        model = models_short_name("claude", model);
+    model = models_short_name(w->name, model);
     role[n] = UI_DIM;
     snprintf(out[n++], 64, "%s", model);
 
