@@ -16,6 +16,7 @@
 #include "boardcard.h"
 #include "boardcfgui.h"
 #include "boardflow.h"
+#include "boardgrid.h"
 #include "boardcmd.h"
 #include "boardplan.h"
 #include "boardsweep.h"
@@ -52,18 +53,22 @@
 #define KEY_SWEEP    'w'
 #define KEY_SERVE    'b'
 #define KEY_ALL      '*'
+#define KEY_VIEW     'v'
 
-#define BOARD_KEYS "ndtsSgarxflcbw*Aiuk\t"
+#define BOARD_KEYS "ndtsSgarxflcbw*Aiukv\t"
 
 #define BOARD_RECENT_INDENT 6
 
-#define BOARD_HINT \
+#define BOARD_HINT_HEAD \
     "enter edit  ·  s start  ·  S start max  ·  g worker  ·  "                \
     "a approve  ·  A approve all  ·  i approve, skipping nothing\n"           \
     "f feedback  ·  r send back  ·  x cancel start  ·  u undo  ·  "          \
     "k skip step\n"                                                            \
     "n new  ·  t triage  ·  l log  ·  d delete  ·  w sweep  ·  c config  ·  "  \
-    "b backend  ·  * all repos  ·  tab sessions  ·  / search"
+    "b backend  ·  * all repos  ·  tab sessions  ·  v view"
+
+#define BOARD_HINT      BOARD_HINT_HEAD "  ·  / search"
+#define BOARD_HINT_GRID BOARD_HINT_HEAD
 
 struct vrow {
     char          id[BOARD_ID_MAX];
@@ -202,7 +207,6 @@ static int by_col(const void *a, const void *b)
     return board_cmp_col(*x, *y);
 }
 
-/* the cards in one lane, ordered and capped the way the column shows them */
 static int lane_cards(struct board_card *cards, int n, const char *filter,
                       int col, const char *const *walk, int walk_n,
                       const struct board_card **in, const char **name)
@@ -292,6 +296,64 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
     return shown;
 }
 
+struct glist {
+    struct board_tile *t;
+    int               *lane_of;
+    const char       **name;
+    int                n, lanes;
+};
+
+static void grid_free(struct glist *g)
+{
+    free(g->t);
+    free(g->lane_of);
+    free(g->name);
+    memset(g, 0, sizeof *g);
+}
+
+static int build_grid(struct glist *g, struct board_card *cards, int n,
+                      const char *filter, int wide)
+{
+    memset(g, 0, sizeof *g);
+
+    const char *const *walk = NULL;
+    int                walk_n = boardcfg_steps(&walk);
+    int                lanes = BOARD_COLS - 1 + walk_n;
+
+    const struct board_card **in = calloc((size_t)(n ? n : 1), sizeof *in);
+    g->t = calloc((size_t)(n ? n : 1), sizeof *g->t);
+    g->lane_of = calloc((size_t)(n ? n : 1), sizeof *g->lane_of);
+    g->name = calloc((size_t)lanes, sizeof *g->name);
+    if (!in || !g->t || !g->lane_of || !g->name) {
+        free(in);
+        grid_free(g);
+        return 0;
+    }
+
+    stamp_due = 0;
+
+    for (int col = 0; col < lanes; col++) {
+        const char *name = NULL;
+        int k = lane_cards(cards, n, filter, col, walk, walk_n, in, &name);
+        if (!k)
+            continue;
+
+        int lane = g->lanes++;
+        g->name[lane] = name;
+        for (int i = 0; i < k; i++) {
+            struct board_tile *t = &g->t[g->n];
+            if (!boardtile_of(in[i], wide, t))
+                break;
+            if (t->stamp)
+                stamp_next(t->stamp);
+            g->lane_of[g->n] = lane;
+            g->n++;
+        }
+    }
+    free(in);
+    return g->n;
+}
+
 static int find_id(const struct vlist *l, const char *id)
 {
     if (id && *id)
@@ -308,12 +370,14 @@ struct anchor {
     char next[BOARD_ID_MAX];
     char prev[BOARD_ID_MAX];
     int  col;
+    int  lane;
 };
 
 static void anchor_set(struct anchor *a, const struct vlist *l, int row, int col)
 {
     snprintf(a->id, sizeof a->id, "%s", l->v[row].id);
     a->col = col;
+    a->lane = -1;
     a->next[0] = a->prev[0] = '\0';
     for (int i = row + 1; i < l->n; i++)
         if (!is_text(&l->v[i])) {
@@ -337,6 +401,7 @@ static void anchor_step(struct anchor *a)
     snprintf(a->id, sizeof a->id, "%s", to);
     a->next[0] = '\0';
     a->col = -1;
+    a->lane = -1;
 }
 
 static int row_of(const struct vlist *l, const struct anchor *a)
@@ -357,6 +422,42 @@ static int row_of(const struct vlist *l, const struct anchor *a)
         if (!is_text(&l->v[i]))
             return i;
     return 0;
+}
+
+static void anchor_tile(struct anchor *a, const struct glist *g, int at, int col,
+                        int lane)
+{
+    snprintf(a->id, sizeof a->id, "%s", g->t[at].c->id);
+    a->col = col;
+    a->lane = lane;
+    a->next[0] = a->prev[0] = '\0';
+    if (at + 1 < g->n)
+        snprintf(a->next, sizeof a->next, "%s", g->t[at + 1].c->id);
+    if (at > 0)
+        snprintf(a->prev, sizeof a->prev, "%s", g->t[at - 1].c->id);
+}
+
+static int tile_at(const struct glist *g, const char *id)
+{
+    if (id && *id)
+        for (int i = 0; i < g->n; i++)
+            if (!strcmp(g->t[i].c->id, id))
+                return i;
+    return -1;
+}
+
+static int tile_of(const struct glist *g, const struct anchor *a)
+{
+    int at = tile_at(g, a->id);
+    if (at >= 0 && (a->lane < 0 || g->lane_of[at] == a->lane))
+        return at;
+
+    int by = tile_at(g, a->next);
+    if (by < 0)
+        by = tile_at(g, a->prev);
+    if (by >= 0)
+        return by;
+    return at >= 0 ? at : 0;
 }
 
 static int board_reap(void)
@@ -811,7 +912,7 @@ int boardview_run(const char *cwd)
     snprintf(here, sizeof here, "%s", cwd ? cwd : "");
 
     static char          filter[4096];
-    static struct anchor cur = {.col = -1};
+    static struct anchor cur = {.col = -1, .lane = -1};
     char                 notice[256] = {0};
     char                 ask[280] = {0};
     int                  asking = ASK_NONE;
@@ -835,11 +936,16 @@ int boardview_run(const char *cwd)
 
         shown_rev = board_revision();
 
-        struct vlist l = {0};
-        int          shown = build_board(&l, cards, n, filter, !filter[0]);
+        int grid = !strcmp(boardcfg_view(), "grid");
 
-        if (!l.n) {
+        struct vlist l = {0};
+        struct glist g = {0};
+        int          shown = grid ? build_grid(&g, cards, n, filter, !filter[0])
+                                  : build_board(&l, cards, n, filter, !filter[0]);
+
+        if (!(grid ? g.n : l.n)) {
             vlist_free(&l);
+            grid_free(&g);
             board_free(cards, n);
 
             if (filter[0]) {
@@ -880,19 +986,45 @@ int boardview_run(const char *cwd)
 
         char hint[512];
         if (notice[0])
-            snprintf(hint, sizeof hint, "%s\n%s", notice, BOARD_HINT);
+            snprintf(hint, sizeof hint, "%s\n%s", notice,
+                     grid ? BOARD_HINT_GRID : BOARD_HINT);
         else
-            snprintf(hint, sizeof hint, "%s", BOARD_HINT);
+            snprintf(hint, sizeof hint, "%s", grid ? BOARD_HINT_GRID : BOARD_HINT);
         notice[0] = '\0';
 
         int pressed = 0;
         int cursor = -1;
-        int at = vlist_run(title, &l, row_of(&l, &cur), hint, ask, BOARD_KEYS,
+        int part = GRID_PART_TILE;
+        int at;
+
+        if (grid) {
+            at = boardgrid_run(title, g.t, g.lane_of, g.name, g.n, g.lanes,
+                               tile_of(&g, &cur), hint, ask, BOARD_KEYS,
+                               &pressed, board_tick, NULL, &cursor, &part);
+            if (at == GRID_NARROW) {
+                grid_free(&g);
+                grid = 0;
+                size_t used = strlen(hint);
+                snprintf(hint + used, sizeof hint - used, "  ·  / search");
+                build_board(&l, cards, n, filter, !filter[0]);
+            }
+        }
+        if (!grid)
+            at = vlist_run(title, &l, row_of(&l, &cur), hint, ask, BOARD_KEYS,
                            &pressed, board_tick, NULL, &cursor);
+
         int row = at >= 0 ? at : cursor;
-        if (row >= 0)
-            anchor_set(&cur, &l, row, at >= 0 ? -1 : (int)l.v[row].col);
+        if (row >= 0) {
+            if (grid)
+                anchor_tile(&cur, &g, row, at >= 0 ? -1 : (int)g.t[row].c->col,
+                            at >= 0 ? -1 : g.lane_of[row]);
+            else
+                anchor_set(&cur, &l, row, at >= 0 ? -1 : (int)l.v[row].col);
+        }
+        if (grid && at >= 0 && !pressed && part == GRID_PART_STATUS)
+            pressed = KEY_GO;
         vlist_free(&l);
+        grid_free(&g);
 
         if (at == PICK_REOPEN) {
             board_free(cards, n);
@@ -1097,6 +1229,10 @@ int boardview_run(const char *cwd)
         case KEY_SERVE:
             close_list();
             do_serve(notice, sizeof notice);
+            break;
+        case KEY_VIEW:
+            boardcfg_set_view(grid ? "list" : "grid");
+            cur.lane = -1;
             break;
         case KEY_ALL:
             if (filter[0])

@@ -23,6 +23,7 @@ enum row_kind {
     ROW_BACKEND,
     ROW_PROMPT,
     ROW_PROJECTS,
+    ROW_VIEW,
     ROW_KIND,
     ROW_KIND_NEW,
 };
@@ -102,6 +103,11 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
 
     head(rows, n, "archive");
     count_row(rows, n, "after", &c->archive_after, 0, 3650, "days");
+
+    head(rows, n, "board");
+    rows[*n].kind = ROW_VIEW;
+    rows[*n].label = "view";
+    (*n)++;
 
     head(rows, n, "columns");
     count_row(rows, n, "done shown", &c->done_shown, 0, 500, "cards");
@@ -189,6 +195,9 @@ static void value_of(const struct row *r, const struct board_cfg *c,
     }
     case ROW_PROJECTS:
         snprintf(out, size, "%s", c->projects[0] ? c->projects : "none");
+        break;
+    case ROW_VIEW:
+        snprintf(out, size, "%s", c->view[0] ? c->view : "list");
         break;
     case ROW_KIND: {
         const struct board_kind *k = &c->kinds[r->kind_at];
@@ -486,6 +495,11 @@ void boardcfgui_run(void)
         case ROW_BACKEND: edit_backend(c, rows[at].backend_at); touched = 1; break;
         case ROW_PROMPT:  edit_prompt(c, rows[at].role_at); touched = 1; break;
         case ROW_PROJECTS: edit_projects(c); touched = 1; break;
+        case ROW_VIEW:
+            snprintf(c->view, sizeof c->view, "%s",
+                     strcmp(c->view, "grid") ? "grid" : "list");
+            touched = 1;
+            break;
         case ROW_KIND:    edit_kind(c, rows[at].kind_at); touched = 1; break;
         case ROW_KIND_NEW: add_kind(c); touched = 1; break;
         default:          break;

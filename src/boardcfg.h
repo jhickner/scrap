@@ -93,6 +93,7 @@ struct board_kind {
 
 struct board_cfg {
     char serving[32];
+    char view[8];
 
     int workers;
     int auto_pull;
@@ -143,6 +144,10 @@ int boardcfg_argv(const struct board_role *p, const char *prompt, char **out,
                   int max);
 
 const char *boardcfg_serving(void);
+
+const char *boardcfg_view(void);
+
+int boardcfg_set_view(const char *view);
 
 int boardcfg_set_serving(const char *backend);
 

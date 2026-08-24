@@ -165,6 +165,7 @@ static void defaults(struct board_cfg *c)
     c->done_shown = 20;
     c->backlog_shown = 20;
     snprintf(c->projects, sizeof c->projects, "~/working");
+    snprintf(c->view, sizeof c->view, "list");
 
     snprintf(c->serving, sizeof c->serving, "claude");
     for (const char *const *b = backend_names(); *b && c->backends_n < BOARD_BACKENDS_MAX; b++)
@@ -288,6 +289,10 @@ static void read_settings(struct board_cfg *c)
     const char *serving = mdcfg_get(&m, "serving");
     if (*serving)
         snprintf(c->serving, sizeof c->serving, "%s", serving);
+
+    const char *view = mdcfg_get(&m, "view");
+    if (*view)
+        snprintf(c->view, sizeof c->view, "%s", view);
 
     if (mdcfg_has(&m, "projects"))
         snprintf(c->projects, sizeof c->projects, "%s", mdcfg_get(&m, "projects"));
@@ -425,14 +430,15 @@ static int write_settings(const struct board_cfg *c)
     snprintf(nums[5], sizeof nums[5], "%d", c->done_shown);
     snprintf(nums[6], sizeof nums[6], "%d", c->backlog_shown);
 
-    const char *keys[] = {"serving", "workers", "auto pull", "auto pick",
-                          "sweep every", "archive after", "done shown",
-                          "backlog shown", "projects"};
-    const char *vals[] = {c->serving, nums[0], nums[1], nums[2], nums[3],
-                          nums[4], nums[5], nums[6], c->projects};
+    const char *keys[] = {"serving", "view", "workers", "auto pull",
+                          "auto pick", "sweep every", "archive after",
+                          "done shown", "backlog shown", "projects"};
+    const char *vals[] = {c->serving, c->view, nums[0], nums[1], nums[2],
+                          nums[3], nums[4], nums[5], nums[6], c->projects};
 
-    return mdcfg_write(path, keys, vals, 9,
+    return mdcfg_write(path, keys, vals, 10,
         "serving is the backend every tiered role runs on.\n"
+        "view is list or grid: the board as rows, or as tiles in lanes.\n"
         "workers is how many may run at once.\n"
         "auto pull is 1 to start backlog cards on a free worker, 0 to wait to\n"
         "be told.\n"
@@ -1077,6 +1083,21 @@ const char *boardcfg_serving(void)
     return cache.serving[0] ? cache.serving : "claude";
 }
 
+const char *boardcfg_view(void)
+{
+    load();
+    return cache.view[0] ? cache.view : "list";
+}
+
+int boardcfg_set_view(const char *view)
+{
+    if (!view || !*view)
+        return 0;
+    load();
+    snprintf(cache.view, sizeof cache.view, "%s", view);
+    return write_settings(&cache);
+}
+
 int boardcfg_set_serving(const char *backend)
 {
     if (!backend || !*backend)
@@ -1159,6 +1180,7 @@ int boardcfg_set(const struct board_cfg *c)
 
     snprintf(cache.projects, sizeof cache.projects, "%s", c->projects);
     snprintf(cache.serving, sizeof cache.serving, "%s", c->serving);
+    snprintf(cache.view, sizeof cache.view, "%s", c->view);
     cache.backends_n = c->backends_n;
     memcpy(cache.backends, c->backends, sizeof cache.backends);
     resolve();
