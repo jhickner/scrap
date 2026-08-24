@@ -40,6 +40,8 @@ int boardwork_audit_pump(void);
 
 int boardwork_sweep_pump(void);
 
+int boardwork_sweep_now(const char *cwd, char *why, int size);
+
 int boardwork_hold(const char *id, struct session *s, enum board_role role);
 
 void boardwork_let_go(const char *id);

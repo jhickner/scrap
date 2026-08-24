@@ -46,10 +46,11 @@
 #define KEY_FEEDBACK 'f'
 #define KEY_LOG      'l'
 #define KEY_CONFIG   'c'
+#define KEY_SWEEP    'w'
 #define KEY_SERVE    'b'
 #define KEY_ALL      '*'
 
-#define BOARD_KEYS "ndtsSgarxflcb*Aiuk\t"
+#define BOARD_KEYS "ndtsSgarxflcbw*Aiuk\t"
 
 #define BOARD_RECENT 3
 
@@ -60,7 +61,7 @@
     "a approve  ·  A approve all  ·  i audit\n"                               \
     "f feedback  ·  r send back  ·  x cancel start  ·  u undo  ·  "          \
     "k skip step\n"                                                            \
-    "n new  ·  t triage  ·  l log  ·  d delete  ·  c config  ·  "               \
+    "n new  ·  t triage  ·  l log  ·  d delete  ·  w sweep  ·  c config  ·  "  \
     "b backend  ·  * all repos  ·  / search"
 
 struct vrow {
@@ -1362,6 +1363,15 @@ int boardview_run(const char *cwd)
             boardcfgui_run();
             int waiting = 0;
             boardwork_serve(&waiting);
+            break;
+        }
+        case KEY_SWEEP: {
+            const char *cwd = c && c->cwd[0] ? c->cwd : filter[0] ? filter : here;
+            char        why[256];
+            if (boardwork_sweep_now(cwd, why, sizeof why))
+                snprintf(notice, sizeof notice, "sweep started");
+            else
+                snprintf(notice, sizeof notice, "%s", why);
             break;
         }
         case KEY_SERVE:

@@ -180,6 +180,30 @@ static int sweeping_any(void)
     return 0;
 }
 
+static int sweep_start(const char *cwd, char *prompt)
+{
+    char id[BOARD_ID_MAX];
+    if (!boardsweep_open(cwd, id, sizeof id)) {
+        free(prompt);
+        return 0;
+    }
+
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    const struct board_card *c = board_find(cards, n, id);
+    int                      started = 0;
+    if (c)
+        started = side_start(c, "sweep", BOARD_ROLE_SWEEP, c->cwd,
+                             prompt, "sweep");
+    else
+        free(prompt);
+    board_free(cards, n);
+
+    if (!started)
+        board_remove(id);
+    return started;
+}
+
 int boardwork_sweep_pump(void)
 {
     if (sweeping_any())
@@ -195,26 +219,34 @@ int boardwork_sweep_pump(void)
     if (!prompt)
         return 0;
 
-    char id[BOARD_ID_MAX];
-    if (!boardsweep_open(cwd, id, sizeof id)) {
-        free(prompt);
+    return sweep_start(cwd, prompt);
+}
+
+int boardwork_sweep_now(const char *cwd, char *why, int size)
+{
+    if (!cwd || !*cwd) {
+        snprintf(why, (size_t)size, "no repo to sweep");
+        return 0;
+    }
+    if (sweeping_any()) {
+        snprintf(why, (size_t)size, "a sweep is already running");
         return 0;
     }
 
-    cards = NULL;
-    n = board_load(&cards);
-    const struct board_card *c = board_find(cards, n, id);
-    int started = 0;
-    if (c)
-        started = side_start(c, "sweep", BOARD_ROLE_SWEEP, c->cwd,
-                             prompt, "sweep");
-    else
-        free(prompt);
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    char              *prompt = boardsweep_prompt(cards, n, cwd);
     board_free(cards, n);
+    if (!prompt) {
+        snprintf(why, (size_t)size, "could not start a sweep");
+        return 0;
+    }
 
-    if (!started)
-        board_remove(id);
-    return started;
+    if (!sweep_start(cwd, prompt)) {
+        snprintf(why, (size_t)size, "could not start a sweep");
+        return 0;
+    }
+    return 1;
 }
 
 static const char *job_of(enum board_role role)
