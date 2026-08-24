@@ -11,4 +11,6 @@ int boardview_run(const char *cwd);
 
 int boardview_capture(const char *text, const char *cwd, char *id_out, int size);
 
+int boardview_approve(const char *id, char *why, int size);
+
 #endif

@@ -9,6 +9,7 @@
 
 #include "app.h"
 #include "boardview.h"
+#include "boardwork.h"
 #include "chrome.h"
 #include "fanout.h"
 #include "frontend.h"
@@ -717,6 +718,23 @@ static void do_card(struct session *s, const char *arg)
         reply_error("could not write to the board");
 }
 
+static void do_approve(struct session *s, const char *arg)
+{
+    (void)arg;
+
+    const char *id = boardwork_card_of(s);
+    if (!id) {
+        reply_error("/approve \xe2\x80\x94 this session is not working a card");
+        return;
+    }
+
+    char why[256] = "";
+    if (boardview_approve(id, why, sizeof why))
+        reply_note("card %s approved", id);
+    else
+        reply_error("%s", why);
+}
+
 static void do_board(struct session *s, const char *arg)
 {
     (void)arg;
@@ -791,6 +809,7 @@ static const struct cmd COMMANDS[] = {
     {"/split", "open a shell split in this directory", "[h|v|w]", 0, do_split},
     {"/card", "add a card to the board, untriaged", "<text>", CMD_LIVE, do_card},
     {"/board", "show the cards, by column", NULL, CMD_LIVE, do_board},
+    {"/approve", "approve this session's card", NULL, CMD_LIVE, do_approve},
     {"/status", "reprint the status bar", NULL, CMD_LIVE, do_status},
     {"/session", "show this session's info and totals", NULL, CMD_LIVE, do_session},
     {"/rename", "name this session, or ask the model to name it again", "[name]",

@@ -1098,6 +1098,27 @@ static void card_form(const struct board_card *c)
     }
 }
 
+int boardview_approve(const char *id, char *why, int size)
+{
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    struct board_card *c = board_find(cards, n, id);
+
+    int ok = 0;
+    if (!c)
+        snprintf(why, (size_t)size, "card %s is not on the board", id);
+    else if (c->col != BOARD_REVIEW)
+        snprintf(why, (size_t)size, "card %s is in %s, not review", id,
+                 board_col_name(c->col));
+    else {
+        approve(c, 0);
+        ok = 1;
+    }
+
+    board_free(cards, n);
+    return ok;
+}
+
 int boardview_capture(const char *text, const char *cwd, char *id_out, int size)
 {
     char id[BOARD_ID_MAX] = {0};
