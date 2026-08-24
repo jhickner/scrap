@@ -13,4 +13,6 @@ int boardview_capture(const char *text, const char *cwd, char *id_out, int size)
 
 int boardview_approve(const char *id, char *why, int size);
 
+int boardview_moveto(const char *id, const char *step, char *why, int size);
+
 #endif

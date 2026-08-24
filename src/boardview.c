@@ -881,6 +881,50 @@ int boardview_approve(const char *id, char *why, int size)
     return ok;
 }
 
+static void steps_of(const char *kind, char *out, size_t size)
+{
+    size_t used = 0;
+    out[0] = '\0';
+    for (int at = 0;; at++) {
+        const char *step = boardcfg_kind_step(kind, at);
+        if (!step)
+            return;
+        used += (size_t)snprintf(out + used, size - used, "%s%s",
+                                 used ? ", " : "", step);
+        if (used >= size)
+            return;
+    }
+}
+
+int boardview_moveto(const char *id, const char *step, char *why, int size)
+{
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    struct board_card *c = board_find(cards, n, id);
+
+    char steps[512];
+    int  ok = 0;
+    if (!c)
+        snprintf(why, (size_t)size, "card %s is not on the board", id);
+    else if (!boardcfg_kind_takes(c->kind, step)) {
+        steps_of(c->kind, steps, sizeof steps);
+        snprintf(why, (size_t)size, "%s has no %s step%s%s",
+                 c->kind[0] ? c->kind : "this card", step,
+                 steps[0] ? " \xc2\xb7 " : "", steps);
+    } else if (board_at(c, step))
+        snprintf(why, (size_t)size, "card %s is already in %s", id, step);
+    else {
+        boardwork_leave(c);
+        boardwork_let_go(c->id);
+        ok = board_move_to(c->id, step, "you", NULL);
+        if (!ok)
+            snprintf(why, (size_t)size, "could not move card %s", id);
+    }
+
+    board_free(cards, n);
+    return ok;
+}
+
 int boardview_capture(const char *text, const char *cwd, char *id_out, int size)
 {
     char id[BOARD_ID_MAX] = {0};
