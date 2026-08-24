@@ -13,24 +13,35 @@
 #include "viewport.h"
 
 #define GRID_LINE_MAX  256
-#define GRID_TILE_ROWS (GRID_TITLE_ROWS + GRID_SPEC_ROWS + 1)
 
-/* the rule, the space after it, and the two cells the mark sits in */
-#define GRID_INDENT 4
+/* the title, the divider under it, then the status and the footer */
+#define GRID_TILE_ROWS (GRID_TITLE_ROWS + 3)
+
+/* the left border and the space after it */
+#define GRID_INDENT 2
+
+/* the cells the spinner takes at the head of the status row */
+#define GRID_SPIN 2
+
+/* the top and bottom border rows a tile carries beyond its text */
+#define GRID_BORDER 2
+
+#define BOX_TL "\xe2\x95\xad"
+#define BOX_TR "\xe2\x95\xae"
+#define BOX_BL "\xe2\x95\xb0"
+#define BOX_BR "\xe2\x95\xaf"
+#define BOX_H  "\xe2\x94\x80"
+#define BOX_V  "\xe2\x94\x82"
+#define BOX_ML "\xe2\x94\x9c"
+#define BOX_MR "\xe2\x94\xa4"
 
 /* the title bar and the row of lane names */
 #define GRID_HEAD 2
 
-#define LIVE_POLL_MS 500
-
-static const char *const SPIN[] = {"\xe2\xa0\x8b", "\xe2\xa0\x99", "\xe2\xa0\xb9",
-                                   "\xe2\xa0\xb8", "\xe2\xa0\xbc", "\xe2\xa0\xb4",
-                                   "\xe2\xa0\xa6", "\xe2\xa0\xa7", "\xe2\xa0\x87",
-                                   "\xe2\xa0\x8f"};
-
+/* the cells a tile's text has between the mark and the right border */
 static int text_width(int lane_w)
 {
-    int w = lane_w - 1 - GRID_INDENT;
+    int w = lane_w - 3 - GRID_INDENT;
     return w < 4 ? 4 : w;
 }
 
@@ -55,16 +66,28 @@ static int text_rows(const char *s, int budget, int max)
     return k ? k : 1;
 }
 
+static int has_status(const struct board_tile *t) { return t->status[0] != 0; }
+
+/* the kind of card, and the backend or tier it was pinned to */
+static int foot_of(const struct board_tile *t, char *out, size_t size)
+{
+    snprintf(out, size, "%s%s%s", t->kind, t->kind[0] && t->pins[0] ? " · " : "",
+             t->pins);
+    return out[0] != '\0';
+}
+
 static int tile_height(const struct board_tile *t, int lane_w)
 {
-    int budget = text_width(lane_w);
-    int h = text_rows(t->title, budget, GRID_TITLE_ROWS);
+    char foot[GRID_LINE_MAX];
+    int  budget = text_width(lane_w);
+    int  h = text_rows(t->title, budget, GRID_TITLE_ROWS);
     if (!h)
         h = 1;
-    h += text_rows(t->spec, budget, GRID_SPEC_ROWS);
-    if (t->status[0] || t->pins[0])
-        h++;
-    return h;
+
+    int under = has_status(t) + foot_of(t, foot, sizeof foot);
+    if (under)
+        h += 1 + under;
+    return h + GRID_BORDER;
 }
 
 static int grow(struct grid_layout *g, int tiles, int lanes)
@@ -111,6 +134,25 @@ void boardgrid_layout_free(struct grid_layout *g)
     memset(g, 0, sizeof *g);
 }
 
+/* the first card of a lane to draw so that the one at s is on screen */
+static int scroll_top(const struct grid_layout *g, int k, int s, int limit)
+{
+    int top = 0;
+    while (s < k && top < s) {
+        int used = 0, fits = 0;
+        for (int j = top; j <= s; j++) {
+            if (used + g->height[j] > limit)
+                break;
+            used += g->height[j];
+            fits = j == s;
+        }
+        if (fits)
+            break;
+        top++;
+    }
+    return top;
+}
+
 static int place_lane(struct grid_layout *g, int lane, int li, int k, int top,
                       int limit)
 {
@@ -130,7 +172,7 @@ static int place_lane(struct grid_layout *g, int lane, int li, int k, int top,
         r->w = g->lane_w - 1;
         r->h = h;
         r->status_row = -1;
-        row += h + 1;
+        row += h;
         placed++;
     }
     return placed;
@@ -188,40 +230,40 @@ int boardgrid_layout(const struct board_tile *t, const int *lane_of, int n,
         if (!k)
             continue;
 
-        int top = 0;
+        int s = -1;
         if (lane == at) {
-            int s = 0;
+            s = 0;
             while (s < k && out->order[s] != sel)
                 s++;
-            while (s < k && top < s) {
-                int used = 0, fits = 0;
-                for (int j = top; j <= s; j++) {
-                    if (used + out->height[j] > rows)
-                        break;
-                    used += out->height[j] + 1;
-                    fits = j == s;
-                }
-                if (fits)
-                    break;
-                top++;
-            }
         }
-        out->lane_top[lane] = top;
+
+        int top = s >= 0 ? scroll_top(out, k, s, rows) : 0;
 
         int mark = out->tiles;
         int placed = place_lane(out, lane, li, k, top, rows);
+        /* the count of what is hidden takes a row from the cards */
         if (placed < k - top && rows > 1) {
             out->tiles = mark;
+            if (s >= 0)
+                top = scroll_top(out, k, s, rows - 1);
             placed = place_lane(out, lane, li, k, top, rows - 1);
         }
+        out->lane_top[lane] = top;
         out->lane_hidden[lane] = k - placed;
     }
 
     for (int i = 0; i < out->tiles; i++) {
         struct grid_rect        *r = &out->tile[i];
         const struct board_tile *tile = &t[r->tile];
-        if (tile->status[0] || tile->pins[0])
-            r->status_row = r->row + r->h - 1;
+        char                     foot[GRID_LINE_MAX];
+        int                      under = foot_of(tile, foot, sizeof foot);
+        /* a tile clipped to a short lane has lost its status row: what sits
+           where the row would be is title, and a click there is not the worker */
+        if (has_status(tile) && r->h == tile_height(tile, out->lane_w)) {
+            int row = r->row + r->h - 2 - under;
+            if (row > r->row)
+                r->status_row = row;
+        }
 
         int end = r->row + r->h;
         if (end > out->lane_more_row[r->lane])
@@ -265,6 +307,8 @@ int boardgrid_hit(const struct grid_layout *g, int row, int col, int *part)
 struct lines {
     char          text[GRID_TILE_ROWS][GRID_LINE_MAX];
     unsigned char role[GRID_TILE_ROWS];
+    unsigned char rule[GRID_TILE_ROWS];   /* the divider under the title */
+    unsigned char indent[GRID_TILE_ROWS]; /* the cells the spinner leaves */
     int           n;
 };
 
@@ -300,26 +344,40 @@ static int wrap_into(const char *s, int budget, int max, struct lines *out,
     return k;
 }
 
+static void add_line(struct lines *out, const char *s, int budget,
+                     enum ui_role role, int indent)
+{
+    if (out->n >= GRID_TILE_ROWS)
+        return;
+    char *into = out->text[out->n];
+    if ((int)ui_cells(s) > budget)
+        snprintf(into, GRID_LINE_MAX, "%.*s…",
+                 (int)ui_fit_bytes(s, budget > 1 ? (size_t)budget - 1 : 1), s);
+    else
+        snprintf(into, GRID_LINE_MAX, "%s", s);
+    out->role[out->n] = (unsigned char)role;
+    out->indent[out->n] = (unsigned char)indent;
+    out->n++;
+}
+
 static void tile_lines(const struct board_tile *t, int budget, struct lines *out)
 {
-    out->n = 0;
+    memset(out, 0, sizeof *out);
     wrap_into(t->title, budget, GRID_TITLE_ROWS, out, UI_TEXT);
-    wrap_into(t->spec, budget, GRID_SPEC_ROWS, out, UI_DIM);
 
-    if (t->status[0] || t->pins[0]) {
-        char say[GRID_LINE_MAX];
-        snprintf(say, sizeof say, "%s%s%s", t->status,
-                 t->status[0] && t->pins[0] ? " · " : "", t->pins);
-        size_t fit = ui_fit_bytes(say, (size_t)budget);
-        if (say[fit])
-            snprintf(out->text[out->n], GRID_LINE_MAX, "%.*s…",
-                     (int)ui_fit_bytes(say, budget > 1 ? (size_t)budget - 1 : 1),
-                     say);
-        else
-            snprintf(out->text[out->n], GRID_LINE_MAX, "%s", say);
-        out->role[out->n] = UI_DIM;
-        out->n++;
-    }
+    char foot[GRID_LINE_MAX];
+    int  has_foot = foot_of(t, foot, sizeof foot);
+    if (!has_status(t) && !has_foot)
+        return;
+
+    if (out->n < GRID_TILE_ROWS)
+        out->rule[out->n++] = 1;
+
+    if (has_status(t))
+        add_line(out, t->status, t->spin ? budget - GRID_SPIN : budget, UI_DIM,
+                 t->spin ? GRID_SPIN : 0);
+    if (has_foot)
+        add_line(out, foot, budget, UI_DIM, 0);
 }
 
 struct grid {
@@ -340,30 +398,10 @@ struct grid {
     int                      drawn_n;
 };
 
-static size_t ask_budget(int columns)
-{
-    return columns > 12 ? (size_t)(columns - 12) : 1;
-}
-
-static int ask_rows(const char *ask, int columns)
-{
-    struct ui_wrap w = {0};
-    w.budget = ask_budget(columns);
-    w.measure = 1;
-    w.paint_empty = 1;
-    return ui_wrap_paint(ask, &w);
-}
-
 static int grid_rows(const struct grid *v)
 {
     int rows = tty_rows() - 3 - chrome_gap() - (GRID_HEAD - 1);
-    if (v->ask && *v->ask)
-        rows -= 1 + ask_rows(v->ask, ui_columns());
-    else if (v->hint && *v->hint) {
-        rows -= 2;
-        for (const char *p = v->hint; (p = strchr(p, '\n')); p++)
-            rows--;
-    }
+    rows -= chrome_foot_rows(v->ask, v->hint, ui_columns());
     return rows < 3 ? 3 : rows;
 }
 
@@ -411,6 +449,38 @@ static void put_fit(const char *s, int budget, enum ui_role role, int *used)
     *used += (int)ui_cells_n(s, fit);
 }
 
+static void put_edge(enum ui_role role, const char *s, int *used)
+{
+    ui_esc(ui_style(role));
+    ui_put(s);
+    ui_esc(ui_style(UI_RESET));
+    (*used)++;
+}
+
+static void put_divider(enum ui_role role, int w, int *used)
+{
+    ui_esc(ui_style(role));
+    ui_put(BOX_ML);
+    for (int i = 2; i < w; i++)
+        ui_put(BOX_H);
+    if (w > 1)
+        ui_put(BOX_MR);
+    ui_esc(ui_style(UI_RESET));
+    *used += w;
+}
+
+static void put_rule(enum ui_role role, int top, int w, int *used)
+{
+    ui_esc(ui_style(role));
+    ui_put(top ? BOX_TL : BOX_BL);
+    for (int i = 2; i < w; i++)
+        ui_put(BOX_H);
+    if (w > 1)
+        ui_put(top ? BOX_TR : BOX_BR);
+    ui_esc(ui_style(UI_RESET));
+    *used += w;
+}
+
 static void pad_to(int *used, int col)
 {
     if (col > *used) {
@@ -450,33 +520,38 @@ static void paint_row(struct grid *v, int row)
 
         const struct board_tile *t = &v->t[r->tile];
         int                      picked = r->tile == v->sel;
+        enum ui_role edge = picked ? UI_ACCENT : (enum ui_role)t->mark_role;
 
         pad_to(&used, r->col);
-        ui_esc(ui_style(picked ? UI_ACCENT : (enum ui_role)t->mark_role));
-        ui_put(UI_BAR);
-        ui_esc(ui_style(UI_RESET));
-        used++;
-        pad_to(&used, r->col + 2);
-
-        if (row == r->row) {
-            if (t->spin) {
-                ui_esc(ui_style(UI_SPIN));
-                ui_put(SPIN[v->frame % (int)(sizeof SPIN / sizeof *SPIN)]);
-                ui_esc(ui_style(UI_RESET));
-                used++;
-            } else if (t->mark && *t->mark) {
-                ui_esc(ui_style((enum ui_role)t->mark_role));
-                ui_put(t->mark);
-                ui_esc(ui_style(UI_RESET));
-                used += (int)ui_cells(t->mark);
-            }
+        if (row == r->row || row == r->row + r->h - 1) {
+            put_rule(edge, row == r->row, r->w, &used);
+            continue;
         }
+
+        int line = row - r->row - 1;
+        if (line >= 0 && line < v->drawn[at].n && v->drawn[at].rule[line]) {
+            put_divider(edge, r->w, &used);
+            continue;
+        }
+
+        put_edge(edge, BOX_V, &used);
         pad_to(&used, r->col + GRID_INDENT);
 
-        int line = row - r->row;
-        if (line < v->drawn[at].n)
-            put_fit(v->drawn[at].text[line], v->g.lane_w - 1 - GRID_INDENT,
+        if (line >= 0 && line < v->drawn[at].n) {
+            int indent = v->drawn[at].indent[line];
+            if (indent && t->spin) {
+                ui_esc(ui_style(UI_SPIN));
+                ui_put(spin_glyph(v->frame));
+                ui_esc(ui_style(UI_RESET));
+                used++;
+            }
+            pad_to(&used, r->col + GRID_INDENT + indent);
+            put_fit(v->drawn[at].text[line], text_width(v->g.lane_w) - indent,
                     (enum ui_role)v->drawn[at].role[line], &used);
+        }
+
+        pad_to(&used, r->col + r->w - 1);
+        put_edge(edge, BOX_V, &used);
     }
     ui_put("\n");
 }
@@ -487,7 +562,6 @@ static void paint(void *ud)
     if (!relayout(v))
         return;
 
-    int  columns = ui_columns();
     char title[256];
     if (v->g.lanes_shown < v->lanes)
         snprintf(title, sizeof title, "%s · lanes %d-%d of %d", v->title,
@@ -496,67 +570,20 @@ static void paint(void *ud)
     else
         snprintf(title, sizeof title, "%s", v->title);
 
-    ui_esc(ui_style(UI_CHROME));
-    ui_put(UI_BAR);
-    ui_esc(ui_style(UI_RESET));
-    ui_put(" ");
-    ui_esc(ui_style(UI_DIM));
-    {
-        size_t budget = columns > 3 ? (size_t)(columns - 3) : 1;
-        size_t fit = ui_fit_bytes(title, budget);
-        ui_putn(title, fit);
-        if (title[fit])
-            ui_put("…");
-    }
-    ui_esc(ui_style(UI_RESET));
-    ui_put("\n");
-
+    chrome_title_paint(title);
     paint_names(v);
-    for (int row = 0; row < v->g.rows_used; row++)
+    /* every pass paints the whole budget, or the board walks up the screen
+       as a lane scrolls and the rows it needs change */
+    for (int row = 0; row < v->rows; row++)
         paint_row(v, row);
 
-    if (v->ask && *v->ask) {
-        const char *p = v->ask;
-        size_t      n = strlen(p);
-        size_t      budget = ask_budget(columns);
-        ui_put("\n");
-        while (n) {
-            size_t skip = 0;
-            size_t row = ui_wrap_row(p, n, budget, &skip, NULL);
-            size_t used = row + skip;
-            ui_put("    ");
-            ui_putn(p, row);
-            p += used;
-            n -= used < n ? used : n;
-            if (n)
-                ui_put("\n");
-        }
-        ui_put(" ");
-        ui_esc(ui_style(UI_ACCENT));
-        ui_put("y/n");
-        ui_esc(ui_style(UI_RESET));
-    } else if (v->hint && *v->hint) {
-        ui_put("\n");
-        size_t budget = columns > 6 ? (size_t)(columns - 6) : 1;
-        for (const char *p = v->hint; p;) {
-            const char *nl = strchr(p, '\n');
-            size_t      n = nl ? (size_t)(nl - p) : strlen(p);
-            ui_esc(ui_style(UI_DIM));
-            ui_put("    ");
-            ui_putn(p, ui_fit_visible(p, n, budget));
-            ui_esc(ui_style(UI_RESET));
-            if (!nl)
-                break;
-            ui_put("\n");
-            p = nl + 1;
-        }
-    }
+    chrome_foot_paint(v->ask, v->hint, ui_columns());
 }
 
 static int animating(const struct grid *v)
 {
-    for (int i = 0; i < v->n; i++)
-        if (v->t[i].spin)
+    for (int i = 0; i < v->g.tiles; i++)
+        if (v->t[v->g.tile[i].tile].spin)
             return 1;
     return 0;
 }
@@ -600,7 +627,8 @@ static void step_lane(struct grid *v, int dir)
 static int move_key(struct grid *v, tty_key key, uint32_t cp,
                     const char *shortcuts)
 {
-    int free_key = cp && (!shortcuts || !strchr(shortcuts, (int)cp));
+    int free_key = cp && cp < 128 &&
+                   (!shortcuts || !strchr(shortcuts, (int)cp));
 
     if (key == TK_UP || (free_key && cp == 'k')) {
         step_in_lane(v, -1);
@@ -662,7 +690,7 @@ int boardgrid_run(const char *title, const struct board_tile *tiles,
 
         int asking = ask && *ask;
         int watching = !asking && tick;
-        int wait = turning ? SPIN_FRAME_MS : (watching ? LIVE_POLL_MS : -1);
+        int wait = turning ? SPIN_FRAME_MS : (watching ? PICK_POLL_MS : -1);
         if (!tty_read(&ev, wait)) {
             if (chrome_modal_interrupted())
                 goto done;

@@ -10,9 +10,9 @@
 struct board_tile {
     const struct board_card *c;
     char                     title[BOARD_TITLE_MAX];
-    char                     spec[512];
     char                     status[512];
     char                     pins[48];
+    char                     kind[16];
     const char              *mark;
     unsigned char            mark_role;
     unsigned char            spin;

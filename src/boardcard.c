@@ -20,17 +20,24 @@
 
 #define STEPS_SHOWN (BOARD_KINDS_MAX * BOARD_KIND_STEPS)
 
+/* what a collapsed card shows of its spec and of its log */
+#define CARD_SPEC_ROWS 6
+#define CARD_LOG_ROWS  6
+
 static const char *const PRIORITIES[] = {"0", "1", "2", "3"};
 
 struct notes {
     const char   **v;
     char         **owned;
+    const char   **labels;
+    char         **owned_labels;
     enum ui_role  *roles;
     int            n, cap;
+    int            log_from; /* the first note of the card's log, or -1 */
 };
 
-/* takes ownership of text */
-static void note_role(struct notes *l, char *text, enum ui_role role)
+/* takes ownership of label and text */
+static void note_at(struct notes *l, char *label, char *text, enum ui_role role)
 {
     if (l->n == l->cap) {
         int          cap = l->cap ? l->cap * 2 : 32;
@@ -40,10 +47,18 @@ static void note_role(struct notes *l, char *text, enum ui_role role)
         char **owned = realloc(l->owned, (size_t)cap * sizeof *owned);
         if (owned)
             l->owned = owned;
+        const char **labels = realloc(l->labels, (size_t)cap * sizeof *labels);
+        if (labels)
+            l->labels = labels;
+        char **owned_labels =
+            realloc(l->owned_labels, (size_t)cap * sizeof *owned_labels);
+        if (owned_labels)
+            l->owned_labels = owned_labels;
         enum ui_role *roles = realloc(l->roles, (size_t)cap * sizeof *roles);
         if (roles)
             l->roles = roles;
-        if (!v || !owned || !roles) {
+        if (!v || !owned || !labels || !owned_labels || !roles) {
+            free(label);
             free(text);
             return;
         }
@@ -51,19 +66,36 @@ static void note_role(struct notes *l, char *text, enum ui_role role)
     }
     l->owned[l->n] = text;
     l->v[l->n] = text ? text : "";
+    l->owned_labels[l->n] = label;
+    l->labels[l->n] = label;
     l->roles[l->n] = role;
     l->n++;
 }
 
+/* takes ownership of text */
+static void note_role(struct notes *l, char *text, enum ui_role role)
+{
+    note_at(l, NULL, text, role);
+}
+
 static void note_line(struct notes *l, char *text)
 {
-    note_role(l, text, UI_DIM);
+    note_at(l, NULL, text, UI_DIM);
+}
+
+static void note_labelled(struct notes *l, const char *label, char *text)
+{
+    note_at(l, text_dsprintf("%s", label), text, UI_DIM);
 }
 
 static void notes_free(struct notes *l)
 {
-    for (int i = 0; i < l->n; i++)
+    for (int i = 0; i < l->n; i++) {
         free(l->owned[i]);
+        free(l->owned_labels[i]);
+    }
+    free(l->labels);
+    free(l->owned_labels);
     free(l->owned);
     free(l->roles);
     free(l->v);
@@ -128,8 +160,9 @@ static void build_stages(const struct board_card *c, struct notes *notes)
     int          stages = stages_of(c, STAGE, BOARD_KIND_STEPS + 1);
 
     char   line[512];
-    size_t at = (size_t)snprintf(line, sizeof line, "  %-8s", "flow");
+    size_t at = 0;
     int    any = 0;
+    line[0] = '\0';
 
     for (int i = 0; i < stages; i++) {
         if (at >= sizeof line)
@@ -153,8 +186,9 @@ static void build_stages(const struct board_card *c, struct notes *notes)
         }
 
         int put = snprintf(line + at, sizeof line - at,
-                           strong ? "  **%s %s**" : "  %s %s", mark,
-                           STAGE[i].name);
+                           at ? (strong ? "  **%s %s**" : "  %s %s")
+                              : (strong ? "**%s %s**" : "%s %s"),
+                           mark, STAGE[i].name);
         if (put < 0)
             break;
         at += (size_t)put;
@@ -162,7 +196,7 @@ static void build_stages(const struct board_card *c, struct notes *notes)
     }
 
     if (any)
-        note_line(notes, text_dsprintf("%s", line));
+        note_labelled(notes, "flow", text_dsprintf("%s", line));
 }
 
 /* The live session is the truth while a tab is up: a handover switches the
@@ -177,8 +211,8 @@ static void build_backend(const struct board_card *c, struct notes *notes)
     if (!name || !*name)
         return;
 
-    note_line(notes, text_dsprintf("  %-8s %s · %s", "backend", name,
-                                   s ? "working" : "worked"));
+    note_labelled(notes, "backend",
+                  text_dsprintf("%s · %s", name, s ? "working" : "worked"));
 }
 
 static void build_spend(const struct board_card *c, struct notes *notes)
@@ -189,22 +223,21 @@ static void build_spend(const struct board_card *c, struct notes *notes)
 
     if (!c->tokens_in && !c->tokens_out) {
         if (cost[0])
-            note_line(notes, text_dsprintf("  %-8s %s", "spend", cost));
+            note_labelled(notes, "spend", text_dsprintf("%s", cost));
         return;
     }
 
     char in[32], out[32];
     text_humanize(c->tokens_in, in, sizeof in);
     text_humanize(c->tokens_out, out, sizeof out);
-    note_line(notes, text_dsprintf("  %-8s %s in · %s out%s%s", "spend", in,
-                                   out, cost[0] ? " · " : "", cost));
+    note_labelled(notes, "spend",
+                  text_dsprintf("%s in · %s out%s%s", in, out,
+                                cost[0] ? " · " : "", cost));
 }
 
-#define NOTE_LEAD 14 /* the width of "HH:MM  who    " */
-
-/* The first line carries the stamp and who said it; the rest sit under them. */
-static void note_entry(struct notes *notes, const char *stamp, const char *who,
-                       const char *text)
+/* The stamp and who said it head the entry; the rest sits indented under it. */
+static void note_entry(struct notes *notes, const char *head, const char *stamp,
+                       const char *who, const char *text)
 {
     const char *at = text;
     int         first = 1;
@@ -214,11 +247,11 @@ static void note_entry(struct notes *notes, const char *stamp, const char *who,
         size_t      len = nl ? (size_t)(nl - at) : strlen(at);
 
         if (first)
-            note_line(notes, text_dsprintf("%s  %-6s %.*s", stamp, who,
-                                           (int)len, at));
+            note_at(notes, head ? text_dsprintf("%s", head) : NULL,
+                    text_dsprintf("%s %-6s  %.*s", stamp, who, (int)len, at),
+                    UI_DIM);
         else if (len)
-            note_line(notes, text_dsprintf("%*s%.*s", NOTE_LEAD, "",
-                                           (int)len, at));
+            note_line(notes, text_dsprintf("  %.*s", (int)len, at));
         else
             note_line(notes, NULL);
 
@@ -229,10 +262,11 @@ static void note_entry(struct notes *notes, const char *stamp, const char *who,
 
 /* A worker's final message is a whole turn, not a lifecycle line: the stamp
    stands alone and the message sits under it at the card's own indent. */
-static void note_message(struct notes *notes, const char *stamp,
+static void note_message(struct notes *notes, const char *head, const char *stamp,
                          const char *who, const char *text)
 {
-    note_line(notes, text_dsprintf("%s  %s", stamp, who));
+    note_at(notes, head ? text_dsprintf("%s", head) : NULL,
+            text_dsprintf("%s %s", stamp, who), UI_DIM);
 
     const char *at = text;
     do {
@@ -251,23 +285,26 @@ static void note_message(struct notes *notes, const char *stamp,
 static void build_proposals(const struct board_card *c, struct notes *notes)
 {
     char line[BOARD_TITLE_MAX];
-    note_line(notes, text_dsprintf("  proposals"));
     for (int i = 0; boardsweep_proposal(c, i, line, sizeof line); i++)
-        note_line(notes, text_dsprintf("  %2d. %s", i + 1, line));
+        note_at(notes, i == 0 ? text_dsprintf("proposals") : NULL,
+                text_dsprintf("%2d. %s", i + 1, line), UI_DIM);
     note_line(notes, NULL);
 }
 
 static void build_notes(const struct board_card *c, struct notes *notes)
 {
+    notes->log_from = -1;
+
     if (boardflow_waits_on_you(c) && boardsweep_is(c))
         build_proposals(c, notes);
     build_stages(c, notes);
     build_backend(c, notes);
     build_spend(c, notes);
 
+    const char *head = "log";
     for (int i = 0; i < c->log_n; i++) {
         if (i == 0)
-            note_line(notes, NULL);
+            notes->log_from = notes->n;
         struct tm when;
         char      stamp[16] = "     ";
         if (c->log[i].ts) {
@@ -276,9 +313,10 @@ static void build_notes(const struct board_card *c, struct notes *notes)
         }
         char *text = ui_plain(c->log[i].text ? c->log[i].text : "", 0);
         if (text && strchr(text, '\n'))
-            note_message(notes, stamp, c->log[i].who, text);
+            note_message(notes, head, stamp, c->log[i].who, text);
         else
-            note_entry(notes, stamp, c->log[i].who, text ? text : "");
+            note_entry(notes, head, stamp, c->log[i].who, text ? text : "");
+        head = NULL;
         free(text);
     }
 }
@@ -333,30 +371,36 @@ enum boardcard_action boardcard_form(const struct board_card *c,
 
     int proposals = boardflow_waits_on_you(c) && boardsweep_is(c);
 
-    struct form_field fields[9];
+    struct form_field fields[FORM_FIELDS];
     int               fields_n = 0;
 
     if (!proposals)
         fields[fields_n++] = (struct form_field){"spec", FORM_TEXT, spec,
-                                                 sizeof spec, NULL, 0};
+                                                 sizeof spec, NULL, 0,
+                                                 CARD_SPEC_ROWS};
     fields[fields_n++] = (struct form_field){"kind", FORM_CHOICE, kind,
-                                             sizeof kind, kinds, kinds_n};
+                                             sizeof kind, kinds, kinds_n, 0};
     fields[fields_n++] = (struct form_field){"column", FORM_CHOICE, column,
-                                             sizeof column, cols, cols_n};
+                                             sizeof column, cols, cols_n, 0};
     fields[fields_n++] = (struct form_field){"repo", FORM_TEXT, where,
-                                             sizeof where, NULL, 0};
+                                             sizeof where, NULL, 0, 0};
     fields[fields_n++] = (struct form_field){"priority", FORM_CHOICE, priority,
                                              sizeof priority, PRIORITIES,
-                                             COUNT(PRIORITIES)};
+                                             COUNT(PRIORITIES), 0};
     fields[fields_n++] = (struct form_field){"backend", FORM_CHOICE, backend,
                                              sizeof backend, backends,
-                                             backends_n};
+                                             backends_n, 0};
     fields[fields_n++] = (struct form_field){"tier", FORM_CHOICE, tier,
-                                             sizeof tier, tiers, tiers_n};
+                                             sizeof tier, tiers, tiers_n, 0};
     if (boardflow_runs(c) == BOARD_RUNS_WORKER && !boardsweep_is(c))
         fields[fields_n++] = (struct form_field){
             "cancel starting, back to backlog", FORM_BUTTON, unstart_at,
-            sizeof unstart_at, NULL, 0};
+            sizeof unstart_at, NULL, 0, 0};
+    static const char *const OPEN[] = {"show the whole card", "show less"};
+    char                     open_at[2] = "";
+    fields[fields_n++] = (struct form_field){NULL,    FORM_TOGGLE, open_at,
+                                             sizeof open_at, OPEN, 2, 0};
+
     const struct board_role *waiting = boardflow_role(c);
     char approve_label[96];
     snprintf(approve_label, sizeof approve_label, "%s",
@@ -379,7 +423,7 @@ enum boardcard_action boardcard_form(const struct board_card *c,
     if (boardflow_waits_on_you(c))
         fields[fields_n++] = (struct form_field){approve_label, FORM_BUTTON,
                                                  approve_at, sizeof approve_at,
-                                                 NULL, 0};
+                                                 NULL, 0, 0};
 
     struct notes notes = {0};
     build_notes(c, &notes);
@@ -394,6 +438,9 @@ enum boardcard_action boardcard_form(const struct board_card *c,
     struct form f = {
         .title = heading,
         .notes = notes.v,
+        .note_labels = notes.labels,
+        .notes_from = notes.log_from < 0 ? 0 : notes.log_from,
+        .notes_max = notes.log_from < 0 ? 0 : CARD_LOG_ROWS,
         .note_roles = notes.roles,
         .notes_n = notes.n,
         .fields = fields,

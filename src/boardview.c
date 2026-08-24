@@ -276,11 +276,13 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             if (t.stamp)
                 stamp_next(t.stamp);
 
-            if (t.pins[0])
-                r->detail = text_dsprintf("%s%s%s", t.status,
-                                          t.status[0] ? " · " : "", t.pins);
-            else
-                r->detail = text_dsprintf("%s", t.status);
+            /* the kind and the pins are the tile's footer; the row runs
+               them on the end of the status */
+            char tail[128];
+            snprintf(tail, sizeof tail, "%s%s%s", t.kind,
+                     t.kind[0] && t.pins[0] ? " · " : "", t.pins);
+            r->detail = text_dsprintf("%s%s%s", t.status,
+                                      t.status[0] && tail[0] ? " · " : "", tail);
 
             for (int j = 0; j < t.recent_n; j++) {
                 struct vrow *say = row_add(l);
@@ -558,9 +560,9 @@ static void do_new(const char *cwd, char *sel_id)
     char tier[8] = "";
 
     struct form_field fields[] = {
-        {"spec", FORM_TEXT, spec, sizeof spec, NULL, 0},
-        {"backend", FORM_CHOICE, backend, sizeof backend, backends, backends_n},
-        {"tier", FORM_CHOICE, tier, sizeof tier, tiers, tiers_n},
+        {"spec", FORM_TEXT, spec, sizeof spec, NULL, 0, 0},
+        {"backend", FORM_CHOICE, backend, sizeof backend, backends, backends_n, 0},
+        {"tier", FORM_CHOICE, tier, sizeof tier, tiers, tiers_n, 0},
     };
     struct form f = {
         .title = "new card",
@@ -1231,7 +1233,7 @@ int boardview_run(const char *cwd)
             do_serve(notice, sizeof notice);
             break;
         case KEY_VIEW:
-            boardcfg_set_view(grid ? "list" : "grid");
+            boardcfg_set_view(strcmp(boardcfg_view(), "grid") ? "grid" : "list");
             cur.lane = -1;
             break;
         case KEY_ALL:

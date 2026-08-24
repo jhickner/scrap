@@ -295,11 +295,11 @@ static void edit_backend(struct board_cfg *c, int at)
 
         snprintf(labels[n], sizeof labels[n], "%s model", name);
         fields[n] = (struct form_field){labels[n], FORM_TEXT, model[t],
-                                        sizeof model[t], NULL, 0};
+                                        sizeof model[t], NULL, 0, 0};
         n++;
         snprintf(labels[n], sizeof labels[n], "%s effort", name);
         fields[n] = (struct form_field){labels[n], FORM_CHOICE, effort[t],
-                                        sizeof effort[t], EFFORTS, COUNT(EFFORTS)};
+                                        sizeof effort[t], EFFORTS, COUNT(EFFORTS), 0};
         n++;
     }
 
@@ -363,17 +363,17 @@ static void edit_kind(struct board_cfg *c, int at)
 
     struct form_field fields[8];
     int               fields_n = 0;
-    fields[fields_n++] = (struct form_field){"name", FORM_TEXT, name, sizeof name, NULL, 0};
-    fields[fields_n++] = (struct form_field){"means", FORM_TEXT, means, sizeof means, NULL, 0};
+    fields[fields_n++] = (struct form_field){"name", FORM_TEXT, name, sizeof name, NULL, 0, 0};
+    fields[fields_n++] = (struct form_field){"means", FORM_TEXT, means, sizeof means, NULL, 0, 0};
     fields[fields_n++] = (struct form_field){"priority", FORM_CHOICE, priority,
-                                             sizeof priority, LEVELS, 4};
+                                             sizeof priority, LEVELS, 4, 0};
     fields[fields_n++] = (struct form_field){"steps", FORM_TEXT, steps,
-                                             sizeof steps, NULL, 0};
+                                             sizeof steps, NULL, 0, 0};
     fields[fields_n++] = (struct form_field){"approval prompt", FORM_TEXT, approval,
-                                             sizeof approval, NULL, 0};
+                                             sizeof approval, NULL, 0, 0};
     fields[fields_n++] = (struct form_field){"next kind", FORM_TEXT, next,
-                                             sizeof next, NULL, 0};
-    fields[fields_n++] = (struct form_field){"prompt", FORM_TEXT, prompt, 8192, NULL, 0};
+                                             sizeof next, NULL, 0, 0};
+    fields[fields_n++] = (struct form_field){"prompt", FORM_TEXT, prompt, 8192, NULL, 0, 0};
 
     static const char *const NOTES[] = {
         "means is what the classifier is told this kind is.",

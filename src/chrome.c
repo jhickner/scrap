@@ -1,5 +1,7 @@
 #include "chrome.h"
 
+#include <string.h>
+
 #include "block.h"
 #include "prompt.h"
 #include "sidechannel.h"
@@ -121,6 +123,90 @@ static void fit_above(struct above *a, const struct heights *h, int room)
 int chrome_gap(void)
 {
     return viewport_active() && !viewport_ends_blank();
+}
+
+void chrome_title_paint(const char *title)
+{
+    int    columns = ui_columns();
+    size_t budget = columns > 3 ? (size_t)(columns - 3) : 1;
+    size_t fit = ui_fit_bytes(title, budget);
+
+    ui_esc(ui_style(UI_CHROME));
+    ui_put(UI_BAR);
+    ui_esc(ui_style(UI_RESET));
+    ui_put(" ");
+    ui_esc(ui_style(UI_DIM));
+    ui_putn(title, fit);
+    if (title[fit])
+        ui_put("\u2026");
+    ui_esc(ui_style(UI_RESET));
+    ui_put("\n");
+}
+
+static size_t ask_budget(int columns)
+{
+    return columns > 12 ? (size_t)(columns - 12) : 1;
+}
+
+int chrome_foot_rows(const char *ask, const char *hint, int columns)
+{
+    if (ask && *ask) {
+        struct ui_wrap w = {0};
+        w.budget = ask_budget(columns);
+        w.measure = 1;
+        w.paint_empty = 1;
+        return 1 + ui_wrap_paint(ask, &w);
+    }
+    if (hint && *hint) {
+        int rows = 2;
+        for (const char *p = hint; (p = strchr(p, '\n')); p++)
+            rows++;
+        return rows;
+    }
+    return 0;
+}
+
+void chrome_foot_paint(const char *ask, const char *hint, int columns)
+{
+    if (ask && *ask) {
+        const char *p = ask;
+        size_t      n = strlen(p);
+        size_t      wide = ask_budget(columns);
+        ui_put("\n");
+        while (n) {
+            size_t skip = 0;
+            size_t row = ui_wrap_row(p, n, wide, &skip, NULL);
+            size_t used = row + skip;
+            ui_put("    ");
+            ui_putn(p, row);
+            p += used;
+            n -= used < n ? used : n;
+            if (n)
+                ui_put("\n");
+        }
+        ui_put(" ");
+        ui_esc(ui_style(UI_ACCENT));
+        ui_put("y/n");
+        ui_esc(ui_style(UI_RESET));
+        return;
+    }
+    if (!hint || !*hint)
+        return;
+
+    ui_put("\n");
+    size_t wide = columns > 6 ? (size_t)(columns - 6) : 1;
+    for (const char *p = hint; p;) {
+        const char *nl = strchr(p, '\n');
+        size_t      n = nl ? (size_t)(nl - p) : strlen(p);
+        ui_esc(ui_style(UI_DIM));
+        ui_put("    ");
+        ui_putn(p, ui_fit_visible(p, n, wide));
+        ui_esc(ui_style(UI_RESET));
+        if (!nl)
+            break;
+        ui_put("\n");
+        p = nl + 1;
+    }
 }
 
 void chrome_paint(void)

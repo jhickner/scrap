@@ -26,15 +26,13 @@ static struct board_tile tiles[TILES_MAX];
 static int               lane_of[TILES_MAX];
 static int               tiles_n;
 
-static void tile(int lane, const char *title, const char *spec,
-                 const char *status)
+static void tile(int lane, const char *title, const char *status)
 {
     if (tiles_n >= TILES_MAX)
         return;
     struct board_tile *t = &tiles[tiles_n];
     memset(t, 0, sizeof *t);
     snprintf(t->title, sizeof t->title, "%s", title);
-    snprintf(t->spec, sizeof t->spec, "%s", spec);
     snprintf(t->status, sizeof t->status, "%s", status);
     lane_of[tiles_n++] = lane;
 }
@@ -51,7 +49,7 @@ static void fill(int lanes, int per_lane)
         for (int i = 0; i < per_lane; i++) {
             char title[64];
             snprintf(title, sizeof title, "card %d of lane %d", i, l);
-            tile(l, title, "a spec that says what the card is for", "tab 2 · 4m");
+            tile(l, title, "tab 2 · 4m");
         }
 }
 
@@ -166,14 +164,14 @@ static void test_tiles_keep_to_their_lane(void)
         expect(r->w == g.lane_w - 1, "a tile leaves a gutter beside it");
         expect(r->row >= 0 && r->row + r->h <= 24, "a tile fits the rows");
         expect(r->lane == lane_of[r->tile], "a tile is drawn in its own lane");
-        expect(r->status_row == r->row + r->h - 1,
-               "the status row is the last row of the tile");
+        expect(r->status_row == r->row + r->h - 2,
+               "the status row is the last row inside the border");
 
         for (int j = 0; j < i; j++) {
             const struct grid_rect *o = &g.tile[j];
             if (o->lane != r->lane)
                 continue;
-            expect(o->row + o->h < r->row || r->row + r->h < o->row,
+            expect(o->row + o->h <= r->row || r->row + r->h <= o->row,
                    "two tiles in a lane do not overlap");
         }
     }
@@ -216,18 +214,51 @@ static void test_every_corner_hits_its_tile(void)
     boardgrid_layout_free(&g);
 }
 
+static void test_the_selection_stays_on_screen(void)
+{
+    struct grid_layout g = {0};
+
+    for (int wide = 0; wide < 2; wide++) {
+        reset();
+        for (int i = 0; i < 12; i++) {
+            char title[64];
+            snprintf(title, sizeof title, "card %d", i);
+            tile(0,
+                 wide && i % 2
+                     ? "a title long enough to wrap over more than one row"
+                     : title,
+                 "tab 1 · 2m");
+        }
+
+        for (int rows = 6; rows <= 30; rows++)
+            for (int sel = 0; sel < tiles_n; sel++) {
+                g.lane_first = 0;
+                expect(boardgrid_layout(tiles, lane_of, tiles_n, 1, 80, rows,
+                                        sel, &g),
+                       "a crowded lane lays out at every height");
+
+                int on = 0;
+                for (int i = 0; i < g.tiles; i++)
+                    on |= g.tile[i].tile == sel;
+                expect(on, "the selected card is never scrolled off the lane");
+            }
+    }
+
+    boardgrid_layout_free(&g);
+}
+
 static void test_a_tile_taller_than_the_lane(void)
 {
     struct grid_layout g = {0};
     reset();
     tile(0, "a title long enough to wrap over more than one row of a lane",
-         "a spec long enough to wrap over more than one row of a narrow lane",
          "tab 1 · 2m");
 
     expect(boardgrid_layout(tiles, lane_of, tiles_n, 1, 80, 3, 0, &g),
            "a tile taller than the lane lays out");
     expect(g.tiles == 1, "the selected tile is still placed");
     expect(g.tile[0].h <= 3, "the tile is clipped to the rows it has");
+    expect(g.tile[0].status_row < 0, "a clipped tile has no status row to hit");
 
     boardgrid_layout_free(&g);
 }
@@ -239,6 +270,7 @@ int main(void)
     test_a_lane_scrolls_on_its_own();
     test_tiles_keep_to_their_lane();
     test_every_corner_hits_its_tile();
+    test_the_selection_stays_on_screen();
     test_a_tile_taller_than_the_lane();
 
     if (failures) {

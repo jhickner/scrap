@@ -35,13 +35,6 @@ struct view {
     short hit[HIT_MAX];
 };
 
-#define LIVE_POLL_MS 500
-
-static const char *const SPIN[] = {"\xe2\xa0\x8b", "\xe2\xa0\x99", "\xe2\xa0\xb9",
-                                  "\xe2\xa0\xb8", "\xe2\xa0\xbc", "\xe2\xa0\xb4",
-                                  "\xe2\xa0\xa6", "\xe2\xa0\xa7", "\xe2\xa0\x87",
-                                  "\xe2\xa0\x8f"};
-
 static int item_heading(const struct view *v, int i)
 {
     return v->heading &&
@@ -142,30 +135,11 @@ static void step(struct view *v, int dir)
     settle(v, dir);
 }
 
-static size_t ask_budget(int columns)
-{
-    return columns > 12 ? (size_t)(columns - 12) : 1;
-}
-
-static int ask_rows(const char *ask, int columns)
-{
-    struct ui_wrap w = {0};
-    w.budget = ask_budget(columns);
-    w.measure = 1;
-    w.paint_empty = 1;
-    return ui_wrap_paint(ask, &w);
-}
-
 static int visible_cap(const struct view *v)
 {
     int rows = tty_rows() - 3 - chrome_gap();
-    if (v->live && v->live->ask && *v->live->ask)
-        rows -= 1 + ask_rows(v->live->ask, ui_columns());
-    else if (v->live && v->live->hint && *v->live->hint) {
-        rows -= 2;
-        for (const char *p = v->live->hint; (p = strchr(p, '\n')); p++)
-            rows--;
-    }
+    if (v->live)
+        rows -= chrome_foot_rows(v->live->ask, v->live->hint, ui_columns());
     if (v->heading) {
         int breaks = 0;
         for (int i = 0; i < v->count; i++)
@@ -269,20 +243,7 @@ static void paint(void *ud)
     for (int i = 0; i < HIT_MAX; i++)
         v->hit[i] = -1;
 
-    ui_esc(ui_style(UI_CHROME));
-    ui_put(UI_BAR);
-    ui_esc(ui_style(UI_RESET));
-    ui_put(" ");
-    ui_esc(ui_style(UI_DIM));
-    {
-        size_t title_budget = columns > 3 ? (size_t)(columns - 3) : 1;
-        size_t title_n = ui_fit_bytes(title, title_budget);
-        ui_putn(title, title_n);
-        if (title[title_n])
-            ui_put("…");
-    }
-    ui_esc(ui_style(UI_RESET));
-    ui_put("\n");
+    chrome_title_paint(title);
     rows++;
 
     int end = v->top + v->visible;
@@ -324,7 +285,7 @@ static void paint(void *ud)
             const char *mark = v->live->mark ? v->live->mark[i] : NULL;
             if (item_spins(v, i)) {
                 ui_esc(ui_style(UI_SPIN));
-                ui_put(SPIN[v->frame % (int)(sizeof SPIN / sizeof *SPIN)]);
+                ui_put(spin_glyph(v->frame));
                 ui_esc(ui_style(selected ? UI_ACCENT : UI_RESET));
                 ui_put(" ");
             } else if (mark && *mark) {
@@ -408,47 +369,8 @@ static void paint(void *ud)
         rows++;
     }
 
-    if (v->live && v->live->ask && *v->live->ask) {
-        const char *p = v->live->ask;
-        size_t      n = strlen(p);
-        size_t      budget = ask_budget(columns);
-        ui_put("\n");
-        rows += 2;
-        while (n) {
-            size_t skip = 0;
-            size_t row = ui_wrap_row(p, n, budget, &skip, NULL);
-            size_t used = row + skip;
-            ui_put("    ");
-            ui_putn(p, row);
-            p += used;
-            n -= used < n ? used : n;
-            if (n) {
-                ui_put("\n");
-                rows++;
-            }
-        }
-        ui_put(" ");
-        ui_esc(ui_style(UI_ACCENT));
-        ui_put("y/n");
-        ui_esc(ui_style(UI_RESET));
-    }
-    else if (v->live && v->live->hint && *v->live->hint) {
-        ui_put("\n");
-        size_t budget = columns > 6 ? (size_t)(columns - 6) : 1;
-        for (const char *p = v->live->hint; p;) {
-            const char *nl = strchr(p, '\n');
-            size_t      n = nl ? (size_t)(nl - p) : strlen(p);
-            ui_esc(ui_style(UI_DIM));
-            ui_put("    ");
-            ui_putn(p, ui_fit_visible(p, n, budget));
-            ui_esc(ui_style(UI_RESET));
-            if (!nl)
-                break;
-            ui_put("\n");
-            p = nl + 1;
-        }
-        rows += 2;
-    }
+    if (v->live)
+        chrome_foot_paint(v->live->ask, v->live->hint, columns);
 
     (void)rows;
 }
@@ -537,7 +459,7 @@ static int run(const char *title, const struct pick_item *items, int count,
 
         int asking = live && live->ask && *live->ask;
         int watching = !asking && v.live && v.live->tick;
-        int wait = turning ? SPIN_FRAME_MS : (watching ? LIVE_POLL_MS : -1);
+        int wait = turning ? SPIN_FRAME_MS : (watching ? PICK_POLL_MS : -1);
         if (!tty_read(&ev, wait)) {
             if (chrome_modal_interrupted())
                 goto done;

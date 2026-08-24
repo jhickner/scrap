@@ -87,6 +87,12 @@ static int size_changing(void)
     return resize_owed;
 }
 
+const char *spin_glyph(int frame)
+{
+    int n = (int)FRAME_COUNT;
+    return FRAMES[((frame % n) + n) % n];
+}
+
 int spin_advance(int *frame, double *at)
 {
     double t = now_seconds();
@@ -173,7 +179,7 @@ void status_paint_spin(void)
 {
     char clock[32], left[64];
     humanize(status_elapsed(), clock, sizeof clock);
-    snprintf(left, sizeof left, "%s %s", FRAMES[frame % FRAME_COUNT], clock);
+    snprintf(left, sizeof left, "%s %s", spin_glyph(frame), clock);
 
     ui_esc(ui_style(UI_SPIN));
     ui_put(left);

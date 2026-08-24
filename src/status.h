@@ -8,6 +8,8 @@
 
 int    spin_advance(int *frame, double *at);
 
+const char *spin_glyph(int frame);
+
 void   status_begin(void);
 void   status_begin_at(double elapsed);
 void   status_end(void);

@@ -7,7 +7,6 @@
 #define GRID_LANE_MAX 40
 
 #define GRID_TITLE_ROWS 2
-#define GRID_SPEC_ROWS  2
 
 /* the terminal is too narrow for lanes; run the list instead */
 #define GRID_NARROW (-3)

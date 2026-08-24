@@ -99,43 +99,6 @@ const char *boardtile_step(const char *id)
     return boardwork_step_job(id);
 }
 
-static void spec_of(const struct board_card *c, char *out, size_t size)
-{
-    out[0] = '\0';
-    if (!c->body || !*c->body)
-        return;
-
-    /* a plan card's body is an entire plan: only the head of it can show */
-    char head[2048];
-    snprintf(head, sizeof head, "%s", c->body);
-    trim_partial(head);
-
-    char *flat = ui_plain(head, 0);
-    if (!flat)
-        return;
-
-    size_t at = 0;
-    int    gap = 0;
-    for (const char *p = flat; *p; p++) {
-        if ((unsigned char)*p <= ' ') {
-            gap = at > 0;
-            continue;
-        }
-        if (gap) {
-            if (at + 1 >= size)
-                break;
-            out[at++] = ' ';
-            gap = 0;
-        }
-        if (at + 1 >= size)
-            break;
-        out[at++] = *p;
-    }
-    out[at] = '\0';
-    free(flat);
-    trim_partial(out);
-}
-
 static void status_of(const struct board_card *c, int wide, const char *step,
                       int tab, char *out, size_t size, time_t *stamp)
 {
@@ -180,19 +143,11 @@ static void status_of(const struct board_card *c, int wide, const char *step,
     } else if (c->cost_usd > 0 &&
                (boardflow_waits_on_you(c) || c->col == BOARD_DONE)) {
         char head[320] = "";
-        if (where[0] && c->kind[0])
-            snprintf(head, sizeof head, "%s · %s · ", where, c->kind);
-        else if (where[0])
+        if (where[0])
             snprintf(head, sizeof head, "%s · ", where);
-        else if (c->kind[0])
-            snprintf(head, sizeof head, "%s · ", c->kind);
         snprintf(out, size, "%s$%.2f · %s", head, c->cost_usd, when);
-    } else if (where[0] && c->kind[0])
-        snprintf(out, size, "%s · %s · %s", where, c->kind, when);
-    else if (where[0])
+    } else if (where[0])
         snprintf(out, size, "%s · %s", where, when);
-    else if (c->kind[0])
-        snprintf(out, size, "%s · %s", c->kind, when);
     else
         snprintf(out, size, "%s", when);
 
@@ -208,7 +163,7 @@ int boardtile_of(const struct board_card *c, int wide, struct board_tile *out)
     out->c = c;
     snprintf(out->title, sizeof out->title, "%s",
              c->title[0] ? c->title : "(untitled)");
-    spec_of(c, out->spec, sizeof out->spec);
+    snprintf(out->kind, sizeof out->kind, "%s", c->kind);
     column_mark(c, &out->mark, &out->mark_role);
 
     out->tab = boardwork_tab(c->id);

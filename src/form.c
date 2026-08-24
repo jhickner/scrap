@@ -13,11 +13,18 @@
 #include "ui.h"
 #include "viewport.h"
 
-#define FORM_FIELDS 12
-
 #define KEY_CTRL(c) ((c) - 'A' + 1)
 
 #define FORM_INDENT 2
+
+/* what a block's content is indented by under its label */
+#define FORM_CONTENT 2
+
+/* a label wider than this keeps its own row rather than moving every value */
+#define FORM_LABEL_MAX 12
+
+/* the cells left of a value for the ‹ › a focused choice draws */
+#define FORM_GUTTER 2
 
 #define HIT_MAX 128
 
@@ -29,8 +36,11 @@ struct slot {
 
 struct line {
     int                   field;
+    const char           *label; /* the block's label */
+    unsigned char         inl;   /* label and value share this row */
     const struct md_text *note;
     size_t                from, len;
+    const char           *plain; /* a row of the form's own, e.g. "+12 more" */
     int                   row;
     int                   indent;
     enum ui_role          role;
@@ -47,10 +57,13 @@ struct state {
     struct lines     lines;
     struct slot      slots[FORM_FIELDS];
     int              focus;
-    int              label_width;
     int              top;
     int              pinned; /* the view is where the user scrolled it */
     int              rows, room;
+    int              label_width;
+    int              folds; /* the form has something collapsed to show */
+    char             more[FORM_FIELDS][24];
+    char             more_notes[24];
     int              budget;
 
     struct replframe frame;
@@ -86,25 +99,69 @@ static void cycle(struct state *st, int i, int delta)
         st->slots[i].choice += f->choices_n;
 }
 
+static int field_shown(const struct state *st, int i)
+{
+    return st->form->fields[i].kind != FORM_TOGGLE || st->folds;
+}
+
 static void focus_step(struct state *st, int delta)
 {
     int n = st->form->fields_n;
     if (n <= 0)
         return;
     st->pinned = 0;
-    st->focus = (st->focus + delta) % n;
-    if (st->focus < 0)
-        st->focus += n;
+    for (int step = 0; step < n; step++) {
+        st->focus = (st->focus + delta) % n;
+        if (st->focus < 0)
+            st->focus += n;
+        if (field_shown(st, st->focus))
+            return;
+    }
 }
 
-static int value_column(const struct state *st)
+/* arrows stop at the first and last field rather than wrapping */
+static void focus_move(struct state *st, int delta)
 {
-    return FORM_INDENT + st->label_width + 4;
+    int want = st->focus + delta;
+    while (want >= 0 && want < st->form->fields_n && !field_shown(st, want))
+        want += delta;
+    if (want < 0 || want >= st->form->fields_n)
+        return;
+    st->pinned = 0;
+    st->focus = want;
 }
 
-static int value_budget(const struct state *st, int columns)
+/* a toggle field turned on opens every collapsed block of the form */
+static int expanded(const struct state *st)
 {
-    int budget = columns - value_column(st) - 2;
+    for (int i = 0; i < st->form->fields_n; i++)
+        if (st->form->fields[i].kind == FORM_TOGGLE && st->slots[i].choice)
+            return 1;
+    return 0;
+}
+
+static int value_column(void)
+{
+    return FORM_INDENT + FORM_CONTENT;
+}
+
+/* where the value of a one-line block sits, beside its label: the widest
+   label, then a space and the two cells a focused choice marks itself with */
+static int inline_column(const struct state *st)
+{
+    return FORM_INDENT + st->label_width + 1 + FORM_GUTTER;
+}
+
+/* a form that labels its notes runs them down the value column; one that does
+   not is prose, and prose starts at the left edge */
+static int note_column(const struct state *st)
+{
+    return st->form->note_labels ? value_column() : FORM_INDENT;
+}
+
+static int value_budget(int columns)
+{
+    int budget = columns - value_column() - 2;
     return budget < 8 ? 8 : budget;
 }
 
@@ -129,6 +186,34 @@ static struct line *line_add(struct lines *l)
     memset(r, 0, sizeof *r);
     l->n++;
     return r;
+}
+
+static void open_up(struct state *st)
+{
+    for (int i = 0; i < st->form->fields_n; i++)
+        if (st->form->fields[i].kind == FORM_TOGGLE)
+            st->slots[i].choice = 1;
+}
+
+/* a field showing only the head of its text: it reads, it does not edit */
+static int folded(struct state *st, int i)
+{
+    const struct form_field *f = &st->form->fields[i];
+    if (f->kind != FORM_TEXT || f->rows_max <= 0 || expanded(st))
+        return 0;
+    return st->slots[i].rows >= f->rows_max &&
+           repl_input_rows(&st->slots[i].repl, repl_width(st)) > f->rows_max;
+}
+
+static struct line *more_row(struct lines *out, const char *text)
+{
+    struct line *l = line_add(out);
+    if (l) {
+        l->field = -1;
+        l->plain = text;
+        l->role = UI_DIM;
+    }
+    return l;
 }
 
 static void wrap_notes(struct lines *out, const struct md_text *note, int budget,
@@ -172,6 +257,62 @@ static void wrap_notes(struct lines *out, const struct md_text *note, int budget
     }
 }
 
+static int is_blank(const struct line *l)
+{
+    return l->field < 0 && !l->label && !l->plain && !l->len;
+}
+
+static struct line *blank_row(struct lines *out)
+{
+    if (!out->n || is_blank(&out->v[out->n - 1]))
+        return NULL;
+    struct line *l = line_add(out);
+    if (l)
+        l->field = -1;
+    return l;
+}
+
+static struct line *head_row(struct lines *out, const char *label, int field)
+{
+    struct line *l = line_add(out);
+    if (l) {
+        l->field = field;
+        l->label = label;
+        l->row = -1;
+    }
+    return l;
+}
+
+/* a block of one row wears its label beside it; only a long one is indented
+   under a heading of its own */
+static void fold_inline(struct lines *out, int head, int budget)
+{
+    if (out->n != head + 2)
+        return;
+    struct line *h = &out->v[head];
+    struct line *body = &out->v[head + 1];
+    if (body->field != h->field || body->plain || body->indent)
+        return;
+    if (body->note &&
+        (int)ui_cells_n(md_text_plain(body->note, NULL) + body->from,
+                        body->len) > budget)
+        return;
+
+    const char *label = h->label;
+    *h = *body;
+    h->label = label;
+    h->inl = 1;
+    h->row = body->note ? -1 : body->row;
+    out->n--;
+
+    /* one-line blocks run together: the blank was for a heading */
+    if (head >= 2 && is_blank(&out->v[head - 1]) && out->v[head - 2].inl) {
+        memmove(&out->v[head - 1], &out->v[head],
+                (size_t)(out->n - head) * sizeof *out->v);
+        out->n--;
+    }
+}
+
 static int layout(struct state *st, int columns)
 {
     const struct form *form = st->form;
@@ -179,76 +320,143 @@ static int layout(struct state *st, int columns)
 
     out->n = 0;
 
-    int note_budget = columns - FORM_INDENT - 2;
+    int note_budget = columns - note_column(st) - 2;
     if (note_budget < 8)
         note_budget = 8;
+    int inline_budget = columns - inline_column(st) - 2;
+    if (inline_budget < 8)
+        inline_budget = 8;
 
-    for (int i = 0; i < form->notes_n; i++)
+    int exp = expanded(st);
+    int from = -1;
+
+    st->folds = 0;
+
+    for (int i = 0; i < form->notes_n; i++) {
+        const char *label = form->note_labels ? form->note_labels[i] : NULL;
+        int         head = -1;
+        if (label) {
+            blank_row(out);
+            head = out->n;
+            head_row(out, label, -1);
+        }
+        if (i == form->notes_from && form->notes_max > 0)
+            from = out->n;
         wrap_notes(out, st->notes ? st->notes[i] : NULL, note_budget,
                    form->note_roles ? form->note_roles[i] : UI_DIM);
-    if (form->notes_n) {
-        struct line *l = line_add(out);
-        if (l)
-            l->field = -1;
+        /* only a block of its own folds onto one row: the notes that follow
+           an unlabelled one belong to it, the log being the reason */
+        int alone = i + 1 >= form->notes_n ||
+                    (form->note_labels && form->note_labels[i + 1]);
+        if (head >= 0 && alone) {
+            int was = out->n;
+            fold_inline(out, head, inline_budget);
+            if (from > head && out->n < was)
+                from -= was - out->n;
+        }
     }
 
-    st->budget = value_budget(st, columns);
+    if (from >= 0 && out->n - from > form->notes_max)
+        st->folds = 1;
+
+    /* the oldest of the block goes, and a row says how much of it */
+    int drop = !exp && from >= 0 ? out->n - from - form->notes_max : 0;
+    if (drop > 0) {
+        snprintf(st->more_notes, sizeof st->more_notes, "+%d earlier", drop);
+        memmove(&out->v[from + 1], &out->v[from + drop],
+                (size_t)(out->n - from - drop) * sizeof *out->v);
+        out->n -= drop - 1;
+        out->v[from] = (struct line){.field = -1,
+                                     .plain = st->more_notes,
+                                     .role = UI_DIM};
+    }
+
+    st->budget = value_budget(columns);
+    blank_row(out);
 
     for (int i = 0; i < form->fields_n; i++) {
-        if (form->fields[i].kind == FORM_BUTTON) {
-            if (i == 0 || form->fields[i - 1].kind != FORM_BUTTON) {
-                struct line *gap = line_add(out);
-                if (gap)
-                    gap->field = -1;
-            }
+        const struct form_field *f = &form->fields[i];
+
+        if (f->kind == FORM_TOGGLE && !st->folds)
+            continue;
+
+        /* a button is its own label: it has no content under it */
+        if (f->kind == FORM_BUTTON || f->kind == FORM_TOGGLE) {
             st->slots[i].rows = 1;
-            struct line *l = line_add(out);
-            if (l)
-                l->field = i;
+            blank_row(out);
+            head_row(out, f->label, i);
             continue;
         }
-        if (form->fields[i].kind == FORM_CHOICE) {
+
+        if (f->kind == FORM_CHOICE) {
             st->slots[i].rows = 1;
             struct line *l = line_add(out);
-            if (l)
+            if (l) {
                 l->field = i;
+                l->label = f->label;
+                l->inl = 1;
+            }
             continue;
         }
 
         int rows = repl_input_rows(&st->slots[i].repl, repl_width(st));
         if (rows < 1)
             rows = 1;
-        st->slots[i].rows = rows;
-        for (int r = 0; r < rows; r++) {
+
+        int shown = rows;
+        if (f->rows_max > 0 && rows > f->rows_max) {
+            st->folds = 1;
+            if (!exp)
+                shown = f->rows_max;
+        }
+
+        st->slots[i].rows = shown;
+
+        if (shown == 1 && rows == 1) {
+            struct line *l = line_add(out);
+            if (l) {
+                l->field = i;
+                l->label = f->label;
+                l->inl = 1;
+            }
+            continue;
+        }
+
+        blank_row(out);
+        head_row(out, f->label, i);
+        for (int r = 0; r < shown; r++) {
             struct line *l = line_add(out);
             if (!l)
                 break;
             l->field = i;
             l->row = r;
         }
+        if (shown < rows) {
+            snprintf(st->more[i], sizeof st->more[i], "+%d more", rows - shown);
+            more_row(out, st->more[i]);
+        }
+        blank_row(out);
     }
     return out->n;
 }
 
-static void put_label(const struct state *st, const char *label, int focused)
+static void put_label(const char *label, int focused)
 {
     ui_pad(FORM_INDENT);
     ui_esc(ui_style(focused ? UI_ACCENT : UI_DIM));
     ui_put(label);
     ui_esc(ui_style(UI_RESET));
-    int pad = st->label_width - (int)ui_cells(label) + 2;
-    ui_pad(pad > 1 ? pad : 1);
 }
 
-static void put_gutter(const struct state *st, int i, int focused)
+static void put_choice_marker(int focused)
 {
-    if (st->form->fields[i].kind == FORM_CHOICE && focused) {
-        ui_esc(ui_style(UI_ACCENT));
-        ui_put("\xe2\x80\xb9 ");
-        ui_esc(ui_style(UI_RESET));
+    if (!focused) {
+        ui_pad(2);
         return;
     }
-    ui_pad(2);
+    ui_esc(ui_style(UI_ACCENT));
+    ui_put("\xe2\x80\xb9 ");
+    ui_esc(ui_style(UI_RESET));
 }
 
 static void put_choice(const struct state *st, int i, int focused)
@@ -319,17 +527,19 @@ static void paint(void *ud)
         if (st->top < 0)
             st->top = 0;
     } else {
-        int first = -1, last = -1, caret = -1;
+        int first = -1, last = -1, caret = -1, body = -1;
         for (int i = 0; i < n; i++) {
             if (lines[i].field != st->focus)
                 continue;
             if (first < 0)
                 first = i;
+            if (body < 0 && lines[i].row >= 0)
+                body = i;
             last = i;
         }
-        if (first >= 0 && field_at(st, st->focus)->kind == FORM_TEXT &&
+        if (body >= 0 && field_at(st, st->focus)->kind == FORM_TEXT &&
             framed(st, st->focus) && st->frame.have_cursor)
-            caret = first + st->frame.cursor_y;
+            caret = body + st->frame.cursor_y;
 
         if (first >= 0) {
             if (first < st->top)
@@ -378,8 +588,20 @@ static void paint(void *ud)
             st->hit[at] = (short)l->field;
 
         if (l->field < 0) {
-            if (l->len) {
-                ui_pad(FORM_INDENT + l->indent);
+            if (l->inl) {
+                put_label(l->label, 0);
+                int used = FORM_INDENT + (int)ui_cells(l->label);
+                ui_pad(inline_column(st) > used ? inline_column(st) - used : 1);
+                md_text_put(l->note, l->from, l->len, l->role);
+            } else if (l->label)
+                put_label(l->label, 0);
+            else if (l->plain) {
+                ui_pad(value_column());
+                ui_esc(ui_style(l->role));
+                ui_put(l->plain);
+                ui_esc(ui_style(UI_RESET));
+            } else if (l->len) {
+                ui_pad(note_column(st) + l->indent);
                 md_text_put(l->note, l->from, l->len, l->role);
             }
             ui_put("\n");
@@ -389,26 +611,37 @@ static void paint(void *ud)
         struct form_field *f = field_at(st, l->field);
         int                focused = l->field == st->focus;
 
-        if (f->kind == FORM_BUTTON) {
-            ui_pad(FORM_INDENT);
-            ui_esc(ui_style(focused ? UI_ACCENT : UI_DIM));
-            ui_put(f->label ? f->label : "");
-            ui_esc(ui_style(UI_RESET));
+        if (l->inl) {
+            const char *label = l->label ? l->label : "";
+            put_label(label, focused);
+            int used = FORM_INDENT + (int)ui_cells(label);
+            int choice = f->kind == FORM_CHOICE;
+            /* the marker of a focused choice stands in for the gap */
+            int want = inline_column(st) - (choice ? 2 : 0);
+            int gap = want - used;
+            if (gap < !choice)
+                gap = !choice;
+            ui_pad(gap);
+            if (choice) {
+                put_choice_marker(focused);
+                put_choice(st, l->field, focused);
+            } else
+                put_value_row(st, l->field, 0, focused);
             ui_put("\n");
             continue;
         }
 
-        if (i == st->top || lines[i - 1].field != l->field) {
-            put_label(st, f->label ? f->label : "", focused);
-            put_gutter(st, l->field, focused);
-        } else {
-            ui_pad(value_column(st));
+        if (l->row < 0) {
+            const char *said = f->label ? f->label : "";
+            if (f->kind == FORM_TOGGLE && f->choices_n > 1)
+                said = f->choices[st->slots[l->field].choice ? 1 : 0];
+            put_label(said ? said : "", focused);
+            ui_put("\n");
+            continue;
         }
 
-        if (f->kind == FORM_CHOICE)
-            put_choice(st, l->field, focused);
-        else
-            put_value_row(st, l->field, l->row, focused);
+        ui_pad(value_column());
+        put_value_row(st, l->field, l->row, focused);
         ui_put("\n");
     }
 
@@ -437,6 +670,10 @@ static void load(struct state *st)
 
         if (f->kind == FORM_BUTTON)
             continue;
+        if (f->kind == FORM_TOGGLE) {
+            s->choice = f->value && f->value[0] ? 1 : 0;
+            continue;
+        }
         if (f->kind == FORM_CHOICE) {
             s->choice = 0;
             for (int c = 0; c < f->choices_n; c++)
@@ -449,7 +686,15 @@ static void load(struct state *st)
         }
 
         int cells = (int)ui_cells(f->label ? f->label : "");
-        if (cells > st->label_width)
+        if (cells > st->label_width && cells <= FORM_LABEL_MAX &&
+            f->kind != FORM_TOGGLE && f->kind != FORM_BUTTON)
+            st->label_width = cells;
+    }
+
+    for (int i = 0; st->form->note_labels && i < st->form->notes_n; i++) {
+        const char *label = st->form->note_labels[i];
+        int         cells = (int)ui_cells(label ? label : "");
+        if (cells > st->label_width && cells <= FORM_LABEL_MAX)
             st->label_width = cells;
     }
 }
@@ -471,10 +716,22 @@ static void store(struct state *st)
 {
     for (int i = 0; i < st->form->fields_n; i++) {
         struct form_field *f = field_at(st, i);
-        if (!f->value || !f->size || f->kind == FORM_BUTTON)
+        if (!f->value || !f->size || f->kind == FORM_BUTTON ||
+            f->kind == FORM_TOGGLE)
             continue;
         snprintf(f->value, f->size, "%s", slot_shown(st, i));
     }
+}
+
+/* a toggle opens or closes the collapsed blocks and the form stays up */
+static int press_toggle(struct state *st)
+{
+    if (field_at(st, st->focus)->kind != FORM_TOGGLE)
+        return 0;
+    struct slot *s = &st->slots[st->focus];
+    s->choice = !s->choice;
+    st->pinned = 0;
+    return 1;
 }
 
 static int press_button(struct state *st)
@@ -493,7 +750,10 @@ static int feed(struct state *st, const ReplEvent *ev)
 {
     struct slot *s = &st->slots[st->focus];
 
-    st->budget = value_budget(st, ui_columns());
+    if (folded(st, st->focus))
+        open_up(st);
+
+    st->budget = value_budget(ui_columns());
     repl_set_width(&s->repl, repl_width(st));
     st->framed = -1;
     st->pinned = 0;
@@ -512,18 +772,29 @@ static void scroll_by(struct state *st, int rows)
         st->top = 0;
 }
 
+/* the last field cannot be left, so the arrow scrolls the view instead: the
+   notes sit above the first field and the wheel is otherwise the only way
+   there */
+static void step_or_scroll(struct state *st, int delta)
+{
+    int was = st->focus;
+    focus_move(st, delta);
+    if (st->focus == was)
+        scroll_by(st, delta);
+}
+
 static void step_or_leave(struct state *st, int delta)
 {
     struct slot *s = &st->slots[st->focus];
-    if (field_at(st, st->focus)->kind != FORM_TEXT) {
-        focus_step(st, delta);
+    if (field_at(st, st->focus)->kind != FORM_TEXT || folded(st, st->focus)) {
+        step_or_scroll(st, delta);
         return;
     }
     int       was = s->repl.cursor;
     ReplEvent ev = {.key = delta < 0 ? REPL_KEY_UP : REPL_KEY_DOWN};
     feed(st, &ev);
     if (s->repl.cursor == was)
-        focus_step(st, delta);
+        step_or_scroll(st, delta);
 }
 
 int form_run(struct form *form)
@@ -549,7 +820,8 @@ int form_run(struct form *form)
 
         struct form_field *f = field_at(&st, st.focus);
         int                typing = f->kind == FORM_TEXT;
-        int                button = f->kind == FORM_BUTTON;
+        int                button = f->kind == FORM_BUTTON ||
+                                    f->kind == FORM_TOGGLE;
 
         if (ev.key == TK_CHAR && ev.cp == 3) {
             chrome_modal(NULL, NULL);
@@ -593,12 +865,16 @@ int form_run(struct form *form)
             if (at < 0 || at >= HIT_MAX || st.hit[at] < 0)
                 continue;
             st.focus = st.hit[at];
+            if (press_toggle(&st))
+                break;
             if (press_button(&st))
                 return 1;
             break;
         }
 
         case TK_ENTER:
+            if (press_toggle(&st))
+                break;
             if (press_button(&st))
                 return 1;
             store(&st);
@@ -616,6 +892,8 @@ int form_run(struct form *form)
             if (!typing) {
                 if (button && ev.key == TK_CHAR && ev.cp == ' ') {
                     free(ev.text);
+                    if (press_toggle(&st))
+                        break;
                     if (press_button(&st))
                         return 1;
                     break;
