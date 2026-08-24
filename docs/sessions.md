@@ -15,6 +15,9 @@ open, wherever it is open:
 - **every other window's sessions**, marked `⇄`; picking one takes it
 - **+ new session**, which asks for a backend and a model
 
+A session a board worker holds a card in carries `◆` in a column of its own,
+between the spinner and the title, wherever in the list it sits.
+
 Conversations that are not running are not in it — that is what `/resume` is
 for. The list is not filtered by directory either: a window anywhere on the
 machine is reachable from any other, which is the point of it. Every row leads

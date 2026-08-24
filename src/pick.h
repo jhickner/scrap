@@ -32,6 +32,9 @@ struct pick_live {
     const char *const   *mark;
     const unsigned char *mark_role;
 
+    const char *const   *icon;
+    const unsigned char *icon_role;
+
     const char *hint;
 
     const char *ask;

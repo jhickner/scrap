@@ -340,6 +340,21 @@ static void paint(void *ud)
             status = 2;
         }
 
+        if (v->live && v->live->icon) {
+            const char *icon = v->live->icon[i];
+            if (icon && *icon) {
+                ui_esc(ui_style(v->live->icon_role
+                                ? (enum ui_role)v->live->icon_role[i]
+                                : UI_ACCENT));
+                ui_put(icon);
+                ui_esc(ui_style(selected ? UI_ACCENT : UI_RESET));
+                ui_put(" ");
+            } else {
+                ui_put("  ");
+            }
+            status += 2;
+        }
+
         size_t label_budget = columns > 5 + (int)status ? (size_t)(columns - 5 - (int)status) : 1;
 
         if (pad_to && items[i].detail && *items[i].detail && label_budget > pad_to)

@@ -35,7 +35,7 @@
 
 #define KEY_CTRL(c) ((c) & 0x1f)
 
-#define WORKER_MARK "\xe2\x97\x86 "
+#define WORKER_MARK "\xe2\x97\x86"
 
 #define MAX_ROWS 128
 
@@ -98,9 +98,8 @@ static void tab_rows(struct row *rows, int *n)
 
         path_home_relative(session_cwd(s), r->cwd, sizeof r->cwd);
         const char *card = boardwork_card_of(s);
-        snprintf(r->label, sizeof r->label, "%s %s%s%s",
+        snprintf(r->label, sizeof r->label, "%s %s%s",
                  i == workspace_index() ? "\xe2\x96\xb8" : "\xc2\xb7",
-                 card ? WORKER_MARK : "",
                  title && *title ? title : "untitled",
                  i == workspace_index() ? " (here)" : "");
         if (card)
@@ -173,9 +172,8 @@ static void fill_live(struct row *r, const struct live_session *v)
     if (in_tmux && !near && wname && *wname)
         snprintf(where, sizeof where, "%s \xc2\xb7 ", wname);
 
-    snprintf(r->label, sizeof r->label, "%s %s%s",
+    snprintf(r->label, sizeof r->label, "%s %s",
              near ? "\xe2\x86\x92" : "\xe2\x87\x84",
-             v->card[0] ? WORKER_MARK : "",
              v->title[0] ? v->title : "untitled");
     snprintf(r->card, sizeof r->card, "%s", v->card);
     if (v->card[0])
@@ -454,6 +452,7 @@ struct listing {
     int                  n;
     unsigned char       *spin;
     const char         **marks;
+    const char         **icons;
     struct live_session **live;
     int                 *nlive;
     double               read_at;
@@ -465,6 +464,7 @@ static void sync_columns(struct listing *l)
     for (int i = 0; i < l->n; i++) {
         l->spin[i] = (unsigned char)l->rows[i].spin;
         l->marks[i] = l->rows[i].mark;
+        l->icons[i] = l->rows[i].card[0] ? WORKER_MARK : "";
     }
 }
 
@@ -473,7 +473,7 @@ static unsigned long listing_sig(const struct listing *l)
     unsigned long h = 5381;
     for (int i = 0; i < l->n; i++) {
         const struct row *r = &l->rows[i];
-        const char *parts[] = {r->label, r->detail, r->mark};
+        const char *parts[] = {r->label, r->detail, r->mark, r->card};
         for (size_t p = 0; p < sizeof parts / sizeof *parts; p++)
             for (const char *c = parts[p]; c && *c; c++)
                 h = h * 33 + (unsigned char)*c;
@@ -502,8 +502,11 @@ static int relist(void *ud)
         struct row *r = &l->rows[i];
         if (r->kind == ROW_TAB) {
             struct session *s = r->at < workspace_count() ? workspace_at(r->at) : NULL;
-            if (s)
+            if (s) {
                 row_status(r, workspace_status(s));
+                const char *card = boardwork_card_of(s);
+                snprintf(r->card, sizeof r->card, "%s", card ? card : "");
+            }
             continue;
         }
         if (r->kind != ROW_LIVE)
@@ -524,6 +527,7 @@ static int relist(void *ud)
         } else {
             r->spin = 0;
             r->mark[0] = '\0';
+            r->card[0] = '\0';
         }
     }
     sync_columns(l);
@@ -547,12 +551,14 @@ static int switch_once(void)
     unsigned char *heading = calloc(MAX_ROWS, 1);
     unsigned char *spin = calloc(MAX_ROWS, 1);
     const char **marks = calloc(MAX_ROWS, sizeof *marks);
-    if (!found || !rows || !heading || !spin || !marks) {
+    const char **icons = calloc(MAX_ROWS, sizeof *icons);
+    if (!found || !rows || !heading || !spin || !marks || !icons) {
         free(found);
         free(rows);
         free(heading);
         free(spin);
         free(marks);
+        free(icons);
         free(live);
         return 0;
     }
@@ -599,6 +605,7 @@ static int switch_once(void)
         free(heading);
         free(spin);
         free(marks);
+        free(icons);
         free(live);
         return 0;
     }
@@ -619,11 +626,11 @@ static int switch_once(void)
              "\xc2\xb7 p: new + prompt \xc2\xb7 r: rename \xc2\xb7 x: close "
              "\xc2\xb7 tab: board \xc2\xb7 /: search",
              livelist_tmux_window()[0] ? " \xc2\xb7 shift-enter: go there" : "");
-    struct listing listing = {rows, n, spin, marks, &live, &nlive, 0, 0};
+    struct listing listing = {rows, n, spin, marks, icons, &live, &nlive, 0, 0};
     sync_columns(&listing);
     listing.sig = listing_sig(&listing);
     struct pick_live shown = {.heading = heading, .spin = spin, .mark = marks,
-                              .tick = relist, .ud = &listing};
+                              .icon = icons, .tick = relist, .ud = &listing};
     int picked = pick_run_live(title, items, n, initial, &shown, PICK_SEARCH_SLASH,
                                shortcuts, &pressed);
 
@@ -643,6 +650,7 @@ static int switch_once(void)
     free(heading);
     free(spin);
     free(marks);
+    free(icons);
 
     if (pressed == '\t') {
         free(live);
