@@ -26,6 +26,7 @@ struct worker {
     struct session *session;
     char            job[32];
     char            step[BOARD_STEP_NAME];
+    char            backend[32];
     enum board_runs runs;
     int             done;
     int             checked;
@@ -323,6 +324,8 @@ int boardwork_hold(const char *id, struct session *s, const char *job,
         snprintf(workers[i].job, sizeof workers[i].job, "%s", job);
         snprintf(workers[i].step, sizeof workers[i].step, "%s", step ? step : "");
         workers[i].session = s;
+        snprintf(workers[i].backend, sizeof workers[i].backend, "%s",
+                 session_backend(s));
         workers[i].runs = runs;
         return 1;
     }
@@ -675,6 +678,7 @@ static void take_slot(struct worker *w, const char *id)
     w->charged_usd = 0;
     w->charged_in = 0;
     w->charged_out = 0;
+    snprintf(w->backend, sizeof w->backend, "%s", session_backend(w->session));
 }
 
 static int start_on(const struct board_card *c, struct worker *onto, char *why,
@@ -1082,6 +1086,57 @@ static int reconcile(struct worker *w, const struct board_card *c)
     return board_move_to(c->id, next, "board", "worker turn is over");
 }
 
+static void switched(struct worker *w)
+{
+    snprintf(w->backend, sizeof w->backend, "%s", session_backend(w->session));
+    w->charged_usd = 0;
+    w->charged_in = 0;
+    w->charged_out = 0;
+    if (w->runs == BOARD_RUNS_WORKER)
+        card_backend(w->id, w->backend);
+}
+
+static struct session *tree_session(const char *tree)
+{
+    if (!tree || !*tree)
+        return NULL;
+    for (int i = 0; i < workspace_count(); i++) {
+        struct session *s = workspace_at(i);
+        if (slot_by_session(s))
+            continue;
+        const char *at = session_cwd(s);
+        if (at && !strcmp(at, tree))
+            return s;
+    }
+    return NULL;
+}
+
+static int strayed(const struct worker *w, const struct board_card *c)
+{
+    if (!c->worktree[0])
+        return 0;
+    const char *at = session_cwd(w->session);
+    return !at || strcmp(at, c->worktree) != 0;
+}
+
+static int rebind(struct worker *w, const struct board_card *c)
+{
+    struct session *s = tree_session(c->worktree);
+    if (!s)
+        return 0;
+
+    w->session = s;
+    w->done = 0;
+    w->checked = 0;
+    w->handover = 0;
+    w->charged_usd = 0;
+    w->charged_in = 0;
+    w->charged_out = 0;
+    switched(w);
+    board_note(w->id, "board", "watching the session in the worktree");
+    return 1;
+}
+
 int boardwork_poll(void)
 {
     int changed = 0;
@@ -1095,6 +1150,10 @@ int boardwork_poll(void)
         }
         int tab = workspace_index_of(workers[i].session);
         if (tab >= 0) {
+            if (strcmp(session_backend(workers[i].session), workers[i].backend)) {
+                switched(&workers[i]);
+                changed = 1;
+            }
             if (workers[i].handover && !session_turn_running(workers[i].session) &&
                 !workspace_queued(tab)) {
                 if (follows(&workers[i]))
@@ -1108,6 +1167,11 @@ int boardwork_poll(void)
         struct board_card *cards = NULL;
         int                n = board_load(&cards);
         struct board_card *c = board_find(cards, n, workers[i].id);
+        if (c && rebind(&workers[i], c)) {
+            board_free(cards, n);
+            changed = 1;
+            continue;
+        }
         if (c && board_at(c, workers[i].step)) {
             board_move(workers[i].id, BOARD_BACKLOG, NULL, "board",
                        "worker session ended");
@@ -1124,6 +1188,8 @@ int boardwork_poll(void)
         if (!workers[i].session)
             continue;
         struct board_card *c = board_find(cards, n, workers[i].id);
+        if (c && strayed(&workers[i], c) && rebind(&workers[i], c))
+            changed = 1;
         if (c && at_role(&workers[i], c)) {
             changed |= reconcile(&workers[i], c);
             continue;
