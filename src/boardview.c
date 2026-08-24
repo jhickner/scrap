@@ -19,6 +19,7 @@
 #include "boardcmd.h"
 #include "boardplan.h"
 #include "boardsweep.h"
+#include "boardtile.h"
 #include "boardtriage.h"
 #include "boardundo.h"
 #include "boardwork.h"
@@ -53,8 +54,6 @@
 #define KEY_ALL      '*'
 
 #define BOARD_KEYS "ndtsSgarxflcbw*Aiuk\t"
-
-#define BOARD_RECENT 3
 
 #define BOARD_RECENT_INDENT 6
 
@@ -192,87 +191,47 @@ static void stamp_next(time_t then)
         stamp_due = next;
 }
 
-static void column_mark(const struct board_card *c, const char **mark,
-                        unsigned char *role)
-{
-    if (boardflow_waits_on_you(c)) {
-        *mark = "\xe2\x9c\x93";
-        *role = UI_OK;
-        return;
-    }
-
-    switch (c->col) {
-    case BOARD_UNCLEAR:
-        *mark = "?";
-        *role = UI_ACCENT;
-        break;
-    case BOARD_BACKLOG:
-        *mark = "●";
-        *role = UI_DIM;
-        break;
-    case BOARD_DONE:
-        *mark = "✓";
-        *role = UI_DIM;
-        break;
-    default:
-        *mark = NULL;
-        *role = UI_DIM;
-        break;
-    }
-}
-
-#define WHERE_MAX 26
-
-static void short_repo(const char *cwd, char *out, size_t size)
-{
-    char full[4096];
-    path_home_relative(cwd, full, sizeof full);
-    if (ui_cells(full) <= WHERE_MAX) {
-        snprintf(out, size, "%s", full);
-        return;
-    }
-    const char *tail = full + strlen(full);
-    const char *best = NULL;
-    while (tail > full) {
-        const char *slash = tail - 1;
-        while (slash > full && *slash != '/')
-            slash--;
-        if (*slash != '/')
-            break;
-        if (ui_cells(slash) + 1 > WHERE_MAX)
-            break;
-        best = slash;
-        tail = slash;
-    }
-    if (best)
-        snprintf(out, size, "…%s", best);
-    else
-        snprintf(out, size, "…%s", strrchr(full, '/') ? strrchr(full, '/') : full);
-}
-
-static const char *asked(const struct board_card *c)
-{
-    return board_said(c, "triage");
-}
-
 static int shows(const struct board_card *c, const char *filter)
 {
     return !filter || !*filter || !strcmp(c->cwd, filter);
-}
-
-static const char *step_of(const char *id)
-{
-    if (boardtriage_running(id))
-        return "triaging";
-    if (boardcmd_running(id))
-        return "landing";
-    return boardwork_step_job(id);
 }
 
 static int by_col(const void *a, const void *b)
 {
     const struct board_card *const *x = a, *const *y = b;
     return board_cmp_col(*x, *y);
+}
+
+/* the cards in one lane, ordered and capped the way the column shows them */
+static int lane_cards(struct board_card *cards, int n, const char *filter,
+                      int col, const char *const *walk, int walk_n,
+                      const struct board_card **in, const char **name)
+{
+    enum board_col at = col < BOARD_STEP            ? (enum board_col)col
+                        : col < BOARD_STEP + walk_n ? BOARD_STEP
+                                      : (enum board_col)(col - walk_n + 1);
+    const char *step = at == BOARD_STEP ? walk[col - BOARD_STEP] : NULL;
+
+    int k = 0;
+    for (int i = 0; i < n; i++) {
+        if (cards[i].col != at || !shows(&cards[i], filter))
+            continue;
+        if (step && strcmp(cards[i].step, step))
+            continue;
+        in[k++] = &cards[i];
+    }
+    if (!k)
+        return 0;
+    qsort(in, (size_t)k, sizeof *in, by_col);
+
+    int cap = at == BOARD_DONE      ? boardcfg()->done_shown
+              : at == BOARD_BACKLOG ? boardcfg()->backlog_shown
+                                    : 0;
+    if (cap > 0 && k > cap)
+        k = cap;
+
+    *name = step ? step : board_col_name(at);
+    return k;
 }
 
 static int build_board(struct vlist *l, struct board_card *cards, int n,
@@ -289,131 +248,43 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
     int                walk_n = boardcfg_steps(&walk);
 
     for (int col = 0; col < BOARD_COLS - 1 + walk_n; col++) {
-        enum board_col at = col < BOARD_STEP            ? (enum board_col)col
-                            : col < BOARD_STEP + walk_n ? BOARD_STEP
-                                          : (enum board_col)(col - walk_n + 1);
-        const char *step = at == BOARD_STEP ? walk[col - BOARD_STEP] : NULL;
-
-        int k = 0;
-        for (int i = 0; i < n; i++) {
-            if (cards[i].col != at || !shows(&cards[i], filter))
-                continue;
-            if (step && strcmp(cards[i].step, step))
-                continue;
-            in[k++] = &cards[i];
-        }
+        const char *name = NULL;
+        int k = lane_cards(cards, n, filter, col, walk, walk_n, in, &name);
         if (!k)
             continue;
-        qsort(in, (size_t)k, sizeof *in, by_col);
-        int cap = at == BOARD_DONE      ? boardcfg()->done_shown
-                  : at == BOARD_BACKLOG ? boardcfg()->backlog_shown
-                                        : 0;
-        if (cap > 0 && k > cap)
-            k = cap;
 
         shown += k;
-        row_heading(l, step ? step : board_col_name(at));
+        row_heading(l, name);
         for (int i = 0; i < k; i++) {
-            const struct board_card *c = in[i];
-            struct vrow             *r = row_add(l);
+            struct board_tile t;
+            if (!boardtile_of(in[i], wide, &t))
+                break;
+            struct vrow *r = row_add(l);
             if (!r)
                 break;
-            snprintf(r->id, sizeof r->id, "%s", c->id);
-            r->col = (unsigned char)c->col;
-            r->label =
-                text_dsprintf("%s", c->title[0] ? c->title : "(untitled)");
-            column_mark(c, &r->mark, &r->mark_role);
-            int         tab = boardwork_tab(c->id);
-            const char *step = step_of(c->id);
-            r->spin = (unsigned char)(step ||
-                                      (tab >= 0 && c->col == BOARD_STEP &&
-                                       session_busy(workspace_at(tab))));
 
-            char ts[32], when[64];
-            text_ago(c->updated ? c->updated : c->created, c->col == BOARD_DONE,
-                 ts, sizeof ts);
-            if (step && tab >= 0)
-                snprintf(when, sizeof when, "%s · tab %d", step, tab + 1);
-            else if (step)
-                snprintf(when, sizeof when, "%s…", step);
-            else {
-                stamp_next(c->updated ? c->updated : c->created);
-                if (tab >= 0)
-                    snprintf(when, sizeof when, "tab %d · %s", tab + 1, ts);
-                else
-                    snprintf(when, sizeof when, "%s", ts);
-            }
+            snprintf(r->id, sizeof r->id, "%s", t.c->id);
+            r->col = (unsigned char)t.c->col;
+            r->label = text_dsprintf("%s", t.title);
+            r->mark = t.mark;
+            r->mark_role = t.mark_role;
+            r->spin = t.spin;
+            if (t.stamp)
+                stamp_next(t.stamp);
 
-            char where[256] = {0};
-            if (wide)
-                short_repo(c->cwd, where, sizeof where);
-
-            char waiting[256] = {0};
-            if (c->col == BOARD_BACKLOG)
-                boardwork_blocked(c, waiting, sizeof waiting);
-
-            const char *question = c->col == BOARD_UNCLEAR ? asked(c) : NULL;
-            if (question)
-                r->detail = text_dsprintf("%s", question);
-
-            else if (c->stuck[0])
-                r->detail = text_dsprintf("stuck · %s", c->stuck);
-            else if (waiting[0])
-                r->detail = text_dsprintf("waiting · %s", waiting);
-            else if (boardflow_waits_on_you(c) && boardsweep_is(c)) {
-                int raised = boardsweep_proposed(c);
-                r->detail = text_dsprintf("%d card%s proposed", raised,
-                                          raised == 1 ? "" : "s");
-            } else if (boardflow_waits_on_you(c) && c->worktree[0]) {
-                int files = 0, lines = 0;
-                boarddiff_size_cached(c, &files, &lines);
-                r->detail = text_dsprintf("%d file%s, %d line%s", files,
-                                          files == 1 ? "" : "s", lines,
-                                          lines == 1 ? "" : "s");
-            } else if (c->cost_usd > 0 &&
-                     (boardflow_waits_on_you(c) || c->col == BOARD_DONE)) {
-                char head[320] = "";
-                if (where[0] && c->kind[0])
-                    snprintf(head, sizeof head, "%s · %s · ", where, c->kind);
-                else if (where[0])
-                    snprintf(head, sizeof head, "%s · ", where);
-                else if (c->kind[0])
-                    snprintf(head, sizeof head, "%s · ", c->kind);
-                r->detail = text_dsprintf("%s$%.2f · %s", head,
-                                          c->cost_usd, when);
-            }
-            else if (where[0] && c->kind[0])
-                r->detail = text_dsprintf("%s · %s · %s", where, c->kind, when);
-            else if (where[0])
-                r->detail = text_dsprintf("%s · %s", where, when);
-            else if (c->kind[0])
-                r->detail = text_dsprintf("%s · %s", c->kind, when);
+            if (t.pins[0])
+                r->detail = text_dsprintf("%s%s%s", t.status,
+                                          t.status[0] ? " · " : "", t.pins);
             else
-                r->detail = text_dsprintf("%s", when);
+                r->detail = text_dsprintf("%s", t.status);
 
-            if (c->backend_pin[0] || c->tier_pin[0]) {
-                char *was = r->detail;
-                char  pin[48];
-                snprintf(pin, sizeof pin, "%s%s%s",
-                         c->backend_pin[0] ? c->backend_pin : "",
-                         c->backend_pin[0] && c->tier_pin[0] ? " " : "",
-                         c->tier_pin[0] ? c->tier_pin : "");
-                r->detail = text_dsprintf("%s%s%s", was ? was : "",
-                                          was && *was ? " · " : "", pin);
-                free(was);
-            }
-
-            if (tab >= 0) {
-                const char *said[BOARD_RECENT];
-                int         k = session_recent(workspace_at(tab), said, BOARD_RECENT);
-                for (int j = 0; j < k; j++) {
-                    struct vrow *t = row_add(l);
-                    if (!t)
-                        break;
-                    t->heading = PICK_TEXT;
-                    t->label = text_dsprintf("%*s%s", BOARD_RECENT_INDENT,
-                                             "", said[j]);
-                }
+            for (int j = 0; j < t.recent_n; j++) {
+                struct vrow *say = row_add(l);
+                if (!say)
+                    break;
+                say->heading = PICK_TEXT;
+                say->label = text_dsprintf("%*s%s", BOARD_RECENT_INDENT, "",
+                                           t.recent[j]);
             }
         }
     }
@@ -1100,7 +971,7 @@ int boardview_run(const char *cwd)
         }
         case KEY_GO: {
             int tab = c ? boardwork_tab(c->id) : -1;
-            const char *step = c ? step_of(c->id) : NULL;
+            const char *step = c ? boardtile_step(c->id) : NULL;
             char        why[256] = "";
             if (tab < 0 && c && !step)
                 tab = boardwork_rejoin(c, why, sizeof why);
