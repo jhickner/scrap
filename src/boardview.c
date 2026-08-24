@@ -991,7 +991,7 @@ int boardview_run(const char *cwd)
                 continue;
             }
             close_list();
-            note("no cards yet; /card <text> adds one");
+            note("no cards yet; /card <text> to create");
             return BOARDVIEW_NONE;
         }
 
