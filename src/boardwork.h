@@ -49,6 +49,8 @@ int boardwork_sweep_now(const char *cwd, char *why, int size);
 
 int boardwork_hold(const char *id, struct session *s, enum board_job role);
 
+void boardwork_leave(const struct board_card *c);
+
 void boardwork_let_go(const char *id);
 
 void boardwork_halt(const char *id);

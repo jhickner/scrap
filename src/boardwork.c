@@ -1000,6 +1000,39 @@ int boardwork_release(const struct board_card *c)
     return board_update(&edited);
 }
 
+static int base_tab(const char *cwd)
+{
+    int any = -1;
+    for (int i = 0; i < workspace_count(); i++) {
+        struct session *s = workspace_at(i);
+        if (boardwork_card_of(s))
+            continue;
+        const char *at = session_cwd(s);
+        if (cwd && *cwd && at && !strcmp(at, cwd))
+            return i;
+        if (any < 0)
+            any = i;
+    }
+    return any;
+}
+
+void boardwork_leave(const struct board_card *c)
+{
+    struct worker *w = c ? slot_of(c->id) : NULL;
+    if (!w || workspace_index_of(w->session) != workspace_index())
+        return;
+
+    int at = base_tab(c->cwd);
+    if (at >= 0) {
+        workspace_show(at);
+        return;
+    }
+
+    char backend[32];
+    snprintf(backend, sizeof backend, "%s", session_backend(w->session));
+    workspace_spawn(backend, NULL, NULL, c->cwd[0] ? c->cwd : NULL, NULL);
+}
+
 void boardwork_let_go(const char *id)
 {
     struct worker *w = slot_of(id);
@@ -1137,6 +1170,7 @@ int boardwork_approve(const struct board_card *c, int audit)
 {
     if (!c)
         return 0;
+    boardwork_leave(c);
     boardwork_let_go(c->id);
     board_note(c->id, "you", audit ? "approved, for audit" : "approved");
 

@@ -286,7 +286,10 @@ There is no REPL inside a card. Opening the worker calls `workspace_show()` and
 puts you in its actual tab — full transcript, full prompt, type whatever you
 want at it — and the left arrow brings you back. Feedback from the board is for
 when you would rather not leave: a line, logged, sent with `workspace_send()`,
-card back to `active`.
+card back to `active`. Approving a card from inside its own worker closes the
+tab under you, so you land on a session that is not a worker — one in the
+card's repo if there is one, any other otherwise, and a new session there if
+there is none.
 
 Configuration lives on the board too, behind `c`, rather than being scattered
 

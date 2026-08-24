@@ -660,10 +660,12 @@ static int approve(const struct board_card *c, int audit)
     if (!c || c->col != BOARD_REVIEW)
         return 0;
     if (boardsweep_is(c)) {
+        boardwork_leave(c);
         boardwork_let_go(c->id);
         return boardsweep_approve(c);
     }
     if (boardplan_is(c)) {
+        boardwork_leave(c);
         boardwork_let_go(c->id);
         int moved = boardplan_approve(c);
         if (!moved)
