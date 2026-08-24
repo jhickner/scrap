@@ -309,24 +309,6 @@ static void one_line(char *dst, size_t size, const char *src)
             dst[i] = ' ';
 }
 
-static char *strip_ansi(char *s)
-{
-    if (!s)
-        return NULL;
-    size_t n = strlen(s), w = 0;
-    for (size_t i = 0; i < n;) {
-        enum ui_esc_kind kind;
-        size_t end = ui_esc_span(s, n, i, &kind);
-        if (kind == UI_ESC_TEXT)
-            for (size_t k = i; k < end; k++)
-                if (s[k] != '\r')
-                    s[w++] = s[k];
-        i = end;
-    }
-    s[w] = '\0';
-    return s;
-}
-
 static void send_markdown(const char *text)
 {
     if (!tx || !chat_id)
@@ -937,13 +919,14 @@ static void run_live_lines(void)
 
         ui_sink_begin_tee();
         cmd_dispatch_live(sess, line);
-        char *shown = ui_sink_end();
+        char *raw = ui_sink_end();
 
         status_resume();
         frontend_pop();
         from_chat = was;
 
-        strip_ansi(shown);
+        char *shown = ui_plain(raw, 1);
+        free(raw);
         if (shown && *shown)
             send_pre(shown);
         else
@@ -1773,9 +1756,10 @@ static void run_line(char *line, int quiet)
 
     ui_sink_begin_tee();
     enum cmd_result r = cmd_dispatch(sess, line);
-    char *shown = ui_sink_end();
+    char *raw = ui_sink_end();
+    char *shown = ui_plain(raw, 1);
+    free(raw);
     if (r != CMD_NOT_A_COMMAND) {
-        strip_ansi(shown);
         if (shown && *shown)
             send_pre(shown);
         else

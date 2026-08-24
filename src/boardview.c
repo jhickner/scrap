@@ -195,7 +195,7 @@ static void stamp_next(time_t then)
 static void column_mark(const struct board_card *c, const char **mark,
                         unsigned char *role)
 {
-    if (boardflow_runs(c) == BOARD_RUNS_PERSON) {
+    if (boardflow_waits_on_you(c)) {
         *mark = "\xe2\x9c\x93";
         *role = UI_OK;
         return;
@@ -576,9 +576,10 @@ static void do_new(const char *cwd, char *sel_id)
     const struct board_cfg *cfg = boardcfg();
 
     const char *backends[BOARD_BACKENDS_MAX + 1];
-    int         backends_n = boardcfg_backend_choices(cfg, backends);
+    int         backends_n =
+        boardcfg_backend_choices(cfg, backends, COUNT(backends));
     const char *tiers[BOARD_TIERS + 1];
-    int         tiers_n = boardcfg_tier_choices(tiers);
+    int         tiers_n = boardcfg_tier_choices(tiers, COUNT(tiers));
 
     char spec[8192] = "";
     char backend[32] = "";
@@ -664,7 +665,7 @@ static int do_delete(const struct board_card *c)
  * is sent the prompt and the card ends on what it did. */
 static char *approval_prompt_of(const struct board_card *c)
 {
-    if (boardflow_runs(c) != BOARD_RUNS_PERSON)
+    if (!boardflow_waits_on_you(c))
         return NULL;
     return boardflow_approval(c);
 }
@@ -765,11 +766,87 @@ static int unstart(const struct board_card *c)
     return boardwork_reject(c, "cancelled start");
 }
 
+static void save_card(const char *id, const struct boardcard_edit *e)
+{
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    struct board_card *live = board_find(cards, n, id);
+    if (!live) {
+        board_free(cards, n);
+        return;
+    }
+
+    struct board_card edited = *live;
+    snprintf(edited.kind, sizeof edited.kind, "%s", e->kind);
+    snprintf(edited.backend_pin, sizeof edited.backend_pin, "%s", e->backend);
+    snprintf(edited.tier_pin, sizeof edited.tier_pin, "%s", e->tier);
+    board_put(&edited, e->column);
+    edited.priority = atoi(e->priority);
+
+    int respec = !e->proposals &&
+                 strcmp(e->spec, live->body ? live->body : "") != 0;
+    if (!e->proposals) {
+        edited.body = (char *)e->spec;
+        if (!live->kind[0])
+            board_title_of(e->spec, edited.title, sizeof edited.title);
+    }
+
+    /* a card the worker planned but that was not sorted as a plan: correcting
+       the kind takes what the worker answered as the plan, so approving it
+       files a card the way a plan does */
+    const char *planned = NULL;
+    if (!e->proposals && !respec && !boardplan_is(live) &&
+        boardplan_named(e->kind))
+        planned = boardplan_said(live);
+    if (planned)
+        edited.body = (char *)planned;
+
+    char *full = path_expand_home(e->where);
+    if (full && *full)
+        snprintf(edited.cwd, sizeof edited.cwd, "%s", full);
+    free(full);
+
+    int answered = respec && live->col == BOARD_UNCLEAR &&
+                   edited.col == BOARD_UNCLEAR;
+    if (answered)
+        edited.col = BOARD_NEW;
+
+    int repin = strcmp(edited.backend_pin, live->backend_pin) != 0 ||
+                strcmp(edited.tier_pin, live->tier_pin) != 0;
+    int adopted = planned != NULL;
+    int ok = board_update(&edited);
+    board_free(cards, n);
+
+    if (ok && adopted)
+        board_note(id, "you", "kind corrected to plan; the spec is now what "
+                              "the worker planned");
+
+    if (ok && repin) {
+        int waiting = 0;
+        boardwork_serve(&waiting);
+    }
+
+    if (ok && answered) {
+        board_note(id, "you", "spec edited; re-triaging");
+        struct board_card *again = NULL;
+        int                m = board_load(&again);
+        struct board_card *fresh = board_find(again, m, id);
+        if (fresh)
+            boardtriage_start(fresh);
+        board_free(again, m);
+    }
+}
+
 static void do_card(const struct board_card *c)
 {
-    enum boardcard_action act = boardcard_form(c);
+    struct boardcard_edit edit;
+    enum boardcard_action act = boardcard_form(c, &edit);
     if (act == BOARDCARD_NONE)
         return;
+    if (act == BOARDCARD_SAVE) {
+        save_card(c->id, &edit);
+        return;
+    }
 
     struct board_card *cards = NULL;
     int                n = board_load(&cards);

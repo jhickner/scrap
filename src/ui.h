@@ -107,6 +107,9 @@ enum ui_esc_kind {
 
 size_t ui_esc_span(const char *s, size_t n, size_t i, enum ui_esc_kind *kind);
 
+/* escapes and control characters out; keep_indent leaves leading spaces */
+char *ui_plain(const char *in, int keep_indent);
+
 struct ui_cellstream {
     unsigned char state;
     unsigned char pending[4];

@@ -609,6 +609,43 @@ size_t ui_esc_span(const char *s, size_t n, size_t i, enum ui_esc_kind *kind)
     return j < n ? j + 1 : n;
 }
 
+char *ui_plain(const char *in, int keep_indent)
+{
+    if (!in)
+        return NULL;
+
+    size_t n = strlen(in);
+    char  *out = malloc(n + 1);
+    if (!out)
+        return NULL;
+
+    size_t w = 0;
+    for (size_t i = 0; i < n;) {
+        enum ui_esc_kind kind;
+        size_t           end = ui_esc_span(in, n, i, &kind);
+        if (kind == UI_ESC_TEXT)
+            for (size_t k = i; k < end; k++) {
+                unsigned char ch = (unsigned char)in[k];
+                if (ch == '\r')
+                    continue;
+                if (ch == '\t')
+                    ch = ' ';
+                if (ch != '\n' && ch < ' ')
+                    continue;
+                if (ch == 0x7f)
+                    continue;
+                if (!keep_indent && ch == ' ' && w && out[w - 1] == '\n')
+                    continue;
+                out[w++] = (char)ch;
+            }
+        i = end;
+    }
+    while (w && (out[w - 1] == '\n' || out[w - 1] == ' '))
+        w--;
+    out[w] = '\0';
+    return out;
+}
+
 static size_t step_visible(const char *s, size_t n, size_t i, size_t *cells)
 {
     enum ui_esc_kind kind;

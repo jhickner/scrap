@@ -14,12 +14,21 @@
 
 char *text_dsprintf(const char *fmt, ...)
 {
-    char    buf[4096];
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof buf, fmt, ap);
+    int n = vsnprintf(NULL, 0, fmt, ap);
     va_end(ap);
-    return strdup(buf);
+    if (n < 0)
+        return NULL;
+
+    char *out = malloc((size_t)n + 1);
+    if (!out)
+        return NULL;
+
+    va_start(ap, fmt);
+    vsnprintf(out, (size_t)n + 1, fmt, ap);
+    va_end(ap);
+    return out;
 }
 
 void text_one_line(const char *in, char *out, size_t size)

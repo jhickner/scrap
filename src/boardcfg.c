@@ -36,20 +36,23 @@ enum board_tier boardcfg_tier_or_med(const char *name)
     return tier < BOARD_TIERS ? tier : BOARD_TIER_MED;
 }
 
-int boardcfg_backend_choices(const struct board_cfg *c, const char **out)
+int boardcfg_backend_choices(const struct board_cfg *c, const char **out,
+                             int max)
 {
     int n = 0;
-    out[n++] = "";
-    for (int i = 0; i < c->backends_n; i++)
+    if (n < max)
+        out[n++] = "";
+    for (int i = 0; i < c->backends_n && n < max; i++)
         out[n++] = c->backends[i].name;
     return n;
 }
 
-int boardcfg_tier_choices(const char **out)
+int boardcfg_tier_choices(const char **out, int max)
 {
     int n = 0;
-    out[n++] = "";
-    for (int t = 0; t < BOARD_TIERS; t++)
+    if (n < max)
+        out[n++] = "";
+    for (int t = 0; t < BOARD_TIERS && n < max; t++)
         out[n++] = boardcfg_tier_name((enum board_tier)t);
     return n;
 }

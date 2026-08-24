@@ -146,10 +146,11 @@ const char *boardcfg_serving(void);
 
 int boardcfg_set_serving(const char *backend);
 
-/* both lists lead with "" for unpinned; out holds MAX + 1 entries */
-int boardcfg_backend_choices(const struct board_cfg *c, const char **out);
+/* both lists lead with "" for unpinned, and stop at max entries */
+int boardcfg_backend_choices(const struct board_cfg *c, const char **out,
+                             int max);
 
-int boardcfg_tier_choices(const char **out);
+int boardcfg_tier_choices(const char **out, int max);
 
 const struct board_backend *boardcfg_backend(const struct board_cfg *c,
                                              const char *name);
