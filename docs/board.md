@@ -94,6 +94,13 @@ goes on to whatever step follows, which for a kind that takes no others is
 on a shortlist, and `approval prompt: Order it, and say what was ordered.` --
 so buying something is a file in `kinds/` rather than a branch in the board.
 
+Both prompts take a `{id}` mark, replaced with the card's id. Two cards of the
+same kind running at once share whatever their prompt names -- the `buy` prompt
+drives a browser window through the `web` skill, and one window driven by two
+workers is two workers fighting over a page -- so the mark is how a prompt names
+a window, a file or a port that belongs to that card alone: `web --name
+web-{id}`, checked with `web --endpoint`.
+
 The third outcome is the important one. A cheap classifier told only to pick a
 kind will always pick one, so the prompt licenses "I don't know" explicitly:
 low confidence, or a question, puts the card in `unclear` with the question

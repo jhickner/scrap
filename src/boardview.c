@@ -634,7 +634,7 @@ static int do_delete(const struct board_card *c)
 
 /* A kind with an approval prompt is not finished by approving it: the worker
  * is sent the prompt and the card ends on what it did. */
-static const char *approval_prompt_of(const struct board_card *c)
+static char *approval_prompt_of(const struct board_card *c)
 {
     if (!c || c->col != BOARD_REVIEW)
         return NULL;
@@ -651,11 +651,12 @@ static void approve(const struct board_card *c, int audit)
         return;
     }
 
-    const char *say = approval_prompt_of(c);
+    char *say = approval_prompt_of(c);
     if (!say)
         boardwork_approve(c, audit);
     else if (!boardwork_feedback(c, say))
         note("no worker left to take it on");
+    free(say);
 }
 
 static int in_review(const struct board_card *cards, int n, const char *filter)

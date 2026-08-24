@@ -537,18 +537,23 @@ static char *first_turn(const struct board_card *c)
     int                      lands = boardcfg_kind_takes(c->kind, BOARD_STEP_WORKTREE);
 
     const char *head = lands ? prompt_of("worker") : "";
-    const char *mine = k && k->prompt ? k->prompt : "";
+    char       *mine = boardcfg_expand(k && k->prompt ? k->prompt : "", c->id);
     const char *body = c->body && *c->body ? c->body : c->title;
     const char *card = lands
         ? "The card is also written to CARD.md here, which is the copy to go "
           "back to rather than this message."
         : "";
 
+    if (!mine)
+        return NULL;
+
     size_t need = strlen(head) + strlen(mine) + strlen(body) +
                   strlen(c->title) + strlen(card) + strlen(c->sent_back) + 256;
     char  *out = malloc(need);
-    if (!out)
+    if (!out) {
+        free(mine);
         return NULL;
+    }
 
     int at = snprintf(out, need, "%s", head);
     if (*mine)
@@ -560,6 +565,7 @@ static char *first_turn(const struct board_card *c)
         snprintf(out + at, need - (size_t)at,
                  "\nAn earlier attempt was sent back. What was said about it:\n\n%s\n",
                  c->sent_back);
+    free(mine);
     return out;
 }
 

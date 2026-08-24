@@ -485,6 +485,36 @@ static void test_a_kind_file_carries_its_approval_prompt(void)
            "and survives a write and a reload");
 }
 
+static void test_a_kind_prompt_takes_the_card_id(void)
+{
+    const char *keys[] = {"means", "priority", "steps", "approval prompt"};
+    const char *vals[] = {"something the person wants to buy", "1", "review",
+                          "Order it in the web-{id} window."};
+    write_kind("buy", keys, vals, 4, "Drive the web-{id} window.\n");
+    boardcfg_reload();
+
+    struct board_card card = {0};
+    snprintf(card.id, sizeof card.id, "c7f2");
+    snprintf(card.kind, sizeof card.kind, "buy");
+
+    char *say = boardflow_approval(&card);
+    expect(say && !strcmp(say, "Order it in the web-c7f2 window."),
+           "the approval prompt takes the card id");
+
+    struct board_note said = {0, "you", say};
+    card.log = &said;
+    card.log_n = 1;
+    char *again = boardflow_approval(&card);
+    expect(again == NULL, "and the expanded prompt is sent once");
+    free(again);
+    free(say);
+
+    char *mine = boardcfg_expand("Drive the web-{id} window.\n", card.id);
+    expect(mine && !strcmp(mine, "Drive the web-c7f2 window.\n"),
+           "so does the prompt the worker is given");
+    free(mine);
+}
+
 static void write_the_shipped_kinds(void)
 {
     static const char *const keys[] = {"means", "priority", "steps"};
@@ -1059,6 +1089,7 @@ int main(void)
     test_kinds();
     test_projects_block();
     test_a_kind_file_carries_its_approval_prompt();
+    test_a_kind_prompt_takes_the_card_id();
     test_archive();
     test_empty_and_missing();
     test_done_lists_newest_first();

@@ -695,6 +695,39 @@ int boardcfg_kind_takes(const char *kind, enum board_step step)
     return k ? (k->steps & (1u << step)) != 0 : 1;
 }
 
+char *boardcfg_expand(const char *text, const char *id)
+{
+    if (!text)
+        return NULL;
+    if (!id)
+        id = "";
+
+    const char *mark = "{id}";
+    size_t      len = strlen(mark), grew = strlen(id);
+    size_t      need = strlen(text) + 1;
+    for (const char *at = text; (at = strstr(at, mark)); at += len)
+        need += grew - len;
+
+    char *out = malloc(need);
+    if (!out)
+        return NULL;
+
+    size_t at = 0;
+    for (const char *from = text;;) {
+        const char *hit = strstr(from, mark);
+        if (!hit) {
+            memcpy(out + at, from, strlen(from) + 1);
+            break;
+        }
+        memcpy(out + at, from, (size_t)(hit - from));
+        at += (size_t)(hit - from);
+        memcpy(out + at, id, grew);
+        at += grew;
+        from = hit + len;
+    }
+    return out;
+}
+
 void boardcfg_kinds_block(char *out, size_t size)
 {
     const struct board_cfg *c = boardcfg();

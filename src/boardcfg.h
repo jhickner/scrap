@@ -126,6 +126,8 @@ int boardcfg_kind_takes(const char *kind, enum board_step step);
 
 void boardcfg_kinds_block(char *out, size_t size);
 
+char *boardcfg_expand(const char *text, const char *id);
+
 void boardcfg_projects_block(char *out, size_t size);
 
 #endif

@@ -1,6 +1,7 @@
 #include "boardflow.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "boardaudit.h"
@@ -39,23 +40,33 @@ enum board_col boardflow_from(const char *kind, enum board_step from,
     return BOARD_DONE;
 }
 
-const char *boardflow_approval(const struct board_card *c)
+char *boardflow_approval(const struct board_card *c)
 {
     const struct board_kind *k = c ? boardcfg_kind(c->kind) : NULL;
     if (!k || !k->approval_prompt || !*k->approval_prompt)
         return NULL;
 
+    char *say = boardcfg_expand(k->approval_prompt, c->id);
+    if (!say)
+        return NULL;
+
     for (int i = 0; i < c->log_n; i++)
-        if (c->log[i].text && !strcmp(c->log[i].text, k->approval_prompt))
+        if (c->log[i].text && !strcmp(c->log[i].text, say)) {
+            free(say);
             return NULL;
-    return k->approval_prompt;
+        }
+    return say;
 }
 
 enum board_step boardflow_after_turn(const struct board_card *c)
 {
     const struct board_kind *k = c ? boardcfg_kind(c->kind) : NULL;
-    if (k && k->approval_prompt && *k->approval_prompt && !boardflow_approval(c))
-        return BOARD_STEP_AUDIT;
+    if (k && k->approval_prompt && *k->approval_prompt) {
+        char *say = boardflow_approval(c);
+        free(say);
+        if (!say)
+            return BOARD_STEP_AUDIT;
+    }
     return BOARD_STEP_REVIEW;
 }
 
