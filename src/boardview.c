@@ -1100,6 +1100,10 @@ int boardview_run(const char *cwd)
         }
         case KEY_GO: {
             int tab = c ? boardwork_tab(c->id) : -1;
+            const char *step = c ? step_of(c->id) : NULL;
+            char        why[256] = "";
+            if (tab < 0 && c && !step)
+                tab = boardwork_rejoin(c, why, sizeof why);
             if (tab >= 0) {
                 close_list();
                 board_free(cards, n);
@@ -1107,11 +1111,10 @@ int boardview_run(const char *cwd)
             }
             if (c) {
                 close_list();
-                const char *step = step_of(c->id);
                 if (step)
                     note("%s is running without a tab", step);
                 else
-                    note("no worker on that card");
+                    note("%s", why[0] ? why : "no worker on that card");
             }
             break;
         }

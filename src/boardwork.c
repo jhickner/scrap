@@ -760,6 +760,51 @@ int boardwork_start(const struct board_card *c, char *why, int size)
     return start_on(c, NULL, why, size);
 }
 
+int boardwork_rejoin(const struct board_card *c, char *why, int size)
+{
+    snprintf(why, (size_t)size, "%s", "");
+    if (!c || !c->session[0]) {
+        snprintf(why, (size_t)size, "no worker on that card");
+        return -1;
+    }
+    if (boardwork_blocked(c, why, size))
+        return -1;
+
+    const char              *backend = c->backend[0] ? c->backend
+                                                     : wanted_backend(c);
+    const struct board_role *mine = boardcfg_worker();
+    const char              *job = mine ? mine->job : "worker";
+    const char              *step = mine ? mine->step : "";
+    const struct board_role *p = boardcfg_for_backend(job, backend, c->tier_pin);
+    const char *model = c->model[0] ? c->model : (p ? p->model : "");
+    const char *effort = c->effort[0] ? c->effort : (p ? p->effort : "");
+    const char *cwd = c->worktree[0] ? c->worktree : c->cwd;
+
+    int at = workspace_spawn(backend, model[0] ? model : NULL,
+                             effort[0] ? effort : NULL, cwd, c->session);
+    if (at < 0) {
+        snprintf(why, (size_t)size, "could not start a %s session", backend);
+        return -1;
+    }
+
+    struct session *s = workspace_at(at);
+    if (!session_can_resume(s)) {
+        workspace_close(at);
+        snprintf(why, (size_t)size, "%s cannot pick a conversation back up",
+                 backend);
+        return -1;
+    }
+
+    if (!boardwork_hold(c->id, s, job, step, BOARD_RUNS_WORKER)) {
+        workspace_close(at);
+        snprintf(why, (size_t)size, "no worker slot left");
+        return -1;
+    }
+
+    board_note(c->id, "board", "worker rejoined the session");
+    return at;
+}
+
 static const char *landed(const struct board_card *c, int *empty_out)
 {
     int files = 0, lines = 0;
@@ -910,6 +955,12 @@ static void pick_after(struct worker *w)
 
     struct board_card *cards = NULL;
     int                n = board_load(&cards);
+    const struct board_card *held = board_find(cards, n, w->id);
+    /* a person answers a review by talking to the session that built the card */
+    if (held && boardflow_waits_on_you(held)) {
+        board_free(cards, n);
+        return;
+    }
     const struct board_card *c = pull_next(cards, n, 1);
     if (!c) {
         board_free(cards, n);

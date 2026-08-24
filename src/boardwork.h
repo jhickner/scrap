@@ -14,6 +14,8 @@ void boardwork_finished(struct session *s);
 
 int boardwork_start(const struct board_card *c, char *why, int size);
 
+int boardwork_rejoin(const struct board_card *c, char *why, int size);
+
 int boardwork_blocked(const struct board_card *c, char *why, int size);
 
 int boardwork_running(void);
