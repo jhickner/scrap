@@ -53,13 +53,21 @@ int boardstep_finished(const struct board_card *c, const struct board_role *p,
         return 0;
 
     boardlog_turn(c->id, p->job, NULL, reply);
+
+    int failed = p->fail_marker[0] && reply && strstr(reply, p->fail_marker);
+    if (failed && board_at(c, p->step)) {
+        struct board_card edited = *c;
+        snprintf(edited.sent_back, sizeof edited.sent_back, "%s", reply);
+        board_update(&edited);
+    }
+
     if (reply && *reply)
         board_note(c->id, p->job, reply);
 
     if (!board_at(c, p->step))
         return 0;
 
-    if (p->fail_marker[0] && reply && strstr(reply, p->fail_marker))
+    if (failed)
         return board_move_back(c->id, boardflow_fail(c), p->job, NULL);
     return board_move_to(c->id, boardflow_next(c, p->step, 0), p->job, NULL);
 }

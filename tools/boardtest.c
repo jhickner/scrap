@@ -459,6 +459,8 @@ static void test_a_step_answers_for_itself(void)
     expect(c && board_said(c, "audit") &&
                strstr(board_said(c, "audit"), "leaks"),
            "with what it found on the card");
+    expect(c && strstr(c->sent_back, "leaks"),
+           "and on the turn the worker picks it up with");
     board_free(v, n);
 
     expect(board_move(id, BOARD_STEP, "audit", "you", NULL), "back into audit");
