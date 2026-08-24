@@ -10,7 +10,25 @@
 
 int boardplan_is(const struct board_card *c)
 {
-    return c && !strcmp(c->kind, PLAN_KIND);
+    return c && boardplan_named(c->kind);
+}
+
+int boardplan_named(const char *kind)
+{
+    return kind && !strcmp(kind, PLAN_KIND);
+}
+
+/* the plan a card wrote before it was called a plan: a kind can be corrected
+   after the worker has answered, and then the answer is the plan. */
+const char *boardplan_said(const struct board_card *c)
+{
+    if (!c)
+        return NULL;
+    for (int i = c->log_n - 1; i >= 0; i--)
+        if (!strcmp(c->log[i].who, "worker") && c->log[i].text &&
+            *c->log[i].text)
+            return c->log[i].text;
+    return NULL;
 }
 
 int boardplan_approve(const struct board_card *c)
