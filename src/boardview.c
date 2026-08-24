@@ -205,19 +205,6 @@ static void stamp_next(time_t then)
         stamp_due = next;
 }
 
-static void ago(time_t then, int done, char *out, size_t size)
-{
-    long gap = (long)(time(NULL) - then);
-    if (gap < 60)
-        snprintf(out, size, "just now");
-    else if (gap < 3600)
-        snprintf(out, size, "%ldm%s", gap / 60, done ? " ago" : "");
-    else if (gap < 86400)
-        snprintf(out, size, "%ldh%s", gap / 3600, done ? " ago" : "");
-    else
-        snprintf(out, size, "%ldd%s", gap / 86400, done ? " ago" : "");
-}
-
 static void column_mark(const struct board_card *c, const char **mark,
                         unsigned char *role)
 {
@@ -360,7 +347,7 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
                                        session_busy(workspace_at(tab))));
 
             char ts[32], when[64];
-            ago(c->updated ? c->updated : c->created, c->col == BOARD_DONE,
+            text_ago(c->updated ? c->updated : c->created, c->col == BOARD_DONE,
                  ts, sizeof ts);
             if (step && tab >= 0)
                 snprintf(when, sizeof when, "%s · tab %d", step, tab + 1);

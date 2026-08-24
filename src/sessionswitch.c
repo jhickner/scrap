@@ -59,19 +59,6 @@ struct row {
     char detail[512];
 };
 
-static void relative_time(long then, char *out, size_t size)
-{
-    long secs = (long)time(NULL) - then;
-    if (secs < 60)
-        snprintf(out, size, "just now");
-    else if (secs < 3600)
-        snprintf(out, size, "%ldm ago", secs / 60);
-    else if (secs < 86400)
-        snprintf(out, size, "%ldh ago", secs / 3600);
-    else
-        snprintf(out, size, "%ldd ago", secs / 86400);
-}
-
 static const char *short_model(const char *backend, const char *model)
 {
     if (!strcmp(backend, "claude") && !strncmp(model, "claude-", 7) && model[7])
@@ -158,7 +145,7 @@ static int pane_at(const char *pane)
 static void fill_live(struct row *r, const struct live_session *v)
 {
     char when[32];
-    relative_time(v->ts, when, sizeof when);
+    text_ago(v->ts, 1, when, sizeof when);
 
     const char *here = livelist_tmux_window();
     int at = v->pane[0] ? pane_at(v->pane) : -1;

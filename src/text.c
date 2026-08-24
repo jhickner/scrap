@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "app.h"
@@ -181,6 +182,20 @@ void text_humanize(long n, char *out, size_t size)
         snprintf(out, size, "%.1fk", (double)n / 1000.0);
     else
         snprintf(out, size, "%.1fM", (double)n / 1000000.0);
+}
+
+void text_ago(time_t then, int suffix, char *out, size_t size)
+{
+    long secs = (long)(time(NULL) - then);
+    const char *tail = suffix ? " ago" : "";
+    if (secs < 60)
+        snprintf(out, size, "just now");
+    else if (secs < 3600)
+        snprintf(out, size, "%ldm%s", secs / 60, tail);
+    else if (secs < 86400)
+        snprintf(out, size, "%ldh%s", secs / 3600, tail);
+    else
+        snprintf(out, size, "%ldd%s", secs / 86400, tail);
 }
 
 int text_shell_quote(const char *s, char *out, size_t size)

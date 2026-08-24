@@ -26,19 +26,6 @@ static void encode_cwd(const char *cwd, char *out, size_t size)
     out[o] = '\0';
 }
 
-static void relative_time(time_t then, char *out, size_t size)
-{
-    long secs = (long)(time(NULL) - then);
-    if (secs < 60)
-        snprintf(out, size, "just now");
-    else if (secs < 3600)
-        snprintf(out, size, "%ldm ago", secs / 60);
-    else if (secs < 86400)
-        snprintf(out, size, "%ldh ago", secs / 3600);
-    else
-        snprintf(out, size, "%ldd ago", secs / 86400);
-}
-
 static const char *json_first_text(const cJSON *content)
 {
     if (cJSON_IsString(content))
@@ -170,7 +157,7 @@ static int scan_dir(const char *dir, const char *skip_id, scan_fill_fn fill,
         if (skip_id && strcmp(candidate.id, skip_id) == 0)
             continue;
         candidate.modified = st.st_mtime;
-        relative_time(candidate.modified, candidate.when, sizeof candidate.when);
+        text_ago(candidate.modified, 1, candidate.when, sizeof candidate.when);
         keep_recent(list, &count, &candidate);
     }
     closedir(d);

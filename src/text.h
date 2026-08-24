@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <time.h>
 
 void text_one_line(const char *in, char *out, size_t size);
 
@@ -23,6 +24,8 @@ int text_fuzzy_score(const char *name, const char *q);
 size_t text_utf8_encode(uint32_t cp, char out[4]);
 
 void text_humanize(long n, char *out, size_t size);
+
+void text_ago(time_t then, int suffix, char *out, size_t size);
 
 double now_seconds(void);
 
