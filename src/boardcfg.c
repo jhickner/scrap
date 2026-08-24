@@ -106,7 +106,7 @@ static void backend_defaults(struct board_backend *b, const char *name)
 
 /* Fields a role file omits: job is the file's own name, step is the job when
  * the job names one, and a role that stands in a step is skippable. */
-static void role_defaults(struct board_profile *p)
+static void role_defaults(struct board_role *p)
 {
     if (!p->job[0])
         snprintf(p->job, sizeof p->job, "%s", p->name);
@@ -202,7 +202,7 @@ static void overlay(struct board_cfg *c, const cJSON *o)
     cJSON_ArrayForEach(p, who) {
         if (!p->string || !*p->string || c->roles_n >= BOARD_ROLES_MAX)
             continue;
-        struct board_profile *into = &c->roles[c->roles_n++];
+        struct board_role *into = &c->roles[c->roles_n++];
         snprintf(into->name, sizeof into->name, "%s", p->string);
         into->prompt = dup_or_null(
             cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)p, "prompt")));
@@ -302,7 +302,7 @@ static int read_roles(struct board_cfg *c)
         if (!mdcfg_load(&m, path))
             continue;
 
-        struct board_profile *p = &c->roles[c->roles_n++];
+        struct board_role *p = &c->roles[c->roles_n++];
         snprintf(p->name, sizeof p->name, "%s", names[i]);
         snprintf(p->job, sizeof p->job, "%s", mdcfg_get(&m, "job"));
         snprintf(p->step, sizeof p->step, "%s", mdcfg_get(&m, "step"));
@@ -425,7 +425,7 @@ static int write_roles(const struct board_cfg *c)
 {
     int ok = 1;
     for (int i = 0; i < c->roles_n; i++) {
-        const struct board_profile *p = &c->roles[i];
+        const struct board_role *p = &c->roles[i];
 
         char path[4300];
         if (!board_path(path, sizeof path, BOARD_DIR "/roles", p->name)) {
@@ -537,9 +537,9 @@ static int write_out(const struct board_cfg *c)
     return ok;
 }
 
-static struct board_cfg cache;
-static int              loaded;
-static struct board_profile serving_roles[BOARD_ROLES_MAX];
+static struct board_cfg  cache;
+static int               loaded;
+static struct board_role serving_roles[BOARD_ROLES_MAX];
 
 static void resolve(void)
 {
@@ -712,7 +712,7 @@ void boardcfg_kinds_block(char *out, size_t size)
                                c->kinds[i].means ? c->kinds[i].means : "");
 }
 
-const struct board_profile *boardcfg_for_job(const char *job)
+const struct board_role *boardcfg_for_job(const char *job)
 {
     load();
     if (!job || !*job)
@@ -723,7 +723,7 @@ const struct board_profile *boardcfg_for_job(const char *job)
     return NULL;
 }
 
-const struct board_profile *boardcfg_for_step(enum board_step step)
+const struct board_role *boardcfg_for_step(enum board_step step)
 {
     load();
     const char *name = boardcfg_step_name(step);
@@ -735,12 +735,12 @@ const struct board_profile *boardcfg_for_step(enum board_step step)
     return NULL;
 }
 
-const struct board_profile *boardcfg_for_backend(const char *job,
+const struct board_role *boardcfg_for_backend(const char *job,
                                                  const char *backend)
 {
-    static struct board_profile out;
+    static struct board_role out;
 
-    const struct board_profile *p = boardcfg_for_job(job);
+    const struct board_role *p = boardcfg_for_job(job);
     if (!p || !backend || !*backend || !strcmp(backend, cache.serving))
         return p;
 
@@ -766,7 +766,7 @@ static int argv_pair(char **out, int n, int max, const char *flag, const char *v
     return n;
 }
 
-int boardcfg_argv(const struct board_profile *p, const char *prompt, char **out,
+int boardcfg_argv(const struct board_role *p, const char *prompt, char **out,
                   int max)
 {
     if (!p || !prompt || max < BOARDCFG_ARGV_MAX)

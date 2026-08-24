@@ -27,7 +27,7 @@ static void triage_key(const char *id, char *out, size_t size)
 
 static char *build_prompt(const struct board_card *c)
 {
-    const struct board_profile *p = boardcfg_for_job("triage");
+    const struct board_role *p = boardcfg_for_job("triage");
     const char                 *head = p && p->prompt ? p->prompt : "";
     const char                 *body = c->body && *c->body ? c->body : c->title;
 

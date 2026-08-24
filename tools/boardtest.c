@@ -613,7 +613,7 @@ static int skip_card(const char *id)
 static void role_add(struct board_cfg *cfg, const char *name, const char *job,
                      const char *prompt)
 {
-    struct board_profile *r = &cfg->roles[cfg->roles_n++];
+    struct board_role *r = &cfg->roles[cfg->roles_n++];
     memset(r, 0, sizeof *r);
     snprintf(r->name, sizeof r->name, "%s", name);
     snprintf(r->job, sizeof r->job, "%s", job);
@@ -634,7 +634,7 @@ static void test_roles_are_what_the_files_say(void)
 
     boardcfg_reload();
 
-    const struct board_profile *p = boardcfg_for_job("audit");
+    const struct board_role *p = boardcfg_for_job("audit");
     expect(p != NULL, "a role is found by the job its file names");
     expect(p && !strcmp(p->name, "auditor"),
            "and takes its own name from that file");

@@ -27,7 +27,7 @@ struct board_backend {
     struct board_level level[BOARD_TIERS];
 };
 
-struct board_profile {
+struct board_role {
     char  name[32];
     char  job[32];
     char  tier[8];
@@ -80,8 +80,8 @@ struct board_cfg {
     struct board_kind kinds[BOARD_KINDS_MAX];
     int               kinds_n;
 
-    struct board_profile roles[BOARD_ROLES_MAX];
-    int                  roles_n;
+    struct board_role roles[BOARD_ROLES_MAX];
+    int               roles_n;
 
     struct board_backend backends[BOARD_BACKENDS_MAX];
     int                  backends_n;
@@ -98,16 +98,16 @@ void              boardcfg_free(struct board_cfg *c);
 
 int boardcfg_set(const struct board_cfg *c);
 
-const struct board_profile *boardcfg_for_job(const char *job);
+const struct board_role *boardcfg_for_job(const char *job);
 
-const struct board_profile *boardcfg_for_step(enum board_step step);
+const struct board_role *boardcfg_for_step(enum board_step step);
 
-const struct board_profile *boardcfg_for_backend(const char *job,
-                                                 const char *backend);
+const struct board_role *boardcfg_for_backend(const char *job,
+                                              const char *backend);
 
 #define BOARDCFG_ARGV_MAX 9
 
-int boardcfg_argv(const struct board_profile *p, const char *prompt, char **out,
+int boardcfg_argv(const struct board_role *p, const char *prompt, char **out,
                   int max);
 
 const char *boardcfg_serving(void);

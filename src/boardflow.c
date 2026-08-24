@@ -71,7 +71,7 @@ int boardflow_skippable(const struct board_card *c)
 {
     if (!c)
         return 0;
-    const struct board_profile *p = boardcfg_for_step(boardflow_step_at(c->col));
+    const struct board_role *p = boardcfg_for_step(boardflow_step_at(c->col));
     return p && p->skippable;
 }
 

@@ -7,10 +7,10 @@
 struct board_card;
 struct session;
 
-enum board_role {
-    BOARD_ROLE_WORKER,
-    BOARD_ROLE_AUDIT,
-    BOARD_ROLE_SWEEP,
+enum board_job {
+    BOARD_JOB_WORKER,
+    BOARD_JOB_AUDIT,
+    BOARD_JOB_SWEEP,
 };
 
 void boardwork_finished(struct session *s);
@@ -47,7 +47,7 @@ int boardwork_sweep_pump(void);
 
 int boardwork_sweep_now(const char *cwd, char *why, int size);
 
-int boardwork_hold(const char *id, struct session *s, enum board_role role);
+int boardwork_hold(const char *id, struct session *s, enum board_job role);
 
 void boardwork_let_go(const char *id);
 

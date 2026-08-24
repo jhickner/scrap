@@ -20,14 +20,14 @@
 #include "workspace.h"
 
 struct worker {
-    char             id[BOARD_ID_MAX];
-    struct session  *session;
-    enum board_role  role;
-    int              done;
-    int              checked;
-    int              handover;
-    double           charged_usd;
-    long             charged_in, charged_out;
+    char            id[BOARD_ID_MAX];
+    struct session *session;
+    enum board_job  role;
+    int             done;
+    int             checked;
+    int             handover;
+    double          charged_usd;
+    long            charged_in, charged_out;
 };
 
 static struct worker workers[WORKSPACE_MAX];
@@ -101,20 +101,20 @@ int boardwork_tab(const char *id)
 int boardwork_auditing(const char *id)
 {
     struct worker *w = id ? slot_of(id) : NULL;
-    return w && w->role == BOARD_ROLE_AUDIT;
+    return w && w->role == BOARD_JOB_AUDIT;
 }
 
 int boardwork_sweeping(const char *id)
 {
     struct worker *w = id ? slot_of(id) : NULL;
-    return w && w->role == BOARD_ROLE_SWEEP;
+    return w && w->role == BOARD_JOB_SWEEP;
 }
 
 static int side_start(const struct board_card *c, const char *job,
-                      enum board_role role, const char *cwd, char *prompt,
+                      enum board_job role, const char *cwd, char *prompt,
                       const char *label)
 {
-    const struct board_profile *p = boardcfg_for_job(job);
+    const struct board_role *p = boardcfg_for_job(job);
     if (!prompt || !p) {
         free(prompt);
         return 0;
@@ -146,7 +146,7 @@ static int audit_start(const struct board_card *c)
 {
     if (!c || !c->worktree[0] || boardwork_auditing(c->id))
         return 0;
-    return side_start(c, "audit", BOARD_ROLE_AUDIT, c->worktree,
+    return side_start(c, "audit", BOARD_JOB_AUDIT, c->worktree,
                       boardaudit_prompt(c), "audit");
 }
 
@@ -175,7 +175,7 @@ int boardwork_audit_pump(void)
 static int sweeping_any(void)
 {
     for (int i = 0; i < WORKSPACE_MAX; i++)
-        if (workers[i].session && workers[i].role == BOARD_ROLE_SWEEP)
+        if (workers[i].session && workers[i].role == BOARD_JOB_SWEEP)
             return 1;
     return 0;
 }
@@ -193,7 +193,7 @@ static int sweep_start(const char *cwd, char *prompt)
     const struct board_card *c = board_find(cards, n, id);
     int                      started = 0;
     if (c)
-        started = side_start(c, "sweep", BOARD_ROLE_SWEEP, c->cwd,
+        started = side_start(c, "sweep", BOARD_JOB_SWEEP, c->cwd,
                              prompt, "sweep");
     else
         free(prompt);
@@ -249,11 +249,11 @@ int boardwork_sweep_now(const char *cwd, char *why, int size)
     return 1;
 }
 
-static const char *job_of(enum board_role role)
+static const char *job_of(enum board_job role)
 {
     switch (role) {
-    case BOARD_ROLE_AUDIT: return "audit";
-    case BOARD_ROLE_SWEEP: return "sweep";
+    case BOARD_JOB_AUDIT: return "audit";
+    case BOARD_JOB_SWEEP: return "sweep";
     default:               return "worker";
     }
 }
@@ -282,17 +282,17 @@ static void card_pin(const char *id, char *out, size_t size)
     board_free(cards, n);
 }
 
-static const struct board_profile *worker_profile(const struct worker *w)
+static const struct board_role *worker_role(const struct worker *w)
 {
     char pin[32] = "";
-    if (w->role == BOARD_ROLE_WORKER)
+    if (w->role == BOARD_JOB_WORKER)
         card_pin(w->id, pin, sizeof pin);
     return boardcfg_for_backend(job_of(w->role), pin);
 }
 
 static int handover(struct worker *w)
 {
-    const struct board_profile *p = worker_profile(w);
+    const struct board_role *p = worker_role(w);
 
     w->handover = 0;
     if (!p || !session_switch_backend(w->session, p->backend))
@@ -302,7 +302,7 @@ static int handover(struct worker *w)
     if (p->effort[0])
         session_set_effort(w->session, p->effort);
 
-    if (w->role == BOARD_ROLE_WORKER)
+    if (w->role == BOARD_JOB_WORKER)
         card_backend(w->id, p->backend);
 
     char said[64];
@@ -313,7 +313,7 @@ static int handover(struct worker *w)
 
 static int follows(const struct worker *w)
 {
-    const struct board_profile *p = worker_profile(w);
+    const struct board_role *p = worker_role(w);
     return strcmp(session_backend(w->session), p->backend) != 0;
 }
 
@@ -340,7 +340,7 @@ int boardwork_serve(int *waiting)
     return moved;
 }
 
-int boardwork_hold(const char *id, struct session *s, enum board_role role)
+int boardwork_hold(const char *id, struct session *s, enum board_job role)
 {
     if (!id || !*id || !s || slot_of(id))
         return 0;
@@ -502,7 +502,7 @@ static void show_card(int at, const struct board_card *c)
 
 static const char *prompt_of(const char *job)
 {
-    const struct board_profile *p = boardcfg_for_job(job);
+    const struct board_role *p = boardcfg_for_job(job);
     return p && p->prompt ? p->prompt : "";
 }
 
@@ -567,7 +567,7 @@ static const char *wanted_backend(const struct board_card *c)
 {
     if (c->backend_pin[0])
         return c->backend_pin;
-    const struct board_profile *p = boardcfg_for_job("worker");
+    const struct board_role *p = boardcfg_for_job("worker");
     const char                 *b = c->backend[0] ? c->backend
                                                   : (p ? p->backend : "");
     return b[0] ? b : "claude";
@@ -675,7 +675,7 @@ static int retarget(struct session *s, const char *backend, const char *model,
 static void take_slot(struct worker *w, const char *id)
 {
     snprintf(w->id, sizeof w->id, "%s", id);
-    w->role = BOARD_ROLE_WORKER;
+    w->role = BOARD_JOB_WORKER;
     w->done = 0;
     w->checked = 0;
     w->handover = 0;
@@ -701,7 +701,7 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
         return 0;
 
     const char *backend = wanted_backend(c);
-    const struct board_profile *p = boardcfg_for_backend("worker", backend);
+    const struct board_role *p = boardcfg_for_backend("worker", backend);
     const char *model = c->model[0] ? c->model : (p ? p->model : "");
     const char *effort = c->effort[0] ? c->effort : (p ? p->effort : "");
 
@@ -730,7 +730,7 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
         }
         workspace_show(front);
         s = workspace_at(at);
-        boardwork_hold(c->id, s, BOARD_ROLE_WORKER);
+        boardwork_hold(c->id, s, BOARD_JOB_WORKER);
     }
 
     show_card(at, c);
@@ -788,7 +788,7 @@ void boardwork_finished(struct session *s)
     if (reply && *reply)
         failed = NULL;
 
-    if (w->role == BOARD_ROLE_AUDIT) {
+    if (w->role == BOARD_JOB_AUDIT) {
         w->done = 1;
         charge_card(w, s);
         if (failed && *failed)
@@ -797,7 +797,7 @@ void boardwork_finished(struct session *s)
         return;
     }
 
-    if (w->role == BOARD_ROLE_SWEEP) {
+    if (w->role == BOARD_JOB_SWEEP) {
         charge_card(w, s);
         if (failed && *failed)
             board_note(w->id, "sweep", failed);
@@ -896,7 +896,7 @@ static const struct board_card *pull_next(const struct board_card *cards, int n,
 
 static void pick_after(struct worker *w)
 {
-    if (!w || w->role != BOARD_ROLE_WORKER || !boardcfg()->auto_pick)
+    if (!w || w->role != BOARD_JOB_WORKER || !boardcfg()->auto_pick)
         return;
 
     int at = workspace_index_of(w->session);
@@ -997,10 +997,10 @@ void boardwork_let_go(const char *id)
         workspace_close(at);
 }
 
-static int at_role(enum board_role role, enum board_col col)
+static int at_role(enum board_job role, enum board_col col)
 {
     switch (role) {
-    case BOARD_ROLE_AUDIT:
+    case BOARD_JOB_AUDIT:
         return col == BOARD_AUDIT;
     default:
         return col == BOARD_DOING || col == BOARD_REVIEW;
@@ -1009,7 +1009,7 @@ static int at_role(enum board_role role, enum board_col col)
 
 static int reconcile(struct worker *w, const struct board_card *c)
 {
-    if (w->role != BOARD_ROLE_WORKER || c->col != BOARD_DOING)
+    if (w->role != BOARD_JOB_WORKER || c->col != BOARD_DOING)
         return 0;
 
     int at = workspace_index_of(w->session);
@@ -1163,7 +1163,7 @@ int boardwork_reject(const struct board_card *c, const char *why)
 void boardwork_spoke_to(struct session *s)
 {
     struct worker *w = slot_by_session(s);
-    if (!w || w->role != BOARD_ROLE_WORKER)
+    if (!w || w->role != BOARD_JOB_WORKER)
         return;
 
     struct board_card *cards = NULL;

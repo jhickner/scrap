@@ -18,7 +18,7 @@ enum row_kind {
     ROW_HEAD,
     ROW_COUNT,
     ROW_TOGGLE,
-    ROW_PROFILE,
+    ROW_ROLE,
     ROW_SERVING,
     ROW_BACKEND,
     ROW_PROMPT,
@@ -115,7 +115,7 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
 
     head(rows, n, "models");
     for (int i = 0; i < c->roles_n && *n < ROWS_MAX - 1; i++) {
-        rows[*n].kind = ROW_PROFILE;
+        rows[*n].kind = ROW_ROLE;
         rows[*n].label = c->roles[i].name;
         rows[*n].role_at = i;
         (*n)++;
@@ -162,8 +162,8 @@ static void value_of(const struct row *r, const struct board_cfg *c,
     case ROW_TOGGLE:
         snprintf(out, size, "%s", *r->count ? "yes" : "no");
         break;
-    case ROW_PROFILE: {
-        const struct board_profile *p = &c->roles[r->role_at];
+    case ROW_ROLE: {
+        const struct board_role *p = &c->roles[r->role_at];
         enum board_tier             tier = boardcfg_tier_or_med(p->tier);
         const struct board_backend *b = boardcfg_backend(c, c->serving);
         const char                 *model = b ? b->level[tier].model : "";
@@ -233,9 +233,9 @@ static const char *const EFFORTS[] = {
     "", "low", "medium", "high", "xhigh", "max",
 };
 
-static void edit_profile(struct board_cfg *c, int role_at)
+static void edit_role(struct board_cfg *c, int role_at)
 {
-    struct board_profile *p = &c->roles[role_at];
+    struct board_role *p = &c->roles[role_at];
 
     struct pick_item items[BOARD_TIERS];
     int              at = 0;
@@ -484,7 +484,7 @@ void boardcfgui_run(void)
         switch (rows[at].kind) {
         case ROW_COUNT:   edit_count(&rows[at]); touched = 1; break;
         case ROW_TOGGLE:  *rows[at].count = !*rows[at].count; touched = 1; break;
-        case ROW_PROFILE: edit_profile(c, rows[at].role_at); touched = 1; break;
+        case ROW_ROLE:    edit_role(c, rows[at].role_at); touched = 1; break;
         case ROW_SERVING: edit_serving(c); touched = 1; break;
         case ROW_BACKEND: edit_backend(c, rows[at].backend_at); touched = 1; break;
         case ROW_PROMPT:  edit_prompt(c, rows[at].role_at); touched = 1; break;
