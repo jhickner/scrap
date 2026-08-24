@@ -588,9 +588,13 @@ static void test_plan_files_a_card(void)
     struct board_card edited = *c;
     snprintf(edited.kind, sizeof edited.kind, "plan");
     board_put(&edited, "review");
-    edited.body = (char *)"1. read the menu code\n2. rewrite the cancel row";
-    expect(board_update(&edited), "the plan lands on the card");
+    expect(board_update(&edited), "the plan card is filed for review");
     board_free(v, n);
+
+    expect(board_note(id, "worker",
+                      "1. read the menu code\n2. rewrite the cancel row"),
+           "the plan lands in the log");
+    expect(board_note(id, "you", "keep the back row"), "and so does the reply");
 
     n = board_load(&v);
     c = board_find(v, n, id);
@@ -604,8 +608,11 @@ static void test_plan_files_a_card(void)
         if (v[i].col == BOARD_BACKLOG && !strcmp(v[i].cwd, "/tmp/planrepo"))
             made = &v[i];
     expect(made != NULL, "the filed card waits in the backlog");
-    expect(made && made->body && strstr(made->body, "rewrite the cancel row"),
-           "with the plan whole as its spec");
+    expect(made && made->body && strstr(made->body, "rewrite the cancel row") &&
+               strstr(made->body, "keep the back row"),
+           "with the whole discussion as its plan");
+    expect(made && made->body && strstr(made->body, "plan the telegram menus"),
+           "over the spec the plan card carried");
     expect(made && !strcmp(made->kind, "feature"), "as the kind the plan names");
     expect(made && !strcmp(made->title, "plan the telegram menus"),
            "under the title of the card that asked for it");
