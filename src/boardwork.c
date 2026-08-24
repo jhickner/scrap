@@ -526,10 +526,14 @@ static char *first_turn(const struct board_card *c)
     if (!mine)
         return NULL;
 
-    size_t need = strlen(head) + strlen(mine) + strlen(body) +
-                  strlen(c->title) + strlen(card) + strlen(c->sent_back) + 256;
+    const struct board_role *mine_at = boardcfg_worker();
+    char *since = boardstep_since(c, mine_at ? mine_at->job : "worker");
+
+    size_t need = strlen(head) + strlen(mine) + strlen(body) + strlen(c->title) +
+                  strlen(card) + (since ? strlen(since) : 0) + 256;
     char  *out = malloc(need);
     if (!out) {
+        free(since);
         free(mine);
         return NULL;
     }
@@ -540,10 +544,11 @@ static char *first_turn(const struct board_card *c)
     if (*card)
         at += snprintf(out + at, need - (size_t)at, "\n\n%s", card);
     at += snprintf(out + at, need - (size_t)at, "\n\n# %s\n\n%s\n", c->title, body);
-    if (c->sent_back[0])
+    if (since)
         snprintf(out + at, need - (size_t)at,
-                 "\nAn earlier attempt was sent back. What was said about it:\n\n%s\n",
-                 c->sent_back);
+                 "\nAn earlier attempt was sent back. What was said about it:\n\n%s",
+                 since);
+    free(since);
     free(mine);
     return out;
 }
@@ -737,7 +742,6 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
     edited.col = BOARD_STEP;
     snprintf(edited.step, sizeof edited.step, "%s", step);
     edited.stuck[0] = '\0';
-    edited.sent_back[0] = '\0';
     snprintf(edited.worktree, sizeof edited.worktree, "%s", lands ? path : "");
     snprintf(edited.base, sizeof edited.base, "%s", base);
     snprintf(edited.backend, sizeof edited.backend, "%s", backend);
@@ -1187,7 +1191,6 @@ int boardwork_send_back(const struct board_card *c, const char *why)
         return 0;
 
     struct board_card edited = *c;
-    snprintf(edited.sent_back, sizeof edited.sent_back, "%s", why);
     edited.merge_into[0] = '\0';
     edited.merge_from[0] = '\0';
     edited.merge_to[0] = '\0';

@@ -9,6 +9,8 @@ char *boardstep_prompt(const struct board_card *c, const struct board_role *p);
 
 const char *boardstep_before(const struct board_card *c);
 
+char *boardstep_since(const struct board_card *c, const char *job);
+
 int boardstep_finished(const struct board_card *c, const struct board_role *p,
                        const char *reply);
 

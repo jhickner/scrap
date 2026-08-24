@@ -21,6 +21,40 @@ const char *boardstep_before(const struct board_card *c)
     return NULL;
 }
 
+char *boardstep_since(const struct board_card *c, const char *job)
+{
+    if (!c || !job || !*job)
+        return NULL;
+
+    int from = -1;
+    for (int i = c->log_n - 1; i >= 0 && from < 0; i--)
+        if (!strcmp(c->log[i].who, job))
+            from = i + 1;
+    if (from < 0)
+        return NULL;
+
+    char  *out = NULL;
+    size_t len = 0;
+    FILE  *f = open_memstream(&out, &len);
+    if (!f)
+        return NULL;
+
+    for (int i = from; i < c->log_n; i++) {
+        const char *who = c->log[i].who, *text = c->log[i].text;
+        if (!text || !*text)
+            continue;
+        if (!strcmp(who, "board"))
+            continue;
+        fprintf(f, "%s%s said:\n\n%s\n", len ? "\n" : "", who, text);
+    }
+    fclose(f);
+
+    if (len)
+        return out;
+    free(out);
+    return NULL;
+}
+
 char *boardstep_prompt(const struct board_card *c, const struct board_role *p)
 {
     if (!c || !p)
@@ -55,11 +89,6 @@ int boardstep_finished(const struct board_card *c, const struct board_role *p,
     boardlog_turn(c->id, p->job, NULL, reply);
 
     int failed = p->fail_marker[0] && reply && strstr(reply, p->fail_marker);
-    if (failed && board_at(c, p->step)) {
-        struct board_card edited = *c;
-        snprintf(edited.sent_back, sizeof edited.sent_back, "%s", reply);
-        board_update(&edited);
-    }
 
     if (reply && *reply)
         board_note(c->id, p->job, reply);

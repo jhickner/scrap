@@ -431,6 +431,7 @@ static void test_a_step_answers_for_itself(void)
 
     char id[BOARD_ID_MAX] = {0};
     expect(board_add("a card to audit", "/tmp/repo", id), "capture");
+    expect(board_note(id, "worker", "wrote the fix"), "the worker had it first");
 
     struct board_card *v = NULL;
     int                n = board_load(&v);
@@ -459,8 +460,10 @@ static void test_a_step_answers_for_itself(void)
     expect(c && board_said(c, "audit") &&
                strstr(board_said(c, "audit"), "leaks"),
            "with what it found on the card");
-    expect(c && strstr(c->sent_back, "leaks"),
-           "and on the turn the worker picks it up with");
+    char *since = c ? boardstep_since(c, "worker") : NULL;
+    expect(since && strstr(since, "leaks") && strstr(since, "audit"),
+           "and in what the worker picking it up is told");
+    free(since);
     board_free(v, n);
 
     expect(board_move(id, BOARD_STEP, "audit", "you", NULL), "back into audit");

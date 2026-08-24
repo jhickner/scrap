@@ -233,9 +233,11 @@ it:
   one card at a time. `merge.md` is this: rebase, check, merge, remove the
   worktree.
 
-An answer that fails sends the card to `fail step` with what it said, which is
-also what the worker picking it up is told, or to `backlog` if the file names
-none. `fail prompt` names a role whose body goes to
+An answer that fails sends the card to `fail step`, or to `backlog` if the file
+names none. The worker that picks it up is given everything said about the card
+since it last spoke -- the whole of the failing step's answer, and anything you
+added -- so a test that came out wrong arrives with its method and its output
+rather than a verdict. `fail prompt` names a role whose body goes to
 the worker that picks it up -- `merge.md` names `landing.md`, which is the
 advice for a branch that would not land.
 
