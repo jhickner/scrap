@@ -59,6 +59,7 @@ struct board_kind {
     char *means;
     char *prompt;
     char *approval_prompt;
+    char  next_kind[32];
     int   priority;
 
     unsigned steps;

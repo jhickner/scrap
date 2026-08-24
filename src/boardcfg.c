@@ -383,6 +383,7 @@ static void read_kinds(struct board_cfg *c)
         k->means = dup_or_null(mdcfg_get(&m, "means"));
         k->prompt = dup_or_null(m.body ? m.body : "");
         k->approval_prompt = dup_or_null(mdcfg_get(&m, "approval prompt"));
+        snprintf(k->next_kind, sizeof k->next_kind, "%s", mdcfg_get(&m, "next kind"));
         k->priority = mdcfg_int(&m, "priority", 0);
         k->steps = steps_of(mdcfg_get(&m, "steps"));
         mdcfg_free(&m);
@@ -522,11 +523,13 @@ static int write_kinds(const struct board_cfg *c)
         steps_str(c->kinds[i].steps, steps, sizeof steps);
         snprintf(priority, sizeof priority, "%d", c->kinds[i].priority);
 
-        const char *keys[] = {"means", "priority", "steps", "approval prompt"};
+        const char *keys[] = {"means", "priority", "steps", "approval prompt",
+                              "next kind"};
         const char *vals[] = {c->kinds[i].means ? c->kinds[i].means : "",
                               priority, steps,
-                              c->kinds[i].approval_prompt ? c->kinds[i].approval_prompt : ""};
-        if (!mdcfg_write(path, keys, vals, 4, c->kinds[i].prompt))
+                              c->kinds[i].approval_prompt ? c->kinds[i].approval_prompt : "",
+                              c->kinds[i].next_kind};
+        if (!mdcfg_write(path, keys, vals, 5, c->kinds[i].prompt))
             ok = 0;
     }
     return ok;

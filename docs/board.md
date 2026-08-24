@@ -101,6 +101,15 @@ workers is two workers fighting over a page -- so the mark is how a prompt names
 a window, a file or a port that belongs to that card alone: `web --name
 web-{id}`, checked with `web --endpoint`.
 
+`plan` is the kind that asks for the work to be worked out rather than done.
+It takes `steps: review` and no worktree, so the worker reads the repo and
+answers with a plan, and what it answered becomes the card's spec: the plan is
+what you read in review and what you edit before approving. Approving it files
+a second card carrying the plan whole, under the title of the card that asked
+for it. `next kind` on the kind file says what that card is -- `next kind:
+feature` puts it straight in `backlog` at that kind's priority, and an empty
+one sends it through `new` and triage like any other capture.
+
 The third outcome is the important one. A cheap classifier told only to pick a
 kind will always pick one, so the prompt licenses "I don't know" explicitly:
 low confidence, or a question, puts the card in `unclear` with the question

@@ -16,6 +16,7 @@
 #include "boardcfgui.h"
 #include "boardflow.h"
 #include "boardmerge.h"
+#include "boardplan.h"
 #include "boardsweep.h"
 #include "boardtriage.h"
 #include "boardundo.h"
@@ -650,6 +651,12 @@ static void approve(const struct board_card *c, int audit)
         boardsweep_approve(c);
         return;
     }
+    if (boardplan_is(c)) {
+        boardwork_let_go(c->id);
+        if (!boardplan_approve(c))
+            note("the plan is empty");
+        return;
+    }
 
     char *say = approval_prompt_of(c);
     if (!say)
@@ -1002,6 +1009,8 @@ static void card_form(const struct board_card *c)
             "cancel starting, back to backlog", FORM_BUTTON, unstart_at,
             sizeof unstart_at, NULL, 0};
     char approve_label[64] = "approve";
+    if (c->col == BOARD_REVIEW && boardplan_is(c))
+        snprintf(approve_label, sizeof approve_label, "approve \xc2\xb7 file a card");
     if (proposals) {
         int raised = boardsweep_proposed(c);
         snprintf(approve_label, sizeof approve_label,

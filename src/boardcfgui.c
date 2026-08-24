@@ -359,7 +359,7 @@ static void edit_kind(struct board_cfg *c, int at)
 {
     struct board_kind *k = &c->kinds[at];
 
-    char name[32], means[256], priority[8], approval[512];
+    char name[32], means[256], priority[8], approval[512], next[32];
     char steps[BOARD_STEPS][8];
     char *prompt = calloc(1, 8192);
     if (!prompt)
@@ -370,11 +370,12 @@ static void edit_kind(struct board_cfg *c, int at)
     snprintf(priority, sizeof priority, "%d", k->priority);
     snprintf(prompt, 8192, "%s", k->prompt ? k->prompt : "");
     snprintf(approval, sizeof approval, "%s", k->approval_prompt ? k->approval_prompt : "");
+    snprintf(next, sizeof next, "%s", k->next_kind);
     for (int i = 0; i < BOARD_STEPS; i++)
         snprintf(steps[i], sizeof steps[i], "%s",
                  k->steps & (1u << i) ? "yes" : "no");
 
-    struct form_field fields[4 + BOARD_STEPS + 1];
+    struct form_field fields[5 + BOARD_STEPS + 1];
     int               fields_n = 0;
     fields[fields_n++] = (struct form_field){"name", FORM_TEXT, name, sizeof name, NULL, 0};
     fields[fields_n++] = (struct form_field){"means", FORM_TEXT, means, sizeof means, NULL, 0};
@@ -386,6 +387,8 @@ static void edit_kind(struct board_cfg *c, int at)
             sizeof steps[i], YES_NO, 2};
     fields[fields_n++] = (struct form_field){"approval prompt", FORM_TEXT, approval,
                                              sizeof approval, NULL, 0};
+    fields[fields_n++] = (struct form_field){"next kind", FORM_TEXT, next,
+                                             sizeof next, NULL, 0};
     fields[fields_n++] = (struct form_field){"prompt", FORM_TEXT, prompt, 8192, NULL, 0};
 
     static const char *const NOTES[] = {
@@ -395,9 +398,11 @@ static void edit_kind(struct board_cfg *c, int at)
         "none of them: the worker writes it and the card is done.",
         "approval prompt is what a worker is told when you approve one in",
         "review; empty finishes the card there instead.",
+        "next kind is the kind of the card approving a plan files; empty sends",
+        "it through triage.",
     };
 
-    struct form f = {.title = "kind", .notes = NOTES, .notes_n = 6,
+    struct form f = {.title = "kind", .notes = NOTES, .notes_n = 8,
                      .fields = fields, .fields_n = fields_n};
     if (!form_run(&f) || !name[0]) {
         free(prompt);
@@ -405,6 +410,7 @@ static void edit_kind(struct board_cfg *c, int at)
     }
 
     snprintf(k->name, sizeof k->name, "%s", name);
+    snprintf(k->next_kind, sizeof k->next_kind, "%s", next);
     k->priority = atoi(priority);
     k->steps = 0;
     for (int i = 0; i < BOARD_STEPS; i++)

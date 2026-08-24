@@ -10,6 +10,7 @@
 #include "boardaudit.h"
 #include "boardcfg.h"
 #include "boardflow.h"
+#include "boardplan.h"
 #include "boardsweep.h"
 #include "boardtriage.h"
 #include "gitcmd.h"
@@ -437,6 +438,63 @@ static void write_kind(const char *name, const char *const *keys,
     expect(mdcfg_dir(dir, sizeof dir, "board/kinds"), "kinds dir");
     snprintf(path, sizeof path, "%s/%s.md", dir, name);
     expect(mdcfg_write(path, keys, vals, n, body), "kind file is written");
+}
+
+static void test_plan_files_a_card(void)
+{
+    const char *keys[] = {"means", "priority", "steps", "next kind"};
+    const char *vals[] = {"a request for a plan of the work", "1", "review",
+                          "feature"};
+    write_kind("plan", keys, vals, 4, "Read the repo and write the plan.\n");
+    boardcfg_reload();
+
+    const struct board_kind *k = boardcfg_kind("plan");
+    expect(k && !strcmp(k->next_kind, "feature"), "next kind comes off the file");
+    expect(!boardcfg_kind_takes("plan", BOARD_STEP_WORKTREE),
+           "a plan gets no worktree");
+    expect(boardflow_from("plan", BOARD_STEP_REVIEW, 1) == BOARD_REVIEW,
+           "and stops for a person");
+
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("plan the telegram menus", "/tmp/planrepo", id), "capture");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    if (!c) {
+        fail("the plan card is stored");
+        board_free(v, n);
+        return;
+    }
+
+    struct board_card edited = *c;
+    snprintf(edited.kind, sizeof edited.kind, "plan");
+    edited.col = BOARD_REVIEW;
+    edited.body = (char *)"1. read the menu code\n2. rewrite the cancel row";
+    expect(board_update(&edited), "the plan lands on the card");
+    board_free(v, n);
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && boardplan_is(c), "the card is a plan");
+    expect(c && boardplan_approve(c), "approving it files a card");
+    board_free(v, n);
+
+    n = board_load(&v);
+    struct board_card *made = NULL;
+    for (int i = 0; i < n; i++)
+        if (v[i].col == BOARD_BACKLOG && !strcmp(v[i].cwd, "/tmp/planrepo"))
+            made = &v[i];
+    expect(made != NULL, "the filed card waits in the backlog");
+    expect(made && made->body && strstr(made->body, "rewrite the cancel row"),
+           "with the plan whole as its spec");
+    expect(made && !strcmp(made->kind, "feature"), "as the kind the plan names");
+    expect(made && !strcmp(made->title, "plan the telegram menus"),
+           "under the title of the card that asked for it");
+
+    c = board_find(v, n, id);
+    expect(c && c->col == BOARD_DONE, "and the plan card is done");
+    board_free(v, n);
 }
 
 static void test_a_kind_file_carries_its_approval_prompt(void)
@@ -1085,6 +1143,7 @@ int main(void)
     test_sweep_review_can_refuse();
     test_sweep_with_nothing_to_raise();
     test_sweep_files_against_the_repo();
+    test_plan_files_a_card();
     test_reply_json();
     test_kinds();
     test_projects_block();

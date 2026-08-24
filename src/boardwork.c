@@ -14,6 +14,7 @@
 #include "boardflow.h"
 #include "boardlog.h"
 #include "boardmerge.h"
+#include "boardplan.h"
 #include "boardsweep.h"
 #include "session.h"
 #include "text.h"
@@ -835,8 +836,11 @@ void boardwork_finished(struct session *s)
     int            empty = 0;
     enum board_col next = landed(c, &empty);
 
-    if ((!failed || !*failed) && !empty)
+    if ((!failed || !*failed) && !empty) {
         edited.col = next;
+        if (boardplan_is(c) && reply && *reply)
+            edited.body = (char *)reply;
+    }
     int stored = board_update(&edited);
     board_free(cards, n);
 
