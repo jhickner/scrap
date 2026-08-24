@@ -368,6 +368,21 @@ void boardwork_branch_of(const char *id, char *out, size_t size)
     snprintf(out, size, "worktree-%s", id);
 }
 
+int boardwork_tidy_step(const char *root, const char *tree, const char *branch,
+                        char *out, size_t size)
+{
+    char qroot[4200], qtree[4200];
+    if (!text_shell_quote(root, qroot, sizeof qroot) ||
+        !text_shell_quote(tree, qtree, sizeof qtree))
+        return 0;
+
+    int at = snprintf(out, size,
+                      "git -C %s worktree remove --force %s >/dev/null 2>&1\n"
+                      "git -C %s branch -D %s >/dev/null 2>&1\n",
+                      qroot, qtree, qroot, branch);
+    return at > 0 && (size_t)at < size;
+}
+
 static int worktree_make(const char *root, const char *id, const char *path,
                          char *why, int size)
 {
@@ -947,23 +962,14 @@ int boardwork_pump(void)
 
 static int drop_worktree(const struct board_card *c)
 {
-    char root[4096], branch[128];
-    boardwork_branch_of(c->id, branch, sizeof branch);
-
+    char root[4096], branch[128], step[BOARDWORK_TIDY_MAX];
     if (!gitcmd_root(c->cwd, root, sizeof root))
         return 1;
 
-    char qroot[4200], qtree[4200];
-    if (!text_shell_quote(root, qroot, sizeof qroot) ||
-        !text_shell_quote(c->worktree, qtree, sizeof qtree))
+    boardwork_branch_of(c->id, branch, sizeof branch);
+    if (!boardwork_tidy_step(root, c->worktree, branch, step, sizeof step))
         return 1;
-
-    char cmd[9000];
-    snprintf(cmd, sizeof cmd,
-             "git -C %s worktree remove --force %s >/dev/null 2>&1; "
-             "git -C %s branch -D %s >/dev/null 2>&1",
-             qroot, qtree, qroot, branch);
-    return system(cmd) != -1;
+    return system(step) != -1;
 }
 
 int boardwork_release(const struct board_card *c)

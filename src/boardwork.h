@@ -30,6 +30,11 @@ void boardwork_worktree_of(const char *root, const char *id, char *out,
 
 void boardwork_branch_of(const char *id, char *out, size_t size);
 
+#define BOARDWORK_TIDY_MAX 16384
+
+int boardwork_tidy_step(const char *root, const char *tree, const char *branch,
+                        char *out, size_t size);
+
 int boardwork_tab(const char *id);
 
 int boardwork_auditing(const char *id);

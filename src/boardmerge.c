@@ -58,9 +58,8 @@ static char *script_for(const struct board_card *c, const char *root,
     char tree[4200];
     boardwork_worktree_of(root, c->id, tree, sizeof tree);
 
-    char qroot[4200], qtree[4200];
-    if (!text_shell_quote(root, qroot, sizeof qroot) ||
-        !text_shell_quote(tree, qtree, sizeof qtree))
+    char qroot[4200];
+    if (!text_shell_quote(root, qroot, sizeof qroot))
         return NULL;
 
     char branch[128];
@@ -80,13 +79,15 @@ static char *script_for(const struct board_card *c, const char *root,
         "echo '== merge'\n"
         "git -C %s merge --ff-only %s || { echo 'merge failed'; exit 1; }\n"
         "echo '== tidy'\n"
-        "git -C %s worktree remove --force %s >/dev/null 2>&1\n"
-        "git -C %s branch -d %s >/dev/null 2>&1\n"
+        "%s"
         "echo merged\n";
 
-    size_t need = strlen(rebase_fmt) + strlen(merge_fmt) +
-                  4 * strlen(base) + 2 * strlen(branch) +
-                  3 * strlen(qroot) + strlen(qtree) + 1;
+    char tidy[BOARDWORK_TIDY_MAX];
+    if (!boardwork_tidy_step(root, tree, branch, tidy, sizeof tidy))
+        return NULL;
+
+    size_t need = strlen(rebase_fmt) + strlen(merge_fmt) + strlen(tidy) +
+                  4 * strlen(base) + strlen(branch) + strlen(qroot) + 1;
     if (verify)
         need += strlen(check_fmt) + strlen(verify);
 
@@ -106,7 +107,7 @@ static char *script_for(const struct board_card *c, const char *root,
     }
 
     int n = snprintf(out + at, need - (size_t)at, merge_fmt,
-                     qroot, branch, qroot, qtree, qroot, branch);
+                     qroot, branch, tidy);
     if (n < 0 || (size_t)n >= need - (size_t)at)
         abort();
 
