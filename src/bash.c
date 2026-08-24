@@ -352,6 +352,16 @@ static void set_winsize(int fd)
     ioctl(fd, TIOCSWINSZ, &ws);
 }
 
+static void no_pager(void)
+{
+    setenv("PAGER", "cat", 1);
+    setenv("GIT_PAGER", "cat", 1);
+    setenv("MANPAGER", "cat", 1);
+    setenv("GH_PAGER", "cat", 1);
+    setenv("SYSTEMD_PAGER", "cat", 1);
+    setenv("DELTA_PAGER", "cat", 1);
+}
+
 void bash_run(const char *line)
 {
     const char *cmd = bash_body(line);
@@ -382,6 +392,7 @@ void bash_run(const char *line)
     if (pid == 0) {
         sigaction(SIGINT, &old_int, NULL);
         sigaction(SIGQUIT, &old_quit, NULL);
+        no_pager();
         const char *sh = getenv("SHELL");
         if (!sh || !*sh)
             sh = "/bin/sh";
