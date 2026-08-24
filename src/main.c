@@ -7,6 +7,8 @@
 
 #include "agenttabs.h"
 #include "app.h"
+#include "board.h"
+#include "boardcfg.h"
 #include "boardview.h"
 #include "child.h"
 #include "boardwork.h"
@@ -135,6 +137,8 @@ static void usage(void)
             "  -C dir     working directory for the agent's tools\n"
             "  -s         safe mode: skip skills, CLAUDE.md, MCP servers, hooks\n"
             "  --card     put the rest of the line on the board and leave\n"
+            "             -b and --tier pin the worker; a card id retargets it\n"
+            "  --tier     with --card: low, med or high\n"
             "  --telegram also answer over Telegram, in the same session\n"
             "  --connect telegram   the same thing, spelled out\n"
             "  -r         --resume: pick a past conversation to continue\n"
@@ -375,6 +379,7 @@ int main(int argc, char **argv)
         {"restore", required_argument, NULL, 'R'},
         {"tabs",    required_argument, NULL, 'B'},
         {"card",    no_argument,       NULL, 'K'},
+        {"tier",    required_argument, NULL, 1},
         {"telegram", no_argument,      NULL, 'T'},
         {"connect", required_argument, NULL, 'N'},
         {"help",    no_argument,       NULL, 'h'},
@@ -384,12 +389,14 @@ int main(int argc, char **argv)
     const char *backend = "claude";
     const char *model = NULL;
     const char *effort = NULL;
+    const char *tier = NULL;
     const char *dir = NULL;
     const char *session_arg = NULL;
     const char *restore_arg = NULL;
     const char *tabs_arg = NULL;
     int telegram = 0;
     int card = 0;
+    int pin_backend = 0;
     int fork_session = 0;
     int safe_mode = 0;
     int resume = 0;
@@ -397,9 +404,10 @@ int main(int argc, char **argv)
 
     while ((opt = getopt_long(argc, argv, "b:m:e:C:srh", LONG_OPTS, NULL)) != -1) {
         switch (opt) {
-        case 'b': backend = optarg; break;
+        case 'b': backend = optarg; pin_backend = 1; break;
         case 'm': model = optarg; break;
         case 'e': effort = optarg; break;
+        case 1:   tier = optarg; break;
         case 'C': dir = optarg; break;
         case 's': safe_mode = 1; break;
         case 'r': resume = 1; break;
@@ -428,6 +436,14 @@ int main(int argc, char **argv)
     }
     if (effort && !strcmp(effort, "default"))
         effort = NULL;
+    if (tier && !card) {
+        fprintf(stderr, APP_NAME ": --tier is for --card\n");
+        return 2;
+    }
+    if (tier && boardcfg_tier_from_name(tier) >= BOARD_TIERS) {
+        fprintf(stderr, APP_NAME ": --tier takes low, med or high\n");
+        return 2;
+    }
 
     sessionfork_set_program(argv[0]);
 
@@ -448,7 +464,16 @@ int main(int argc, char **argv)
     }
 
     if (card) {
-        if (optind >= argc) {
+        const char *card_backend = pin_backend ? backend : NULL;
+        const char *card_tier = tier;
+        int         rest = argc - optind;
+
+        if (rest == 1 && (card_backend || card_tier) &&
+            board_pin(argv[optind], card_backend, card_tier)) {
+            printf("%s\n", argv[optind]);
+            return 0;
+        }
+        if (rest <= 0) {
             fprintf(stderr, APP_NAME ": --card takes the text to file\n");
             return 2;
         }
@@ -468,6 +493,8 @@ int main(int argc, char **argv)
         }
         char id[16] = {0};
         int  ok = boardview_capture(text, cwd, id, sizeof id);
+        if (ok && (card_backend || card_tier))
+            ok = board_pin(id, card_backend, card_tier);
         free(text);
         if (!ok) {
             fprintf(stderr, APP_NAME ": could not write to the board\n");

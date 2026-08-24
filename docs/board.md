@@ -3,11 +3,13 @@
 A card is a thought you had. The board is what happens to it.
 
 Capture is meant to cost nothing: `/card fix the thing with the tabs`, or `mux
---card` from anywhere, appends a line and returns. No agent runs, nothing is
-classified, you keep typing. Everything after that — working out what the card
-meant, which repo it belongs to, who should build it, whether it is worth a
-worker at all — happens without you, and comes back to you only at the points
-where your judgement is the thing that is actually needed.
+--card` from anywhere, appends a line and returns. `-b` and `--tier` pin the
+worker; a card id in place of the text sets those pins on a card already on
+the board. No agent runs, nothing is classified, you keep typing. Everything
+after that — working out what the card meant, which repo it belongs to, who
+should build it, whether it is worth a worker at all — happens without you, and
+comes back to you only at the points where your judgement is the thing that is
+actually needed.
 
 ## The flow
 

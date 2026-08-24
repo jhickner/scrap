@@ -86,6 +86,8 @@ void board_title_of(const char *text, char *out, size_t size);
 
 int board_update(const struct board_card *card);
 
+int board_pin(const char *id, const char *backend, const char *tier);
+
 int board_remove(const char *id);
 
 int board_archive(int days);

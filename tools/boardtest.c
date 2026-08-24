@@ -95,8 +95,46 @@ static void test_capture(void)
     expect(strstr(c->body, "80 columns") != NULL, "body keeps the rest");
     expect(!strcmp(c->cwd, "/tmp/repo"), "cwd is recorded");
     expect(c->kind[0] == '\0', "kind waits for triage");
+    expect(c->backend_pin[0] == '\0' && c->tier_pin[0] == '\0',
+           "capture does not pin");
     expect(c->created > 0 && c->updated > 0, "card is stamped");
     board_free(v, n);
+}
+
+static void test_pin(void)
+{
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("pin the worker", "/tmp/repo", id), "capture");
+    expect(board_pin(id, "grok", "high"), "pin both");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    if (!c) {
+        fail("pinned card is found");
+        board_free(v, n);
+        return;
+    }
+    expect(!strcmp(c->backend_pin, "grok"), "backend pin");
+    expect(!strcmp(c->tier_pin, "high"), "tier pin");
+    expect(!strcmp(c->title, "pin the worker"), "pin leaves the spec");
+    board_free(v, n);
+
+    expect(board_pin(id, "claude", NULL), "pin backend only");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && !strcmp(c->backend_pin, "claude"), "backend pin replaced");
+    expect(c && !strcmp(c->tier_pin, "high"), "tier pin left alone");
+    board_free(v, n);
+
+    expect(board_pin(id, NULL, "low"), "pin tier only");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && !strcmp(c->backend_pin, "claude"), "backend pin left alone");
+    expect(c && !strcmp(c->tier_pin, "low"), "tier pin replaced");
+    board_free(v, n);
+
+    expect(!board_pin("nope", "grok", "high"), "pin of a stranger fails");
 }
 
 static void test_ids_are_distinct(void)
@@ -1327,6 +1365,7 @@ int main(void)
 
     test_capture();
     test_ids_are_distinct();
+    test_pin();
     test_note_and_move();
     test_update_preserves_created();
     test_update_leaves_others_alone();

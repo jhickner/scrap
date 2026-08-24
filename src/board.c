@@ -563,6 +563,27 @@ int board_update(const struct board_card *card)
     return with_card(card->id, apply_update, (void *)card);
 }
 
+struct pin_args {
+    const char *backend;
+    const char *tier;
+};
+
+static int apply_pin(struct board_card *c, void *ud)
+{
+    const struct pin_args *a = ud;
+    if (a->backend)
+        set_str(c->backend_pin, sizeof c->backend_pin, a->backend);
+    if (a->tier)
+        set_str(c->tier_pin, sizeof c->tier_pin, a->tier);
+    return 1;
+}
+
+int board_pin(const char *id, const char *backend, const char *tier)
+{
+    struct pin_args a = {backend, tier};
+    return with_card(id, apply_pin, &a);
+}
+
 struct note_args {
     const char *who;
     const char *text;

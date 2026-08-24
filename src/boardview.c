@@ -617,21 +617,6 @@ static int tier_choices(const char **out)
     return n;
 }
 
-static void pin_card(const char *id, const char *backend, const char *tier)
-{
-    struct board_card *cards = NULL;
-    int                n = board_load(&cards);
-    struct board_card *c = board_find(cards, n, id);
-    if (c) {
-        struct board_card edited = *c;
-        snprintf(edited.backend_pin, sizeof edited.backend_pin, "%s", backend);
-    snprintf(edited.tier_pin, sizeof edited.tier_pin, "%s", tier);
-        snprintf(edited.tier_pin, sizeof edited.tier_pin, "%s", tier);
-        board_update(&edited);
-    }
-    board_free(cards, n);
-}
-
 static void do_new(const char *cwd, char *sel_id)
 {
     const struct board_cfg *cfg = boardcfg();
@@ -663,7 +648,7 @@ static void do_new(const char *cwd, char *sel_id)
         return;
     snprintf(sel_id, BOARD_ID_MAX, "%s", id);
     if (backend[0] || tier[0])
-        pin_card(id, backend, tier);
+        board_pin(id, backend[0] ? backend : NULL, tier[0] ? tier : NULL);
 }
 
 static void do_serve(char *notice, size_t size)
