@@ -1,6 +1,7 @@
 #include "boardplan.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "board.h"
@@ -18,20 +19,84 @@ int boardplan_named(const char *kind)
     return kind && !strcmp(kind, PLAN_KIND);
 }
 
-/* the plan a card wrote before it was called a plan: a kind can be corrected
-   after the worker has answered, and then the answer is the plan. */
-const char *boardplan_said(const struct board_card *c)
+static int bookkeeping(const char *who)
 {
-    return board_said(c, "worker");
+    return !strcmp(who, "board") || !strcmp(who, "triage") ||
+           !strcmp(who, "plan") || !strcmp(who, "sweep");
+}
+
+/* everything said about the card from the first worker turn on: the plan and
+   whatever was discussed after it */
+char *boardplan_discussion(const struct board_card *c)
+{
+    if (!c)
+        return NULL;
+
+    const struct board_role *mine = boardcfg_worker();
+    const char              *job = mine && mine->job[0] ? mine->job : "worker";
+
+    int from = -1;
+    for (int i = 0; i < c->log_n && from < 0; i++)
+        if (!strcmp(c->log[i].who, job) && c->log[i].text && *c->log[i].text)
+            from = i;
+    if (from < 0)
+        for (int i = 0; i < c->log_n && from < 0; i++)
+            if (!bookkeeping(c->log[i].who) && c->log[i].text &&
+                *c->log[i].text)
+                from = i;
+    if (from < 0)
+        return NULL;
+
+    char  *out = NULL;
+    size_t len = 0;
+    FILE  *f = open_memstream(&out, &len);
+    if (!f)
+        return NULL;
+
+    for (int i = from; i < c->log_n; i++) {
+        const char *who = c->log[i].who, *text = c->log[i].text;
+        if (!text || !*text || bookkeeping(who))
+            continue;
+        fprintf(f, "%s%s said:\n\n%s\n", len ? "\n" : "", who, text);
+    }
+    fclose(f);
+
+    if (len)
+        return out;
+    free(out);
+    return NULL;
+}
+
+static char *filed_body(const struct board_card *c, const char *plan)
+{
+    const char *spec = c->body && *c->body ? c->body : c->title;
+
+    size_t need = strlen(spec) + strlen(plan) + 32;
+    char  *out = malloc(need);
+    if (!out)
+        return NULL;
+    snprintf(out, need, "## Spec\n\n%s\n\n## Plan\n\n%s", spec, plan);
+    return out;
 }
 
 int boardplan_approve(const struct board_card *c)
 {
-    if (!boardplan_is(c) || !c->body || !*c->body)
+    if (!boardplan_is(c))
+        return 0;
+
+    char *plan = boardplan_discussion(c);
+    if (!plan)
+        return 0;
+
+    char *body = filed_body(c, plan);
+    free(plan);
+    if (!body)
         return 0;
 
     char id[BOARD_ID_MAX];
-    if (!board_add(c->body, c->cwd, id))
+    int  added = board_add(body, c->cwd, id);
+    free(body);
+    if (!added)
         return 0;
 
     const struct board_kind *k = boardcfg_kind(c->kind);

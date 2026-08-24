@@ -791,16 +791,6 @@ static void save_card(const char *id, const struct boardcard_edit *e)
             board_title_of(e->spec, edited.title, sizeof edited.title);
     }
 
-    /* a card the worker planned but that was not sorted as a plan: correcting
-       the kind takes what the worker answered as the plan, so approving it
-       files a card the way a plan does */
-    const char *planned = NULL;
-    if (!e->proposals && !respec && !boardplan_is(live) &&
-        boardplan_named(e->kind))
-        planned = boardplan_said(live);
-    if (planned)
-        edited.body = (char *)planned;
-
     char *full = path_expand_home(e->where);
     if (full && *full)
         snprintf(edited.cwd, sizeof edited.cwd, "%s", full);
@@ -813,13 +803,8 @@ static void save_card(const char *id, const struct boardcard_edit *e)
 
     int repin = strcmp(edited.backend_pin, live->backend_pin) != 0 ||
                 strcmp(edited.tier_pin, live->tier_pin) != 0;
-    int adopted = planned != NULL;
     int ok = board_update(&edited);
     board_free(cards, n);
-
-    if (ok && adopted)
-        board_note(id, "you", "kind corrected to plan; the spec is now what "
-                              "the worker planned");
 
     if (ok && repin) {
         int waiting = 0;

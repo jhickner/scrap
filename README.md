@@ -8,3 +8,4 @@ subscription use.
 - can run multiple sessions with different backends in one window and switch
 between them
 - kitty image support, useful for iterating on graphical projects
+- kanban-based software factory

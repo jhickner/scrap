@@ -831,8 +831,6 @@ void boardwork_finished(struct session *s)
     if ((!failed || !*failed) && !empty) {
         edited.col = next ? BOARD_STEP : BOARD_DONE;
         snprintf(edited.step, sizeof edited.step, "%s", next ? next : "");
-        if (boardplan_is(c) && reply && *reply)
-            edited.body = (char *)reply;
     }
     int stored = board_update(&edited);
     board_free(cards, n);

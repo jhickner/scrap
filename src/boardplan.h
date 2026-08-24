@@ -7,7 +7,7 @@ int boardplan_is(const struct board_card *c);
 
 int boardplan_named(const char *kind);
 
-const char *boardplan_said(const struct board_card *c);
+char *boardplan_discussion(const struct board_card *c);
 
 int boardplan_approve(const struct board_card *c);
 

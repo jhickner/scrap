@@ -99,8 +99,8 @@ const struct board_default board_defaults[] = {
      "alone.\n"
      "\n"
      "Read the repo, and whatever else you need to read. Change nothing: no edits,\n"
-     "no commits, no branch. The plan is the whole of the output, and it becomes the\n"
-     "spec of the card that gets built from it.\n"
+     "no commits, no branch. The plan is the whole of the output. Approving the card\n"
+     "files a card holding this card's spec and everything said here.\n"
      "\n"
      "Say what should change, in which files, in what order, and what the traps are.\n"
     },
