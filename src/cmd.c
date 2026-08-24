@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "app.h"
+#include "board.h"
 #include "boardview.h"
 #include "boardwork.h"
 #include "chrome.h"
@@ -737,8 +738,8 @@ static void do_approve(struct session *s, const char *arg)
 
 static void do_moveto(struct session *s, const char *arg)
 {
-    const char *id = boardwork_card_of(s);
-    if (!id) {
+    const char *held = boardwork_card_of(s);
+    if (!held) {
         reply_error("/moveto \xe2\x80\x94 this session is not working a card");
         return;
     }
@@ -746,6 +747,10 @@ static void do_moveto(struct session *s, const char *arg)
         reply_error("/moveto <step> \xe2\x80\x94 no step to move to");
         return;
     }
+
+    /* boardview_moveto lets the worker go, clearing the slot held points into */
+    char id[BOARD_ID_MAX];
+    snprintf(id, sizeof id, "%s", held);
 
     char why[512] = "";
     if (boardview_moveto(id, arg, why, sizeof why))
