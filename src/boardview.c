@@ -867,6 +867,10 @@ static void build_stages(const struct board_card *c, struct notes *notes)
         {"merge",  BOARD_MERGING, BOARD_STEP_MERGE,  NULL},
     };
 
+    char   line[512];
+    size_t at = (size_t)snprintf(line, sizeof line, "  %-8s", "flow");
+    int    any = 0;
+
     for (size_t i = 0; i < sizeof STAGE / sizeof *STAGE; i++) {
         if (STAGE[i].step != BOARD_STEPS &&
             !boardcfg_kind_takes(c->kind, STAGE[i].step))
@@ -874,21 +878,38 @@ static void build_stages(const struct board_card *c, struct notes *notes)
         if (boardsweep_is(c) && STAGE[i].at != BOARD_DOING &&
             STAGE[i].at != BOARD_REVIEW)
             continue;
+        if (at >= sizeof line)
+            break;
 
-        const char *state;
+        const char *mark;
+        int         strong;
         int         here = c->col == STAGE[i].at ||
                            (STAGE[i].at == BOARD_NEW && c->col == BOARD_UNCLEAR);
-        if (here)
-            state = "current";
-        else if (c->col < STAGE[i].at)
-            state = "pending";
-        else if (STAGE[i].who && !stage_ran(c, STAGE[i].who))
-            state = "skipped";
-        else
-            state = "done";
+        if (here) {
+            mark = "\xe2\x96\xb8";
+            strong = 1;
+        } else if (c->col < STAGE[i].at) {
+            mark = "\xe2\x97\x8b";
+            strong = 0;
+        } else if (STAGE[i].who && !stage_ran(c, STAGE[i].who)) {
+            mark = "\xe2\x80\x93";
+            strong = 0;
+        } else {
+            mark = "\xe2\x9c\x93";
+            strong = 1;
+        }
 
-        note_line(notes, dsprintf("  %-8s %s", STAGE[i].name, state));
+        int put = snprintf(line + at, sizeof line - at,
+                           strong ? "  **%s %s**" : "  %s %s", mark,
+                           STAGE[i].name);
+        if (put < 0)
+            break;
+        at += (size_t)put;
+        any = 1;
     }
+
+    if (any)
+        note_line(notes, dsprintf("%s", line));
 }
 
 /* The live session is the truth while a tab is up: a handover switches the
