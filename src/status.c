@@ -235,6 +235,10 @@ void status_tick(void)
 {
     if (!active || !visible || size_changing())
         return;
+    if (chrome_modal_active()) {
+        dirty = 1;
+        return;
+    }
     int advanced = spin_advance(&frame, &frame_at);
     if (dirty)
         paint();

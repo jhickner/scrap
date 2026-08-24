@@ -385,6 +385,8 @@ static void settle_finished(int index, int hold)
 static int pump(int hold)
 {
     int busy = 0;
+
+    hold = hold || chrome_modal_active();
     for (int i = 0; i < ntabs; i++) {
         struct session *s = tabs[i].s;
         int running = session_turn_running(s);

@@ -892,7 +892,8 @@ static void idle_ready_hook(void *ud)
     if (!p || !p->idle_render)
         return;
     p->idle_render(p->idle_ud);
-    repaint(p);
+    if (!chrome_modal_active())
+        repaint(p);
 }
 
 static void restart_check(struct prompt *p)
