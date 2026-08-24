@@ -13,10 +13,15 @@ static char diffs[4][1024];
 static char texts[4][256];
 static int nrec;
 static int last_failed;
+static char streamed[512];
 
 static void on_event(void *ud, const grok_event *ev)
 {
     (void)ud;
+    if (ev->kind == GROK_EV_ASSISTANT && ev->text) {
+        size_t at = strlen(streamed);
+        snprintf(streamed + at, sizeof streamed - at, "%s", ev->text);
+    }
     if (ev->kind == GROK_EV_TOOL) {
         tool_starts++;
         snprintf(last_tool, sizeof last_tool, "%s", ev->name ? ev->name : "");
@@ -187,6 +192,20 @@ static int mock_server(int argc, char **argv)
                        "\"status\":\"completed\",\"title\":\"Web search:\","
                        "\"rawOutput\":{\"action\":{\"type\":\"search\","
                        "\"query\":\"COLMAP Apple Silicon\"}}}}}\n");
+                fflush(stdout);
+            } else if (text && strstr(text, "text-around-tool")) {
+                printf("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\","
+                       "\"params\":{\"update\":{\"sessionUpdate\":"
+                       "\"agent_message_chunk\",\"content\":{\"type\":\"text\","
+                       "\"text\":\"Looking.\"}}}}\n");
+                printf("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\","
+                       "\"params\":{\"update\":{\"sessionUpdate\":\"tool_call\","
+                       "\"toolCallId\":\"grep-2\",\"title\":\"grep\","
+                       "\"kind\":\"search\",\"status\":\"in_progress\"}}}\n");
+                printf("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\","
+                       "\"params\":{\"update\":{\"sessionUpdate\":"
+                       "\"agent_message_chunk\",\"content\":{\"type\":\"text\","
+                       "\"text\":\"Found it.\"}}}}\n");
                 fflush(stdout);
             } else if (text && strstr(text, "grep-late")) {
                 printf("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\","
@@ -361,6 +380,18 @@ int main(int argc, char **argv)
         grok_stop(client);
         return 1;
     }
+
+    streamed[0] = '\0';
+    reply = grok_send(client, "text-around-tool");
+    if (!reply || strcmp(reply, "Looking.\n\nFound it.") ||
+        strcmp(reply, streamed)) {
+        fprintf(stderr, "groktest: the reply and the streamed chunks disagree "
+                "(reply=%s streamed=%s)\n", reply ? reply : "NULL", streamed);
+        free(reply);
+        grok_stop(client);
+        return 1;
+    }
+    free(reply);
 
     grok_stop(client);
     puts("groktest: ok");

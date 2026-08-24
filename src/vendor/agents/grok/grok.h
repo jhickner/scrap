@@ -424,13 +424,12 @@ static void gk_concat(char **dst, const char *src) {
     *dst = n;
 }
 
-static void gk_paragraph(char **dst) {
-    size_t al = *dst ? strlen(*dst) : 0;
-    if (!al) return;
-    while (al && ((*dst)[al - 1] == '\n' || (*dst)[al - 1] == ' ')) al--;
-    if (!al) return;
-    (*dst)[al] = '\0';
-    gk_concat(dst, "\n\n");
+static const char *gk_gap(const char *acc) {
+    size_t al = acc ? strlen(acc) : 0;
+    if (!al) return "";
+    if (al >= 2 && acc[al - 1] == '\n' && acc[al - 2] == '\n') return "";
+    if (acc[al - 1] == '\n') return "\n";
+    return "\n\n";
 }
 
 static void gk_append(char **dst, const char *src) {
@@ -888,14 +887,21 @@ static int gk_handle(grok_client *c, cJSON *ev, int want_id, char **acc, int *ok
                 cJSON *content = cJSON_GetObjectItem(u, "content");
                 const char *txt = content ? cJSON_GetStringValue(cJSON_GetObjectItem(content, "text")) : NULL;
                 if (strcmp(su, "agent_message_chunk") == 0 && txt) {
-                    /* Chunks stream one message, but the messages either side
-                     * of a tool call are separate paragraphs. */
-                    if (acc && c->tools_since_text)
-                        gk_paragraph(acc);
+                    /* Chunks stream one message, but the messages either
+                     * side of a tool call are separate paragraphs. The break
+                     * rides on the event as well as the reply: a caller that
+                     * prints the events and then compares them with the reply
+                     * must find them equal, or it prints the reply twice. */
+                    char *chunk = NULL;
+                    if (c->tools_since_text)
+                        gk_concat(&chunk, gk_gap(acc ? *acc : NULL));
+                    gk_concat(&chunk, txt);
                     c->tools_since_text = 0;
-                    if (acc) gk_concat(acc, txt);
-                    grok_event e = { .kind = GROK_EV_ASSISTANT, .text = txt };
+                    if (acc) gk_concat(acc, chunk);
+                    grok_event e = { .kind = GROK_EV_ASSISTANT,
+                                     .text = chunk ? chunk : txt };
                     gk_emit(c, &e);
+                    free(chunk);
                 } else if (strcmp(su, "agent_thought_chunk") == 0 && txt) {
                     grok_event e = { .kind = GROK_EV_THINKING, .text = txt };
                     gk_emit(c, &e);
