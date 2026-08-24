@@ -1,11 +1,11 @@
 ---
 runs: agent
 tier: high
+skippable: 1
 fail marker: FINDINGS
 fail step: worktree
 over files: 5
 over lines: 200
-skippable: 1
 ---
 
 Review the change on this branch against the commit it branched from.

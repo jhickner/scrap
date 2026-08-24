@@ -1,9 +1,10 @@
 ---
 runs: command
-lock: repo
+tier: med
+skippable: 1
 fail step: worktree
 fail prompt: landing
-skippable: 1
+lock: repo
 ---
 
 echo '== rebase onto {base}'

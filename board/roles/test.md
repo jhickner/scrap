@@ -1,9 +1,9 @@
 ---
 runs: agent
 tier: med
+skippable: 1
 fail marker: BROKEN
 fail step: worktree
-skippable: 1
 ---
 
 Devise and run a test that shows the change on this branch does what the card asked, and answer with what you did and what happened.

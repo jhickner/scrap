@@ -1,5 +1,7 @@
 ---
+runs: agent
 tier: med
+skippable: 1
 ---
 
 You are running a period code audit sweep. Incremental work often requires

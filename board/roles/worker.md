@@ -1,7 +1,7 @@
 ---
 runs: worker
-step: worktree
 tier: med
+step: worktree
 skippable: 0
 ---
 

@@ -1,6 +1,7 @@
 ---
-job: landing
-step: landing
+runs: agent
+tier: med
+skippable: 1
 ---
 
 This branch could not be landed. What the attempt said is below.
