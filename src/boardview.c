@@ -870,8 +870,8 @@ int boardview_approve(const char *id, char *why, int size)
     if (!c)
         snprintf(why, (size_t)size, "card %s is not on the board", id);
     else if (!boardflow_waits_on_you(c))
-        snprintf(why, (size_t)size, "card %s is in %s, which is not yours to "
-                 "answer", id, board_where(c));
+        snprintf(why, (size_t)size, "card %s is in %s, and can't be approved "
+                 "yet", id, board_where(c));
     else {
         approve(c, 0);
         ok = 1;
