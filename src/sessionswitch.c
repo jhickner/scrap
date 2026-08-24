@@ -610,14 +610,14 @@ static int switch_once(void)
     char shortcuts[16] = {KEY_CLOSE, KEY_NEW, KEY_ASK, KEY_GO, KEY_RENAME,
                           KEY_CTRL(KEY_CLOSE), KEY_CTRL(KEY_NEW), KEY_CTRL(KEY_ASK),
                           KEY_CTRL(KEY_GO), KEY_CTRL(KEY_RENAME), '\n',
-                          PICK_KEY_RIGHT, 0};
+                          PICK_KEY_RIGHT, '\t', 0};
     int pressed = 0;
 
     char title[256];
     snprintf(title, sizeof title,
              "sessions \xc2\xb7 enter: bring here%s \xc2\xb7 n: new "
              "\xc2\xb7 p: new + prompt \xc2\xb7 r: rename \xc2\xb7 x: close "
-             "\xc2\xb7 /: search",
+             "\xc2\xb7 tab: board \xc2\xb7 /: search",
              livelist_tmux_window()[0] ? " \xc2\xb7 shift-enter: go there" : "");
     struct listing listing = {rows, n, spin, marks, &live, &nlive, 0, 0};
     sync_columns(&listing);
@@ -631,7 +631,8 @@ static int switch_once(void)
     if (picked >= 0)
         chosen = rows[picked];
 
-    if (pressed > 0 && pressed < 0x20 && pressed != '\n' && pressed != PICK_KEY_RIGHT)
+    if (pressed > 0 && pressed < 0x20 && pressed != '\n' && pressed != '\t' &&
+        pressed != PICK_KEY_RIGHT)
         pressed |= 0x60;
 
     if (pressed == PICK_KEY_RIGHT)
@@ -642,6 +643,11 @@ static int switch_once(void)
     free(heading);
     free(spin);
     free(marks);
+
+    if (pressed == '\t') {
+        free(live);
+        return SESSIONSWITCH_BOARD;
+    }
 
     if (picked < 0) {
         free(live);
@@ -730,10 +736,12 @@ static int switch_once(void)
     return 0;
 }
 
-void sessionswitch_run(void)
+int sessionswitch_run(void)
 {
-    while (switch_once())
+    int r;
+    while ((r = switch_once()) == 1)
         ;
+    return r;
 }
 
 static int gave_last;

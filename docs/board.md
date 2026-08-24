@@ -201,6 +201,9 @@ you have been using the thing.
 
 ## The view
 
+Tab on an empty prompt opens the board and tab leaves it for the session list,
+so the two views are one keystroke apart in either direction.
+
 Two screens, both `pick_run_live()`. Columns are group headings, cards are
 rows, and the status column carries a spinner while a worker's turn is in
 flight. There is no grid: mux uses no alternate screen anywhere, a rotated

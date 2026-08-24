@@ -4,6 +4,8 @@
 
 struct session;
 
+#define BOARDVIEW_SESSIONS (-2)
+
 int boardview_run(const char *cwd);
 
 int boardview_capture(const char *text, const char *cwd, char *id_out, int size);

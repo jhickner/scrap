@@ -24,8 +24,8 @@
 #include "sessionfork.h"
 #include "sessionlist.h"
 #include "sessionload.h"
-#include "sessionswitch.h"
 #include "viewport.h"
+#include "views.h"
 #include "workspace.h"
 #include "sidechannel.h"
 #include "settings.h"
@@ -698,11 +698,10 @@ static void do_resume(struct session *s, const char *arg)
 
 static void do_sessions(struct session *s, const char *arg)
 {
-    (void)s;
     (void)arg;
     if (!can_pick("/sessions"))
         return;
-    sessionswitch_run();
+    views_sessions(session_cwd(s));
 }
 
 static void do_card(struct session *s, const char *arg)
@@ -723,9 +722,7 @@ static void do_board(struct session *s, const char *arg)
     (void)arg;
     if (!can_pick("/board"))
         return;
-    int tab = boardview_run(session_cwd(s));
-    if (tab >= 0)
-        workspace_show(tab);
+    views_board(session_cwd(s));
 }
 
 static void do_status(struct session *s, const char *arg)

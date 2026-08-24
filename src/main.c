@@ -33,6 +33,7 @@
 #include "tty.h"
 #include "ui.h"
 #include "viewport.h"
+#include "views.h"
 #include "workspace.h"
 #include "vendor/agents/backend.h"
 #include "vendor/repl.h"
@@ -198,7 +199,12 @@ static void side_tick(void *ud)
 static int idle_busy(void *ud)   { (void)ud; return workspace_busy(); }
 static void replay(void *ud)      { (void)ud; session_replay(workspace_current()); }
 static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
-static void switcher(void *ud)    { (void)ud; sessionswitch_run(); }
+static void switcher(void *ud)
+{
+    (void)ud;
+    struct session *here = workspace_current();
+    views_sessions(here ? session_cwd(here) : NULL);
+}
 
 static void board(void *ud)
 {
@@ -206,9 +212,7 @@ static void board(void *ud)
     struct session *here = workspace_current();
     if (!here)
         return;
-    int tab = boardview_run(session_cwd(here));
-    if (tab >= 0)
-        workspace_show(tab);
+    views_board(session_cwd(here));
 }
 
 static void another(void *ud)

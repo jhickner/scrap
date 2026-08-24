@@ -62,7 +62,7 @@
     "f feedback  ·  r send back  ·  x cancel start  ·  u undo  ·  "          \
     "k skip step\n"                                                            \
     "n new  ·  t triage  ·  l log  ·  d delete  ·  w sweep  ·  c config  ·  "  \
-    "b backend  ·  * all repos  ·  / search"
+    "b backend  ·  * all repos  ·  tab sessions  ·  / search"
 
 struct vrow {
     char          id[BOARD_ID_MAX];
@@ -1209,6 +1209,11 @@ int boardview_run(const char *cwd)
                 return -1;
             }
             continue;
+        }
+        if (pressed == '\t') {
+            close_list();
+            board_free(cards, n);
+            return BOARDVIEW_SESSIONS;
         }
         if (at < 0) {
             close_list();

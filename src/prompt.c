@@ -825,6 +825,7 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
     default: {
         if (ev->key == TK_LEFT && !live && p->switcher && p->repl.len == 0 &&
             !overlay_open(p)) {
+            viewport_defer();
             chrome_clear();
             p->switcher(p->switcher_ud);
             return KEY_OK;
