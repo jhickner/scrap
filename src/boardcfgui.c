@@ -233,8 +233,6 @@ static const char *const EFFORTS[] = {
     "", "low", "medium", "high", "xhigh", "max",
 };
 
-static const char *const TIERS[] = {"low", "med", "high"};
-
 static void edit_profile(struct board_cfg *c, int role_at)
 {
     struct board_profile *p = &c->roles[role_at];
@@ -244,8 +242,9 @@ static void edit_profile(struct board_cfg *c, int role_at)
     for (int t = 0; t < BOARD_TIERS; t++) {
         const struct board_backend *b = boardcfg_backend(c, c->serving);
         const char                 *model = b ? b->level[t].model : "";
-        items[t] = (struct pick_item){TIERS[t], model[0] ? model : "default"};
-        if (!strcmp(TIERS[t], p->tier))
+        const char                 *name = boardcfg_tier_name((enum board_tier)t);
+        items[t] = (struct pick_item){name, model[0] ? model : "default"};
+        if (!strcmp(name, p->tier))
             at = t;
     }
 
@@ -254,7 +253,8 @@ static void edit_profile(struct board_cfg *c, int role_at)
 
     int chosen = pick_run(title, items, BOARD_TIERS, at);
     if (chosen >= 0)
-        snprintf(p->tier, sizeof p->tier, "%s", TIERS[chosen]);
+        snprintf(p->tier, sizeof p->tier, "%s",
+                 boardcfg_tier_name((enum board_tier)chosen));
 }
 
 static void edit_serving(struct board_cfg *c)
