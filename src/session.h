@@ -126,8 +126,6 @@ const char *session_saved_effort(const char *backend);
 
 const char *session_model_label(const struct session *s);
 
-const char *session_model_short(const struct session *s, const char *model);
-
 const char *session_effort_label(const struct session *s);
 
 int session_can_resume(const struct session *s);

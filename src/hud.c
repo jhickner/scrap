@@ -6,6 +6,7 @@
 
 #include "app.h"
 #include "gitinfo.h"
+#include "models.h"
 #include "session.h"
 #include "tg.h"
 #include "ui.h"
@@ -44,7 +45,7 @@ static int paint_row(const struct seg *segs, int count, int cols)
 static int row_identity(const struct session *s, int cols)
 {
     const char *backend = session_backend(s);
-    const char *model = session_model_short(s, session_model_label(s));
+    const char *model = models_short_name(backend, session_model_label(s));
     const char *effort = session_effort_label(s);
 
     char tail[256];

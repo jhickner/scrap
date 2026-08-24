@@ -202,7 +202,7 @@ static void note_identity(const struct session *s)
 
     viewport_item_begin(VIEWPORT_ROWS(1, 1));
     ui_note("%s \xc2\xb7 %s%s%s", session_backend(s),
-            session_model_short(s, session_model_label(s)), effort, ctx);
+            models_short_name(session_backend(s), session_model_label(s)), effort, ctx);
     viewport_item_end();
     ui_flush();
 }

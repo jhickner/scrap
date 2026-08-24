@@ -334,8 +334,13 @@ int models_for(const char *backend, const struct pick_item **out)
 
 const char *models_short_name(const char *backend, const char *model)
 {
-    if (!strcmp(backend, "claude") && !strncmp(model, "claude-", 7) && model[7])
-        return model + 7;
+    const size_t plen = sizeof "claude-" - 1;
+
+    if (!model)
+        return NULL;
+    if (backend && !strcmp(backend, "claude") && !strncmp(model, "claude-", plen) &&
+        model[plen])
+        return model + plen;
     return model;
 }
 

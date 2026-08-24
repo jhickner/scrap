@@ -11,6 +11,7 @@
 #include "filediff.h"
 #include "muxcfg.h"
 #include "md.h"
+#include "models.h"
 #include "restart.h"
 #include "session.h"
 #include "sessionview.h"
@@ -325,8 +326,8 @@ static int worker_labels(const struct worker *w, int live, char out[4][64],
     snprintf(out[n++], 64, "%s", w->name);
 
     const char *model = *w->resolved ? w->resolved : *w->model ? w->model : "default";
-    if (!strncmp(w->name, "claude", 6) && !strncmp(model, "claude-", 7) && model[7])
-        model += 7;
+    if (!strncmp(w->name, "claude", 6))
+        model = models_short_name("claude", model);
     role[n] = UI_DIM;
     snprintf(out[n++], 64, "%s", model);
 

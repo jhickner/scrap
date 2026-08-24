@@ -88,7 +88,7 @@ static void tab_rows(struct row *rows, int *n)
         snprintf(r->id, sizeof r->id, "%s", session_id(s) ? session_id(s) : "");
         snprintf(r->detail, sizeof r->detail, "%s %s",
                  session_backend(s),
-                 session_model_short(s, session_model_label(s)));
+                 models_short_name(session_backend(s), session_model_label(s)));
         row_status(r, status);
     }
 }

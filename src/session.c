@@ -1763,11 +1763,6 @@ static void await_model(struct session *s)
     }
 }
 
-const char *session_model_short(const struct session *s, const char *model)
-{
-    return models_short_name(s->backend, model);
-}
-
 const char *session_model_label(const struct session *s)
 {
     if (s->resolved && *s->resolved)
