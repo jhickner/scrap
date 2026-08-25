@@ -26,6 +26,7 @@ struct keep {
     enum ui_role   role;
     int            error;
     int            gap;
+    char          *row;
 };
 
 static void keep_free(void *ud)
@@ -34,12 +35,14 @@ static void keep_free(void *ud)
     free(k->a);
     free(k->b);
     free(k->spans);
+    free(k->row);
     free(k);
 }
 
 static void cluster_paint(const char *line, const unsigned char *spans);
 static void tool_tag(const char *name, char *out, size_t size);
 static unsigned char *row_spans(const char *name, const char *row, size_t prefix);
+static int cluster_budget(void);
 
 static int collapsed;
 
@@ -50,7 +53,13 @@ static int keep_drops(const struct keep *k)
     return k->kind == KEEP_DIFF || (k->kind == KEEP_OUTPUT && !k->error);
 }
 
-static void call_collapsed(const char *name, const char *arg)
+static size_t row_prefix(const char *row)
+{
+    size_t n = strcspn(row, "]");
+    return row[n] ? n + 2 : n;
+}
+
+static void call_row(const char *name, const char *arg, char *out, size_t size)
 {
     char tag[64];
     tool_tag(name, tag, sizeof tag);
@@ -58,10 +67,35 @@ static void call_collapsed(const char *name, const char *arg)
     char flat[4096];
     text_one_line(arg ? arg : "", flat, sizeof flat);
 
-    char row[4096];
-    snprintf(row, sizeof row, "%s %s", tag, flat);
+    snprintf(out, size, "%s %s", tag, flat);
+}
 
-    unsigned char *spans = row_spans(name, row, strlen(tag) + 1);
+static int call_row_extend(const char *base, const char *arg, char *out, size_t size)
+{
+    if (!base)
+        return 0;
+    if (!arg || !*arg) {
+        snprintf(out, size, "%s", base);
+        return 1;
+    }
+
+    char flat[4096];
+    text_one_line(arg, flat, sizeof flat);
+
+    snprintf(out, size, "%s, %s", base, flat);
+    return (int)ui_cells(out) <= cluster_budget();
+}
+
+static void call_collapsed(const struct keep *k)
+{
+    char own[4096];
+    const char *row = k->row;
+    if (!row) {
+        call_row(k->a, k->b, own, sizeof own);
+        row = own;
+    }
+
+    unsigned char *spans = row_spans(k->a, row, row_prefix(row));
     cluster_paint(row, spans);
     free(spans);
 }
@@ -75,7 +109,7 @@ static void keep_render(void *ud, int cols)
         if (keep_drops(k))
             return;
         if (k->kind == KEEP_CALL) {
-            call_collapsed(k->a, k->b);
+            call_collapsed(k);
             return;
         }
     }
@@ -151,7 +185,10 @@ static char *keep_encode(void *ud)
     return out;
 }
 
-static void restate(int stale);
+static void restate(unsigned from, int after_call, int stale);
+
+static unsigned run_start;
+static int      run_after;
 
 static unsigned keep(struct keep *k)
 {
@@ -161,8 +198,8 @@ static unsigned keep(struct keep *k)
     keep_render(k, ui_columns());
     viewport_item_end();
     viewport_item_persist(mark, VIEW_KEEP_KIND, keep_encode);
-    if (collapsed)
-        restate(0);
+    if (collapsed && mark)
+        restate(run_start ? run_start : mark, run_start ? run_after : 0, 0);
     return mark;
 }
 
@@ -250,41 +287,90 @@ void view_keep_diff(char *patch)
 }
 
 struct collapse {
-    int stale;
-    int after_call;
+    int          stale;
+    int          after_call;
+    struct keep *head;
+    unsigned     head_mark;
+    int          head_after; /* what the head's gap was decided against, so a
+                                rescan starting at the head agrees with it */
 };
+
+static void row_set(struct keep *k, unsigned mark, const char *row)
+{
+    if (k->row && strcmp(k->row, row) == 0)
+        return;
+    free(k->row);
+    k->row = strdup(row);
+    viewport_item_stale(mark);
+}
 
 static void restate_item(unsigned mark, const char *kind, void *ud, void *ctx)
 {
     struct collapse *c = ctx;
 
     if (!ud || !kind || strcmp(kind, VIEW_KEEP_KIND) != 0) {
+        c->head = NULL;
+        c->head_mark = 0;
         c->after_call = 0;
         return;
     }
-    const struct keep *k = ud;
-    int hidden = collapsed && keep_drops(k);
-    int row = collapsed && k->kind == KEEP_CALL;
+    struct keep *k = ud;
 
-    viewport_item_hide(mark, hidden);
-    viewport_item_pad(mark, !(row && c->after_call));
+    if (collapsed && keep_drops(k)) {
+        viewport_item_hide(mark, 1);
+        if (c->stale)
+            viewport_item_stale(mark);
+        return;
+    }
+
+    char row[4096];
+    if (collapsed && k->kind == KEEP_CALL && c->head &&
+        strcmp(c->head->a, k->a) == 0 &&
+        call_row_extend(c->head->row, k->b, row, sizeof row)) {
+        row_set(c->head, c->head_mark, row);
+        viewport_item_hide(mark, 1);
+        return;
+    }
+
+    viewport_item_hide(mark, 0);
+
+    if (collapsed && k->kind == KEEP_CALL) {
+        call_row(k->a, k->b, row, sizeof row);
+        row_set(k, mark, row);
+        viewport_item_pad(mark, !c->after_call);
+        if (c->stale)
+            viewport_item_stale(mark);
+        c->head = k;
+        c->head_mark = mark;
+        c->head_after = c->after_call;
+        c->after_call = 1;
+        return;
+    }
+
+    viewport_item_pad(mark, 1);
     if (c->stale)
         viewport_item_stale(mark);
-    if (!hidden)
-        c->after_call = row;
+    c->head = NULL;
+    c->head_mark = 0;
+    c->after_call = 0;
 }
 
-static void restate(int stale)
+static void restate(unsigned from, int after_call, int stale)
 {
-    struct collapse c = {.stale = stale};
-    viewport_scan(restate_item, &c);
+    struct collapse c = {.stale = stale, .after_call = after_call};
+    viewport_scan(from, restate_item, &c);
+    run_start = c.head_mark;
+    run_after = c.head_after;
     viewport_repad();
 }
+
+static void rewidth(void) { restate(0, 0, 0); }
 
 void view_collapse(int on)
 {
     collapsed = on ? 1 : 0;
-    restate(1);
+    viewport_on_width(rewidth);
+    restate(0, 0, 1);
 }
 
 static const struct {
@@ -487,19 +573,13 @@ static int cluster_budget(void)
 
 void view_cluster_start(struct turnview *v, const char *name, const char *arg, int gap)
 {
-    char tag[64];
-    tool_tag(name, tag, sizeof tag);
-
-    char flat[4096];
-    text_one_line(arg ? arg : "", flat, sizeof flat);
-
     char row[4096];
-    snprintf(row, sizeof row, "%s %s", tag, flat);
+    call_row(name, arg, row, sizeof row);
 
     view_cluster_forget(v);
     snprintf(v->tool, sizeof v->tool, "%s", name);
     v->line = strdup(row);
-    v->spans = v->line ? row_spans(name, row, strlen(tag) + 1) : NULL;
+    v->spans = v->line ? row_spans(name, row, row_prefix(row)) : NULL;
     v->gap = gap;
 }
 
@@ -510,12 +590,8 @@ int view_cluster_extend(struct turnview *v, const char *name, const char *arg)
     if (!arg || !*arg)
         return 1;
 
-    char flat[4096];
-    text_one_line(arg, flat, sizeof flat);
-
     char row[4096];
-    snprintf(row, sizeof row, "%s, %s", v->line, flat);
-    if ((int)ui_cells(row) > cluster_budget())
+    if (!call_row_extend(v->line, arg, row, sizeof row))
         return 0;
 
     char *grown = strdup(row);

@@ -67,6 +67,10 @@ static int suspended;
 static int scrolled;
 static int dirty;
 static int deferred;
+static int painting;
+
+static viewport_width_fn on_width;
+static int painted_cols;
 
 static unsigned anchor_id;
 static int      anchor_skip;
@@ -177,9 +181,17 @@ void viewport_item_stale(unsigned mark)
     dirty = 1;
 }
 
-void viewport_scan(viewport_scan_fn fn, void *ctx)
+void viewport_on_width(viewport_width_fn fn)
 {
-    for (int i = 0; i < nitems; i++)
+    on_width = fn;
+}
+
+void viewport_scan(unsigned from, viewport_scan_fn fn, void *ctx)
+{
+    int at = from ? index_of_mark(from) : 0;
+    if (at < 0)
+        at = 0;
+    for (int i = at; i < nitems; i++)
         if (!items[i].pad)
             fn(items[i].id, items[i].kind, items[i].ud, ctx);
 }
@@ -997,12 +1009,19 @@ void viewport_flush(void)
 
 void viewport_paint(void)
 {
-    if (!active || suspended || held || in_render || deferred)
+    if (!active || suspended || held || in_render || deferred || painting)
         return;
 
     int H = tty_rows(), W = tty_screen_columns();
     if (H < 1 || W < 1)
         return;
+
+    painting = 1;
+    if (W != painted_cols) {
+        painted_cols = W;
+        if (on_width)
+            on_width();
+    }
 
     struct item pending = {0};
     struct window g = window_geometry(W, H, &pending);
@@ -1116,6 +1135,7 @@ void viewport_paint(void)
 
     frame_swap(&shown, &built);
     dirty = 0;
+    painting = 0;
 }
 
 void viewport_chrome(char **rows_in, int n, int caret_row, int caret_col)

@@ -36,6 +36,58 @@ static void pump(struct screen *s)
         feed(s, buf, (size_t)n);
 }
 
+static int merges(struct screen *s)
+{
+    int ok = 1;
+
+    viewport_clear();
+    view_collapse(1);
+    view_keep_tool_call("Bash", "git add -A", 0);
+    view_keep_output("nothing to commit", UI_DIM, 0);
+    view_keep_tool_call("Bash", "git commit -m wip", 1);
+    view_keep_output("1 file changed", UI_DIM, 0);
+    viewport_paint();
+    pump(s);
+
+    if (row_with(s, "git add -A") < 0 || row_with(s, "git commit") != row_with(s, "git add -A"))
+        ok = fail("collapsed calls of one tool share a row", NULL) == 0;
+
+    char pad[81], over[256];
+    memset(pad, 'x', sizeof pad - 1);
+    pad[sizeof pad - 1] = '\0';
+    snprintf(over, sizeof over, "grep -rn %s src", pad);
+
+    view_keep_tool_call("Bash", over, 1);
+    viewport_paint();
+    pump(s);
+    if (row_with(s, "grep -rn") != row_with(s, "git commit") + 1)
+        ok = fail("a call too wide for the row starts its own", NULL) == 0;
+
+    setenv("COLUMNS", "34", 1);
+    viewport_touch();
+    viewport_paint();
+    pump(s);
+    if (row_with(s, "git commit") == row_with(s, "git add -A"))
+        ok = fail("narrowing the pane splits a merged row", NULL) == 0;
+
+    setenv("COLUMNS", "80", 1);
+    viewport_touch();
+    viewport_paint();
+    pump(s);
+    if (row_with(s, "git commit") != row_with(s, "git add -A"))
+        ok = fail("widening the pane merges the rows back", NULL) == 0;
+
+    view_collapse(0);
+    pump(s);
+    if (row_with(s, "git commit") == row_with(s, "git add -A"))
+        ok = fail("expanding gives each call its own row again", NULL) == 0;
+    if (count_on_screen(s, "nothing to commit") != 1 ||
+        count_on_screen(s, "1 file changed") != 1)
+        ok = fail("expanding shows the output of merged calls", NULL) == 0;
+
+    return ok;
+}
+
 static int collapse_redraws(void)
 {
     char path[] = "/tmp/mux-sessionviewtest-XXXXXX";
@@ -104,6 +156,8 @@ static int collapse_redraws(void)
     pump(&s);
     if (count_on_screen(&s, "on branch master") != 1 || count_on_screen(&s, "after") != 1)
         ok = fail("expanding shows what was kept while collapsed", NULL) == 0;
+
+    ok = merges(&s) && ok;
 
     viewport_end();
     return ok ? 0 : 1;

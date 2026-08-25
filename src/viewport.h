@@ -66,8 +66,12 @@ void viewport_item_hide(unsigned mark, int on);
 void viewport_item_pad(unsigned mark, int on);
 void viewport_item_stale(unsigned mark);
 
+/* from is a hint: a mark no longer held scans from the first item */
 typedef void (*viewport_scan_fn)(unsigned mark, const char *kind, void *ud, void *ctx);
-void viewport_scan(viewport_scan_fn fn, void *ctx);
+void viewport_scan(unsigned from, viewport_scan_fn fn, void *ctx);
+
+typedef void (*viewport_width_fn)(void);
+void viewport_on_width(viewport_width_fn fn);
 
 void viewport_repad(void);
 
