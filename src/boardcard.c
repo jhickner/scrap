@@ -236,11 +236,6 @@ enum boardcard_action boardcard_form(const struct board_card *c,
                                      struct boardcard_edit *out)
 {
     const struct board_cfg *cfg = boardcfg();
-    const char             *kinds[BOARD_KINDS_MAX + 1];
-    int                     kinds_n = 0;
-    kinds[kinds_n++] = "";
-    for (int i = 0; i < cfg->kinds_n; i++)
-        kinds[kinds_n++] = cfg->kinds[i].name;
 
     const char *backends[BOARD_BACKENDS_MAX + 1];
     int         backends_n =
@@ -249,14 +244,12 @@ enum boardcard_action boardcard_form(const struct board_card *c,
     int         tiers_n = boardcfg_tier_choices(tiers, COUNT(tiers));
 
     char spec[8192];
-    char kind[16];
     char where[4096];
     char priority[8];
     char backend[32];
     char tier[8];
 
     snprintf(spec, sizeof spec, "%s", c->body ? c->body : "");
-    snprintf(kind, sizeof kind, "%s", c->kind);
     path_home_relative(c->cwd, where, sizeof where);
     snprintf(priority, sizeof priority, "%d", c->priority);
     snprintf(backend, sizeof backend, "%s", c->backend_pin);
@@ -270,8 +263,6 @@ enum boardcard_action boardcard_form(const struct board_card *c,
     fields[fields_n++] = (struct form_field){"spec", FORM_TEXT, spec,
                                              sizeof spec, NULL, 0,
                                              CARD_SPEC_ROWS};
-    fields[fields_n++] = (struct form_field){"kind", FORM_CHOICE, kind,
-                                             sizeof kind, kinds, kinds_n, 0};
     fields[fields_n++] = (struct form_field){"repo", FORM_TEXT, where,
                                              sizeof where, NULL, 0, 0};
     fields[fields_n++] = (struct form_field){"priority", FORM_CHOICE, priority,
@@ -315,11 +306,7 @@ enum boardcard_action boardcard_form(const struct board_card *c,
     build_notes(c, &notes);
 
     char heading[600];
-    if (c->kind[0] && c->title[0] && strcmp(c->title, c->body ? c->body : ""))
-        snprintf(heading, sizeof heading, "%s · %s · %s", c->id, c->kind, c->title);
-    else
-        snprintf(heading, sizeof heading, "%s · %s", c->id,
-                 c->kind[0] ? c->kind : "unsorted");
+    snprintf(heading, sizeof heading, "%s · %s", c->id, c->title);
 
     struct form f = {
         .title = heading,
@@ -337,7 +324,6 @@ enum boardcard_action boardcard_form(const struct board_card *c,
     notes_free(&notes);
 
     snprintf(out->spec, sizeof out->spec, "%s", spec);
-    snprintf(out->kind, sizeof out->kind, "%s", kind);
     snprintf(out->where, sizeof out->where, "%s", where);
     snprintf(out->run, sizeof out->run, "%s", run);
     snprintf(out->priority, sizeof out->priority, "%s", priority);

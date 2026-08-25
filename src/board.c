@@ -20,26 +20,6 @@ static void set_str(char *dst, size_t n, const char *src)
     snprintf(dst, n, "%s", src ? src : "");
 }
 
-static const char *const COL_NAMES[BOARD_COLS] = {
-    "new", "unclear", "backlog", "done",
-};
-
-static const struct {
-    const char *was;
-    const char *is;
-} COL_WAS[] = {
-    {"active", "worktree"},
-    {"doing", "worktree"},
-    {"merging", "merge"},
-};
-
-const char *board_col_name(enum board_col col)
-{
-    if (col < 0 || col >= BOARD_COLS)
-        return COL_NAMES[BOARD_NEW];
-    return COL_NAMES[col];
-}
-
 static const char *const STAND_NAMES[BOARD_STANDS] = {
     "open", "working", "review", "done",
 };
@@ -55,7 +35,7 @@ enum board_stand board_stands(const struct board_card *c)
 {
     if (!c)
         return BOARD_OPEN;
-    if (c->col == BOARD_DONE)
+    if (c->closed)
         return BOARD_CLOSED;
     if (c->queue_n)
         return BOARD_WORKING;
@@ -74,42 +54,14 @@ int board_ran(const struct board_card *c, const char *action)
     return 0;
 }
 
-/* A name that is not one of the columns named a step in the per-kind pipeline
-   the board used to walk. The card lands in the backlog, and the step name is
-   handed on so read_history can work out what it had already been through. */
-static const char *where_from_name(struct board_card *c, const char *name)
-{
-    c->col = BOARD_NEW;
-    if (!name || !*name)
-        return NULL;
-
-    for (int i = 0; i < BOARD_COLS; i++)
-        if (!strcmp(name, COL_NAMES[i])) {
-            c->col = (enum board_col)i;
-            return NULL;
-        }
-
-    for (size_t i = 0; i < sizeof COL_WAS / sizeof *COL_WAS; i++)
-        if (!strcmp(name, COL_WAS[i].was))
-            name = COL_WAS[i].is;
-
-    c->col = BOARD_BACKLOG;
-    return name;
-}
-
-void board_put(struct board_card *c, const char *name)
-{
-    where_from_name(c, name);
-}
-
 static time_t stamped(const struct board_card *c)
 {
     return c->updated ? c->updated : c->created;
 }
 
-int board_cmp_col(const struct board_card *a, const struct board_card *b)
+int board_cmp(const struct board_card *a, const struct board_card *b)
 {
-    if (a->col == BOARD_DONE && b->col == BOARD_DONE) {
+    if (a->closed && b->closed) {
         time_t ta = stamped(a), tb = stamped(b);
         if (ta != tb)
             return ta < tb ? 1 : -1;
@@ -262,20 +214,14 @@ static void read_names(const cJSON *o, const char *key,
     }
 }
 
-/* A card written before the board kept a history: what it walked through is
-   whatever its kind lists ahead of the step it stopped in. A guess about the
-   past, and the only one available. */
-static void walked_before(struct board_card *c, const char *stopped_in)
+/* A card written before the board dropped its columns names the one it was in.
+   Only whether it was closed still means anything. */
+static int closed_from_json(const cJSON *o)
 {
-    int upto = c->col == BOARD_DONE ? BOARD_KIND_STEPS
-             : stopped_in ? boardcfg_kind_step_at(c->kind, stopped_in)
-                          : 0;
-    for (int i = 0; i < upto && c->done_n < BOARD_DONE_MAX; i++) {
-        const char *step = boardcfg_kind_step(c->kind, i);
-        if (!step)
-            break;
-        set_str(c->done[c->done_n++], BOARD_ACTION_NAME, step);
-    }
+    const cJSON *j = cJSON_GetObjectItem((cJSON *)o, "closed");
+    if (j && cJSON_IsNumber(j))
+        return j->valuedouble != 0;
+    return !strcmp(json_str(o, "col"), "done");
 }
 
 static int card_from_json(const cJSON *o, struct board_card *c)
@@ -285,8 +231,7 @@ static int card_from_json(const cJSON *o, struct board_card *c)
     if (!c->id[0])
         return 0;
 
-    const char *stopped_in = where_from_name(c, json_str(o, "col"));
-    set_str(c->kind, sizeof c->kind, json_str(o, "kind"));
+    c->closed = closed_from_json(o);
     set_str(c->title, sizeof c->title, json_str(o, "title"));
     set_str(c->cwd, sizeof c->cwd, json_str(o, "cwd"));
     set_str(c->backend, sizeof c->backend, json_str(o, "backend"));
@@ -312,8 +257,6 @@ static int card_from_json(const cJSON *o, struct board_card *c)
     c->stopped = (int)json_num(o, "stopped");
     read_names(o, "queue", c->queue, &c->queue_n, BOARD_QUEUE);
     read_names(o, "done", c->done, &c->done_n, BOARD_DONE_MAX);
-    if (!cJSON_GetObjectItem((cJSON *)o, "done"))
-        walked_before(c, stopped_in);
 
     const cJSON *log = cJSON_GetObjectItem((cJSON *)o, "log"), *e = NULL;
     cJSON_ArrayForEach(e, log) {
@@ -353,8 +296,7 @@ static cJSON *card_to_json(const struct board_card *c)
         return NULL;
 
     cJSON_AddStringToObject(o, "id", c->id);
-    cJSON_AddStringToObject(o, "col", board_col_name(c->col));
-    cJSON_AddStringToObject(o, "kind", c->kind);
+    cJSON_AddNumberToObject(o, "closed", c->closed);
     cJSON_AddStringToObject(o, "title", c->title);
     cJSON_AddStringToObject(o, "body", c->body ? c->body : "");
     cJSON_AddStringToObject(o, "cwd", c->cwd);
@@ -563,7 +505,6 @@ int board_add(const char *text, const char *cwd, char id_out[BOARD_ID_MAX])
     struct board_card *c = &v[n];
     memset(c, 0, sizeof *c);
     mint_id(v, n, c->id);
-    c->col = BOARD_NEW;
     c->created = c->updated = time(NULL);
     board_title_of(text, c->title, sizeof c->title);
     c->body = dup_or_empty(text);
@@ -660,21 +601,6 @@ int board_note(const char *id, const char *who, const char *text)
     return ok;
 }
 
-struct move_args {
-    enum board_col col;
-    const char    *who;
-    const char    *why;
-};
-
-static int apply_move(struct board_card *c, void *ud)
-{
-    const struct move_args *a = ud;
-    c->col = a->col;
-    if (a->why && *a->why)
-        return note_append(c, a->who, a->why);
-    return 1;
-}
-
 struct queue_args {
     const char *const *actions;
     int                n;
@@ -765,7 +691,7 @@ static int apply_close(struct board_card *c, void *ud)
 {
     (void)ud;
     c->queue_n = 0;
-    c->col = BOARD_DONE;
+    c->closed = 1;
     return 1;
 }
 
@@ -774,20 +700,6 @@ int board_close(const char *id)
     if (!with_card(id, apply_close, NULL))
         return 0;
     boardlog_note(id, "you", "closed");
-    return 1;
-}
-
-int board_move(const char *id, enum board_col col, const char *who,
-               const char *why)
-{
-    struct move_args a = {col, who, why};
-    if (!with_card(id, apply_move, &a))
-        return 0;
-
-    char said[512];
-    snprintf(said, sizeof said, "\xe2\x86\x92 %s%s%s", board_col_name(col),
-             why && *why ? " \xc2\xb7 " : "", why && *why ? why : "");
-    boardlog_note(id, who, said);
     return 1;
 }
 
@@ -814,7 +726,7 @@ int board_archive(int days)
 
     FILE *out = NULL;
     for (int i = 0; i < n; i++) {
-        if (v[i].col != BOARD_DONE)
+        if (!v[i].closed)
             continue;
         time_t when = stamped(&v[i]);
         if (when > cutoff)

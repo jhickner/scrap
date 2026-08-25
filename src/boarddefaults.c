@@ -42,6 +42,27 @@ const struct board_default board_defaults[] = {
      "Answer with what you built, which files it touched, and what to run to see it\n"
      "work.\n"
     },
+    {"actions/name.md",
+     "---\n"
+     "tier: low\n"
+     "on: capture\n"
+     "---\n"
+     "\n"
+     "You are naming one card on a work board. Answer with JSON only, no prose and no\n"
+     "code fence.\n"
+     "\n"
+     "  {\"title\":\"...\"}\n"
+     "\n"
+     "title is what the card is about, at most five words, lower case, no trailing\n"
+     "full stop. Name the thing rather than describing the work on it:\n"
+     "\n"
+     "  \"tab strip wraps at 80\"        and not \"investigate the tab wrapping problem\"\n"
+     "  \"retry backoff for the poller\" and not \"figure out how retries should work\"\n"
+     "  \"board card queue ordering\"    and not \"look into the ordering of the queue\"\n"
+     "\n"
+     "Take the name from what the card says. Do not guess at detail it does not give,\n"
+     "and do not judge the work or say how hard it looks.\n"
+    },
     {"actions/plan.md",
      "---\n"
      "tier: high\n"
@@ -71,54 +92,6 @@ const struct board_default board_defaults[] = {
      "read it and come back with revisions; each time they do, rewrite the same file\n"
      "under the same name, and only rename it if what the plan is about has changed.\n"
     },
-    {"actions/triage.md",
-     "---\n"
-     "tier: low\n"
-     "on: capture\n"
-     "---\n"
-     "\n"
-     "You are sorting one card on a work board. Read it and answer with JSON only, no prose and no code fence.\n"
-     "\n"
-     "  {\"kind\":\"...\",\"title\":\"...\",\"spec\":\"...\",\"cwd\":\"...\",\"confidence\":0.0,\"question\":\"\"}\n"
-     "\n"
-     "{kinds}\n"
-     "title is a short name for the card, at most 5 words.\n"
-     "spec is what the card asks for, in a few sentences. Do not invent\n"
-     "  requirements the card does not imply.\n"
-     "cwd is the absolute path of the repo it belongs to.\n"
-     "confidence is 0.0 to 1.0.\n"
-     "question is the one thing you would have to ask, or \"\".\n"
-     "\n"
-     "The board takes plan cards and nothing else. A plan card asks for a plan of\n"
-     "some work: what should be done and how, written down for someone else to carry\n"
-     "out. It does not ask for the work itself.\n"
-     "\n"
-     "  \"make a plan to fix the tab ordering\"   plan.\n"
-     "  \"how should we do the retry backoff?\"   plan. It asks how, not for the fix.\n"
-     "  \"plan out the board rewrite\"            plan.\n"
-     "  \"fix the tab ordering\"                  not a plan. It asks for the work.\n"
-     "  \"cachegrind: 4.2ms warm\"                not a plan. It is a note.\n"
-     "  \"https://example.com/thing\"             not a plan. It is a link.\n"
-     "\n"
-     "When the card asks for a plan, set kind to plan, confidence above 0.7, and\n"
-     "leave question empty. Missing detail is not a reason to be unsure: whoever\n"
-     "plans it will work the detail out.\n"
-     "\n"
-     "When it does not, leave kind empty, set confidence to 0.0, and write in\n"
-     "question one line saying what the card asks for instead and that the board\n"
-     "only takes plans.\n"
-     "\n"
-     "The card was captured in a directory, given below. Unless the card names\n"
-     "somewhere else, that is the repo, and you should say so rather than leaving\n"
-     "cwd empty.\n"
-    },
-    {"kinds/plan.md",
-     "---\n"
-     "means: a request for a plan of the work rather than the work itself\n"
-     "priority: 1\n"
-     "steps: plan\n"
-     "---\n"
-    },
     {"pipelines/build.md",
      "---\n"
      "actions: plan, implement\n"
@@ -126,4 +99,4 @@ const struct board_default board_defaults[] = {
     },
 };
 
-const int board_defaults_n = 5;
+const int board_defaults_n = 4;

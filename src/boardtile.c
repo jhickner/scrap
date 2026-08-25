@@ -6,7 +6,7 @@
 
 #include "boarddiff.h"
 #include "boardflow.h"
-#include "boardtriage.h"
+#include "boardname.h"
 #include "boardwork.h"
 #include "session.h"
 #include "text.h"
@@ -85,8 +85,8 @@ static void short_repo(const char *cwd, char *out, size_t size)
 
 const char *boardtile_step(const char *id)
 {
-    if (boardtriage_running(id))
-        return "triaging";
+    if (boardname_running(id))
+        return "naming";
     return boardwork_step_job(id);
 }
 
@@ -94,7 +94,7 @@ static void status_of(const struct board_card *c, int wide, const char *step,
                       int tab, char *out, size_t size, time_t *stamp)
 {
     char ts[32], when[64];
-    text_ago(c->updated ? c->updated : c->created, c->col == BOARD_DONE, ts,
+    text_ago(c->updated ? c->updated : c->created, c->closed, ts,
              sizeof ts);
     if (step && tab >= 0)
         snprintf(when, sizeof when, "%s · tab %d", step, tab + 1);
@@ -147,7 +147,6 @@ int boardtile_of(const struct board_card *c, int wide, struct board_tile *out)
     out->c = c;
     snprintf(out->title, sizeof out->title, "%s",
              c->title[0] ? c->title : "(untitled)");
-    snprintf(out->kind, sizeof out->kind, "%s", c->kind);
     column_mark(c, &out->mark, &out->mark_role);
 
     out->tab = boardwork_tab(c->id);

@@ -36,7 +36,8 @@ void boardwork_discard(const struct board_card *c);
 
 int boardwork_pump(void);
 
-int boardwork_send_back(const struct board_card *c, const char *why);
+/* stop what the card is running and say why, leaving it in review */
+int boardwork_stop(const struct board_card *c, const char *why);
 
 void boardwork_spoke_to(struct session *s);
 

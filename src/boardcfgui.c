@@ -19,7 +19,6 @@ enum row_kind {
     ROW_TOGGLE,
     ROW_SERVING,
     ROW_BACKEND,
-    ROW_PROJECTS,
     ROW_VIEW,
 };
 
@@ -73,11 +72,6 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
     toggle_row(rows, n, "auto pull", &c->auto_pull);
     toggle_row(rows, n, "auto pick", &c->auto_pick);
 
-    head(rows, n, "triage");
-    rows[*n].kind = ROW_PROJECTS;
-    rows[*n].label = "projects";
-    (*n)++;
-
     head(rows, n, "archive");
     count_row(rows, n, "after", &c->archive_after, 0, 3650, "days");
 
@@ -130,9 +124,6 @@ static void value_of(const struct row *r, const struct board_cfg *c,
                                    b->level[t].model[0] ? b->level[t].model : "default");
         break;
     }
-    case ROW_PROJECTS:
-        snprintf(out, size, "%s", c->projects[0] ? c->projects : "none");
-        break;
     case ROW_VIEW:
         snprintf(out, size, "%s", c->view[0] ? c->view : "list");
         break;
@@ -222,15 +213,6 @@ static void edit_backend(struct board_cfg *c, int at)
     }
 }
 
-static void edit_projects(struct board_cfg *c)
-{
-    char *said = ask_run("directory the projects sit in", c->projects);
-    if (!said)
-        return;
-    snprintf(c->projects, sizeof c->projects, "%s", said);
-    free(said);
-}
-
 
 void boardcfgui_run(void)
 {
@@ -268,7 +250,6 @@ void boardcfgui_run(void)
         case ROW_TOGGLE:  *rows[at].count = !*rows[at].count; touched = 1; break;
         case ROW_SERVING: edit_serving(c); touched = 1; break;
         case ROW_BACKEND: edit_backend(c, rows[at].backend_at); touched = 1; break;
-        case ROW_PROJECTS: edit_projects(c); touched = 1; break;
         case ROW_VIEW:
             snprintf(c->view, sizeof c->view, "%s",
                      strcmp(c->view, "grid") ? "grid" : "list");

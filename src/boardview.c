@@ -18,7 +18,7 @@
 #include "boardflow.h"
 #include "boardgrid.h"
 #include "boardtile.h"
-#include "boardtriage.h"
+#include "boardname.h"
 #include "boardwork.h"
 #include "child.h"
 #include "chrome.h"
@@ -32,13 +32,13 @@
 
 #define KEY_NEW      'n'
 #define KEY_DELETE   'd'
-#define KEY_TRIAGE   't'
+#define KEY_NAME     't'
 #define KEY_START    's'
 #define KEY_START_MAX 'S'
 #define KEY_GO       'g'
-#define KEY_APPROVE  'a'
-#define KEY_APPROVE_ALL 'A'
-#define KEY_REJECT   'r'
+#define KEY_CLOSE    'a'
+#define KEY_CLOSE_ALL 'A'
+#define KEY_STOP     'r'
 #define KEY_UNSTART  'x'
 #define KEY_FEEDBACK 'f'
 #define KEY_LOG      'l'
@@ -186,7 +186,7 @@ static int shows(const struct board_card *c, const char *filter)
 static int by_col(const void *a, const void *b)
 {
     const struct board_card *const *x = a, *const *y = b;
-    return board_cmp_col(*x, *y);
+    return board_cmp(*x, *y);
 }
 
 /* Four lanes, whatever the actions are: waiting on you, being worked, open,
@@ -249,13 +249,11 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
             if (t.stamp)
                 stamp_next(t.stamp);
 
-            /* the kind and the pins are the tile's footer; the row runs
-               them on the end of the status */
-            char tail[128];
-            snprintf(tail, sizeof tail, "%s%s%s", t.kind,
-                     t.kind[0] && t.pins[0] ? " · " : "", t.pins);
+            /* the pins are the tile's footer; the row runs them on the end
+               of the status */
             r->detail = text_dsprintf("%s%s%s", t.status,
-                                      t.status[0] && tail[0] ? " · " : "", tail);
+                                      t.status[0] && t.pins[0] ? " · " : "",
+                                      t.pins);
 
             for (int j = 0; j < t.recent_n; j++) {
                 struct vrow *say = row_add(l);
@@ -444,7 +442,7 @@ static int board_reap(void)
         if (!child_reap(key, sizeof key, &out, &ok))
             break;
         (void)ok;
-        changed |= boardtriage_take(key, out);
+        changed |= boardname_take(key, out);
         free(out);
     }
     return changed;
@@ -489,14 +487,6 @@ static int board_tick(void *ud)
         moved = 1;
 
     return moved ? PICK_TICK_REOPEN : 0;
-}
-
-static void triage_the_new(struct board_card *cards, int n)
-{
-    for (int i = 0; i < n; i++)
-        if (!cards[i].kind[0] && !boardtriage_running(cards[i].id) &&
-            boardtriage_attempts(&cards[i]) == 0)
-            boardtriage_start(&cards[i]);
 }
 
 __attribute__((format(printf, 1, 2)))
@@ -596,7 +586,7 @@ static void do_serve(char *notice, size_t size)
         snprintf(notice + used, size - used, " · %d after their current card", waiting);
 }
 
-enum { ASK_NONE, ASK_APPROVE_ALL, ASK_DELETE };
+enum { ASK_NONE, ASK_CLOSE_ALL, ASK_DELETE };
 
 static int do_delete(const struct board_card *c)
 {
@@ -700,22 +690,21 @@ static void save_card(const char *id, const struct boardcard_edit *e)
     }
 
     struct board_card edited = *live;
-    snprintf(edited.kind, sizeof edited.kind, "%s", e->kind);
     snprintf(edited.backend_pin, sizeof edited.backend_pin, "%s", e->backend);
     snprintf(edited.tier_pin, sizeof edited.tier_pin, "%s", e->tier);
     edited.priority = atoi(e->priority);
-
-    int respec = strcmp(e->spec, live->body ? live->body : "") != 0;
     edited.body = (char *)e->spec;
-    if (!live->kind[0])
+
+    /* a title nobody has named still follows the spec it was taken from */
+    char taken[BOARD_TITLE_MAX];
+    board_title_of(live->body ? live->body : "", taken, sizeof taken);
+    if (!strcmp(live->title, taken))
         board_title_of(e->spec, edited.title, sizeof edited.title);
 
     char *full = path_expand_home(e->where);
     if (full && *full)
         snprintf(edited.cwd, sizeof edited.cwd, "%s", full);
     free(full);
-
-    (void)respec;
 
     int repin = strcmp(edited.backend_pin, live->backend_pin) != 0 ||
                 strcmp(edited.tier_pin, live->tier_pin) != 0;
@@ -754,7 +743,7 @@ static void do_card(const struct board_card *c)
     board_free(cards, n);
 }
 
-int boardview_approve(const char *id, char *why, int size)
+int boardview_close(const char *id, char *why, int size)
 {
     struct board_card *cards = NULL;
     int                n = board_load(&cards);
@@ -842,6 +831,13 @@ int boardview_capture(const char *text, const char *cwd, char *id_out, int size)
         return 0;
     if (id_out && size > 0)
         snprintf(id_out, (size_t)size, "%s", id);
+
+    /* the card is open the moment it is captured, carrying its own first line;
+       naming runs alongside and improves the title if it comes back */
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    boardname_start(board_find(cards, n, id));
+    board_free(cards, n);
     return 1;
 }
 
@@ -879,8 +875,6 @@ int boardview_run(const char *cwd)
     for (;;) {
         struct board_card *cards = NULL;
         int                n = board_load(&cards);
-
-        triage_the_new(cards, n);
 
         if (board_archive(boardcfg()->archive_after)) {
             board_free(cards, n);
@@ -965,7 +959,8 @@ int boardview_run(const char *cwd)
         int row = at >= 0 ? at : cursor;
         if (row >= 0) {
             if (grid)
-                anchor_tile(&cur, &g, row, at >= 0 ? -1 : (int)g.t[row].c->col,
+                anchor_tile(&cur, &g, row,
+                            at >= 0 ? -1 : (int)board_stands(g.t[row].c),
                             at >= 0 ? -1 : g.lane_of[row]);
             else
                 anchor_set(&cur, &l, row, at >= 0 ? -1 : (int)l.v[row].col);
@@ -986,7 +981,7 @@ int boardview_run(const char *cwd)
 
             struct board_card *c = board_find(cards, n, cur.id);
             if (at >= 0 && pressed == 'y') {
-                if (what == ASK_APPROVE_ALL) {
+                if (what == ASK_CLOSE_ALL) {
                     int did = close_all(cards, n, filter);
                     snprintf(notice, sizeof notice, "closed %d card%s", did,
                              did == 1 ? "" : "s");
@@ -1024,9 +1019,9 @@ int boardview_run(const char *cwd)
             do_new(filter[0] ? filter : here, cur.id);
             cur.col = -1;
             break;
-        case KEY_TRIAGE:
+        case KEY_NAME:
             if (c)
-                boardtriage_start(c);
+                boardname_start(c);
             break;
         case KEY_START:
             if (c) {
@@ -1070,27 +1065,27 @@ int boardview_run(const char *cwd)
             }
             break;
         }
-        case KEY_APPROVE:
+        case KEY_CLOSE:
             if (c && board_close(c->id))
                 anchor_step(&cur);
             break;
-        case KEY_APPROVE_ALL: {
+        case KEY_CLOSE_ALL: {
             int ready = in_review(cards, n, filter);
             if (!ready)
                 snprintf(notice, sizeof notice, "nothing in review");
             else {
                 snprintf(ask, sizeof ask, "close %d card%s in review?", ready,
                          ready == 1 ? "" : "s");
-                asking = ASK_APPROVE_ALL;
+                asking = ASK_CLOSE_ALL;
             }
             break;
         }
-        case KEY_REJECT:
+        case KEY_STOP:
             if (c && board_stands(c) != BOARD_OPEN) {
                 close_list();
                 char *why = ask_run("what is wrong with it", NULL);
                 if (why) {
-                    boardwork_send_back(c, why);
+                    boardwork_stop(c, why);
                     free(why);
                 }
             }

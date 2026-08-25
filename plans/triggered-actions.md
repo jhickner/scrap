@@ -38,10 +38,10 @@ The column is derived, not stored:
     closed by hand                              -> done
 
 There is no `unclear`: naming never asks you anything, so nothing lands there.
-
-`board_where()` keeps its shape — it returns the running action's name when one
-is running, and the derived column name otherwise — so callers that print where
-a card is do not change.
+Nor is there `new` or `backlog`: nothing moved a card between them once triage
+stopped classifying, so the whole column collapses to a `closed` bit on the
+card. `board_where()` goes with it; callers that print where a card is ask
+`board_stands()` and name the stand.
 
 A gate is satisfied when every name in `needs:` is in `done`. `done` is appended
 only on success, which is the point: `deploy needs: merge` has to know the merge
@@ -115,15 +115,17 @@ on failure it clears the queue and leaves the card in review with a note, rather
 than sending it back a step. `boardwork_approve`, `boardwork_send_back` and
 `boardwork_reject` collapse into `boardwork_stop` (clear the queue) — there is
 nothing to approve when review is a resting state, only more to trigger.
+`/approve` becomes `/close` and the board's `a` key closes rather than approves.
 
 **boardstep.c.** Unchanged in shape; `boardstep_finished` loses the fail-marker
 branch, which moves to `boardwork_finished`.
 
-**boardtriage.c** narrows to naming. It keeps its shape — a headless
-`child_start` on a low tier, answering with JSON — and loses everything but the
-title: no `kind`, no `spec`, no `cwd`, no `confidence`, no `question`. It fires
-on capture, before any session exists, which is why it stays headless rather
-than becoming an ordinary action.
+**boardtriage.c becomes boardname.c**, since triage is not what it does any
+more. It keeps its shape — a headless `child_start` on a low tier, answering
+with JSON — and loses everything but the title: no `kind`, no `spec`, no `cwd`,
+no `confidence`, no `question`. It fires on capture, before any session exists,
+which is why it stays headless rather than becoming an ordinary action. It only
+bothers on a card long enough that its own first line reads badly.
 
 Naming cannot fail in a way you need to answer, so it never blocks: the card is
 open the moment it is captured, carrying `board_title_of`'s first line, and the
@@ -146,8 +148,9 @@ a config written by an older build keeps whatever is in
 card carries across every action, and the copy in `board-cards/` is what makes
 it survive the worktree going away at merge.
 
-**boardundo.c** reads `merge_into`/`merge_from`/`merge_to`, which stay. It needs
-`boardundo_can` to test the derived column instead of `BOARD_DONE`.
+**boardundo.c** goes. Nothing sets `merge_into`/`merge_from`/`merge_to` once
+`merge` is not a shipped action, so `board_ran(c, "merge")` can never be true
+and the whole module is unreachable. The three card fields go with it.
 
 ## Views
 
@@ -191,12 +194,14 @@ happens in `load`, and the new shape is written back on the next update.
 ## Order of work
 
 1. `struct board_action` and `board/actions/`, still driving the old flow, so
-   the config change lands on its own and `make check` stays green.
-2. Card `queue` and `done`, the derived column, and the read migration.
+   the config change lands on its own and `make check` stays green. **Done.**
+2. Card `queue` and `done`, the derived column, and the read migration. **Done.**
 3. `boardflow` rewritten to gates; `boardwork` to queue head, with the cwd move.
-4. Pipelines and the trigger UI.
-5. Delete kinds, triage, and the approve/send-back path.
-6. Views.
+   **Done.**
+4. Pipelines and the trigger UI. **Done.**
+5. Delete kinds, triage, and the approve/send-back path. **Done.**
+6. Views. Mostly fell out of step 3: both views already lane by `board_stands`.
+   What is left is checking nothing still assumes a lane per action.
 
 Steps 1–3 are the change; 4–6 are consequences. Each stops at a green build.
 
@@ -229,10 +234,8 @@ history would otherwise read as a card nothing had ever been run on, which is
 the one case a failed first action would land in. `stopped` clears when
 something is queued again or an action passes.
 
-**Open: what shape a name takes.** Uniform matters more than clever, so the
-prompt should pin it rather than ask for "a short title": at most five words,
-lower case, no trailing full stop, naming the thing rather than describing it —
+**Settled: what shape a name takes.** At most five words, lower case, no
+trailing full stop, naming the thing rather than describing the work on it —
 `tab strip wraps at 80` and not `investigate the tab wrapping problem`. The
-other reading of uniform is a kebab-case slug, `tab-strip-wrap`, which reads
-well in a dense list and would double as the branch and plan-file name. Pick
-one before writing the prompt; they are not worth supporting both of.
+kebab-case slug was the other candidate; it reads well in a dense list but the
+branch already comes from the card id, so it bought nothing.

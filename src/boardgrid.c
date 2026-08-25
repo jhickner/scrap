@@ -68,11 +68,10 @@ static int text_rows(const char *s, int budget, int max)
 
 static int has_status(const struct board_tile *t) { return t->status[0] != 0; }
 
-/* the kind of card, and the backend or tier it was pinned to */
+/* the backend or tier the card was pinned to */
 static int foot_of(const struct board_tile *t, char *out, size_t size)
 {
-    snprintf(out, size, "%s%s%s", t->kind, t->kind[0] && t->pins[0] ? " · " : "",
-             t->pins);
+    snprintf(out, size, "%s", t->pins);
     return out[0] != '\0';
 }
 

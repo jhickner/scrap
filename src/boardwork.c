@@ -291,8 +291,6 @@ static void ignore_card_file(const char *path)
 static void card_write(FILE *f, const struct board_card *c)
 {
     fprintf(f, "# %s\n\n%s\n", c->title, c->body ? c->body : "");
-    if (c->kind[0])
-        fprintf(f, "\nkind: %s\n", c->kind);
     if (c->log_n) {
         fprintf(f, "\n## Notes\n\n");
         for (int i = 0; i < c->log_n; i++)
@@ -1046,7 +1044,7 @@ int boardwork_poll(void)
     for (int i = 0; i < n; i++) {
         if (!cards[i].worktree[0])
             continue;
-        if (cards[i].col != BOARD_DONE)
+        if (!cards[i].closed)
             continue;
         if (!release(&cards[i]))
             continue;
@@ -1060,7 +1058,7 @@ int boardwork_poll(void)
 static void halt(const char *id)
 {
     char key[CHILD_KEY_MAX];
-    snprintf(key, sizeof key, "triage:%s", id);
+    snprintf(key, sizeof key, "name:%s", id);
     child_stop(key);
 
     boardwork_let_go(id);
@@ -1077,7 +1075,7 @@ void boardwork_discard(const struct board_card *c)
     boardfile_drop(c->id);
 }
 
-int boardwork_send_back(const struct board_card *c, const char *why)
+int boardwork_stop(const struct board_card *c, const char *why)
 {
     if (!c || !why || !*why)
         return 0;

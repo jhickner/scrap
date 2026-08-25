@@ -14,7 +14,6 @@ enum boardcard_action {
 
 struct boardcard_edit {
     char spec[8192];
-    char kind[16];
     char where[4096];
     char priority[8];
     char backend[32];

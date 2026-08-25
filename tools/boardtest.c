@@ -11,7 +11,7 @@
 #include "boardfile.h"
 #include "boardcfg.h"
 #include "boardflow.h"
-#include "boardtriage.h"
+#include "boardname.h"
 #include "gitcmd.h"
 #include "mdcfg.h"
 #include "replyjson.h"
@@ -46,14 +46,6 @@ static void cleanup(void)
         fprintf(stderr, "could not clean %s\n", home);
 }
 
-static int count_in(struct board_card *v, int n, enum board_col col)
-{
-    int k = 0;
-    for (int i = 0; i < n; i++)
-        k += v[i].col == col;
-    return k;
-}
-
 static void test_capture(void)
 {
     char id[BOARD_ID_MAX] = {0};
@@ -71,11 +63,10 @@ static void test_capture(void)
         board_free(v, n);
         return;
     }
-    expect(c->col == BOARD_NEW, "capture lands in new");
+    expect(!c->closed, "capture lands open");
     expect(!strcmp(c->title, "fix the tab strip"), "title is the first line");
     expect(strstr(c->body, "80 columns") != NULL, "body keeps the rest");
     expect(!strcmp(c->cwd, "/tmp/repo"), "cwd is recorded");
-    expect(c->kind[0] == '\0', "kind waits for triage");
     expect(c->backend_pin[0] == '\0' && c->tier_pin[0] == '\0',
            "capture does not pin");
     expect(c->created > 0 && c->updated > 0, "card is stamped");
@@ -141,15 +132,14 @@ static void test_ids_are_distinct(void)
     board_free(v, n);
 }
 
-static void test_note_and_move(void)
+static void test_note_and_close(void)
 {
     char id[BOARD_ID_MAX] = {0};
-    expect(board_add("worktree cleanup after approve", "/tmp/repo", id), "capture");
+    expect(board_add("worktree cleanup after landing", "/tmp/repo", id), "capture");
 
-    expect(board_note(id, "triage", "feature, mux, priority 0"), "note appends");
-    expect(board_move(id, BOARD_BACKLOG, "triage", "classified as feature"),
-           "move with a reason");
-    expect(board_move(id, BOARD_DONE, "you", NULL), "move without a reason");
+    expect(board_note(id, "name", "worktree cleanup"), "note appends");
+    expect(board_note(id, "you", "after landing, not before"), "and again");
+    expect(board_close(id), "closing the card");
 
     struct board_card *v = NULL;
     int                n = board_load(&v);
@@ -159,10 +149,11 @@ static void test_note_and_move(void)
         board_free(v, n);
         return;
     }
-    expect(c->col == BOARD_DONE, "column follows the last move");
-    expect(c->log_n == 2, "a move with no reason logs nothing");
-    expect(!strcmp(c->log[0].who, "triage"), "note records who");
-    expect(strstr(c->log[1].text, "classified") != NULL, "move logs its reason");
+    expect(c->closed, "closed is the one bit it carries");
+    expect(board_stands(c) == BOARD_CLOSED, "and it stands done");
+    expect(c->log_n == 2, "both notes are on it");
+    expect(!strcmp(c->log[0].who, "name"), "note records who");
+    expect(strstr(c->log[1].text, "landing") != NULL, "and what was said");
     expect(c->log[0].ts > 0, "note is stamped");
     board_free(v, n);
 }
@@ -182,14 +173,13 @@ static void test_update_preserves_created(void)
     }
 
     time_t created = c->created;
-    snprintf(c->kind, sizeof c->kind, "bug");
     snprintf(c->model, sizeof c->model, "opus");
     snprintf(c->base, sizeof c->base, "b519936");
     c->priority = 2;
     c->cost_usd = 0.42;
     c->tokens_in = 12345;
     c->tokens_out = 678;
-    board_put(c, "review");
+    c->closed = 1;
     expect(board_update(c), "update writes back");
     board_free(v, n);
 
@@ -200,13 +190,12 @@ static void test_update_preserves_created(void)
         board_free(v, n);
         return;
     }
-    expect(!strcmp(c->kind, "bug"), "kind round-trips");
     expect(!strcmp(c->model, "opus"), "model round-trips");
     expect(!strcmp(c->base, "b519936"), "base sha round-trips");
     expect(c->priority == 2, "priority round-trips");
     expect(c->cost_usd > 0.41 && c->cost_usd < 0.43, "cost round-trips");
     expect(c->tokens_in == 12345 && c->tokens_out == 678, "tokens round-trip");
-    expect(c->col == BOARD_BACKLOG, "column round-trips");
+    expect(c->closed, "closed round-trips");
     expect(c->created == created, "update leaves created alone");
     board_free(v, n);
 }
@@ -227,7 +216,7 @@ static void test_update_leaves_others_alone(void)
     int intact = 1;
     for (int i = 0; i < n_before; i++) {
         struct board_card *c = board_find(after, n_after, before[i].id);
-        if (!c || c->col != before[i].col ||
+        if (!c || c->closed != before[i].closed ||
             strcmp(c->title, before[i].title) ||
             c->log_n != before[i].log_n)
             intact = 0;
@@ -259,65 +248,44 @@ static void test_remove(void)
     board_free(v, n);
 }
 
-static void test_columns(void)
+/* the columns a card used to sit in are gone; only closed survived them */
+static void test_an_old_column_reads_as_closed_or_not(void)
 {
-    struct board_card where_at = {0};
+    FILE *f = fopen(board_path(), "a");
+    if (!f) {
+        fail("the store takes an old line");
+        return;
+    }
+    const char *was[] = {"new", "unclear", "backlog", "worktree", "done"};
+    for (size_t i = 0; i < sizeof was / sizeof *was; i++)
+        fprintf(f, "{\"id\":\"was%zu\",\"col\":\"%s\",\"title\":\"old\","
+                   "\"body\":\"old\",\"cwd\":\"/tmp/repo\","
+                   "\"created\":1,\"updated\":1,\"log\":[]}\n", i, was[i]);
+    fclose(f);
 
-    board_put(&where_at, "unclear");
-    expect(where_at.col == BOARD_UNCLEAR, "one of the board's own columns by name");
-    board_put(&where_at, "nonsense");
-    expect(where_at.col == BOARD_BACKLOG,
-           "a column the board does not know named a step, and lands in backlog");
-
-    for (int i = 0; i < BOARD_COLS; i++) {
-        board_put(&where_at, board_col_name((enum board_col)i));
-        if ((int)where_at.col != i) {
-            fail("every column round-trips");
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    for (size_t i = 0; i < sizeof was / sizeof *was; i++) {
+        char id[BOARD_ID_MAX];
+        snprintf(id, sizeof id, "was%zu", i);
+        struct board_card *c = board_find(v, n, id);
+        int want = !strcmp(was[i], "done");
+        if (!c || c->closed != want) {
+            fail("every old column reads as closed or not");
+            break;
+        }
+        if (!want && board_stands(c) != BOARD_OPEN) {
+            fail("and a card that was not done is open");
             break;
         }
     }
-
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    expect(count_in(v, n, BOARD_NEW) > 0, "cards sit in new");
-    board_free(v, n);
-}
-
-static void test_attempts_reset_when_answered(void)
-{
-    char id[BOARD_ID_MAX] = {0};
-    board_add("do the thing", "/tmp/repo", id);
-
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    expect(boardtriage_attempts(board_find(v, n, id)) == 0,
-           "a fresh card has had no turns");
     board_free(v, n);
 
-    board_move(id, BOARD_UNCLEAR, "triage", "which thing?");
-    n = board_load(&v);
-    expect(boardtriage_attempts(board_find(v, n, id)) == 1, "unclear counts a turn");
-    board_free(v, n);
-
-    board_note(id, "worker", "still stuck");
-    n = board_load(&v);
-    expect(boardtriage_attempts(board_find(v, n, id)) == 1,
-           "a worker saying something is not an answer");
-    board_free(v, n);
-
-    board_note(id, "you", "answered, and sent back to triage");
-    n = board_load(&v);
-    expect(boardtriage_attempts(board_find(v, n, id)) == 0,
-           "answering it makes it new again");
-    board_free(v, n);
-
-    board_move(id, BOARD_UNCLEAR, "triage", "still cannot tell");
-    n = board_load(&v);
-    expect(boardtriage_attempts(board_find(v, n, id)) == 1,
-           "the next turn counts from the answer");
-    board_free(v, n);
-
-    board_remove(id);
+    for (size_t i = 0; i < sizeof was / sizeof *was; i++) {
+        char id[BOARD_ID_MAX];
+        snprintf(id, sizeof id, "was%zu", i);
+        board_remove(id);
+    }
 }
 
 static void plant_stale(const char *id)
@@ -338,7 +306,7 @@ static void test_archive(void)
     char busy[BOARD_ID_MAX] = {0}, fresh[BOARD_ID_MAX] = {0};
     expect(board_add("still being worked on", "/tmp/repo", busy), "capture");
     expect(board_add("finished just now", "/tmp/repo", fresh), "capture");
-    expect(board_move(fresh, BOARD_DONE, "you", NULL), "done");
+    expect(board_close(fresh), "done");
     plant_stale("aged");
 
     struct board_card *v = NULL;
@@ -421,13 +389,6 @@ static void pipeline_def(const char *name, const char *actions)
     def_add(path, front, "");
 }
 
-static void kind_def(const char *name, const char *front, const char *body)
-{
-    char path[128];
-    snprintf(path, sizeof path, "kinds/%s.md", name);
-    def_add(path, front, body);
-}
-
 static void defs_clear(void)
 {
     for (int i = 0; i < defs_n; i++) {
@@ -440,15 +401,6 @@ static void defs_clear(void)
 static void defs_use(void)
 {
     boardcfg_defaults(defs, defs_n);
-}
-
-static void steps_for(const char *kind, const char *steps)
-{
-    char front[512];
-    snprintf(front, sizeof front,
-             "means: a kind a test made up\npriority: 1\nsteps: %s\n", steps);
-    kind_def(kind, front, "");
-    defs_use();
 }
 
 static void with_actions(void)
@@ -493,123 +445,6 @@ static void test_reply_json(void)
     expect(!replyjson_parse(NULL), "nothing is nothing");
 }
 
-static void write_kind(const char *name, const char *const *keys,
-                       const char *const *vals, int n, const char *body)
-{
-    char front[2048];
-    size_t at = 0;
-    front[0] = '\0';
-    for (int i = 0; i < n && at < sizeof front; i++)
-        at += (size_t)snprintf(front + at, sizeof front - at, "%s: %s\n",
-                               keys[i], vals[i]);
-    kind_def(name, front, body);
-}
-
-
-
-
-static void write_the_shipped_kinds(void)
-{
-    with_actions();
-    static const char *const keys[] = {"means", "priority", "steps"};
-    static const char *const work = "worktree, review, audit, merge";
-    static const struct {
-        const char *name, *means, *priority, *steps;
-    } kinds[] = {
-        {"bug", "something that exists and is wrong", "2", NULL},
-        {"feature", "something that should exist and does not", "1", NULL},
-        {"chore", "upkeep: a rename, a bump, a cleanup", "0", NULL},
-        {"todo", "something the person means to do", "0", ""},
-        {"reference", "a link, a name, a fact", "0", ""},
-    };
-
-    for (size_t i = 0; i < sizeof kinds / sizeof *kinds; i++) {
-        const char *vals[] = {kinds[i].means, kinds[i].priority,
-                              kinds[i].steps ? kinds[i].steps : work};
-        write_kind(kinds[i].name, keys, vals, 3, "");
-    }
-    defs_use();
-}
-
-static void test_a_named_kind_skips_triage(void)
-{
-    write_the_shipped_kinds();
-
-    char id[BOARD_ID_MAX] = {0};
-    expect(board_add("bug: the list scrolls past its end\n\nhow to repeat it",
-                     "/tmp/repo", id),
-           "capture");
-
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    expect(boardtriage_start(board_find(v, n, id)), "the named kind is taken");
-    board_free(v, n);
-
-    n = board_load(&v);
-    struct board_card *c = board_find(v, n, id);
-    expect(c && !strcmp(c->kind, "bug"), "the card is the kind it named");
-    expect(c && c->col == BOARD_BACKLOG, "and skips new for backlog");
-    expect(c && c->priority == boardcfg_priority("bug"),
-           "at the priority of that kind");
-    expect(c && !strcmp(c->title, "the list scrolls past its end"),
-           "the title drops the prefix");
-    expect(c && c->body && strstr(c->body, "how to repeat it") != NULL,
-           "the body is left whole");
-    board_free(v, n);
-
-    board_remove(id);
-}
-
-static void test_projects_block(void)
-{
-    char dir[4096];
-    snprintf(dir, sizeof dir, "%s/working", home);
-    mkdir(dir, 0700);
-
-    char path[4300];
-    snprintf(path, sizeof path, "%s/alpha", dir);
-    mkdir(path, 0700);
-    snprintf(path, sizeof path, "%s/mux", dir);
-    mkdir(path, 0700);
-    snprintf(path, sizeof path, "%s/.hidden", dir);
-    mkdir(path, 0700);
-    snprintf(path, sizeof path, "%s/notes.txt", dir);
-    fclose(fopen(path, "w"));
-
-    boardcfg_reload();
-
-    char block[8192];
-    boardcfg_projects_block(block, sizeof block);
-
-    char want[4300];
-    snprintf(want, sizeof want, "%s/mux", dir);
-    expect(strstr(block, want) != NULL, "a project is listed by its path");
-    expect(!strstr(block, "notes.txt"), "a file is not a project");
-    expect(!strstr(block, ".hidden"), "nor is a dotted directory");
-
-    snprintf(want, sizeof want, "%s/alpha", dir);
-    const char *first = strstr(block, want);
-    snprintf(want, sizeof want, "%s/mux", dir);
-    expect(first && first < strstr(block, want), "the list is sorted");
-
-    struct board_cfg *c = boardcfg_copy();
-    c->projects[0] = '\0';
-    expect(boardcfg_set(c), "the directory writes back");
-    boardcfg_free(c);
-    boardcfg_reload();
-    expect(boardcfg()->projects[0] == '\0', "an empty directory survives a reload");
-
-    boardcfg_projects_block(block, sizeof block);
-    expect(block[0] == '\0', "and lists nothing");
-
-    c = boardcfg_copy();
-    snprintf(c->projects, sizeof c->projects, "~/working");
-    boardcfg_set(c);
-    boardcfg_free(c);
-    boardcfg_reload();
-}
-
-
 static void test_actions_are_what_the_files_say(void)
 {
     defs_clear();
@@ -633,7 +468,7 @@ static void test_done_lists_newest_first(void)
 {
     struct board_card older = {0}, newer = {0}, high = {0}, low = {0};
 
-    older.col = newer.col = BOARD_DONE;
+    older.closed = newer.closed = 1;
     snprintf(older.id, sizeof older.id, "old");
     snprintf(newer.id, sizeof newer.id, "new");
     older.created = 100;
@@ -642,17 +477,17 @@ static void test_done_lists_newest_first(void)
     newer.updated = 2000;
     older.priority = 9;
     newer.priority = 0;
-    expect(board_cmp_col(&newer, &older) < 0, "newer done card sorts first");
-    expect(board_cmp_col(&older, &newer) > 0, "older done card sorts second");
+    expect(board_cmp(&newer, &older) < 0, "newer done card sorts first");
+    expect(board_cmp(&older, &newer) > 0, "older done card sorts second");
 
-    high.col = low.col = BOARD_BACKLOG;
+
     snprintf(high.id, sizeof high.id, "hi");
     snprintf(low.id, sizeof low.id, "lo");
     high.priority = 2;
     low.priority = 1;
     high.created = 300;
     low.created = 100;
-    expect(board_cmp_col(&high, &low) < 0, "higher priority still leads the backlog");
+    expect(board_cmp(&high, &low) < 0, "higher priority still leads the open cards");
 }
 
 static int make_repo(char *root, size_t rsize)
@@ -770,8 +605,8 @@ static void test_revision_tracks_writes(void)
     expect(board_revision() == added, "a read leaves the revision alone");
     board_free(v, n);
 
-    expect(board_move(id, BOARD_BACKLOG, "worker", "finished"), "move");
-    expect(board_revision() != added, "a move moves the revision");
+    expect(board_close(id), "close");
+    expect(board_revision() != added, "closing moves the revision");
 
     board_remove(id);
 }
@@ -786,7 +621,7 @@ static int has_dir(const char *leaf)
     return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-static void test_the_shipped_kinds_and_actions_are_built_in(void)
+static void test_the_shipped_actions_are_built_in(void)
 {
     char dir[4096], path[4300];
     expect(mdcfg_dir(dir, sizeof dir, "board/roles"), "an old roles dir");
@@ -800,16 +635,12 @@ static void test_the_shipped_kinds_and_actions_are_built_in(void)
 
     expect(!has_dir("board/roles"), "loading clears the old roles dir");
     expect(!has_dir("board/actions"), "and writes no actions dir of its own");
-    expect(!has_dir("board/kinds"), "and writes no kinds dir of its own");
+    expect(!has_dir("board/kinds"), "nor a kinds dir of its own");
     expect(!has_dir("board/pipelines"), "nor a pipelines dir");
     expect(boardcfg_action("leftover") == NULL, "the stale role is gone");
 
     char why[512];
     expect(!boardcfg_missing(why, sizeof why), "the built-in set is whole");
-
-    const struct board_kind *k = boardcfg_kind("plan");
-    expect(k != NULL, "plan is a kind without a file anywhere");
-    expect(k && k->steps_n == 1, "walking the one step it names");
 
     const struct board_action *p = boardcfg_action("plan");
     expect(p && p->where == BOARD_IN_WORKTREE, "the plan action runs in the worktree");
@@ -817,7 +648,7 @@ static void test_the_shipped_kinds_and_actions_are_built_in(void)
     expect(p && p->prompt && strstr(p->prompt, "plan mode"),
            "its prompt is the body of the file it was built from");
 
-    const struct board_action *name = boardcfg_action("triage");
+    const struct board_action *name = boardcfg_action("name");
     expect(name && name->on_capture, "naming runs on capture, not on trigger");
 
     const struct board_pipeline *build = boardcfg_pipeline("build");
@@ -895,7 +726,6 @@ static void test_the_card_file_outlives_the_worktree(void)
 static void test_a_card_carries_a_queue_and_a_history(void)
 {
     with_actions();
-    steps_for("queued", "worktree, review, audit, merge");
 
     char id[BOARD_ID_MAX] = {0};
     expect(board_add("a card to queue work onto", "/tmp/repo", id), "capture");
@@ -946,38 +776,6 @@ static void test_a_card_carries_a_queue_and_a_history(void)
     board_free(v, n);
 
     board_remove(id);
-}
-
-static void test_a_card_written_before_the_history_reads_forward(void)
-{
-    with_actions();
-    steps_for("walked", "worktree, review, audit, merge");
-
-    /* a line as an older mux wrote it: a column, a step, and no history */
-    FILE *f = fopen(board_path(), "a");
-    if (!f) {
-        fail("the store takes an old line");
-        return;
-    }
-    fprintf(f, "{\"id\":\"old1\",\"col\":\"audit\",\"kind\":\"walked\","
-               "\"title\":\"a card from an older mux\",\"body\":\"b\","
-               "\"cwd\":\"/tmp/repo\",\"created\":1,\"updated\":1,"
-               "\"log\":[]}\n");
-    fclose(f);
-
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    struct board_card *c = board_find(v, n, "old1");
-    expect(c != NULL, "the old line still loads");
-    expect(c && board_ran(c, "worktree"), "the steps it walked are its history");
-    expect(c && board_ran(c, "review"), "all of them");
-    expect(c && !board_ran(c, "audit"), "but not the one it stopped on");
-    expect(c && !board_ran(c, "merge"), "nor the ones after it");
-    expect(c && !c->queue_n, "and nothing is queued on it");
-    expect(c && c->col == BOARD_BACKLOG, "the step it named is not a column");
-    board_free(v, n);
-
-    board_remove("old1");
 }
 
 static void test_an_action_waits_on_what_it_needs(void)
@@ -1155,7 +953,6 @@ static void test_a_pipeline_stands_for_its_actions(void)
     action_def("deploy", "tier: med\nin: repo\nneeds: merge\n", "ship it");
     pipeline_def("build", "plan, implement");
     pipeline_def("ship", "merge, deploy");
-    kind_def("piped", "means: a kind a test made up\npriority: 1\nsteps: plan\n", "");
     defs_use();
 
     const struct board_pipeline *p = boardcfg_pipeline("build");
@@ -1221,27 +1018,23 @@ int main(void)
     test_capture();
     test_ids_are_distinct();
     test_pin();
-    test_note_and_move();
+    test_note_and_close();
     test_update_preserves_created();
     test_update_leaves_others_alone();
     test_remove();
-    test_columns();
-    test_attempts_reset_when_answered();
+    test_an_old_column_reads_as_closed_or_not();
     test_actions_are_what_the_files_say();
 
     test_reply_json();
-    test_a_named_kind_skips_triage();
-    test_projects_block();
     test_archive();
     test_empty_and_missing();
     test_done_lists_newest_first();
     test_worktree_name_is_stable();
     test_auto_pick_roundtrip();
     test_revision_tracks_writes();
-    test_the_shipped_kinds_and_actions_are_built_in();
+    test_the_shipped_actions_are_built_in();
     test_the_card_file_outlives_the_worktree();
     test_a_card_carries_a_queue_and_a_history();
-    test_a_card_written_before_the_history_reads_forward();
     test_an_action_waits_on_what_it_needs();
     test_a_trigger_queues_a_pipeline();
     test_a_stopped_card_waits_on_you();

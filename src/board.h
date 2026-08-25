@@ -9,16 +9,6 @@
 
 struct board_card;
 
-enum board_col {
-    BOARD_NEW,
-    BOARD_UNCLEAR,
-    BOARD_BACKLOG,
-    BOARD_DONE,
-    BOARD_COLS,
-};
-
-const char *board_col_name(enum board_col col);
-
 #define BOARD_ID_MAX    16
 #define BOARD_TITLE_MAX 200
 #define BOARD_WHO_MAX   16
@@ -29,7 +19,7 @@ const char *board_col_name(enum board_col col);
 
 /* Where a card stands, read off its lists rather than stored: nothing run and
    nothing waiting is open, a queue is working, and an empty queue is your turn
-   once anything has been run on it. Done is you closing it. */
+   once anything has been run on it. Closed is the one bit the card carries. */
 enum board_stand {
     BOARD_OPEN,
     BOARD_WORKING,
@@ -48,9 +38,8 @@ struct board_note {
 };
 
 struct board_card {
-    char           id[BOARD_ID_MAX];
-    enum board_col col;
-    char           kind[16];
+    char id[BOARD_ID_MAX];
+    int  closed;
 
     char queue[BOARD_QUEUE][BOARD_ACTION_NAME];
     int  queue_n;
@@ -83,7 +72,7 @@ struct board_card {
     int                log_n;
 };
 
-int board_cmp_col(const struct board_card *a, const struct board_card *b);
+int board_cmp(const struct board_card *a, const struct board_card *b);
 
 const char *board_path(void);
 
@@ -109,9 +98,6 @@ int board_archive(int days);
 
 int board_note(const char *id, const char *who, const char *text);
 
-int board_move(const char *id, enum board_col col, const char *who,
-               const char *why);
-
 int board_ran(const struct board_card *c, const char *action);
 
 int board_queued(const char *id, const char *const *actions, int n);
@@ -123,7 +109,5 @@ int board_stopped(const char *id);
 int board_took(const char *id, const char *action);
 
 int board_close(const char *id);
-
-void board_put(struct board_card *c, const char *name);
 
 #endif

@@ -721,19 +721,19 @@ static void do_card(struct session *s, const char *arg)
         reply_error("could not write to the board");
 }
 
-static void do_approve(struct session *s, const char *arg)
+static void do_close(struct session *s, const char *arg)
 {
     (void)arg;
 
     const char *id = boardwork_card_of(s);
     if (!id) {
-        reply_error("/approve \xe2\x80\x94 this session is not working a card");
+        reply_error("/close \xe2\x80\x94 this session is not working a card");
         return;
     }
 
     char why[256] = "";
-    if (boardview_approve(id, why, sizeof why))
-        reply_note("card %s approved", id);
+    if (boardview_close(id, why, sizeof why))
+        reply_note("card %s closed", id);
     else
         reply_error("%s", why);
 }
@@ -828,9 +828,9 @@ static const struct cmd COMMANDS[] = {
     {"/fv", "fork into a vertical tmux split", NULL, CMD_LIVE, do_fork_v},
     {"/fw", "fork into a tmux window", NULL, CMD_LIVE, do_fork_w},
     {"/split", "open a shell split in this directory", "[h|v|w]", 0, do_split},
-    {"/card", "add a card to the board, untriaged", "<text>", CMD_LIVE, do_card},
+    {"/card", "add a card to the board", "<text>", CMD_LIVE, do_card},
     {"/board", "show the cards, by column", NULL, CMD_LIVE, do_board},
-    {"/approve", "approve this session's card", NULL, CMD_LIVE, do_approve},
+    {"/close", "close this session's card", NULL, CMD_LIVE, do_close},
     {"/run", "queue actions on this session's card", "[<action>, ...]", CMD_LIVE,
      do_run},
     {"/status", "reprint the status bar", NULL, CMD_LIVE, do_status},
