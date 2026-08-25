@@ -172,15 +172,21 @@ static int inline_budget(const struct state *st, int columns)
     return budget < 8 ? 8 : budget;
 }
 
-/* a text field wraps at the width of the column it is painted in: beside its
-   label while it holds one row, under it once it does not */
+/* a text field sits beside its label while it holds one row there, and moves
+   under the label once it does not */
+static int inline_row(const struct state *st, int i)
+{
+    int inl = inline_budget(st, ui_columns()) + REPL_GUTTER;
+    return repl_input_rows(&st->slots[i].repl, inl) <= 1;
+}
+
+/* the width a field wraps at is the width of the column it is painted in */
 static int repl_width(const struct state *st, int i)
 {
     int columns = ui_columns();
-    int inl = inline_budget(st, columns) + REPL_GUTTER;
-    if (repl_input_rows(&st->slots[i].repl, inl) <= 1)
-        return inl;
-    return value_budget(columns) + REPL_GUTTER;
+    return (inline_row(st, i) ? inline_budget(st, columns)
+                              : value_budget(columns)) +
+           REPL_GUTTER;
 }
 
 static struct line *line_add(struct lines *l)
@@ -407,6 +413,7 @@ static int layout(struct state *st, int columns)
             continue;
         }
 
+        int inl = inline_row(st, i);
         int rows = repl_input_rows(&st->slots[i].repl, repl_width(st, i));
         if (rows < 1)
             rows = 1;
@@ -420,7 +427,7 @@ static int layout(struct state *st, int columns)
 
         st->slots[i].rows = shown;
 
-        if (shown == 1 && rows == 1) {
+        if (inl) {
             struct line *l = line_add(out);
             if (l) {
                 l->field = i;
