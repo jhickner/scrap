@@ -28,7 +28,6 @@ struct keep {
     unsigned char *spans;
     enum ui_role   role;
     int            error;
-    int            gap;
     int            collapses; /* the tool style shows this call as one row in any mode */
     char          *row;
 };
@@ -174,7 +173,6 @@ static char *keep_encode(void *ud)
     cJSON_AddStringToObject(o, "b", k->b ? k->b : "");
     cJSON_AddNumberToObject(o, "role", k->role);
     cJSON_AddNumberToObject(o, "error", k->error);
-    cJSON_AddNumberToObject(o, "gap", k->gap);
     cJSON_AddNumberToObject(o, "collapses", k->collapses);
     if (k->spans && k->a) {
         char *hex = spans_hex(k->spans, strlen(k->a));
@@ -188,21 +186,22 @@ static char *keep_encode(void *ud)
     return out;
 }
 
-static void restate(unsigned from, int after_call, int stale);
+static void restate(unsigned from, int stale);
 
 static unsigned run_start;
-static int      run_after;
 
+/* the blank always gets reserved here: a pad can be hidden later but not
+   conjured, so an item born without one could never take a gap on a toggle */
 static unsigned keep(struct keep *k)
 {
     unsigned mark = viewport_item_begin(&(struct viewport_entry){
         .render = keep_render, .ud = k, .free_ud = keep_free, .reflow = 1,
-        .pad_before = k->gap});
+        .pad_before = 1});
     keep_render(k, ui_columns());
     viewport_item_end();
     viewport_item_persist(mark, VIEW_KEEP_KIND, keep_encode);
     if (mark)
-        restate(run_start ? run_start : mark, run_start ? run_after : 0, 0);
+        restate(run_start ? run_start : mark, 0);
     return mark;
 }
 
@@ -227,7 +226,6 @@ void view_keep_load(const cJSON *st)
     k->b = strdup(scrollback_str(st, "b"));
     k->role = (enum ui_role)scrollback_int(st, "role");
     k->error = scrollback_int(st, "error");
-    k->gap = scrollback_int(st, "gap");
     k->collapses = scrollback_int(st, "collapses");
     if (!k->a || !k->b) {
         keep_free(k);
@@ -239,7 +237,7 @@ void view_keep_load(const cJSON *st)
     keep(k);
 }
 
-void view_keep_activity(const char *marker, const char *text, enum ui_role role, int gap)
+void view_keep_activity(const char *marker, const char *text, enum ui_role role)
 {
     struct keep *k = keep_new(KEEP_ACTIVITY);
     if (!k)
@@ -247,18 +245,16 @@ void view_keep_activity(const char *marker, const char *text, enum ui_role role,
     k->a = strdup(marker ? marker : "");
     k->b = strdup(text ? text : "");
     k->role = role;
-    k->gap = gap;
     keep(k);
 }
 
-void view_keep_tool_call(const char *name, const char *arg, int gap, int collapses)
+void view_keep_tool_call(const char *name, const char *arg, int collapses)
 {
     struct keep *k = keep_new(KEEP_CALL);
     if (!k)
         return;
     k->a = strdup(name ? name : "?");
     k->b = strdup(arg ? arg : "");
-    k->gap = gap;
     k->collapses = collapses;
     keep(k);
 }
@@ -295,11 +291,8 @@ void view_keep_diff(char *patch)
 
 struct collapse {
     int          stale;
-    int          after_call;
     struct keep *head;
     unsigned     head_mark;
-    int          head_after; /* what the head's gap was decided against, so a
-                                rescan starting at the head agrees with it */
 };
 
 static void row_set(struct keep *k, unsigned mark, const char *row)
@@ -318,7 +311,6 @@ static void restate_item(unsigned mark, const char *kind, void *ud, void *ctx)
     if (!ud || !kind || strcmp(kind, VIEW_KEEP_KIND) != 0) {
         c->head = NULL;
         c->head_mark = 0;
-        c->after_call = 0;
         return;
     }
     struct keep *k = ud;
@@ -343,43 +335,37 @@ static void restate_item(unsigned mark, const char *kind, void *ud, void *ctx)
 
     viewport_item_hide(mark, 0);
 
+    viewport_item_pad(mark, !collapsed);
+    if (c->stale)
+        viewport_item_stale(mark);
+
     if (as_row) {
         call_row(k->a, k->b, row, sizeof row);
         row_set(k, mark, row);
-        viewport_item_pad(mark, !c->after_call);
-        if (c->stale)
-            viewport_item_stale(mark);
         c->head = k;
         c->head_mark = mark;
-        c->head_after = c->after_call;
-        c->after_call = 1;
         return;
     }
 
-    viewport_item_pad(mark, 1);
-    if (c->stale)
-        viewport_item_stale(mark);
     c->head = NULL;
     c->head_mark = 0;
-    c->after_call = 0;
 }
 
-static void restate(unsigned from, int after_call, int stale)
+static void restate(unsigned from, int stale)
 {
-    struct collapse c = {.stale = stale, .after_call = after_call};
+    struct collapse c = {.stale = stale};
     viewport_scan(from, restate_item, &c);
     run_start = c.head_mark;
-    run_after = c.head_after;
     viewport_repad();
 }
 
-static void rewidth(void) { restate(0, 0, 0); }
+static void rewidth(void) { restate(0, 0); }
 
 void view_collapse(int on)
 {
     collapsed = on ? 1 : 0;
     viewport_on_width(rewidth);
-    restate(0, 0, 1);
+    restate(0, 1);
     viewport_paint();
 }
 

@@ -235,7 +235,6 @@ static void render_event(struct session *s, const backend_event *ev)
         md_render_kept(ev->text, 0);
         stream_append(s, ev->text);
         view_keep_break();
-        s->view.after_tool = 0;
         s->view.after_collapse = 0;
         break;
 
@@ -245,8 +244,7 @@ static void render_event(struct session *s, const backend_event *ev)
         status_pause();
         paused = 1;
         view_keep_break();
-        view_keep_activity("\xe2\x9c\xbb", ev->text, UI_THINKING, s->view.after_tool);
-        s->view.after_tool = 1;
+        view_keep_activity("\xe2\x9c\xbb", ev->text, UI_THINKING);
         s->view.after_collapse = 0;
         break;
 
@@ -258,7 +256,7 @@ static void render_event(struct session *s, const backend_event *ev)
 
         status_pause();
         paused = 1;
-        view_keep_tool_call(name, arg, s->view.after_tool, collapses);
+        view_keep_tool_call(name, arg, collapses);
 
         char path[4096];
         if (!collapses && view_tool_path(ev->input_json, s->cwd, path, sizeof path))
@@ -266,7 +264,6 @@ static void render_event(struct session *s, const backend_event *ev)
         else
             filediff_clear();
 
-        s->view.after_tool = 1;
         s->view.after_collapse = collapses;
         break;
     }
@@ -287,7 +284,6 @@ static void render_event(struct session *s, const backend_event *ev)
                     view_keep_output(line, UI_ERROR, 1);
                 }
             }
-            s->view.after_tool = 1;
             s->view.after_collapse = 0;
             break;
         }
@@ -310,7 +306,6 @@ static void render_event(struct session *s, const backend_event *ev)
                 view_keep_output(ev->text, UI_DIM, 0);
             }
         }
-        s->view.after_tool = 1;
         break;
     }
 
@@ -437,7 +432,6 @@ int session_idle_pump(struct session *s)
 
     if (!s->idle_busy) {
         view_keep_break();
-        s->view.after_tool = 0;
         s->view.after_collapse = 0;
     }
     struct session *was = session_set_drawing(s);
@@ -1410,7 +1404,6 @@ static void turn_prepare(struct session *s, const char *text)
     replace(&s->last_block, NULL);
     stream_reset(s);
     replace(&s->prompt, text);
-    s->view.after_tool = 0;
     s->view.after_collapse = 0;
     view_keep_break();
     s->started = now_seconds();

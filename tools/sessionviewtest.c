@@ -50,14 +50,14 @@ static int tool_rows(struct screen *s)
 
     viewport_clear();
     view_collapse(0);
-    view_keep_tool_call("Bash", arg, 0, 0);
+    view_keep_tool_call("Bash", arg, 0);
     viewport_paint();
     pump(s);
     if (row_with(s, "[bash]") < 0 || row_with(s, "import json") == row_with(s, "[bash]"))
         ok = fail("a full call keeps the command on rows of its own", NULL) == 0;
 
     viewport_clear();
-    view_keep_tool_call("Bash", arg, 0, 1);
+    view_keep_tool_call("Bash", arg, 1);
     viewport_paint();
     pump(s);
     int at = row_with(s, "[bash]");
@@ -82,9 +82,9 @@ static int tool_rows(struct screen *s)
         ok = fail("widening the pane brings the rest of the row back", NULL) == 0;
 
     viewport_clear();
-    view_keep_tool_call("Read", "src/a.c", 0, 1);
-    view_keep_tool_call("Read", "src/b.c", 1, 1);
-    view_keep_tool_call("Bash", "make check", 1, 0);
+    view_keep_tool_call("Read", "src/a.c", 1);
+    view_keep_tool_call("Read", "src/b.c", 1);
+    view_keep_tool_call("Bash", "make check", 0);
     viewport_paint();
     pump(s);
     if (row_with(s, "src/a.c") < 0 || row_with(s, "src/b.c") != row_with(s, "src/a.c"))
@@ -101,9 +101,9 @@ static int merges(struct screen *s)
 
     viewport_clear();
     view_collapse(1);
-    view_keep_tool_call("Bash", "git add -A", 0, 0);
+    view_keep_tool_call("Bash", "git add -A", 0);
     view_keep_output("nothing to commit", UI_DIM, 0);
-    view_keep_tool_call("Bash", "git commit -m wip", 1, 0);
+    view_keep_tool_call("Bash", "git commit -m wip", 0);
     view_keep_output("1 file changed", UI_DIM, 0);
     viewport_paint();
     pump(s);
@@ -116,7 +116,7 @@ static int merges(struct screen *s)
     pad[sizeof pad - 1] = '\0';
     snprintf(over, sizeof over, "grep -rn %s src", pad);
 
-    view_keep_tool_call("Bash", over, 1, 0);
+    view_keep_tool_call("Bash", over, 0);
     viewport_paint();
     pump(s);
     if (row_with(s, "grep -rn") != row_with(s, "git commit") + 1)
@@ -170,9 +170,9 @@ static int collapse_redraws(void)
     screen_init(&s, 24, 80);
 
     view_collapse(0);
-    view_keep_tool_call("Bash", "ls -la", 0, 0);
+    view_keep_tool_call("Bash", "ls -la", 0);
     view_keep_output("total 8\nfoo\nbar", UI_DIM, 0);
-    view_keep_tool_call("Read", "src/main.c", 1, 0);
+    view_keep_tool_call("Read", "src/main.c", 0);
     view_keep_output("read 40 lines", UI_DIM, 0);
     viewport_paint();
     pump(&s);
@@ -198,9 +198,9 @@ static int collapse_redraws(void)
         ok = fail("expanding brings the gap between calls back", NULL) == 0;
 
     view_collapse(1);
-    view_keep_tool_call("Bash", "git status", 1, 0);
+    view_keep_tool_call("Bash", "git status", 0);
     view_keep_output("on branch master", UI_DIM, 0);
-    view_keep_tool_call("Edit", "src/two.c", 1, 0);
+    view_keep_tool_call("Edit", "src/two.c", 0);
     view_keep_diff(strdup("@@file src/two.c\n@@ -3 +3 @@\n-before\n+after\n"));
     viewport_paint();
     pump(&s);
@@ -215,6 +215,20 @@ static int collapse_redraws(void)
     pump(&s);
     if (count_on_screen(&s, "on branch master") != 1 || count_on_screen(&s, "after") != 1)
         ok = fail("expanding shows what was kept while collapsed", NULL) == 0;
+    if (!row_blank(&s, row_with(&s, "src/two.c") - 1))
+        ok = fail("a call kept while collapsed takes a gap once expanded", NULL) == 0;
+
+    view_collapse(1);
+    pump(&s);
+    if (row_with(&s, "src/two.c") - row_with(&s, "git status") != 1 ||
+        row_with(&s, "git status") - row_with(&s, "src/main.c") != 1)
+        ok = fail("collapsing again puts every row back against the one above", NULL) == 0;
+
+    view_collapse(0);
+    pump(&s);
+    if (!row_blank(&s, row_with(&s, "src/two.c") - 1) ||
+        !row_blank(&s, row_with(&s, "git status") - 1))
+        ok = fail("expanding again gaps every call", NULL) == 0;
 
     ok = merges(&s) && ok;
     ok = tool_rows(&s) && ok;

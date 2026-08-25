@@ -155,7 +155,7 @@ static void draw_tool(const cJSON *block, const char *cwd)
 
     char arg[4096];
     view_tool_argument(&ev, cwd, arg, sizeof arg);
-    view_keep_tool_call(name, arg, 0, toolstyle_collapses(name, json, NULL));
+    view_keep_tool_call(name, arg, toolstyle_collapses(name, json, NULL));
     free(json);
 }
 
@@ -175,7 +175,7 @@ static int draw_message(enum role role, const cJSON *content, const char *cwd,
             return 1;
         }
         if (role == ROLE_THINKING && thinking && *content->valuestring) {
-            view_keep_activity("\xe2\x9c\xbb", content->valuestring, UI_THINKING, 0);
+            view_keep_activity("\xe2\x9c\xbb", content->valuestring, UI_THINKING);
             return 1;
         }
         return 0;
@@ -203,7 +203,7 @@ static int draw_message(enum role role, const cJSON *content, const char *cwd,
                                       : cJSON_GetStringValue(
                                             cJSON_GetObjectItem(block, "thinking"));
             if (thinking && reason && *reason) {
-                view_keep_activity("\xe2\x9c\xbb", reason, UI_THINKING, 0);
+                view_keep_activity("\xe2\x9c\xbb", reason, UI_THINKING);
                 drew = 1;
             }
         } else if (!strcmp(kind, "tool_use")) {

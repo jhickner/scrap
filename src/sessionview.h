@@ -10,7 +10,6 @@
 #include "vendor/agents/backend.h"
 
 struct turnview {
-    int after_tool;
     int after_collapse; /* the last call was one the tool style shows as a row */
 };
 
@@ -26,9 +25,9 @@ void view_tool_output(const char *text, enum ui_role role);
 
 void view_tool_error(const char *text);
 
-void view_keep_activity(const char *marker, const char *text, enum ui_role role, int gap);
+void view_keep_activity(const char *marker, const char *text, enum ui_role role);
 
-void view_keep_tool_call(const char *name, const char *arg, int gap, int collapses);
+void view_keep_tool_call(const char *name, const char *arg, int collapses);
 
 void view_keep_break(void);
 
