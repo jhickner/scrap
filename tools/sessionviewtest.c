@@ -36,15 +36,74 @@ static void pump(struct screen *s)
         feed(s, buf, (size_t)n);
 }
 
+static int tool_rows(struct screen *s)
+{
+    int ok = 1;
+
+    const backend_event tool = {.name = "Bash",
+                                .input_json = "{\"command\":\"python - <<'EOF'\\n"
+                                              "import json\\n"
+                                              "d = json.load(open('x.json'))\\n"
+                                              "EOF\"}"};
+    char arg[4096];
+    view_tool_argument(&tool, NULL, arg, sizeof arg);
+
+    viewport_clear();
+    view_collapse(0);
+    view_keep_tool_call("Bash", arg, 0, 0);
+    viewport_paint();
+    pump(s);
+    if (row_with(s, "[bash]") < 0 || row_with(s, "import json") == row_with(s, "[bash]"))
+        ok = fail("a full call keeps the command on rows of its own", NULL) == 0;
+
+    viewport_clear();
+    view_keep_tool_call("Bash", arg, 0, 1);
+    viewport_paint();
+    pump(s);
+    int at = row_with(s, "[bash]");
+    if (at < 0 || row_with(s, "import json") != at || row_with(s, "json.load") != at)
+        ok = fail("a collapsing call flattens onto its tag row", NULL) == 0;
+
+    setenv("COLUMNS", "40", 1);
+    viewport_touch();
+    viewport_paint();
+    pump(s);
+    at = row_with(s, "[bash]");
+    if (at < 0 || !strstr(row_text(s, at), "\xe2\x80\xa6"))
+        ok = fail("a row too wide for the pane is cut short", NULL) == 0;
+    if (count_on_screen(s, "json.load") != 0)
+        ok = fail("a cut row drops what does not fit", NULL) == 0;
+
+    setenv("COLUMNS", "80", 1);
+    viewport_touch();
+    viewport_paint();
+    pump(s);
+    if (count_on_screen(s, "json.load") != 1)
+        ok = fail("widening the pane brings the rest of the row back", NULL) == 0;
+
+    viewport_clear();
+    view_keep_tool_call("Read", "src/a.c", 0, 1);
+    view_keep_tool_call("Read", "src/b.c", 1, 1);
+    view_keep_tool_call("Bash", "make check", 1, 0);
+    viewport_paint();
+    pump(s);
+    if (row_with(s, "src/a.c") < 0 || row_with(s, "src/b.c") != row_with(s, "src/a.c"))
+        ok = fail("collapsing calls merge in full mode too", NULL) == 0;
+    if (row_with(s, "make check") == row_with(s, "src/a.c"))
+        ok = fail("a full call does not join a collapsed row", NULL) == 0;
+
+    return ok;
+}
+
 static int merges(struct screen *s)
 {
     int ok = 1;
 
     viewport_clear();
     view_collapse(1);
-    view_keep_tool_call("Bash", "git add -A", 0);
+    view_keep_tool_call("Bash", "git add -A", 0, 0);
     view_keep_output("nothing to commit", UI_DIM, 0);
-    view_keep_tool_call("Bash", "git commit -m wip", 1);
+    view_keep_tool_call("Bash", "git commit -m wip", 1, 0);
     view_keep_output("1 file changed", UI_DIM, 0);
     viewport_paint();
     pump(s);
@@ -57,7 +116,7 @@ static int merges(struct screen *s)
     pad[sizeof pad - 1] = '\0';
     snprintf(over, sizeof over, "grep -rn %s src", pad);
 
-    view_keep_tool_call("Bash", over, 1);
+    view_keep_tool_call("Bash", over, 1, 0);
     viewport_paint();
     pump(s);
     if (row_with(s, "grep -rn") != row_with(s, "git commit") + 1)
@@ -111,9 +170,9 @@ static int collapse_redraws(void)
     screen_init(&s, 24, 80);
 
     view_collapse(0);
-    view_keep_tool_call("Bash", "ls -la", 0);
+    view_keep_tool_call("Bash", "ls -la", 0, 0);
     view_keep_output("total 8\nfoo\nbar", UI_DIM, 0);
-    view_keep_tool_call("Read", "src/main.c", 1);
+    view_keep_tool_call("Read", "src/main.c", 1, 0);
     view_keep_output("read 40 lines", UI_DIM, 0);
     viewport_paint();
     pump(&s);
@@ -139,9 +198,9 @@ static int collapse_redraws(void)
         ok = fail("expanding brings the gap between calls back", NULL) == 0;
 
     view_collapse(1);
-    view_keep_tool_call("Bash", "git status", 1);
+    view_keep_tool_call("Bash", "git status", 1, 0);
     view_keep_output("on branch master", UI_DIM, 0);
-    view_keep_tool_call("Edit", "src/two.c", 1);
+    view_keep_tool_call("Edit", "src/two.c", 1, 0);
     view_keep_diff(strdup("@@file src/two.c\n@@ -3 +3 @@\n-before\n+after\n"));
     viewport_paint();
     pump(&s);
@@ -158,6 +217,7 @@ static int collapse_redraws(void)
         ok = fail("expanding shows what was kept while collapsed", NULL) == 0;
 
     ok = merges(&s) && ok;
+    ok = tool_rows(&s) && ok;
 
     viewport_end();
     return ok ? 0 : 1;
@@ -187,30 +247,6 @@ int main(void)
         return fail("view_tool_call flattened the command", out);
     free(out);
 
-    struct turnview v = {0};
-    ui_capture_begin(200);
-    view_cluster_start(&v, "Bash", arg, 0);
-    view_cluster_paint(&v);
-    out = ui_capture_end();
-    if (!out || lines_of(out) != 1)
-        return fail("cluster line spans rows", out);
-    free(out);
-
-    ui_capture_begin(40);
-    view_cluster_paint(&v);
-    char *cut = ui_capture_end();
-    ui_capture_begin(200);
-    view_cluster_paint(&v);
-    char *full = ui_capture_end();
-    if (!cut || !full || lines_of(cut) != 1)
-        return fail("a cluster row stays one row at any width", cut);
-    if (!strstr(cut, "\xe2\x80\xa6"))
-        return fail("a cluster row too wide for the pane is cut short", cut);
-    if (strlen(full) <= strlen(cut))
-        return fail("a cluster row is laid out for the width it is drawn at", full);
-    free(cut);
-    free(full);
-    view_cluster_forget(&v);
 
     ui_capture_begin(80);
     view_tool_error("failed: Exit code 1\n"

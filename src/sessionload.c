@@ -11,6 +11,7 @@
 #include "sessionlist.h"
 #include "session.h"
 #include "sessionview.h"
+#include "toolstyle.h"
 #include "ui.h"
 #include "viewport.h"
 #include "vendor/agents/backend.h"
@@ -154,7 +155,7 @@ static void draw_tool(const cJSON *block, const char *cwd)
 
     char arg[4096];
     view_tool_argument(&ev, cwd, arg, sizeof arg);
-    view_keep_tool_call(name, arg, 0);
+    view_keep_tool_call(name, arg, 0, toolstyle_collapses(name, json, NULL));
     free(json);
 }
 

@@ -234,8 +234,7 @@ static void render_event(struct session *s, const backend_event *ev)
 
         md_render_kept(ev->text, 0);
         stream_append(s, ev->text);
-        view_cluster_forget(&s->view);
-        s->view.after_activity = 0;
+        view_keep_break();
         s->view.after_tool = 0;
         s->view.after_collapse = 0;
         break;
@@ -245,9 +244,8 @@ static void render_event(struct session *s, const backend_event *ev)
             break;
         status_pause();
         paused = 1;
-        view_cluster_forget(&s->view);
+        view_keep_break();
         view_keep_activity("\xe2\x9c\xbb", ev->text, UI_THINKING, s->view.after_tool);
-        s->view.after_activity = 1;
         s->view.after_tool = 1;
         s->view.after_collapse = 0;
         break;
@@ -256,29 +254,20 @@ static void render_event(struct session *s, const backend_event *ev)
         const char *name = ev->name ? ev->name : "?";
         char arg[4096];
         view_tool_argument(ev, s->cwd, arg, sizeof arg);
-        int cluster = toolstyle_collapses(name, ev->input_json, ev->arg);
+        int collapses = toolstyle_collapses(name, ev->input_json, ev->arg);
 
         status_pause();
         paused = 1;
-        if (cluster) {
-            if (!view_cluster_extend(&s->view, name, arg))
-                view_cluster_start(&s->view, name, arg,
-                                   s->view.after_tool && !s->view.after_collapse);
-            view_cluster_paint(&s->view);
-        } else {
-            view_cluster_forget(&s->view);
-            view_keep_tool_call(name, arg, s->view.after_tool);
-        }
+        view_keep_tool_call(name, arg, s->view.after_tool, collapses);
 
         char path[4096];
-        if (!cluster && view_tool_path(ev->input_json, s->cwd, path, sizeof path))
+        if (!collapses && view_tool_path(ev->input_json, s->cwd, path, sizeof path))
             filediff_snapshot(path);
         else
             filediff_clear();
 
-        s->view.after_activity = 1;
         s->view.after_tool = 1;
-        s->view.after_collapse = cluster;
+        s->view.after_collapse = collapses;
         break;
     }
 
@@ -286,7 +275,7 @@ static void render_event(struct session *s, const backend_event *ev)
         if (ev->failed) {
             status_pause();
             paused = 1;
-            view_cluster_forget(&s->view);
+            view_keep_break();
             filediff_clear();
             {
                 const char *why = ev->text && *ev->text ? ev->text : NULL;
@@ -298,7 +287,6 @@ static void render_event(struct session *s, const backend_event *ev)
                     view_keep_output(line, UI_ERROR, 1);
                 }
             }
-            s->view.after_activity = 1;
             s->view.after_tool = 1;
             s->view.after_collapse = 0;
             break;
@@ -322,7 +310,6 @@ static void render_event(struct session *s, const backend_event *ev)
                 view_keep_output(ev->text, UI_DIM, 0);
             }
         }
-        s->view.after_activity = 1;
         s->view.after_tool = 1;
         break;
     }
@@ -449,8 +436,7 @@ int session_idle_pump(struct session *s)
         return 0;
 
     if (!s->idle_busy) {
-        view_cluster_forget(&s->view);
-        s->view.after_activity = 0;
+        view_keep_break();
         s->view.after_tool = 0;
         s->view.after_collapse = 0;
     }
@@ -763,7 +749,6 @@ void session_free(struct session *s)
     free(s->permission);
     free(s->error_note);
     free(s->system_extra);
-    view_free(&s->view);
     transcript_free(&s->transcript);
     if (live == s)
         live = NULL;
@@ -1425,10 +1410,9 @@ static void turn_prepare(struct session *s, const char *text)
     replace(&s->last_block, NULL);
     stream_reset(s);
     replace(&s->prompt, text);
-    s->view.after_activity = 0;
     s->view.after_tool = 0;
     s->view.after_collapse = 0;
-    view_cluster_forget(&s->view);
+    view_keep_break();
     s->started = now_seconds();
     s->idle_busy = 1;
     s->interrupted = 0;

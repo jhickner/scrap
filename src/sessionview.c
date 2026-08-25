@@ -16,6 +16,9 @@
 
 #define COUNT(a) (sizeof (a) / sizeof *(a))
 
+/* KEEP_CLUSTER is only ever loaded: it is the pre-merge form of a row of
+   calls, kept so a scrollback written before the merge moved into the render
+   pass still draws */
 enum keep_kind { KEEP_ACTIVITY, KEEP_CALL, KEEP_OUTPUT, KEEP_DIFF, KEEP_CLUSTER };
 
 struct keep {
@@ -26,6 +29,7 @@ struct keep {
     enum ui_role   role;
     int            error;
     int            gap;
+    int            collapses; /* the tool style shows this call as one row in any mode */
     char          *row;
 };
 
@@ -105,13 +109,11 @@ static void keep_render(void *ud, int cols)
     const struct keep *k = ud;
     (void)cols;
 
-    if (collapsed) {
-        if (keep_drops(k))
-            return;
-        if (k->kind == KEEP_CALL) {
-            call_collapsed(k);
-            return;
-        }
+    if (collapsed && keep_drops(k))
+        return;
+    if (k->kind == KEEP_CALL && (collapsed || k->collapses)) {
+        call_collapsed(k);
+        return;
     }
 
     switch (k->kind) {
@@ -173,6 +175,7 @@ static char *keep_encode(void *ud)
     cJSON_AddNumberToObject(o, "role", k->role);
     cJSON_AddNumberToObject(o, "error", k->error);
     cJSON_AddNumberToObject(o, "gap", k->gap);
+    cJSON_AddNumberToObject(o, "collapses", k->collapses);
     if (k->spans && k->a) {
         char *hex = spans_hex(k->spans, strlen(k->a));
         if (hex) {
@@ -198,7 +201,7 @@ static unsigned keep(struct keep *k)
     keep_render(k, ui_columns());
     viewport_item_end();
     viewport_item_persist(mark, VIEW_KEEP_KIND, keep_encode);
-    if (collapsed && mark)
+    if (mark)
         restate(run_start ? run_start : mark, run_start ? run_after : 0, 0);
     return mark;
 }
@@ -225,6 +228,7 @@ void view_keep_load(const cJSON *st)
     k->role = (enum ui_role)scrollback_int(st, "role");
     k->error = scrollback_int(st, "error");
     k->gap = scrollback_int(st, "gap");
+    k->collapses = scrollback_int(st, "collapses");
     if (!k->a || !k->b) {
         keep_free(k);
         return;
@@ -247,7 +251,7 @@ void view_keep_activity(const char *marker, const char *text, enum ui_role role,
     keep(k);
 }
 
-void view_keep_tool_call(const char *name, const char *arg, int gap)
+void view_keep_tool_call(const char *name, const char *arg, int gap, int collapses)
 {
     struct keep *k = keep_new(KEEP_CALL);
     if (!k)
@@ -255,8 +259,11 @@ void view_keep_tool_call(const char *name, const char *arg, int gap)
     k->a = strdup(name ? name : "?");
     k->b = strdup(arg ? arg : "");
     k->gap = gap;
+    k->collapses = collapses;
     keep(k);
 }
+
+void view_keep_break(void) { run_start = 0; }
 
 void view_keep_output(const char *text, enum ui_role role, int error)
 {
@@ -323,8 +330,10 @@ static void restate_item(unsigned mark, const char *kind, void *ud, void *ctx)
         return;
     }
 
+    int as_row = k->kind == KEEP_CALL && (collapsed || k->collapses);
+
     char row[4096];
-    if (collapsed && k->kind == KEEP_CALL && c->head &&
+    if (as_row && c->head && c->head->collapses == k->collapses &&
         strcmp(c->head->a, k->a) == 0 &&
         call_row_extend(c->head->row, k->b, row, sizeof row)) {
         row_set(c->head, c->head_mark, row);
@@ -334,7 +343,7 @@ static void restate_item(unsigned mark, const char *kind, void *ud, void *ctx)
 
     viewport_item_hide(mark, 0);
 
-    if (collapsed && k->kind == KEEP_CALL) {
+    if (as_row) {
         call_row(k->a, k->b, row, sizeof row);
         row_set(k, mark, row);
         viewport_item_pad(mark, !c->after_call);
@@ -542,16 +551,6 @@ void view_tool_call(const char *name, const char *arg)
     free(spans);
 }
 
-void view_cluster_forget(struct turnview *v)
-{
-    free(v->line);
-    free(v->spans);
-    v->line = NULL;
-    v->spans = NULL;
-    v->tool[0] = '\0';
-    v->onscreen = 0;
-}
-
 static unsigned char *row_spans(const char *name, const char *row, size_t prefix)
 {
     size_t len = strlen(row);
@@ -570,47 +569,6 @@ static int cluster_budget(void)
 {
     int budget = ui_columns() - TOOL_INDENT - 2;
     return budget < 8 ? 8 : budget;
-}
-
-void view_cluster_start(struct turnview *v, const char *name, const char *arg, int gap)
-{
-    char row[4096];
-    call_row(name, arg, row, sizeof row);
-
-    view_cluster_forget(v);
-    snprintf(v->tool, sizeof v->tool, "%s", name);
-    v->line = strdup(row);
-    v->spans = v->line ? row_spans(name, row, row_prefix(row)) : NULL;
-    v->gap = gap;
-}
-
-int view_cluster_extend(struct turnview *v, const char *name, const char *arg)
-{
-    if (!v->line || !v->after_collapse || strcmp(v->tool, name) != 0)
-        return 0;
-    if (!arg || !*arg)
-        return 1;
-
-    char row[4096];
-    if (!call_row_extend(v->line, arg, row, sizeof row))
-        return 0;
-
-    char *grown = strdup(row);
-    if (!grown)
-        return 0;
-
-    unsigned char *spans = NULL;
-    if (v->spans) {
-        size_t kept = strlen(v->line);
-        spans = row_spans(name, row, kept + 2);
-        if (spans)
-            memcpy(spans, v->spans, kept);
-    }
-    free(v->line);
-    free(v->spans);
-    v->line = grown;
-    v->spans = spans;
-    return 1;
 }
 
 static void cluster_paint(const char *line, const unsigned char *spans)
@@ -639,39 +597,6 @@ static void cluster_paint(const char *line, const unsigned char *spans)
         ui_put("…");
     ui_esc(ui_style(UI_RESET));
     ui_put("\n");
-}
-
-void view_cluster_paint(struct turnview *v)
-{
-    if (!v->line)
-        return;
-
-    size_t         len = strlen(v->line);
-    unsigned char *spans = NULL;
-    if (v->spans && (spans = malloc(len)))
-        memcpy(spans, v->spans, len);
-
-    struct keep *k = v->onscreen ? viewport_item_data(v->mark) : NULL;
-    if (k) {
-        free(k->a);
-        free(k->spans);
-        k->a = strdup(v->line);
-        k->spans = spans;
-        viewport_item_update(v->mark);
-        return;
-    }
-
-    k = keep_new(KEEP_CLUSTER);
-    if (!k) {
-        free(spans);
-        return;
-    }
-    k->a = strdup(v->line);
-    k->spans = spans;
-    k->gap = v->gap;
-    v->mark = keep(k);
-
-    v->onscreen = v->mark != 0;
 }
 
 #define TOOL_PREVIEW_ROWS 3
@@ -818,10 +743,3 @@ void view_tool_output(const char *text, enum ui_role role)
     }
 }
 
-void view_free(struct turnview *v)
-{
-    free(v->line);
-    free(v->spans);
-    v->line = NULL;
-    v->spans = NULL;
-}
