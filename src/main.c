@@ -567,7 +567,7 @@ int main(int argc, char **argv)
         }
     }
 
-    agenttabs_begin(backend);
+    agenttabs_begin();
     if (interactive)
         livelist_begin();
     struct session *session = session_new(backend, cwd, model, effort);

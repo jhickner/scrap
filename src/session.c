@@ -400,12 +400,7 @@ int session_idle_fd(const struct session *s)
 
 static void publish(const struct session *s, const char *status)
 {
-    if (!strcmp(status, "working"))
-        agenttabs_working();
-    else if (!strcmp(status, "errored"))
-        agenttabs_errored();
-    else
-        agenttabs_finished();
+    agenttabs_publish(s, session_backend(s), status);
     livelist_publish(s, status);
 }
 
@@ -469,7 +464,7 @@ static void usage_poll(struct session *s)
     backend_rate_limit limit = {0};
     s->agent->rate_limit(s->agent, &limit);
     if (limit.available) {
-        agenttabs_usage(limit.used_percent, limit.resets_at, limit.window_minutes);
+        agenttabs_usage(s, limit.used_percent, limit.resets_at, limit.window_minutes);
 
     }
 }
@@ -714,6 +709,7 @@ void session_free(struct session *s)
     if (!s)
         return;
     livelist_forget(s);
+    agenttabs_forget(s);
 
     if (s->running) {
         s->abort_request = 1;

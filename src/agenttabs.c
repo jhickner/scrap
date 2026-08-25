@@ -10,14 +10,21 @@
 
 #include "text.h"
 
-static char record[4200];
+#define MAX_SLOTS 32
+
+struct slot {
+    const void *key;
+    char        agent[32];
+    char        status[16];
+    int         usage_percent; /* -1 until a reading lands */
+    long        usage_resets_at;
+    long        usage_window_minutes;
+    time_t      usage_updated_at;
+};
+
+static struct slot slots[MAX_SLOTS];
+static char agents_dir[4200];
 static char hook_dir[4200];
-static char agent[32];
-static const char *current_status;
-static int usage_percent = -1;
-static long usage_resets_at;
-static long usage_window_minutes;
-static time_t usage_updated_at;
 
 static int state_dir(char *out, size_t size)
 {
@@ -53,50 +60,83 @@ static int pane_id(const char *s)
     return 1;
 }
 
+static int agent_name(const char *backend)
+{
+    if (!backend || !*backend || strlen(backend) >= sizeof slots[0].agent)
+        return 0;
+    for (const char *p = backend; *p; p++)
+        if ((*p < 'a' || *p > 'z') && (*p < '0' || *p > '9') && *p != '-' && *p != '_')
+            return 0;
+    return 1;
+}
+
+static int record_path(int at, char *out, size_t size)
+{
+    if (!agents_dir[0])
+        return 0;
+    return (size_t)snprintf(out, size, "%s/%ld-%d.json", agents_dir, (long)getpid(), at) < size;
+}
+
 static int write_json(FILE *f, void *ud)
 {
-    (void)ud;
+    const struct slot *s = ud;
 
     const char *pane = getenv("TMUX_PANE");
     fprintf(f, "{\"agent\":\"%s\",\"pid\":%ld,\"status\":\"%s\",\"ts\":%ld",
-            agent, (long)getpid(), current_status, (long)time(NULL));
+            s->agent, (long)getpid(), s->status, (long)time(NULL));
     if (pane_id(pane))
         fprintf(f, ",\"tmux_pane\":\"%s\"", pane);
-    if (usage_percent >= 0) {
+    if (s->usage_percent >= 0) {
         fprintf(f, ",\"usage_percent\":%d,\"usage_resets_at\":%ld"
                    ",\"usage_window_minutes\":%ld,\"usage_ts\":%ld",
-                usage_percent, usage_resets_at, usage_window_minutes,
-                (long)usage_updated_at);
+                s->usage_percent, s->usage_resets_at, s->usage_window_minutes,
+                (long)s->usage_updated_at);
     }
     fprintf(f, "}\n");
     return 1;
 }
 
-static void write_record(void)
+static void write_record(int at)
 {
-    if (!record[0] || !current_status)
+    char path[4400];
+    if (!slots[at].key || !slots[at].status[0] || !record_path(at, path, sizeof path))
         return;
-
-    text_spit(record, write_json, NULL);
+    text_spit(path, write_json, &slots[at]);
 }
 
-static void drop_record(void)
+static int slot_of(const void *key, int make)
 {
-    if (record[0])
-        unlink(record);
+    int free_at = -1;
+    for (int i = 0; i < MAX_SLOTS; i++) {
+        if (slots[i].key == key)
+            return i;
+        if (!slots[i].key && free_at < 0)
+            free_at = i;
+    }
+    if (!make || free_at < 0)
+        return -1;
+    slots[free_at] = (struct slot){0};
+    slots[free_at].key = key;
+    slots[free_at].usage_percent = -1;
+    return free_at;
 }
 
-void agenttabs_begin(const char *backend)
+static void drop_all(void)
+{
+    for (int i = 0; i < MAX_SLOTS; i++) {
+        if (!slots[i].key)
+            continue;
+        char path[4400];
+        if (record_path(i, path, sizeof path))
+            unlink(path);
+        slots[i].key = NULL;
+    }
+}
+
+void agenttabs_begin(void)
 {
     if (!getenv("TMUX_PANE"))
         return;
-
-    if (!backend || !*backend || strlen(backend) >= sizeof agent)
-        return;
-    for (const char *p = backend; *p; p++)
-        if ((*p < 'a' || *p > 'z') && (*p < '0' || *p > '9') && *p != '-' && *p != '_')
-            return;
-    snprintf(agent, sizeof agent, "%s", backend);
 
     char dir[4096];
     struct stat st;
@@ -111,46 +151,69 @@ void agenttabs_begin(const char *backend)
 
     if (snprintf(hook_dir, sizeof hook_dir, "%s/state", dir) >= (int)sizeof hook_dir)
         return;
-    if (snprintf(record, sizeof record, "%s/%ld.json", agents, (long)getpid()) >=
-        (int)sizeof record)
-        return;
+    snprintf(agents_dir, sizeof agents_dir, "%s", agents);
 
     setenv("AGENT_TABS_WRAPPED", "1", 1);
 
-    atexit(drop_record);
-
-    agenttabs_finished();
+    atexit(drop_all);
 }
 
-static void write_status(const char *status)
+void agenttabs_publish(const void *key, const char *backend, const char *status)
 {
-    current_status = status;
-    write_record();
-}
-
-void agenttabs_working(void)  { write_status("working"); }
-void agenttabs_finished(void) { write_status("finished"); }
-void agenttabs_errored(void)  { write_status("errored"); }
-
-void agenttabs_usage(int percent, long resets_at, long window_minutes)
-{
-    if (!record[0] || percent < 0 || percent > 100)
+    if (!agents_dir[0] || !key || !status || !*status || !agent_name(backend))
         return;
+
+    int at = slot_of(key, 1);
+    if (at < 0)
+        return;
+
+    /* A quota reading belongs to the backend that reported it: a session that
+     * switches drops the old one rather than showing it under the new name. */
+    if (strcmp(slots[at].agent, backend) != 0) {
+        snprintf(slots[at].agent, sizeof slots[at].agent, "%s", backend);
+        slots[at].usage_percent = -1;
+        slots[at].usage_resets_at = 0;
+        slots[at].usage_window_minutes = 0;
+    }
+    snprintf(slots[at].status, sizeof slots[at].status, "%s", status);
+    write_record(at);
+}
+
+void agenttabs_usage(const void *key, int percent, long resets_at, long window_minutes)
+{
+    if (!agents_dir[0] || percent < 0 || percent > 100)
+        return;
+
+    int at = slot_of(key, 0);
+    if (at < 0)
+        return;
+
     resets_at = resets_at > 0 ? resets_at : 0;
     window_minutes = window_minutes > 0 ? window_minutes : 0;
-    if (percent == usage_percent && resets_at == usage_resets_at &&
-        window_minutes == usage_window_minutes)
+    if (percent == slots[at].usage_percent && resets_at == slots[at].usage_resets_at &&
+        window_minutes == slots[at].usage_window_minutes)
         return;
-    usage_percent = percent;
-    usage_resets_at = resets_at;
-    usage_window_minutes = window_minutes;
-    usage_updated_at = time(NULL);
-    write_record();
+    slots[at].usage_percent = percent;
+    slots[at].usage_resets_at = resets_at;
+    slots[at].usage_window_minutes = window_minutes;
+    slots[at].usage_updated_at = time(NULL);
+    write_record(at);
+}
+
+void agenttabs_forget(const void *key)
+{
+    int at = slot_of(key, 0);
+    if (at < 0)
+        return;
+    char path[4400];
+    if (record_path(at, path, sizeof path))
+        unlink(path);
+    slots[at].key = NULL;
 }
 
 void agenttabs_forget_hook(const char *id)
 {
-    if (!record[0] || !id || !*id || strchr(id, '/'))
+    if (!hook_dir[0] || !id || !*id || strchr(id, '/'))
         return;
 
     char path[4300];
