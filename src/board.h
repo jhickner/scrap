@@ -26,6 +26,24 @@ const char *board_where(const struct board_card *c);
 #define BOARD_TITLE_MAX 200
 #define BOARD_WHO_MAX   16
 
+#define BOARD_ACTION_NAME 32
+#define BOARD_QUEUE       12
+#define BOARD_DONE_MAX    16
+
+/* Where a card stands, read off its two lists rather than stored: nothing run
+   and nothing waiting is open, a queue is working, an empty queue over a
+   history is your turn, and done is you closing it. */
+enum board_stand {
+    BOARD_OPEN,
+    BOARD_WORKING,
+    BOARD_REVIEW,
+    BOARD_CLOSED,
+    BOARD_STANDS,
+};
+
+const char      *board_stand_name(enum board_stand stand);
+enum board_stand board_stands(const struct board_card *c);
+
 struct board_note {
     time_t ts;
     char   who[BOARD_WHO_MAX];
@@ -37,6 +55,11 @@ struct board_card {
     enum board_col col;
     char           step[BOARD_STEP_NAME];
     char           kind[16];
+
+    char queue[BOARD_QUEUE][BOARD_ACTION_NAME];
+    int  queue_n;
+    char done[BOARD_DONE_MAX][BOARD_ACTION_NAME];
+    int  done_n;
     char           title[BOARD_TITLE_MAX];
     char          *body;
     char           cwd[4096];
@@ -103,6 +126,14 @@ int board_move_back(const char *id, const char *step, const char *who,
                     const char *why);
 
 int board_at(const struct board_card *c, const char *step);
+
+int board_ran(const struct board_card *c, const char *action);
+
+int board_queued(const char *id, const char *const *actions, int n);
+
+int board_took(const char *id, const char *action);
+
+int board_close(const char *id);
 
 void board_put(struct board_card *c, const char *name);
 

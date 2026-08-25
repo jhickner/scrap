@@ -49,6 +49,40 @@ const char *board_where(const struct board_card *c)
     return board_col_name(c->col);
 }
 
+static const char *const STAND_NAMES[BOARD_STANDS] = {
+    "open", "working", "review", "done",
+};
+
+const char *board_stand_name(enum board_stand stand)
+{
+    if (stand < 0 || stand >= BOARD_STANDS)
+        return STAND_NAMES[BOARD_OPEN];
+    return STAND_NAMES[stand];
+}
+
+enum board_stand board_stands(const struct board_card *c)
+{
+    if (!c)
+        return BOARD_OPEN;
+    if (c->col == BOARD_DONE)
+        return BOARD_CLOSED;
+    if (c->queue_n)
+        return BOARD_WORKING;
+    if (c->done_n)
+        return BOARD_REVIEW;
+    return BOARD_OPEN;
+}
+
+int board_ran(const struct board_card *c, const char *action)
+{
+    if (!c || !action || !*action)
+        return 0;
+    for (int i = 0; i < c->done_n; i++)
+        if (!strcmp(c->done[i], action))
+            return 1;
+    return 0;
+}
+
 int board_at(const struct board_card *c, const char *step)
 {
     return c && step && c->col == BOARD_STEP && !strcmp(c->step, step);
@@ -238,6 +272,34 @@ static double json_num(const cJSON *o, const char *key)
     return (j && cJSON_IsNumber(j)) ? j->valuedouble : 0;
 }
 
+static void read_names(const cJSON *o, const char *key,
+                       char names[][BOARD_ACTION_NAME], int *n, int max)
+{
+    *n = 0;
+    const cJSON *list = cJSON_GetObjectItem((cJSON *)o, key), *e = NULL;
+    cJSON_ArrayForEach(e, list) {
+        const char *name = cJSON_GetStringValue((cJSON *)e);
+        if (name && *name && *n < max)
+            set_str(names[(*n)++], BOARD_ACTION_NAME, name);
+    }
+}
+
+/* A card written before the board kept a history: what it walked through is
+   whatever its kind lists ahead of where it stopped. A guess about the past,
+   and the only one available. */
+static void walked_before(struct board_card *c)
+{
+    int upto = c->col == BOARD_DONE ? BOARD_KIND_STEPS
+             : c->col == BOARD_STEP ? boardcfg_kind_step_at(c->kind, c->step)
+                                    : 0;
+    for (int i = 0; i < upto && c->done_n < BOARD_DONE_MAX; i++) {
+        const char *step = boardcfg_kind_step(c->kind, i);
+        if (!step)
+            break;
+        set_str(c->done[c->done_n++], BOARD_ACTION_NAME, step);
+    }
+}
+
 static int card_from_json(const cJSON *o, struct board_card *c)
 {
     memset(c, 0, sizeof *c);
@@ -272,6 +334,11 @@ static int card_from_json(const cJSON *o, struct board_card *c)
     if (!c->body)
         return 0;
 
+    read_names(o, "queue", c->queue, &c->queue_n, BOARD_QUEUE);
+    read_names(o, "done", c->done, &c->done_n, BOARD_DONE_MAX);
+    if (!cJSON_GetObjectItem((cJSON *)o, "done"))
+        walked_before(c);
+
     const cJSON *log = cJSON_GetObjectItem((cJSON *)o, "log"), *e = NULL;
     cJSON_ArrayForEach(e, log) {
         if (!cJSON_IsObject(e))
@@ -289,6 +356,17 @@ static int card_from_json(const cJSON *o, struct board_card *c)
             break;
         c->log_n++;
     }
+    return 1;
+}
+
+static int put_names(cJSON *o, const char *key,
+                     const char names[][BOARD_ACTION_NAME], int n)
+{
+    cJSON *list = cJSON_AddArrayToObject(o, key);
+    if (!list)
+        return 0;
+    for (int i = 0; i < n; i++)
+        cJSON_AddItemToArray(list, cJSON_CreateString(names[i]));
     return 1;
 }
 
@@ -321,6 +399,12 @@ static cJSON *card_to_json(const struct board_card *c)
     cJSON_AddNumberToObject(o, "tokens_out", (double)c->tokens_out);
     cJSON_AddNumberToObject(o, "created", (double)c->created);
     cJSON_AddNumberToObject(o, "updated", (double)c->updated);
+
+    if (!put_names(o, "queue", c->queue, c->queue_n) ||
+        !put_names(o, "done", c->done, c->done_n)) {
+        cJSON_Delete(o);
+        return NULL;
+    }
 
     cJSON *log = cJSON_AddArrayToObject(o, "log");
     if (!log) {
@@ -616,6 +700,78 @@ static int apply_move(struct board_card *c, void *ud)
     set_str(c->step, sizeof c->step, a->col == BOARD_STEP ? a->step : "");
     if (a->why && *a->why)
         return note_append(c, a->who, a->why);
+    return 1;
+}
+
+struct queue_args {
+    const char *const *actions;
+    int                n;
+};
+
+static int apply_queue(struct board_card *c, void *ud)
+{
+    const struct queue_args *a = ud;
+
+    c->queue_n = 0;
+    for (int i = 0; i < a->n && c->queue_n < BOARD_QUEUE; i++)
+        if (a->actions[i] && *a->actions[i])
+            set_str(c->queue[c->queue_n++], BOARD_ACTION_NAME, a->actions[i]);
+    return 1;
+}
+
+int board_queued(const char *id, const char *const *actions, int n)
+{
+    struct queue_args a = {actions, n};
+    if (!with_card(id, apply_queue, &a))
+        return 0;
+
+    char said[512];
+    size_t at = (size_t)snprintf(said, sizeof said, "queued");
+    for (int i = 0; i < n && at < sizeof said; i++)
+        at += (size_t)snprintf(said + at, sizeof said - at, "%s %s",
+                               i ? "," : "", actions[i]);
+    boardlog_note(id, "you", n ? said : "queue cleared");
+    return 1;
+}
+
+/* The action at the head of the queue ran and passed: it joins the history
+   once, and leaves the queue. */
+static int apply_took(struct board_card *c, void *ud)
+{
+    const char *action = ud;
+
+    if (!board_ran(c, action) && c->done_n < BOARD_DONE_MAX)
+        set_str(c->done[c->done_n++], BOARD_ACTION_NAME, action);
+
+    int k = 0;
+    for (int i = 0; i < c->queue_n; i++)
+        if (strcmp(c->queue[i], action))
+            set_str(c->queue[k++], BOARD_ACTION_NAME, c->queue[i]);
+    c->queue_n = k;
+    return 1;
+}
+
+int board_took(const char *id, const char *action)
+{
+    if (!action || !*action)
+        return 0;
+    return with_card(id, apply_took, (void *)action);
+}
+
+static int apply_close(struct board_card *c, void *ud)
+{
+    (void)ud;
+    c->queue_n = 0;
+    c->col = BOARD_DONE;
+    c->step[0] = '\0';
+    return 1;
+}
+
+int board_close(const char *id)
+{
+    if (!with_card(id, apply_close, NULL))
+        return 0;
+    boardlog_note(id, "you", "closed");
     return 1;
 }
 

@@ -486,7 +486,7 @@ static void steps_for(const char *kind, const char *steps)
     defs_use();
 }
 
-static void with_roles(void)
+static void with_actions(void)
 {
     defs_clear();
     action_def("worker", "runs: worker\ntier: high\nstep: worktree\n",
@@ -503,7 +503,7 @@ static void with_roles(void)
 
 static void test_a_step_answers_for_itself(void)
 {
-    with_roles();
+    with_actions();
     steps_for("audited", "worktree, review, audit, merge");
 
     char id[BOARD_ID_MAX] = {0};
@@ -618,7 +618,7 @@ static void test_a_planner_works_without_a_worktree(void)
     expect(goes("plan", "plan", "review"), "then stops for a person");
     expect(goes("plan", "review", NULL), "and approving that finishes it");
 
-    with_roles();
+    with_actions();
 }
 
 static void test_a_kind_file_carries_its_approval_prompt(void)
@@ -626,7 +626,7 @@ static void test_a_kind_file_carries_its_approval_prompt(void)
     const char *keys[] = {"means", "priority", "steps", "approval prompt"};
     const char *vals[] = {"something the person wants to buy", "1", "review",
                           "Order it, and say what was ordered."};
-    with_roles();
+    with_actions();
     write_kind("buy", keys, vals, 4, "Search Amazon with the web skill.\n");
     defs_use();
 
@@ -701,7 +701,7 @@ static void test_a_kind_prompt_takes_the_card_id(void)
 
 static void write_the_shipped_kinds(void)
 {
-    with_roles();
+    with_actions();
     static const char *const keys[] = {"means", "priority", "steps"};
     static const char *const work = "worktree, review, audit, merge";
     static const struct {
@@ -869,7 +869,7 @@ static void test_actions_are_what_the_files_say(void)
 
 static void test_a_step_that_fails_with_nowhere_to_send_it(void)
 {
-    with_roles();
+    with_actions();
     action_def("audit", "runs: worker\ntier: high\nfail marker: FINDINGS\n",
              "read the diff");
     defs_use();
@@ -902,7 +902,7 @@ static void test_a_step_that_fails_with_nowhere_to_send_it(void)
 
 static void test_a_step_is_a_file(void)
 {
-    with_roles();
+    with_actions();
     steps_for("tested", "worktree, test, review, audit, merge");
     steps_for("untested", "worktree, review, audit, merge");
     steps_for("filed", "");
@@ -973,7 +973,7 @@ static void test_a_step_is_a_file(void)
 
 static void unskippable(int no)
 {
-    with_roles();
+    with_actions();
     if (no) {
         action_def("audit",
                  "runs: worker\ntier: high\nskippable: 0\n"
@@ -986,7 +986,7 @@ static void unskippable(int no)
 
 static void test_skipping_a_step(void)
 {
-    with_roles();
+    with_actions();
     steps_for("skipped", "worktree, review, audit, merge");
 
     char id[BOARD_ID_MAX] = {0};
@@ -1290,6 +1290,93 @@ static void test_the_card_file_outlives_the_worktree(void)
     expect(slurp_file(kept) == NULL, "dropping the card drops the copy");
 }
 
+static void test_a_card_carries_a_queue_and_a_history(void)
+{
+    with_actions();
+    steps_for("queued", "worktree, review, audit, merge");
+
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("a card to queue work onto", "/tmp/repo", id), "capture");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    expect(c && board_stands(c) == BOARD_OPEN, "a fresh card is open");
+    board_free(v, n);
+
+    const char *want[] = {"worktree", "merge"};
+    expect(board_queued(id, want, 2), "two actions are queued");
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && c->queue_n == 2 && !strcmp(c->queue[0], "worktree"),
+           "in the order they were asked for");
+    expect(c && board_stands(c) == BOARD_WORKING, "which sets it working");
+    expect(c && !board_ran(c, "worktree"), "and nothing has run yet");
+    board_free(v, n);
+
+    expect(board_took(id, "worktree"), "the head of the queue passes");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && board_ran(c, "worktree"), "so it joins the history");
+    expect(c && c->queue_n == 1 && !strcmp(c->queue[0], "merge"),
+           "and leaves the queue");
+    expect(c && board_stands(c) == BOARD_WORKING, "the rest is still working");
+    board_free(v, n);
+
+    expect(board_took(id, "worktree"), "an action that passes twice");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && c->done_n == 1, "is in the history once");
+    board_free(v, n);
+
+    expect(board_took(id, "merge"), "the last of the queue passes");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && !c->queue_n && c->done_n == 2, "the queue empties");
+    expect(c && board_stands(c) == BOARD_REVIEW, "and the card is your turn");
+    board_free(v, n);
+
+    expect(board_close(id), "closing it");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && board_stands(c) == BOARD_CLOSED, "stands it done");
+    board_free(v, n);
+
+    board_remove(id);
+}
+
+static void test_a_card_written_before_the_history_reads_forward(void)
+{
+    with_actions();
+    steps_for("walked", "worktree, review, audit, merge");
+
+    /* a line as an older mux wrote it: a column, a step, and no history */
+    FILE *f = fopen(board_path(), "a");
+    if (!f) {
+        fail("the store takes an old line");
+        return;
+    }
+    fprintf(f, "{\"id\":\"old1\",\"col\":\"audit\",\"kind\":\"walked\","
+               "\"title\":\"a card from an older mux\",\"body\":\"b\","
+               "\"cwd\":\"/tmp/repo\",\"created\":1,\"updated\":1,"
+               "\"log\":[]}\n");
+    fclose(f);
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, "old1");
+    expect(c != NULL, "the old line still loads");
+    expect(c && board_ran(c, "worktree"), "the steps it walked are its history");
+    expect(c && board_ran(c, "review"), "all of them");
+    expect(c && !board_ran(c, "audit"), "but not the one it stopped on");
+    expect(c && !board_ran(c, "merge"), "nor the ones after it");
+    expect(c && !c->queue_n, "and nothing is queued on it");
+    board_free(v, n);
+
+    board_remove("old1");
+}
+
 int main(void)
 {
     if (!mkdtemp(home)) {
@@ -1328,6 +1415,8 @@ int main(void)
     test_revision_tracks_writes();
     test_the_shipped_kinds_and_roles_are_built_in();
     test_the_card_file_outlives_the_worktree();
+    test_a_card_carries_a_queue_and_a_history();
+    test_a_card_written_before_the_history_reads_forward();
 
     cleanup();
     if (failures)
