@@ -17,8 +17,6 @@
 #include "boardcfgui.h"
 #include "boardflow.h"
 #include "boardgrid.h"
-#include "boardcmd.h"
-#include "boardsweep.h"
 #include "boardtile.h"
 #include "boardtriage.h"
 #include "boardundo.h"
@@ -461,8 +459,8 @@ static int board_reap(void)
         int   ok = 0;
         if (!child_reap(key, sizeof key, &out, &ok))
             break;
+        (void)ok;
         changed |= boardtriage_take(key, out);
-        changed |= boardcmd_take(key, out, ok);
         free(out);
     }
     return changed;
@@ -480,8 +478,6 @@ static int board_tick(void *ud)
     moved |= boardwork_poll();
     moved |= boardwork_pump();
 
-    moved |= boardcmd_pump();
-    moved |= boardwork_sweep_pump();
 
     static int seen;
     int        now = 0;
@@ -637,11 +633,6 @@ static int approve(const struct board_card *c, int force)
 {
     if (!boardflow_waits_on_you(c))
         return 0;
-    if (boardsweep_is(c)) {
-        boardwork_leave(c);
-        boardwork_let_go(c->id);
-        return boardsweep_approve(c);
-    }
     char *say = approval_prompt_of(c);
     int   moved;
     if (!say)
@@ -715,7 +706,7 @@ static int start_max(const struct board_card *cards, int n, const char *filter,
 
 static int unstart(const struct board_card *c)
 {
-    if (boardflow_runs(c) != BOARD_RUNS_WORKER || boardsweep_is(c))
+    if (boardflow_runs(c) != BOARD_RUNS_WORKER)
         return 0;
     return boardwork_reject(c, "cancelled start");
 }
@@ -737,13 +728,10 @@ static void save_card(const char *id, const struct boardcard_edit *e)
     board_put(&edited, e->column);
     edited.priority = atoi(e->priority);
 
-    int respec = !e->proposals &&
-                 strcmp(e->spec, live->body ? live->body : "") != 0;
-    if (!e->proposals) {
-        edited.body = (char *)e->spec;
-        if (!live->kind[0])
-            board_title_of(e->spec, edited.title, sizeof edited.title);
-    }
+    int respec = strcmp(e->spec, live->body ? live->body : "") != 0;
+    edited.body = (char *)e->spec;
+    if (!live->kind[0])
+        board_title_of(e->spec, edited.title, sizeof edited.title);
 
     char *full = path_expand_home(e->where);
     if (full && *full)
@@ -1104,7 +1092,7 @@ int boardview_run(const char *cwd)
                 anchor_step(&cur);
             break;
         case KEY_AUDIT:
-            if (c && !boardsweep_is(c) && approve(c, 1))
+            if (c && approve(c, 1))
                 anchor_step(&cur);
             break;
         case KEY_SKIP:
@@ -1139,10 +1127,7 @@ int boardview_run(const char *cwd)
             }
             break;
         case KEY_REJECT:
-            if (c && boardsweep_is(c)) {
-                boardwork_let_go(c->id);
-                boardsweep_reject(c);
-            } else if (c && (c->col == BOARD_STEP || c->col == BOARD_DONE)) {
+            if (c && (c->col == BOARD_STEP || c->col == BOARD_DONE)) {
                 close_list();
                 const struct board_role *at = boardflow_role(c);
                 char                     asked[64];
@@ -1193,15 +1178,6 @@ int boardview_run(const char *cwd)
             boardcfgui_run();
             int waiting = 0;
             boardwork_serve(&waiting);
-            break;
-        }
-        case KEY_SWEEP: {
-            const char *cwd = c && c->cwd[0] ? c->cwd : filter[0] ? filter : here;
-            char        why[256];
-            if (boardwork_sweep_now(cwd, why, sizeof why))
-                snprintf(notice, sizeof notice, "sweep started");
-            else
-                snprintf(notice, sizeof notice, "%s", why);
             break;
         }
         case KEY_SERVE:

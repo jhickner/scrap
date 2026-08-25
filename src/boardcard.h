@@ -19,7 +19,6 @@ struct boardcard_edit {
     char priority[8];
     char backend[32];
     char tier[8];
-    int  proposals; /* a sweep waiting on you has no spec field to save */
 };
 
 enum boardcard_action boardcard_form(const struct board_card *c,

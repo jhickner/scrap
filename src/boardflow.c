@@ -42,10 +42,9 @@ const char *boardflow_next(const struct board_card *c, const char *after,
     return NULL;
 }
 
-const char *boardflow_start(void)
+const char *boardflow_start(const struct board_card *c)
 {
-    const struct board_role *p = boardcfg_worker();
-    return p ? p->step : NULL;
+    return boardflow_next(c, NULL, 1);
 }
 
 const char *boardflow_after_turn(const struct board_card *c)
@@ -80,14 +79,13 @@ const char *boardflow_fail(const struct board_card *c)
 
 int boardflow_lands(const char *kind)
 {
-    const struct board_role *p = boardcfg_worker();
-    return p && boardcfg_kind_takes(kind, p->step);
+    return boardcfg_kind_step(kind, 0) != NULL;
 }
 
 int boardflow_worktree(const char *kind)
 {
-    const struct board_role *p = boardcfg_worker();
-    return p && p->worktree && boardcfg_kind_takes(kind, p->step);
+    const struct board_kind *k = boardcfg_kind(kind);
+    return k && k->worktree && boardflow_lands(kind);
 }
 
 const char *boardflow_person(const char *kind)

@@ -8,11 +8,11 @@
 #include "child.h"
 #include "text.h"
 #include "boarddefaults.h"
+#include "boardfile.h"
 #include "boarddiff.h"
 #include "boardcfg.h"
 #include "boardflow.h"
 #include "boardstep.h"
-#include "boardsweep.h"
 #include "boardstep.h"
 #include "boardtriage.h"
 #include "gitcmd.h"
@@ -491,13 +491,13 @@ static void with_roles(void)
     defs_clear();
     role_def("worker", "runs: worker\ntier: high\nstep: worktree\n",
              "work the card");
-    role_def("test", "runs: agent\ntier: high\n", "test the change");
+    role_def("test", "runs: worker\ntier: high\n", "test the change");
     role_def("review", "runs: person\ntier: high\n", "");
     role_def("audit",
-             "runs: agent\ntier: high\nfail marker: FINDINGS\n"
+             "runs: worker\ntier: high\nfail marker: FINDINGS\n"
              "fail step: worktree\n",
              "read the diff");
-    role_def("merge", "runs: command\ntier: high\n", "land it");
+    role_def("merge", "runs: worker\ntier: high\n", "land it");
     defs_use();
 }
 
@@ -605,14 +605,12 @@ static void write_kind(const char *name, const char *const *keys,
 static void test_a_planner_works_without_a_worktree(void)
 {
     defs_clear();
-    role_def("plan", "runs: worker\ntier: high\nstep: plan\nworktree: 0\n",
+    role_def("plan", "runs: worker\ntier: high\nstep: plan\n",
              "Read the repo and write the plan.");
     role_def("review", "runs: person\ntier: med\n", "");
-    steps_for("plan", "plan, review");
-
-    const struct board_role *worker = boardcfg_worker();
-    expect(worker && !strcmp(worker->step, "plan"), "the worker stands in plan");
-    expect(worker && !worker->worktree, "and asks for no worktree");
+    kind_def("plan", "means: a plan of the work\npriority: 1\n"
+                     "steps: plan, review\nworktree: 0\n", "");
+    defs_use();
 
     expect(boardflow_lands("plan"), "a plan card is the worker's to take");
     expect(!boardflow_worktree("plan"), "and gets no worktree to take it in");
@@ -839,50 +837,6 @@ static void test_kinds(void)
            "and each says what it means");
 }
 
-static int sweep_mark_count(const char *cwd)
-{
-    struct board_card *v = NULL;
-    int                n = board_load(&v), marked = 0;
-    for (int i = 0; i < n; i++) {
-        if (strcmp(v[i].cwd, cwd))
-            continue;
-        for (int j = 0; j < v[i].log_n; j++)
-            marked += !strcmp(v[i].log[j].who, "sweep") &&
-                      !strcmp(v[i].log[j].text, "swept");
-    }
-    board_free(v, n);
-    return marked;
-}
-
-static int sweep_due(char *cwd, size_t size)
-{
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    int                due = boardsweep_due(v, n, cwd, size);
-    board_free(v, n);
-    return due;
-}
-
-static int card_titled(const char *text, const char *cwd)
-{
-    struct board_card *v = NULL;
-    int                n = board_load(&v), found = 0;
-    for (int i = 0; i < n; i++)
-        found += strstr(v[i].title, text) != NULL && !strcmp(v[i].cwd, cwd);
-    board_free(v, n);
-    return found;
-}
-
-static void land_cards(const char *cwd, int count, const char *what)
-{
-    for (int i = 0; i < count; i++) {
-        char id[BOARD_ID_MAX] = {0}, text[64];
-        snprintf(text, sizeof text, "%s %d", what, i);
-        expect(board_add(text, cwd, id), "capture");
-        expect(board_move(id, BOARD_DONE, NULL, "board", NULL), "landed");
-    }
-}
-
 static int skip_card(const char *id)
 {
     struct board_card *v = NULL;
@@ -896,9 +850,9 @@ static int skip_card(const char *id)
 static void test_roles_are_what_the_files_say(void)
 {
     defs_clear();
-    role_def("auditor", "runs: agent\ntier: high\njob: audit\n",
+    role_def("auditor", "runs: worker\ntier: high\njob: audit\n",
              "read the diff");
-    role_def("merge", "runs: command\ntier: high\n", "land it");
+    role_def("merge", "runs: worker\ntier: high\n", "land it");
     defs_use();
 
     const struct board_role *p = boardcfg_for_job("audit");
@@ -916,7 +870,7 @@ static void test_roles_are_what_the_files_say(void)
 static void test_a_step_that_fails_with_nowhere_to_send_it(void)
 {
     with_roles();
-    role_def("audit", "runs: agent\ntier: high\nfail marker: FINDINGS\n",
+    role_def("audit", "runs: worker\ntier: high\nfail marker: FINDINGS\n",
              "read the diff");
     defs_use();
     steps_for("nowhere", "worktree, review, audit, merge");
@@ -955,7 +909,7 @@ static void test_a_step_is_a_file(void)
 
     const struct board_role *p = boardcfg_for_step("test");
     expect(p != NULL, "a file standing in a step is the step");
-    expect(p && p->runs == BOARD_RUNS_AGENT, "an agent runs it unless it says");
+    expect(p && p->runs == BOARD_RUNS_WORKER, "a worker runs it unless it says");
     expect(p && p->skippable, "and it may be skipped by hand");
     expect(goes("tested", "worktree", "test"), "the kind that lists it walks it");
     expect(goes("untested", "worktree", "review"),
@@ -965,9 +919,6 @@ static void test_a_step_is_a_file(void)
     expect(boardcfg_for_step("review") &&
                boardcfg_for_step("review")->runs == BOARD_RUNS_PERSON,
            "a step nothing runs waits for a person");
-    expect(boardcfg_for_step("merge") &&
-               boardcfg_for_step("merge")->runs == BOARD_RUNS_COMMAND,
-           "and one that is a script is a command");
     expect(boardflow_lands("tested"), "a kind listing the worker's step gets a "
                                       "worktree");
     expect(!boardflow_lands("filed"), "and one that lists no steps at all does "
@@ -1001,8 +952,8 @@ static void test_a_step_is_a_file(void)
     expect(prompt && strstr(prompt, "test the change"),
            "the file is what the worker at that step is told");
     expect(prompt && strstr(prompt, "the tab strip wraps"), "with the card");
-    expect(prompt && strstr(prompt, "run mux and widen"),
-           "and what has been said about it since its worker had it");
+    expect(prompt && !strstr(prompt, "run mux and widen"),
+           "and not what was said earlier, which its own session already has");
     free(prompt);
 
     expect(boardstep_finished(c, boardcfg_for_step("test"),
@@ -1025,7 +976,7 @@ static void unskippable(int no)
     with_roles();
     if (no) {
         role_def("audit",
-                 "runs: agent\ntier: high\nskippable: 0\n"
+                 "runs: worker\ntier: high\nskippable: 0\n"
                  "fail marker: FINDINGS\nfail step: worktree\n",
                  "read the diff");
         defs_use();
@@ -1075,172 +1026,6 @@ static void test_skipping_a_step(void)
     board_free(v, n);
 
     board_remove(id);
-}
-
-static void sweep_every(int cards)
-{
-    struct board_cfg *cfg = boardcfg_copy();
-    cfg->sweep_every = cards;
-    expect(boardcfg_set(cfg), "the sweep interval is written out");
-    boardcfg_free(cfg);
-    boardcfg_reload();
-}
-
-static void test_sweep_counts_landed_cards(void)
-{
-    const char *cwd = "/tmp/sweeprepo";
-    sweep_every(8);
-    int         every = boardcfg()->sweep_every;
-    char        due[4096];
-
-    land_cards(cwd, every - 1, "landed card");
-    expect(!sweep_due(due, sizeof due), "one short of the interval is not due");
-
-    land_cards(cwd, 1, "the card that trips it");
-    expect(sweep_due(due, sizeof due) && !strcmp(due, cwd),
-           "the interval makes the repo due");
-
-    const char *sweep_keys[] = {"means", "priority", "steps"};
-    const char *sweep_vals[] = {"a card the board raised itself", "0",
-                                "sweep, review"};
-    write_kind("sweep", sweep_keys, sweep_vals, 3, "");
-    defs_use();
-
-    char id[BOARD_ID_MAX] = {0};
-    expect(boardsweep_open(cwd, id, sizeof id), "a sweep card is minted");
-    expect(sweep_mark_count(cwd) == every,
-           "every landed card is marked, so the count is on the board");
-    expect(!sweep_due(due, sizeof due), "and a restart does not sweep them twice");
-
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    struct board_card *c = board_find(v, n, id);
-    expect(c && board_at(c, "sweep"), "the sweep card starts at its own step");
-    expect(c && boardsweep_is(c), "and is a sweep");
-    board_free(v, n);
-
-    expect(!boardsweep_finished("", "{}"), "a sweep needs a card");
-    expect(boardsweep_finished(id, "{\"cards\":[\"two ways to spell a worktree\"]}"),
-           "the sweep's cards are taken");
-
-    n = board_load(&v);
-    c = board_find(v, n, id);
-    expect(c && board_at(c, "review"), "what it raised goes to review");
-    expect(c && boardsweep_proposed(c) == 1, "with the proposal on it");
-    expect(!card_titled("two ways to spell a worktree", cwd),
-           "and nothing on the board yet");
-
-    expect(boardsweep_approve(c), "approving files them");
-    board_free(v, n);
-
-    expect(card_titled("two ways to spell a worktree", cwd) == 1,
-           "the sweep files what was approved");
-
-    n = board_load(&v);
-    c = board_find(v, n, id);
-    expect(c && c->col == BOARD_DONE, "and the sweep card is done");
-    board_free(v, n);
-}
-
-static void test_sweep_review_can_refuse(void)
-{
-    const char *cwd = "/tmp/refusedsweep";
-    char        due[4096], id[BOARD_ID_MAX] = {0};
-
-    sweep_every(8);
-    land_cards(cwd, boardcfg()->sweep_every, "dropped card");
-    expect(sweep_due(due, sizeof due), "the interval makes the repo due");
-    expect(boardsweep_open(cwd, id, sizeof id), "a sweep card is minted");
-    expect(boardsweep_finished(id, "{\"cards\":[\"keep this one\",\"drop this one\"]}"),
-           "the sweep's cards are taken");
-
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    struct board_card *c = board_find(v, n, id);
-    expect(c && boardsweep_proposed(c) == 2, "both wait on the card");
-    expect(boardsweep_reject(c), "rejecting drops them");
-    board_free(v, n);
-
-    expect(!card_titled("keep this one", cwd) && !card_titled("drop this one", cwd),
-           "nothing was filed");
-
-    n = board_load(&v);
-    c = board_find(v, n, id);
-    expect(c && c->col == BOARD_DONE, "and the sweep card is done");
-    board_free(v, n);
-}
-
-static void test_sweep_with_nothing_to_raise(void)
-{
-    const char *cwd = "/tmp/quietsweep";
-    char        due[4096], id[BOARD_ID_MAX] = {0};
-
-    sweep_every(8);
-    land_cards(cwd, boardcfg()->sweep_every, "quiet card");
-    expect(sweep_due(due, sizeof due), "the interval makes the repo due");
-    expect(boardsweep_open(cwd, id, sizeof id), "a sweep card is minted");
-    expect(boardsweep_finished(id, "{\"cards\":[]}"), "an empty sweep is taken");
-
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    struct board_card *c = board_find(v, n, id);
-    expect(c && c->col == BOARD_DONE, "a sweep with nothing to raise skips review");
-    board_free(v, n);
-}
-
-static int make_repo_with_worktree(char *root, size_t rsize, char *tree, size_t tsize)
-{
-    snprintf(root, rsize, "%s/repo", home);
-    snprintf(tree, tsize, "%s/repo/wt", home);
-
-    char cmd[2048];
-    snprintf(cmd, sizeof cmd,
-             "git init -q %s >/dev/null 2>&1 && "
-             "git -C %s -c user.email=t@t -c user.name=t commit -q --allow-empty "
-             "-m base >/dev/null 2>&1 && "
-             "git -C %s worktree add -q -b wt %s >/dev/null 2>&1",
-             root, root, root, tree);
-    if (system(cmd) != 0)
-        return 0;
-
-    char real[4096];
-    if (realpath(root, real))
-        snprintf(root, rsize, "%s", real);
-    return 1;
-}
-
-static void test_sweep_files_against_the_repo(void)
-{
-    char root[4096], tree[4096];
-    if (!make_repo_with_worktree(root, sizeof root, tree, sizeof tree)) {
-        fprintf(stderr, "skipping worktree sweep test: no git\n");
-        return;
-    }
-
-    sweep_every(8);
-    land_cards(tree, boardcfg()->sweep_every, "worktree card");
-
-    char id[BOARD_ID_MAX] = {0};
-    expect(boardsweep_open(tree, id, sizeof id), "a sweep card is minted");
-
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    struct board_card *c = board_find(v, n, id);
-    expect(c && !strcmp(c->cwd, root), "a sweep sits on the main repo");
-    board_free(v, n);
-
-    expect(boardsweep_finished(id, "{\"cards\":[\"a finding from the worktree\"]}"),
-           "the sweep's cards are taken");
-
-    n = board_load(&v);
-    c = board_find(v, n, id);
-    expect(boardsweep_approve(c), "approving files them");
-    board_free(v, n);
-
-    expect(card_titled("a finding from the worktree", root) == 1,
-           "a finding is filed against the main repo");
-    expect(!card_titled("a finding from the worktree", tree),
-           "and not against the worktree it was found in");
 }
 
 static void test_done_lists_newest_first(void)
@@ -1423,11 +1208,76 @@ static void test_the_shipped_kinds_and_roles_are_built_in(void)
     expect(k != NULL, "plan is a kind without a file anywhere");
     expect(k && k->steps_n == 2, "walking the two steps it names");
 
-    const struct board_role *p = boardcfg_worker();
-    expect(p && !strcmp(p->name, "plan"), "the planner is the worker");
-    expect(p && !p->worktree, "and takes no worktree");
+    expect(!boardflow_worktree("plan"), "and takes no worktree");
+
+    const struct board_role *p = boardcfg_for_step("plan");
+    expect(p && p->runs == BOARD_RUNS_WORKER, "a worker takes the plan step");
     expect(p && p->prompt && strstr(p->prompt, "plan mode"),
            "its prompt is the body of the file it was built from");
+}
+
+static void put_file(const char *path, const char *text)
+{
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        fail("the file is written");
+        return;
+    }
+    fputs(text, f);
+    fclose(f);
+}
+
+static char *slurp_file(const char *path)
+{
+    return text_slurp(path, 1u << 20, NULL);
+}
+
+static void test_the_card_file_outlives_the_worktree(void)
+{
+    struct board_card c = {0};
+    snprintf(c.id, sizeof c.id, "cf01");
+    snprintf(c.worktree, sizeof c.worktree, "%s/tree", home);
+    mkdir(c.worktree, 0700);
+
+    char in_tree[4300];
+    snprintf(in_tree, sizeof in_tree, "%s/CARD.md", c.worktree);
+    put_file(in_tree, "# a card\n\n## Plan\n\nrewrite the cancel row\n");
+
+    boardfile_keep(&c);
+
+    char kept[4300];
+    expect(boardfile_kept(c.id, kept, sizeof kept), "the copy has a path");
+    char *saved = slurp_file(kept);
+    expect(saved && strstr(saved, "rewrite the cancel row"),
+           "and holds what the worker wrote");
+    free(saved);
+
+    char gone[4400];
+    snprintf(gone, sizeof gone, "rm -rf %s", c.worktree);
+    expect(system(gone) == 0, "the worktree goes");
+
+    mkdir(c.worktree, 0700);
+    expect(boardfile_put(c.worktree, &c), "a new worktree takes the copy back");
+    char *back = slurp_file(in_tree);
+    expect(back && strstr(back, "rewrite the cancel row"),
+           "with the plan still in it");
+    free(back);
+
+    unlink(in_tree);
+    boardfile_keep(&c);
+    saved = slurp_file(kept);
+    expect(saved && strstr(saved, "rewrite the cancel row"),
+           "a card file that is gone leaves the last copy standing");
+    free(saved);
+
+    struct board_card other = {0};
+    snprintf(other.id, sizeof other.id, "cf02");
+    snprintf(other.worktree, sizeof other.worktree, "%s", c.worktree);
+    expect(!boardfile_put(other.worktree, &other),
+           "a card with no copy kept has nothing to put back");
+
+    boardfile_drop(c.id);
+    expect(slurp_file(kept) == NULL, "dropping the card drops the copy");
 }
 
 int main(void)
@@ -1453,10 +1303,6 @@ int main(void)
     test_a_step_that_fails_with_nowhere_to_send_it();
     test_skipping_a_step();
 
-    test_sweep_counts_landed_cards();
-    test_sweep_review_can_refuse();
-    test_sweep_with_nothing_to_raise();
-    test_sweep_files_against_the_repo();
     test_a_planner_works_without_a_worktree();
     test_reply_json();
     test_kinds();
@@ -1471,6 +1317,7 @@ int main(void)
     test_auto_pick_roundtrip();
     test_revision_tracks_writes();
     test_the_shipped_kinds_and_roles_are_built_in();
+    test_the_card_file_outlives_the_worktree();
 
     cleanup();
     if (failures)

@@ -9,7 +9,6 @@
 #include "board.h"
 #include "boardcfg.h"
 #include "boardflow.h"
-#include "boardsweep.h"
 #include "boardwork.h"
 #include "form.h"
 #include "session.h"
@@ -128,9 +127,7 @@ static int stages_of(const struct board_card *c, struct stage *out, int max)
         if (!p)
             continue;
         out[n++] = (struct stage){step, step,
-                                  p->runs == BOARD_RUNS_PERSON  ? "you"
-                                  : p->runs == BOARD_RUNS_COMMAND ? NULL
-                                                                  : p->job};
+                                  p->runs == BOARD_RUNS_PERSON ? "you" : p->job};
     }
     return n;
 }
@@ -281,21 +278,10 @@ static void note_message(struct notes *notes, const char *head, const char *stam
     } while (at);
 }
 
-static void build_proposals(const struct board_card *c, struct notes *notes)
-{
-    char line[BOARD_TITLE_MAX];
-    for (int i = 0; boardsweep_proposal(c, i, line, sizeof line); i++)
-        note_at(notes, i == 0 ? text_dsprintf("proposals") : NULL,
-                text_dsprintf("%2d. %s", i + 1, line), UI_DIM);
-    note_line(notes, NULL);
-}
-
 static void build_notes(const struct board_card *c, struct notes *notes)
 {
     notes->log_from = -1;
 
-    if (boardflow_waits_on_you(c) && boardsweep_is(c))
-        build_proposals(c, notes);
     build_stages(c, notes);
     build_backend(c, notes);
     build_spend(c, notes);
@@ -368,15 +354,12 @@ enum boardcard_action boardcard_form(const struct board_card *c,
     char unstart_at[2] = "";
     char approve_at[2] = "";
 
-    int proposals = boardflow_waits_on_you(c) && boardsweep_is(c);
-
     struct form_field fields[FORM_FIELDS];
     int               fields_n = 0;
 
-    if (!proposals)
-        fields[fields_n++] = (struct form_field){"spec", FORM_TEXT, spec,
-                                                 sizeof spec, NULL, 0,
-                                                 CARD_SPEC_ROWS};
+    fields[fields_n++] = (struct form_field){"spec", FORM_TEXT, spec,
+                                             sizeof spec, NULL, 0,
+                                             CARD_SPEC_ROWS};
     fields[fields_n++] = (struct form_field){"kind", FORM_CHOICE, kind,
                                              sizeof kind, kinds, kinds_n, 0};
     fields[fields_n++] = (struct form_field){"column", FORM_CHOICE, column,
@@ -391,7 +374,7 @@ enum boardcard_action boardcard_form(const struct board_card *c,
                                              backends_n, 0};
     fields[fields_n++] = (struct form_field){"tier", FORM_CHOICE, tier,
                                              sizeof tier, tiers, tiers_n, 0};
-    if (boardflow_runs(c) == BOARD_RUNS_WORKER && !boardsweep_is(c))
+    if (boardflow_runs(c) == BOARD_RUNS_WORKER)
         fields[fields_n++] = (struct form_field){
             "cancel starting, back to backlog", FORM_BUTTON, unstart_at,
             sizeof unstart_at, NULL, 0, 0};
@@ -411,11 +394,6 @@ enum boardcard_action boardcard_form(const struct board_card *c,
             snprintf(approve_label + strlen(approve_label),
                      sizeof approve_label - strlen(approve_label),
                      " \xc2\xb7 no %s", most);
-    }
-    if (proposals) {
-        int raised = boardsweep_proposed(c);
-        snprintf(approve_label, sizeof approve_label,
-                 "approve · raise %d card%s", raised, raised == 1 ? "" : "s");
     }
     if (boardflow_waits_on_you(c))
         fields[fields_n++] = (struct form_field){approve_label, FORM_BUTTON,
@@ -454,7 +432,6 @@ enum boardcard_action boardcard_form(const struct board_card *c,
     snprintf(out->priority, sizeof out->priority, "%s", priority);
     snprintf(out->backend, sizeof out->backend, "%s", backend);
     snprintf(out->tier, sizeof out->tier, "%s", tier);
-    out->proposals = proposals;
 
     if (unstart_at[0])
         return BOARDCARD_UNSTART;

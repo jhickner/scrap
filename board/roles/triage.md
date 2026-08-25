@@ -1,5 +1,4 @@
 ---
-runs: agent
 tier: low
 skippable: 1
 ---

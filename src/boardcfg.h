@@ -31,10 +31,8 @@ struct board_backend {
 #define BOARD_KIND_STEPS 12
 
 enum board_runs {
-    BOARD_RUNS_AGENT,
     BOARD_RUNS_WORKER,
     BOARD_RUNS_PERSON,
-    BOARD_RUNS_COMMAND,
     BOARD_RUNS_MODES,
 };
 
@@ -57,7 +55,6 @@ struct board_role {
     char step[BOARD_STEP_NAME];
     char tier[8];
     int  skippable;
-    int  worktree;
 
     enum board_runs runs;
     enum board_lock lock;
@@ -87,6 +84,7 @@ struct board_kind {
     char *approval_prompt;
     char  next_kind[32];
     int   priority;
+    int   worktree;
 
     char steps[BOARD_KIND_STEPS][BOARD_STEP_NAME];
     int  steps_n;
@@ -99,7 +97,6 @@ struct board_cfg {
     int workers;
     int auto_pull;
     int auto_pick;
-    int sweep_every;
     int archive_after;
     int done_shown;
     int backlog_shown;
@@ -136,8 +133,6 @@ int boardcfg_set(const struct board_cfg *c);
 const struct board_role *boardcfg_for_job(const char *job);
 
 const struct board_role *boardcfg_for_step(const char *step);
-
-const struct board_role *boardcfg_worker(void);
 
 const struct board_role *boardcfg_for_backend(const char *job,
                                               const char *backend,

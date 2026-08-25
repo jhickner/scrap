@@ -56,7 +56,6 @@ struct board_card {
     char merge_from[48];
     char merge_to[48];
 
-    char stuck[256];
     double cost_usd;
     long   tokens_in, tokens_out;
 

@@ -4,10 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "boardcmd.h"
 #include "boarddiff.h"
 #include "boardflow.h"
-#include "boardsweep.h"
 #include "boardtriage.h"
 #include "boardwork.h"
 #include "session.h"
@@ -93,8 +91,6 @@ const char *boardtile_step(const char *id)
 {
     if (boardtriage_running(id))
         return "triaging";
-    if (boardcmd_running(id))
-        return "landing";
     return boardwork_step_job(id);
 }
 
@@ -127,14 +123,9 @@ static void status_of(const struct board_card *c, int wide, const char *step,
     const char *question = c->col == BOARD_UNCLEAR ? board_said(c, "triage") : NULL;
     if (question)
         snprintf(out, size, "%s", question);
-    else if (c->stuck[0])
-        snprintf(out, size, "stuck · %s", c->stuck);
     else if (waiting[0])
         snprintf(out, size, "waiting · %s", waiting);
-    else if (boardflow_waits_on_you(c) && boardsweep_is(c)) {
-        int raised = boardsweep_proposed(c);
-        snprintf(out, size, "%d card%s proposed", raised, raised == 1 ? "" : "s");
-    } else if (boardflow_waits_on_you(c) && c->worktree[0]) {
+    else if (boardflow_waits_on_you(c) && c->worktree[0]) {
         int files = 0, lines = 0;
         boarddiff_size_cached(c, &files, &lines);
         snprintf(out, size, "%d file%s, %d line%s", files, files == 1 ? "" : "s",

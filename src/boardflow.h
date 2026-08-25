@@ -9,7 +9,7 @@ struct board_card;
 const char *boardflow_next(const struct board_card *c, const char *after,
                            int force);
 
-const char *boardflow_start(void);
+const char *boardflow_start(const struct board_card *c);
 
 const char *boardflow_after_turn(const struct board_card *c);
 

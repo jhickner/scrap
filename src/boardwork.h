@@ -38,12 +38,8 @@ int boardwork_tab(const char *id);
 
 const char *boardwork_step_job(const char *id);
 
-int boardwork_sweep_pump(void);
-
-int boardwork_sweep_now(const char *cwd, char *why, int size);
-
 int boardwork_hold(const char *id, struct session *s, const char *job,
-                   const char *step, enum board_runs runs);
+                   const char *step);
 
 void boardwork_leave(const struct board_card *c);
 

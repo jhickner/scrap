@@ -73,9 +73,6 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
     toggle_row(rows, n, "auto pull", &c->auto_pull);
     toggle_row(rows, n, "auto pick", &c->auto_pick);
 
-    head(rows, n, "sweep");
-    count_row(rows, n, "interval", &c->sweep_every, 0, 500, "cards");
-
     head(rows, n, "triage");
     rows[*n].kind = ROW_PROJECTS;
     rows[*n].label = "projects";

@@ -3,7 +3,6 @@ runs: worker
 tier: high
 step: plan
 skippable: 0
-worktree: 0
 ---
 
 You are in plan mode. You are researching a codebase and writing a plan for

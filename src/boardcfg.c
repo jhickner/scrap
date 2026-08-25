@@ -69,14 +69,12 @@ const struct board_backend *boardcfg_backend(const struct board_cfg *c,
     return NULL;
 }
 
-static const char *const RUNS_NAMES[BOARD_RUNS_MODES] = {
-    "agent", "worker", "person", "command",
-};
+static const char *const RUNS_NAMES[BOARD_RUNS_MODES] = {"worker", "person"};
 
 const char *boardcfg_runs_name(enum board_runs runs)
 {
     if (runs < 0 || runs >= BOARD_RUNS_MODES)
-        return RUNS_NAMES[BOARD_RUNS_AGENT];
+        return RUNS_NAMES[BOARD_RUNS_WORKER];
     return RUNS_NAMES[runs];
 }
 
@@ -86,7 +84,7 @@ enum board_runs boardcfg_runs_from_name(const char *name)
         for (int i = 0; i < BOARD_RUNS_MODES; i++)
             if (!strcmp(name, RUNS_NAMES[i]))
                 return (enum board_runs)i;
-    return BOARD_RUNS_AGENT;
+    return BOARD_RUNS_WORKER;
 }
 
 static const char *const LOCK_NAMES[BOARD_LOCKS] = {"", "repo", "machine"};
@@ -121,7 +119,7 @@ static void backend_defaults(struct board_backend *b, const char *name)
     snprintf(b->level[BOARD_TIER_HIGH].effort, sizeof b->level[0].effort, "high");
 
     if (!strcmp(name, "claude")) {
-        snprintf(b->level[BOARD_TIER_LOW].model, sizeof b->level[0].model, "sonnet");
+        snprintf(b->level[BOARD_TIER_LOW].model, sizeof b->level[0].model, "haiku");
         snprintf(b->level[BOARD_TIER_MED].model, sizeof b->level[0].model, "opus[1m]");
         snprintf(b->level[BOARD_TIER_HIGH].model, sizeof b->level[0].model, "opus[1m]");
     } else if (!strcmp(name, "codex")) {
@@ -160,7 +158,6 @@ static void defaults(struct board_cfg *c)
 {
     memset(c, 0, sizeof *c);
     c->workers = 3;
-    c->sweep_every = 0;
     c->archive_after = 14;
     c->done_shown = 20;
     c->backlog_shown = 20;
@@ -269,7 +266,6 @@ static void read_settings(struct board_cfg *c)
     c->workers = mdcfg_int(&m, "workers", c->workers);
     c->auto_pull = mdcfg_int(&m, "auto pull", c->auto_pull);
     c->auto_pick = mdcfg_int(&m, "auto pick", c->auto_pick);
-    c->sweep_every = mdcfg_int(&m, "sweep every", c->sweep_every);
     c->archive_after = mdcfg_int(&m, "archive after", c->archive_after);
     c->done_shown = mdcfg_int(&m, "done shown", c->done_shown);
     c->backlog_shown = mdcfg_int(&m, "backlog shown", c->backlog_shown);
@@ -321,7 +317,6 @@ static void read_roles(struct board_cfg *c)
 
         role_defaults(p);
         p->skippable = mdcfg_int(&m, "skippable", 1);
-        p->worktree = mdcfg_int(&m, "worktree", 1);
 
         p->prompt = dup_or_null(m.body ? m.body : "");
         mdcfg_free(&m);
@@ -376,6 +371,7 @@ static void read_kinds(struct board_cfg *c)
         k->approval_prompt = dup_or_null(mdcfg_get(&m, "approval prompt"));
         snprintf(k->next_kind, sizeof k->next_kind, "%s", mdcfg_get(&m, "next kind"));
         k->priority = mdcfg_int(&m, "priority", 0);
+        k->worktree = mdcfg_int(&m, "worktree", 1);
         boardcfg_kind_steps(k, mdcfg_get(&m, "steps"));
         mdcfg_free(&m);
     }
@@ -387,22 +383,21 @@ static int write_settings(const struct board_cfg *c)
     if (!board_path(path, sizeof path, BOARD_DIR, "settings"))
         return 0;
 
-    char nums[7][32];
+    char nums[6][32];
     snprintf(nums[0], sizeof nums[0], "%d", c->workers);
     snprintf(nums[1], sizeof nums[1], "%d", c->auto_pull);
     snprintf(nums[2], sizeof nums[2], "%d", c->auto_pick);
-    snprintf(nums[3], sizeof nums[3], "%d", c->sweep_every);
-    snprintf(nums[4], sizeof nums[4], "%d", c->archive_after);
-    snprintf(nums[5], sizeof nums[5], "%d", c->done_shown);
-    snprintf(nums[6], sizeof nums[6], "%d", c->backlog_shown);
+    snprintf(nums[3], sizeof nums[3], "%d", c->archive_after);
+    snprintf(nums[4], sizeof nums[4], "%d", c->done_shown);
+    snprintf(nums[5], sizeof nums[5], "%d", c->backlog_shown);
 
     const char *keys[] = {"serving", "view", "workers", "auto pull",
-                          "auto pick", "sweep every", "archive after",
+                          "auto pick", "archive after",
                           "done shown", "backlog shown", "projects"};
     const char *vals[] = {c->serving, c->view, nums[0], nums[1], nums[2],
-                          nums[3], nums[4], nums[5], nums[6], c->projects};
+                          nums[3], nums[4], nums[5], c->projects};
 
-    return mdcfg_write(path, keys, vals, 10,
+    return mdcfg_write(path, keys, vals, 9,
         "serving is the backend every tiered role runs on.\n"
         "view is list or grid: the board as rows, or as tiles in lanes.\n"
         "workers is how many may run at once.\n"
@@ -411,7 +406,6 @@ static int write_settings(const struct board_cfg *c)
         "auto pick is 1 to hand a worker the next backlog card when its current\n"
         "task completes, switching backends to match the card; 0 to leave it on\n"
         "the card until you take it.\n"
-        "sweep every is cards landed in a repo before a sweep of it; zero never.\n"
         "archive after is days a done card stays on the board; zero forever.\n"
         "done shown and backlog shown are how many cards those columns list;\n"
         "zero lists them all.\n"
@@ -604,11 +598,6 @@ int boardcfg_missing(char *out, size_t size)
                 return 1;
             }
         }
-
-    if (!boardcfg_worker()) {
-        snprintf(out, size, "no role runs a worker");
-        return 1;
-    }
 
     char   who[128] = "";
     size_t at = 0;
@@ -839,15 +828,6 @@ const struct board_role *boardcfg_for_step(const char *step)
     return NULL;
 }
 
-const struct board_role *boardcfg_worker(void)
-{
-    load();
-    for (int i = 0; i < cache.roles_n; i++)
-        if (serving_roles[i].runs == BOARD_RUNS_WORKER)
-            return &serving_roles[i];
-    return NULL;
-}
-
 const struct board_role *boardcfg_for_backend(const char *job,
                                                  const char *backend,
                                                  const char *tier)
@@ -981,7 +961,6 @@ int boardcfg_set(const struct board_cfg *c)
     cache.workers = c->workers;
     cache.auto_pull = c->auto_pull;
     cache.auto_pick = c->auto_pick;
-    cache.sweep_every = c->sweep_every;
     cache.archive_after = c->archive_after;
     cache.done_shown = c->done_shown;
     cache.backlog_shown = c->backlog_shown;
