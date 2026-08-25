@@ -8,7 +8,6 @@
 
 #include "board.h"
 #include "gitcmd.h"
-#include "md.h"
 #include "boardcfg.h"
 #include "boarddiff.h"
 #include "boardfile.h"
@@ -325,18 +324,6 @@ static void card_write(FILE *f, const struct board_card *c)
     }
 }
 
-static char *card_text(const struct board_card *c)
-{
-    char  *buf = NULL;
-    size_t len = 0;
-    FILE  *f = open_memstream(&buf, &len);
-    if (!f)
-        return NULL;
-    card_write(f, c);
-    fclose(f);
-    return buf;
-}
-
 static void write_card_file(const char *path, const struct board_card *c)
 {
     if (boardfile_put(path, c))
@@ -351,13 +338,75 @@ static void write_card_file(const char *path, const struct board_card *c)
     fclose(f);
 }
 
+struct card_show {
+    char *text;
+    char *notes;
+};
+
+static void card_show_free(void *ud)
+{
+    struct card_show *k = ud;
+    if (!k)
+        return;
+    free(k->text);
+    free(k->notes);
+    free(k);
+}
+
+static struct card_show *card_show_new(const struct board_card *c)
+{
+    struct card_show *k = calloc(1, sizeof *k);
+    if (!k)
+        return NULL;
+
+    const char *body = c->body ? c->body : "";
+    k->text = *body && !same_text(body, c->title)
+        ? text_dsprintf("%s\n\n%s", c->title, body)
+        : text_dsprintf("%s", c->title);
+    if (!k->text) {
+        card_show_free(k);
+        return NULL;
+    }
+
+    if (c->log_n) {
+        char  *buf = NULL;
+        size_t len = 0;
+        FILE  *f = open_memstream(&buf, &len);
+        if (f) {
+            for (int i = 0; i < c->log_n; i++)
+                fprintf(f, "%s%s: %s", i ? "\n" : "", c->log[i].who,
+                        c->log[i].text ? c->log[i].text : "");
+            fclose(f);
+            k->notes = buf;
+        }
+    }
+    return k;
+}
+
+static void card_render(void *ud, int cols)
+{
+    (void)cols;
+    const struct card_show *k = ud;
+
+    ui_bar(ui_style(UI_HEADING), "Card");
+    ui_wrapped(k->text, 2, UI_DIM);
+    if (k->notes) {
+        ui_put("\n");
+        ui_bar(ui_style(UI_HEADING), "Notes");
+        ui_wrapped(k->notes, 2, UI_DIM);
+    }
+    ui_put("\n");
+    ui_bar(ui_style(UI_HEADING), "Worker");
+}
+
 static void draw_card(struct session *s, void *ud)
 {
     (void)s;
-    viewport_item_begin(VIEWPORT_ROWS(1, 1));
-    ui_bar(ui_style(UI_DIM), "Card");
+    viewport_item_begin(&(struct viewport_entry){
+        .render = card_render, .ud = ud, .free_ud = card_show_free,
+        .reflow = 1, .pad_before = 1, .pad_after = 1});
+    card_render(ud, ui_columns());
     viewport_item_end();
-    md_render_kept(ud, 0);
 }
 
 static void replay(struct session *s, void *ud)
@@ -368,11 +417,9 @@ static void replay(struct session *s, void *ud)
 
 static void show_card(int at, const struct board_card *c)
 {
-    char *text = card_text(c);
-    if (!text)
-        return;
-    workspace_render(at, draw_card, text);
-    free(text);
+    struct card_show *k = card_show_new(c);
+    if (k)
+        workspace_render(at, draw_card, k);
 }
 
 /* The turn that opens a card's session: the action it is on, the card, and a
