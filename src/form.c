@@ -166,9 +166,8 @@ static int inline_budget(const struct state *st, int columns)
     return budget < 8 ? 8 : budget;
 }
 
-/* a text field wraps at the width of the column it is painted in beside its
-   label, the narrower of the two columns it can sit in: it moves under the
-   label on the row it wraps, rather than growing on for the columns between */
+/* a text field keeps the column it starts in, however many rows it takes: it
+   wraps under itself beside its label rather than moving out from under it */
 static int repl_width(const struct state *st)
 {
     return inline_budget(st, ui_columns()) + REPL_GUTTER;
@@ -411,30 +410,25 @@ static int layout(struct state *st, int columns)
 
         st->slots[i].rows = shown;
 
-        if (shown == 1 && rows == 1) {
-            struct line *l = line_add(out);
-            if (l) {
-                l->field = i;
-                l->label = f->label;
-                l->inl = 1;
-            }
-            continue;
-        }
-
-        blank_row(out);
-        head_row(out, f->label, i);
-        for (int r = 0; r < shown; r++) {
-            struct line *l = line_add(out);
-            if (!l)
-                break;
+        struct line *l = line_add(out);
+        if (l) {
             l->field = i;
-            l->row = r;
+            l->label = f->label;
+            l->inl = 1;
+        }
+        for (int r = 1; r < shown; r++) {
+            struct line *k = line_add(out);
+            if (!k)
+                break;
+            k->field = i;
+            k->row = r;
         }
         if (shown < rows) {
             snprintf(st->more[i], sizeof st->more[i], "+%d more", rows - shown);
-            more_row(out, st->more[i]);
+            struct line *k = more_row(out, st->more[i]);
+            if (k)
+                k->indent = inline_column(st) - value_column();
         }
-        blank_row(out);
     }
     return out->n;
 }
@@ -595,7 +589,7 @@ static void paint(void *ud)
             } else if (l->label)
                 put_label(l->label, 0);
             else if (l->plain) {
-                ui_pad(value_column());
+                ui_pad(value_column() + l->indent);
                 ui_esc(ui_style(l->role));
                 ui_put(l->plain);
                 ui_esc(ui_style(UI_RESET));
@@ -639,7 +633,7 @@ static void paint(void *ud)
             continue;
         }
 
-        ui_pad(value_column());
+        ui_pad(inline_column(st));
         put_value_row(st, l->field, l->row, focused);
         ui_put("\n");
     }
