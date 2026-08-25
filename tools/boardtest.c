@@ -461,22 +461,6 @@ static void defs_use(void)
     boardcfg_defaults(defs, defs_n);
 }
 
-static struct board_card of_kind(const char *kind)
-{
-    struct board_card c = {0};
-    snprintf(c.kind, sizeof c.kind, "%s", kind);
-    return c;
-}
-
-static int goes(const char *kind, const char *from, const char *want)
-{
-    struct board_card c = of_kind(kind);
-    const char       *next = boardflow_next(&c, from, 1);
-    if (!want)
-        return next == NULL;
-    return next && !strcmp(next, want);
-}
-
 static void steps_for(const char *kind, const char *steps)
 {
     char front[512];
@@ -501,64 +485,6 @@ static void with_actions(void)
     defs_use();
 }
 
-static void test_a_step_answers_for_itself(void)
-{
-    with_actions();
-    steps_for("audited", "worktree, review, audit, merge");
-
-    char id[BOARD_ID_MAX] = {0};
-    expect(board_add("a card to audit", "/tmp/repo", id), "capture");
-    expect(board_note(id, "worker", "wrote the fix"), "the worker had it first");
-
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    struct board_card *c = board_find(v, n, id);
-    if (!c) {
-        fail("the card is stored");
-        board_free(v, n);
-        return;
-    }
-    struct board_card edited = *c;
-    snprintf(edited.kind, sizeof edited.kind, "audited");
-    board_put(&edited, "audit");
-    expect(board_update(&edited), "the card sits at the audit step");
-    board_free(v, n);
-
-    n = board_load(&v);
-    c = board_find(v, n, id);
-    expect(boardstep_finished(c, boardcfg_for_step("audit"),
-                              "src/a.c leaks the buffer\nFINDINGS"),
-           "an answer is taken");
-    board_free(v, n);
-
-    expect(at(id, "worktree"), "the marker sends the card back to its worker");
-    n = board_load(&v);
-    c = board_find(v, n, id);
-    expect(c && board_said(c, "audit") &&
-               strstr(board_said(c, "audit"), "leaks"),
-           "with what it found on the card");
-    char *since = c ? boardstep_since(c, "worker") : NULL;
-    expect(since && strstr(since, "leaks") && strstr(since, "audit"),
-           "and in what the worker picking it up is told");
-    free(since);
-    board_free(v, n);
-
-    expect(board_move(id, BOARD_STEP, "audit", "you", NULL), "back into audit");
-    n = board_load(&v);
-    c = board_find(v, n, id);
-    expect(boardstep_finished(c, boardcfg_for_step("audit"), "nothing to report"), "a clean answer");
-    board_free(v, n);
-    expect(at(id, "merge"), "sends the card on to the step after it");
-
-    expect(board_move(id, BOARD_STEP, "audit", "you", NULL), "into audit again");
-    n = board_load(&v);
-    c = board_find(v, n, id);
-    expect(boardstep_finished(c, boardcfg_for_step("audit"), NULL), "a turn that said nothing");
-    board_free(v, n);
-    expect(at(id, "merge"), "does not hold the card either");
-
-    board_remove(id);
-}
 
 static void test_reply_json(void)
 {
@@ -602,102 +528,8 @@ static void write_kind(const char *name, const char *const *keys,
     kind_def(name, front, body);
 }
 
-static void test_a_planner_works_without_a_worktree(void)
-{
-    defs_clear();
-    action_def("plan", "runs: worker\ntier: high\nstep: plan\n",
-             "Read the repo and write the plan.");
-    action_def("review", "runs: person\ntier: med\n", "");
-    kind_def("plan", "means: a plan of the work\npriority: 1\n"
-                     "steps: plan, review\nworktree: 0\n", "");
-    defs_use();
 
-    expect(boardflow_lands("plan"), "a plan card is the worker's to take");
-    expect(!boardflow_worktree("plan"), "and gets no worktree to take it in");
-    expect(goes("plan", NULL, "plan"), "it starts on the worker");
-    expect(goes("plan", "plan", "review"), "then stops for a person");
-    expect(goes("plan", "review", NULL), "and approving that finishes it");
 
-    with_actions();
-}
-
-static void test_a_kind_file_carries_its_approval_prompt(void)
-{
-    const char *keys[] = {"means", "priority", "steps", "approval prompt"};
-    const char *vals[] = {"something the person wants to buy", "1", "review",
-                          "Order it, and say what was ordered."};
-    with_actions();
-    write_kind("buy", keys, vals, 4, "Search Amazon with the web skill.\n");
-    defs_use();
-
-    const struct board_kind *k = boardcfg_kind("buy");
-    if (!k) {
-        fail("a kind is whatever its file says");
-        return;
-    }
-    expect(k->priority == 1, "priority comes off the file");
-    expect(boardcfg_kind_takes("buy", "review"), "so does the step it stops at");
-    expect(!boardcfg_kind_takes("buy", "worktree"), "and the ones it skips");
-    expect(goes("buy", NULL, "review"), "the card waits in review");
-    expect(k->approval_prompt && !strcmp(k->approval_prompt, vals[3]),
-           "the approval prompt is read whole");
-
-    struct board_card card = of_kind("buy");
-    snprintf(card.step, sizeof card.step, "worktree");
-    card.col = BOARD_STEP;
-    expect(boardflow_after_turn(&card) &&
-               !strcmp(boardflow_after_turn(&card), "review"),
-           "the first turn stops for a person");
-
-    struct board_note said = {0, "you", (char *)vals[3]};
-    card.log = &said;
-    card.log_n = 1;
-    expect(boardflow_approval(&card) == NULL, "the approval prompt is sent once");
-    expect(boardflow_after_turn(&card) == NULL,
-           "and the turn answering it ends the card");
-
-    char block[4096];
-    boardcfg_kinds_block(block, sizeof block);
-    expect(strstr(block, "buy") != NULL, "the classifier is told about it");
-
-    struct board_cfg *c = boardcfg_copy();
-    expect(boardcfg_set(c), "the config writes back");
-    boardcfg_free(c);
-    boardcfg_reload();
-    k = boardcfg_kind("buy");
-    expect(k && k->approval_prompt && !strcmp(k->approval_prompt, vals[3]),
-           "and survives a write and a reload");
-}
-
-static void test_a_kind_prompt_takes_the_card_id(void)
-{
-    const char *keys[] = {"means", "priority", "steps", "approval prompt"};
-    const char *vals[] = {"something the person wants to buy", "1", "review",
-                          "Order it in the web-{id} window."};
-    write_kind("buy", keys, vals, 4, "Drive the web-{id} window.\n");
-    defs_use();
-
-    struct board_card card = {0};
-    snprintf(card.id, sizeof card.id, "c7f2");
-    snprintf(card.kind, sizeof card.kind, "buy");
-
-    char *say = boardflow_approval(&card);
-    expect(say && !strcmp(say, "Order it in the web-c7f2 window."),
-           "the approval prompt takes the card id");
-
-    struct board_note said = {0, "you", say};
-    card.log = &said;
-    card.log_n = 1;
-    char *again = boardflow_approval(&card);
-    expect(again == NULL, "and the expanded prompt is sent once");
-    free(again);
-    free(say);
-
-    char *mine = boardcfg_expand("Drive the web-{id} window.\n", card.id);
-    expect(mine && !strcmp(mine, "Drive the web-c7f2 window.\n"),
-           "so does the prompt the worker is given");
-    free(mine);
-}
 
 static void write_the_shipped_kinds(void)
 {
@@ -800,52 +632,6 @@ static void test_projects_block(void)
     boardcfg_reload();
 }
 
-static void test_kinds(void)
-{
-    write_the_shipped_kinds();
-
-    expect(boardcfg_kind("bug") != NULL, "a configured kind is found");
-    expect(boardcfg_kind("nonsense") == NULL, "an unconfigured one is not");
-    expect(boardcfg_kind("") == NULL, "nor is no kind at all");
-
-    expect(boardcfg_priority("bug") > boardcfg_priority("feature"),
-           "a bug comes before a feature");
-    expect(boardcfg_priority("feature") > boardcfg_priority("chore"),
-           "a feature comes before a chore");
-    expect(boardcfg_priority("nonsense") == 0, "an unknown kind is worth nothing");
-
-    expect(boardcfg_kind_takes("bug", "worktree"), "work gets a worktree");
-    expect(boardcfg_kind_takes("bug", "merge"), "and lands through the queue");
-    expect(!boardcfg_kind_takes("reference", "worktree"),
-           "a note to file gets neither");
-    expect(!boardcfg_kind_takes("reference", "review"), "nor a review");
-    expect(boardcfg_kind_takes("nonsense", "merge"),
-           "an unknown kind walks the board's own steps, which is the careful "
-           "way round");
-
-    expect(goes("bug", "worktree", "review"), "work stops for a person first");
-    expect(goes("bug", "review", "audit"), "then for an audit");
-    expect(goes("bug", "audit", "merge"), "then for the queue");
-    expect(goes("bug", "merge", NULL), "the queue is the last of it");
-    expect(goes("reference", NULL, NULL),
-           "a filed note is done when the worker stops");
-
-    char block[4096];
-    boardcfg_kinds_block(block, sizeof block);
-    expect(strstr(block, "todo") && strstr(block, "chore"), "every kind is named");
-    expect(strstr(block, "something that exists and is wrong") != NULL,
-           "and each says what it means");
-}
-
-static int skip_card(const char *id)
-{
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    struct board_card *c = board_find(v, n, id);
-    int                did = c && boardflow_skip(c);
-    board_free(v, n);
-    return did;
-}
 
 static void test_actions_are_what_the_files_say(void)
 {
@@ -867,109 +653,7 @@ static void test_actions_are_what_the_files_say(void)
            "which is the job it does, not the file it is in");
 }
 
-static void test_a_step_that_fails_with_nowhere_to_send_it(void)
-{
-    with_actions();
-    action_def("audit", "runs: worker\ntier: high\nfail marker: FINDINGS\n",
-             "read the diff");
-    defs_use();
-    steps_for("nowhere", "worktree, review, audit, merge");
 
-    char id[BOARD_ID_MAX] = {0};
-    expect(board_add("a card with nowhere to go back to", "/tmp/repo", id),
-           "capture");
-
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    struct board_card *c = board_find(v, n, id);
-    if (c) {
-        struct board_card edited = *c;
-        snprintf(edited.kind, sizeof edited.kind, "nowhere");
-        board_put(&edited, "audit");
-        board_update(&edited);
-    }
-    board_free(v, n);
-
-    n = board_load(&v);
-    c = board_find(v, n, id);
-    expect(boardstep_finished(c, boardcfg_for_step("audit"), "FINDINGS"),
-           "the answer fails the card");
-    board_free(v, n);
-    expect(at(id, "backlog"), "and it waits in the backlog for a worker");
-
-    board_remove(id);
-}
-
-static void test_a_step_is_a_file(void)
-{
-    with_actions();
-    steps_for("tested", "worktree, test, review, audit, merge");
-    steps_for("untested", "worktree, review, audit, merge");
-    steps_for("filed", "");
-
-    const struct board_action *p = boardcfg_for_step("test");
-    expect(p != NULL, "a file standing in a step is the step");
-    expect(p && p->runs == BOARD_RUNS_WORKER, "a worker runs it unless it says");
-    expect(p && p->skippable, "and it may be skipped by hand");
-    expect(goes("tested", "worktree", "test"), "the kind that lists it walks it");
-    expect(goes("untested", "worktree", "review"),
-           "and the kind that does not walks past");
-    expect(goes("tested", "test", "review"), "the step before the person's");
-
-    expect(boardcfg_for_step("review") &&
-               boardcfg_for_step("review")->runs == BOARD_RUNS_PERSON,
-           "a step nothing runs waits for a person");
-    expect(boardflow_lands("tested"), "a kind listing the worker's step gets a "
-                                      "worktree");
-    expect(!boardflow_lands("filed"), "and one that lists no steps at all does "
-                                      "not");
-    expect(goes("filed", NULL, NULL), "nor does it stop anywhere");
-
-    char id[BOARD_ID_MAX] = {0};
-    expect(board_add("the tab strip wraps at 80 columns", "/tmp/repo", id),
-           "capture");
-    expect(board_note(id, "worker", "fixed the wrap; run mux and widen"),
-           "the worker says how to test it");
-
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    struct board_card *c = board_find(v, n, id);
-    if (!c) {
-        fail("the card is stored");
-        board_free(v, n);
-        return;
-    }
-    struct board_card edited = *c;
-    snprintf(edited.kind, sizeof edited.kind, "tested");
-    snprintf(edited.base, sizeof edited.base, "b519936");
-    board_put(&edited, "test");
-    expect(board_update(&edited), "the card sits at the test step");
-    board_free(v, n);
-
-    n = board_load(&v);
-    c = board_find(v, n, id);
-    char *prompt = boardstep_prompt(c, boardcfg_for_step("test"));
-    expect(prompt && strstr(prompt, "test the change"),
-           "the file is what the worker at that step is told");
-    expect(prompt && strstr(prompt, "the tab strip wraps"), "with the card");
-    expect(prompt && !strstr(prompt, "run mux and widen"),
-           "and not what was said earlier, which its own session already has");
-    free(prompt);
-
-    expect(boardstep_finished(c, boardcfg_for_step("test"),
-                              "ran mux at 60 columns; the strip held"),
-           "its answer moves the card on");
-    board_free(v, n);
-    expect(at(id, "review"), "to the person");
-
-    n = board_load(&v);
-    c = board_find(v, n, id);
-    expect(c && board_said(c, "test") && board_said(c, "worker"),
-           "with what both of them said on the card");
-    board_free(v, n);
-
-    board_remove(id);
-}
 
 static void unskippable(int no)
 {
@@ -984,49 +668,6 @@ static void unskippable(int no)
     steps_for("skipped", "worktree, review, audit, merge");
 }
 
-static void test_skipping_a_step(void)
-{
-    with_actions();
-    steps_for("skipped", "worktree, review, audit, merge");
-
-    char id[BOARD_ID_MAX] = {0};
-    expect(board_add("a card to skip past", "/tmp/repo", id), "capture");
-
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    struct board_card *c = board_find(v, n, id);
-    if (c) {
-        struct board_card edited = *c;
-        snprintf(edited.kind, sizeof edited.kind, "skipped");
-        board_put(&edited, "audit");
-        board_update(&edited);
-    }
-    board_free(v, n);
-
-    unskippable(1);
-
-    expect(!boardflow_skip(NULL), "a missing card is not skipped");
-    expect(!skip_card(id), "an unskippable step holds the card");
-
-    unskippable(0);
-
-    expect(skip_card(id), "a skippable step is skipped");
-    expect(at(id, "merge"), "skipping the audit sends it on to land");
-    expect(skip_card(id), "and the next step skips too");
-    expect(at(id, "done"), "skipping the last of them is the end of it");
-
-    n = board_load(&v);
-    c = board_find(v, n, id);
-    int said = 0;
-    if (c)
-        for (int i = 0; i < c->log_n; i++)
-            if (strstr(c->log[i].text, "audit skipped"))
-                said = 1;
-    expect(said, "the skip says which step it was");
-    board_free(v, n);
-
-    board_remove(id);
-}
 
 static void test_done_lists_newest_first(void)
 {
@@ -1209,8 +850,6 @@ static void test_the_shipped_kinds_and_roles_are_built_in(void)
     expect(k != NULL, "plan is a kind without a file anywhere");
     expect(k && k->steps_n == 2, "walking the two steps it names");
 
-    expect(!boardflow_worktree("plan"), "and takes no worktree");
-
     const struct board_action *p = boardcfg_action("plan");
     expect(p && p->runs == BOARD_RUNS_WORKER, "a worker takes the plan step");
     expect(p && p->where == BOARD_IN_WORKTREE, "and takes it in the worktree");
@@ -1377,6 +1016,68 @@ static void test_a_card_written_before_the_history_reads_forward(void)
     board_remove("old1");
 }
 
+static void test_an_action_waits_on_what_it_needs(void)
+{
+    defs_clear();
+    action_def("plan", "runs: worker\ntier: high\nin: worktree\n", "plan it");
+    action_def("implement", "runs: worker\ntier: high\nin: worktree\n",
+               "build it");
+    action_def("test", "runs: worker\ntier: med\nin: worktree\n"
+                       "needs: implement\n",
+               "test it");
+    action_def("merge", "runs: worker\ntier: med\nin: repo\n"
+                        "needs: implement\n",
+               "land it");
+    action_def("deploy", "runs: worker\ntier: med\nin: repo\nneeds: merge\n",
+               "ship it");
+    action_def("name", "tier: low\non: capture\n", "name it");
+    defs_use();
+
+    struct board_card c = {0};
+    snprintf(c.id, sizeof c.id, "gate");
+    snprintf(c.cwd, sizeof c.cwd, "/tmp/repo");
+
+    expect(boardflow_gated(&c, "plan"), "an action needing nothing may run");
+    expect(boardflow_gated(&c, "implement"), "and so may another");
+    expect(!boardflow_gated(&c, "test"), "one needing implement may not");
+    expect(!boardflow_gated(&c, "merge"), "nor may merge");
+    expect(!boardflow_gated(&c, "deploy"), "nor deploy, two gates back");
+    expect(!boardflow_gated(&c, "name"), "and a capture action is never offered");
+
+    const char *offered[BOARD_ACTIONS_MAX];
+    int         n = boardflow_offered(&c, offered, BOARD_ACTIONS_MAX);
+    expect(n == 2, "a fresh card offers the two ungated actions");
+
+    snprintf(c.done[c.done_n++], BOARD_ACTION_NAME, "implement");
+    expect(boardflow_gated(&c, "test"), "implementing opens test");
+    expect(boardflow_gated(&c, "merge"), "and merge");
+    expect(!boardflow_gated(&c, "deploy"), "but not deploy, which needs merge");
+
+    snprintf(c.done[c.done_n++], BOARD_ACTION_NAME, "merge");
+    expect(boardflow_gated(&c, "deploy"), "merging opens deploy");
+    n = boardflow_offered(&c, offered, BOARD_ACTIONS_MAX);
+    expect(n == 5, "and every action is offered by then");
+
+    /* where each one runs, which is what moves the session */
+    expect(!strcmp(boardflow_cwd(&c, boardcfg_action("implement")), "/tmp/repo"),
+           "with no worktree yet, a worktree action runs in the repo");
+    snprintf(c.worktree, sizeof c.worktree, "/tmp/repo/.claude/worktrees/gate");
+    expect(!strcmp(boardflow_cwd(&c, boardcfg_action("implement")), c.worktree),
+           "once there is one, it runs in the worktree");
+    expect(!strcmp(boardflow_cwd(&c, boardcfg_action("merge")), "/tmp/repo"),
+           "and merge runs in the checkout it came from");
+
+    struct board_card only_repo = {0};
+    snprintf(only_repo.queue[only_repo.queue_n++], BOARD_ACTION_NAME, "merge");
+    expect(!boardflow_worktree(&only_repo),
+           "a card whose queue and history are all repo actions makes no tree");
+    snprintf(only_repo.queue[only_repo.queue_n++], BOARD_ACTION_NAME, "test");
+    expect(boardflow_worktree(&only_repo),
+           "one that queues a worktree action does");
+
+    with_actions();
+}
+
 int main(void)
 {
     if (!mkdtemp(home)) {
@@ -1394,19 +1095,11 @@ int main(void)
     test_remove();
     test_columns();
     test_attempts_reset_when_answered();
-    test_a_step_answers_for_itself();
     test_actions_are_what_the_files_say();
-    test_a_step_is_a_file();
-    test_a_step_that_fails_with_nowhere_to_send_it();
-    test_skipping_a_step();
 
-    test_a_planner_works_without_a_worktree();
     test_reply_json();
-    test_kinds();
     test_a_named_kind_skips_triage();
     test_projects_block();
-    test_a_kind_file_carries_its_approval_prompt();
-    test_a_kind_prompt_takes_the_card_id();
     test_archive();
     test_empty_and_missing();
     test_done_lists_newest_first();
@@ -1417,6 +1110,7 @@ int main(void)
     test_the_card_file_outlives_the_worktree();
     test_a_card_carries_a_queue_and_a_history();
     test_a_card_written_before_the_history_reads_forward();
+    test_an_action_waits_on_what_it_needs();
 
     cleanup();
     if (failures)

@@ -40,16 +40,12 @@ static void column_mark(const struct board_card *c, const char **mark,
         return;
     }
 
-    switch (c->col) {
-    case BOARD_UNCLEAR:
-        *mark = "?";
-        *role = UI_ACCENT;
-        break;
-    case BOARD_BACKLOG:
+    switch (board_stands(c)) {
+    case BOARD_OPEN:
         *mark = "●";
         *role = UI_DIM;
         break;
-    case BOARD_DONE:
+    case BOARD_CLOSED:
         *mark = "✓";
         *role = UI_DIM;
         break;
@@ -117,13 +113,10 @@ static void status_of(const struct board_card *c, int wide, const char *step,
         short_repo(c->cwd, where, sizeof where);
 
     char waiting[256] = {0};
-    if (c->col == BOARD_BACKLOG)
+    if (board_stands(c) == BOARD_WORKING && boardwork_tab(c->id) < 0)
         boardwork_blocked(c, waiting, sizeof waiting);
 
-    const char *question = c->col == BOARD_UNCLEAR ? board_said(c, "triage") : NULL;
-    if (question)
-        snprintf(out, size, "%s", question);
-    else if (waiting[0])
+    if (waiting[0])
         snprintf(out, size, "waiting · %s", waiting);
     else if (boardflow_waits_on_you(c) && c->worktree[0]) {
         int files = 0, lines = 0;
@@ -131,7 +124,8 @@ static void status_of(const struct board_card *c, int wide, const char *step,
         snprintf(out, size, "%d file%s, %d line%s", files, files == 1 ? "" : "s",
                  lines, lines == 1 ? "" : "s");
     } else if (c->cost_usd > 0 &&
-               (boardflow_waits_on_you(c) || c->col == BOARD_DONE)) {
+               (boardflow_waits_on_you(c) ||
+                board_stands(c) == BOARD_CLOSED)) {
         char head[320] = "";
         if (where[0])
             snprintf(head, sizeof head, "%s · ", where);
@@ -158,8 +152,10 @@ int boardtile_of(const struct board_card *c, int wide, struct board_tile *out)
 
     out->tab = boardwork_tab(c->id);
     const char *step = boardtile_step(c->id);
-    out->spin = (unsigned char)(step || (out->tab >= 0 && c->col == BOARD_STEP &&
-                                         session_busy(workspace_at(out->tab))));
+    out->spin = (unsigned char)(step ||
+                                (out->tab >= 0 &&
+                                 board_stands(c) == BOARD_WORKING &&
+                                 session_busy(workspace_at(out->tab))));
 
     status_of(c, wide, step, out->tab, out->status, sizeof out->status,
               &out->stamp);

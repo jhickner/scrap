@@ -5,7 +5,6 @@
 #include <string.h>
 
 #include "board.h"
-#include "boardflow.h"
 #include "boardlog.h"
 
 char *boardstep_since(const struct board_card *c, const char *job)
@@ -60,25 +59,4 @@ char *boardstep_prompt(const struct board_card *c, const struct board_action *p)
     snprintf(out, need, "%s\n\nThe card this is for:\n\n# %s\n\n%s\n", head,
              c->title, body);
     return out;
-}
-
-int boardstep_finished(const struct board_card *c, const struct board_action *p,
-                       const char *reply)
-{
-    if (!c || !p)
-        return 0;
-
-    boardlog_turn(c->id, p->job, NULL, reply);
-
-    int failed = p->fail_marker[0] && reply && strstr(reply, p->fail_marker);
-
-    if (reply && *reply)
-        board_note(c->id, p->job, reply);
-
-    if (!board_at(c, p->step))
-        return 0;
-
-    if (failed)
-        return board_move_back(c->id, boardflow_fail(c), p->job, NULL);
-    return board_move_to(c->id, boardflow_next(c, p->step, 0), p->job, NULL);
 }

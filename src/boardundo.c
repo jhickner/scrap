@@ -74,11 +74,17 @@ static int roll_back(const struct board_card *c, char *said, size_t size)
         return 0;
     }
 
-    const char *back = boardflow_person(c->kind);
-
+    /* the branch is back, so merge is undone: it drops out of the history and
+       the card is your turn again */
     struct board_card edited = *c;
-    edited.col = back ? BOARD_STEP : BOARD_BACKLOG;
-    snprintf(edited.step, sizeof edited.step, "%s", back ? back : "");
+    int k = 0;
+    for (int i = 0; i < edited.done_n; i++)
+        if (strcmp(edited.done[i], "merge"))
+            snprintf(edited.done[k++], BOARD_ACTION_NAME, "%s", edited.done[i]);
+    edited.done_n = k;
+    edited.queue_n = 0;
+    edited.col = BOARD_BACKLOG;
+    edited.step[0] = '\0';
     snprintf(edited.worktree, sizeof edited.worktree, "%s", path);
     edited.merge_into[0] = '\0';
     edited.merge_from[0] = '\0';
@@ -94,7 +100,7 @@ static int roll_back(const struct board_card *c, char *said, size_t size)
 
 int boardundo_can(const struct board_card *c)
 {
-    return c && c->col == BOARD_DONE;
+    return c && board_ran(c, "merge");
 }
 
 int boardundo_run(const struct board_card *c, char *said, size_t size)
@@ -105,13 +111,8 @@ int boardundo_run(const struct board_card *c, char *said, size_t size)
     }
 
     if (!c->merge_to[0] || !c->merge_from[0] || !c->merge_into[0]) {
-        if (boardflow_worktree(c->kind)) {
-            snprintf(said, size, "no merge on record to undo");
-            return 0;
-        }
-        board_move(c->id, BOARD_BACKLOG, NULL, "you", "undone");
-        snprintf(said, size, "back in backlog");
-        return 1;
+        snprintf(said, size, "no merge on record to undo");
+        return 0;
     }
 
     return roll_back(c, said, size);

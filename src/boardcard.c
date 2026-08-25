@@ -100,98 +100,25 @@ static void notes_free(struct notes *l)
     memset(l, 0, sizeof *l);
 }
 
-static int stage_ran(const struct board_card *c, const char *who)
-{
-    for (int i = 0; i < c->log_n; i++)
-        if (!strcmp(c->log[i].who, who))
-            return 1;
-    return 0;
-}
-
-struct stage {
-    const char *name;
-    const char *step;
-    const char *who;
-};
-
-static int stages_of(const struct board_card *c, struct stage *out, int max)
-{
-    int n = 0;
-    out[n++] = (struct stage){"triage", NULL, "triage"};
-
-    for (int at = 0; n < max; at++) {
-        const char *step = boardcfg_kind_step(c->kind, at);
-        if (!step)
-            break;
-        const struct board_action *p = boardcfg_for_step(step);
-        if (!p)
-            continue;
-        out[n++] = (struct stage){step, step,
-                                  p->runs == BOARD_RUNS_PERSON ? "you" : p->job};
-    }
-    return n;
-}
-
-static int stage_rank(const struct board_card *c, const struct stage *st)
-{
-    if (!st->step)
-        return c->col > BOARD_NEW && c->col != BOARD_UNCLEAR ? 1 : 0;
-    if (board_at(c, st->step))
-        return 0;
-    if (c->col == BOARD_DONE)
-        return 1;
-    if (c->col < BOARD_STEP)
-        return -1;
-
-    int here = boardcfg_kind_step_at(c->kind, c->step);
-    int there = boardcfg_kind_step_at(c->kind, st->step);
-    if (here < 0)
-        return -1;
-    return here > there ? 1 : -1;
-}
-
+/* What the card has been through, what it is on, and what is waiting. */
 static void build_stages(const struct board_card *c, struct notes *notes)
 {
-    struct stage STAGE[BOARD_KIND_STEPS + 1];
-    int          stages = stages_of(c, STAGE, BOARD_KIND_STEPS + 1);
-
     char   line[512];
     size_t at = 0;
-    int    any = 0;
     line[0] = '\0';
 
-    for (int i = 0; i < stages; i++) {
-        if (at >= sizeof line)
-            break;
+    for (int i = 0; i < c->done_n && at < sizeof line; i++)
+        at += (size_t)snprintf(line + at, sizeof line - at,
+                               at ? "  **\xe2\x9c\x93 %s**" : "**\xe2\x9c\x93 %s**",
+                               c->done[i]);
 
-        const char *mark;
-        int         strong;
-        int         rank = stage_rank(c, &STAGE[i]);
-        if (rank == 0) {
-            mark = "\xe2\x96\xb8";
-            strong = 1;
-        } else if (rank < 0) {
-            mark = "\xe2\x97\x8b";
-            strong = 0;
-        } else if (STAGE[i].who && !stage_ran(c, STAGE[i].who)) {
-            mark = "\xe2\x80\x93";
-            strong = 0;
-        } else {
-            mark = "\xe2\x9c\x93";
-            strong = 1;
-        }
+    for (int i = 0; i < c->queue_n && at < sizeof line; i++)
+        at += (size_t)snprintf(line + at, sizeof line - at,
+                               i ? (at ? "  \xe2\x97\x8b %s" : "\xe2\x97\x8b %s")
+                                 : (at ? "  **\xe2\x96\xb8 %s**" : "**\xe2\x96\xb8 %s**"),
+                               c->queue[i]);
 
-        int put = snprintf(line + at, sizeof line - at,
-                           at ? (strong ? "  **%s %s**" : "  %s %s")
-                              : (strong ? "**%s %s**" : "%s %s"),
-                           mark, STAGE[i].name);
-        if (put < 0)
-            break;
-        at += (size_t)put;
-        any = 1;
-    }
-
-    if (any)
+    if (at)
         note_labelled(notes, "flow", text_dsprintf("%s", line));
 }
 
@@ -309,19 +236,6 @@ static void build_notes(const struct board_card *c, struct notes *notes)
 enum boardcard_action boardcard_form(const struct board_card *c,
                                      struct boardcard_edit *out)
 {
-    const char        *cols[BOARD_COLS + STEPS_SHOWN];
-    const char *const *walk = NULL;
-    int                walk_n = boardcfg_steps(&walk);
-    int                cols_n = 0;
-    for (int i = 0; i < BOARD_COLS; i++) {
-        if (i == BOARD_STEP) {
-            for (int j = 0; j < walk_n && j < STEPS_SHOWN; j++)
-                cols[cols_n++] = walk[j];
-            continue;
-        }
-        cols[cols_n++] = board_col_name((enum board_col)i);
-    }
-
     const struct board_cfg *cfg = boardcfg();
     const char             *kinds[BOARD_KINDS_MAX + 1];
     int                     kinds_n = 0;
@@ -337,7 +251,6 @@ enum boardcard_action boardcard_form(const struct board_card *c,
 
     char spec[8192];
     char kind[16];
-    char column[16];
     char where[4096];
     char priority[8];
     char backend[32];
@@ -345,14 +258,12 @@ enum boardcard_action boardcard_form(const struct board_card *c,
 
     snprintf(spec, sizeof spec, "%s", c->body ? c->body : "");
     snprintf(kind, sizeof kind, "%s", c->kind);
-    snprintf(column, sizeof column, "%s", board_where(c));
     path_home_relative(c->cwd, where, sizeof where);
     snprintf(priority, sizeof priority, "%d", c->priority);
     snprintf(backend, sizeof backend, "%s", c->backend_pin);
     snprintf(tier, sizeof tier, "%s", c->tier_pin);
 
     char unstart_at[2] = "";
-    char approve_at[2] = "";
 
     struct form_field fields[FORM_FIELDS];
     int               fields_n = 0;
@@ -362,8 +273,6 @@ enum boardcard_action boardcard_form(const struct board_card *c,
                                              CARD_SPEC_ROWS};
     fields[fields_n++] = (struct form_field){"kind", FORM_CHOICE, kind,
                                              sizeof kind, kinds, kinds_n, 0};
-    fields[fields_n++] = (struct form_field){"column", FORM_CHOICE, column,
-                                             sizeof column, cols, cols_n, 0};
     fields[fields_n++] = (struct form_field){"repo", FORM_TEXT, where,
                                              sizeof where, NULL, 0, 0};
     fields[fields_n++] = (struct form_field){"priority", FORM_CHOICE, priority,
@@ -374,30 +283,33 @@ enum boardcard_action boardcard_form(const struct board_card *c,
                                              backends_n, 0};
     fields[fields_n++] = (struct form_field){"tier", FORM_CHOICE, tier,
                                              sizeof tier, tiers, tiers_n, 0};
-    if (boardflow_runs(c) == BOARD_RUNS_WORKER)
+    if (board_stands(c) == BOARD_WORKING)
         fields[fields_n++] = (struct form_field){
-            "cancel starting, back to backlog", FORM_BUTTON, unstart_at,
+            "stop, and clear what is queued", FORM_BUTTON, unstart_at,
             sizeof unstart_at, NULL, 0, 0};
     static const char *const OPEN[] = {"show the whole card", "show less"};
     char                     open_at[2] = "";
     fields[fields_n++] = (struct form_field){NULL,    FORM_TOGGLE, open_at,
                                              sizeof open_at, OPEN, 2, 0};
 
-    const struct board_action *waiting = boardflow_role(c);
-    char approve_label[96];
-    snprintf(approve_label, sizeof approve_label, "%s",
-             waiting ? waiting->pass_label : "approve");
-    if (waiting) {
-        const char *next = boardflow_next(c, c->step, 0);
-        const char *most = boardflow_next(c, c->step, 1);
-        if (most && (!next || strcmp(next, most)))
-            snprintf(approve_label + strlen(approve_label),
-                     sizeof approve_label - strlen(approve_label),
-                     " \xc2\xb7 no %s", most);
+    const char *offered[BOARD_ACTIONS_MAX + 1];
+    int         offered_n = 0;
+    offered[offered_n++] = "";
+    offered_n += boardflow_offered(c, offered + 1, BOARD_ACTIONS_MAX);
+
+    char run[32] = "";
+    char run_at[2] = "";
+    char close_at[2] = "";
+    if (offered_n > 1) {
+        fields[fields_n++] = (struct form_field){"run", FORM_CHOICE, run,
+                                                 sizeof run, offered,
+                                                 offered_n, 0};
+        fields[fields_n++] = (struct form_field){"run it", FORM_BUTTON, run_at,
+                                                 sizeof run_at, NULL, 0, 0};
     }
-    if (boardflow_waits_on_you(c))
-        fields[fields_n++] = (struct form_field){approve_label, FORM_BUTTON,
-                                                 approve_at, sizeof approve_at,
+    if (board_stands(c) != BOARD_CLOSED)
+        fields[fields_n++] = (struct form_field){"close the card", FORM_BUTTON,
+                                                 close_at, sizeof close_at,
                                                  NULL, 0, 0};
 
     struct notes notes = {0};
@@ -427,15 +339,17 @@ enum boardcard_action boardcard_form(const struct board_card *c,
 
     snprintf(out->spec, sizeof out->spec, "%s", spec);
     snprintf(out->kind, sizeof out->kind, "%s", kind);
-    snprintf(out->column, sizeof out->column, "%s", column);
     snprintf(out->where, sizeof out->where, "%s", where);
+    snprintf(out->run, sizeof out->run, "%s", run);
     snprintf(out->priority, sizeof out->priority, "%s", priority);
     snprintf(out->backend, sizeof out->backend, "%s", backend);
     snprintf(out->tier, sizeof out->tier, "%s", tier);
 
     if (unstart_at[0])
         return BOARDCARD_UNSTART;
-    if (approve_at[0])
-        return BOARDCARD_APPROVE;
+    if (run_at[0] && run[0])
+        return BOARDCARD_RUN;
+    if (close_at[0])
+        return BOARDCARD_CLOSE;
     return kept ? BOARDCARD_SAVE : BOARDCARD_NONE;
 }
