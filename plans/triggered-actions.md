@@ -213,24 +213,28 @@ Steps 1–3 are the change; 4–6 are consequences. Each stops at a green build.
 
 ## Traps
 
-**The cwd move is the risky part.** `session_set_cwd` mid-card is exercised
-today only by `retarget`, which runs on an idle session between cards. Moving a
-live session's cwd between the worktree and the main checkout, twice, on a card
-that merges and then deploys, is new. It wants a test that actually does it
-rather than one that reasons about it.
+**Still open: the cwd move is untested.** `step_send` calls `session_set_cwd`
+when the queue head asks to run somewhere the session is not, which is the
+mechanism `in: repo` rests on. Nothing shipped uses `in: repo`, so nothing
+exercises it, and `boardtest` reasons about `boardflow_cwd` rather than moving a
+live session. The first action that lands with `in: repo` should come with a
+test that actually moves one.
 
 **A failed action must not silently satisfy a gate.** `done` is appended in
 exactly one place, on a turn that neither errored nor tripped a marker. Anywhere
 else and `deploy` runs on an unmerged branch.
 
-**`lock: repo` matters more now, not less.** Two cards running `merge` or
-`deploy` in the main checkout at the same time is the failure the lock exists
-for, and both actions now run in a live session rather than a headless script.
+**Still open: nothing locks the main checkout.** `lock: repo` was parsed and
+never read, so it went with the other dead fields. Nothing shipped runs in the
+checkout today, which is why that was safe. Two cards running an `in: repo`
+action at once is the failure the lock existed for, so it has to come back
+before such an action ships — read this time, not just parsed.
 
-**Open: what closes a card.** Nothing in this design moves a card to done by
-itself, since `deploy` can follow `merge`. Closing by hand from review is the
-assumption; if that turns out to be a chore, the alternative is an action
-declaring itself terminal.
+**Still open: what closes a card.** Nothing moves a card to done by itself.
+Closing by hand from review is the assumption, with `a` on the board, `A` for
+every card in review at once, and `/close` from the session holding it. If that
+turns out to be a chore, the alternative is an action declaring itself
+terminal.
 
 **Settled: a pipeline does not survive a failure mid-way.** The queue is
 dropped and the card stands in review, waiting to be told what to run next.
