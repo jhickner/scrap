@@ -525,6 +525,10 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
     if (!card_tree(c, path, sizeof path, base, sizeof base, &lands, why, size))
         return 0;
 
+    /* an action that runs in the repo acts on the checkout, even on a card
+       that has a worktree of its own */
+    const char *cwd = mine->where == BOARD_IN_REPO ? c->cwd : path;
+
     int             at;
     struct session *s;
     if (onto) {
@@ -535,7 +539,7 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
             return 0;
         }
         if (!retarget(s, backend, model[0] ? model : NULL,
-                      effort[0] ? effort : NULL, path)) {
+                      effort[0] ? effort : NULL, cwd)) {
             snprintf(why, (size_t)size, "could not start a %s session", backend);
             return 0;
         }
@@ -543,7 +547,7 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
     } else {
         int front = workspace_index();
         at = workspace_spawn(backend, model[0] ? model : NULL,
-                             effort[0] ? effort : NULL, path, NULL);
+                             effort[0] ? effort : NULL, cwd, NULL);
         if (at < 0) {
             snprintf(why, (size_t)size, "could not start a %s session", backend);
             return 0;
@@ -621,14 +625,16 @@ int boardwork_rejoin(const struct board_card *c, char *why, int size)
     return at;
 }
 
-/* A worktree action that committed nothing did not do what it was asked, so
-   the card stays on it rather than counting it as run. */
+/* An action asked to commit and committed nothing did not do what it was
+   asked, so the card stays on it rather than counting it as run. An action
+   that is not asked to commit -- plan writes a file and nothing else -- passes
+   on an empty branch. */
 static int nothing_landed(const struct board_card *c,
                           const struct board_action *p)
 {
     int files = 0, lines = 0;
-    return p && p->where == BOARD_IN_WORKTREE && c->worktree[0] && c->base[0] &&
-           !boarddiff_size(c, &files, &lines);
+    return p && p->commits && p->where == BOARD_IN_WORKTREE && c->worktree[0] &&
+           c->base[0] && !boarddiff_size(c, &files, &lines);
 }
 
 void boardwork_finished(struct session *s)
@@ -750,8 +756,10 @@ static void pick_after(struct worker *w)
     struct board_card *cards = NULL;
     int                n = board_load(&cards);
     const struct board_card *held = board_find(cards, n, w->id);
-    /* a person answers a review by talking to the session that built the card */
-    if (held && boardflow_waits_on_you(held)) {
+    /* the session stays with the card while the card has anything left to run,
+       and a person answers a review by talking to the session that built it */
+    enum board_stand stand = board_stands(held);
+    if (held && (stand == BOARD_WORKING || stand == BOARD_REVIEW)) {
         board_free(cards, n);
         return;
     }
@@ -922,8 +930,15 @@ static int reconcile(struct worker *w, const struct board_card *c)
     w->checked = 1;
 
     const char *reply = session_last_reply(w->session);
-    if (!reply || !*reply || nothing_landed(c, p))
+    if (!reply || !*reply)
         return 0;
+
+    /* the same test boardwork_finished applies: an action that tripped its
+       marker or landed nothing did not pass, and takes the rest of the
+       pipeline down with it */
+    if ((p->fail_marker[0] && strstr(reply, p->fail_marker)) ||
+        nothing_landed(c, p))
+        return board_stopped(c->id);
 
     return board_took(c->id, p->name);
 }

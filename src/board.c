@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "boardfile.h"
 #include "boardlog.h"
 #include "text.h"
 #include "vendor/cJSON.h"
@@ -614,9 +615,12 @@ static int apply_queue(struct board_card *c, void *ud)
     for (int i = 0; i < a->n && c->queue_n < BOARD_QUEUE; i++)
         if (a->actions[i] && *a->actions[i])
             set_str(c->queue[c->queue_n++], BOARD_ACTION_NAME, a->actions[i]);
-    /* being told what to run next is the answer to having stopped */
-    if (c->queue_n)
+    /* being told what to run next is the answer to having stopped, and to
+       having been closed: a card with something to run is not at rest */
+    if (c->queue_n) {
         c->stopped = 0;
+        c->closed = 0;
+    }
     return 1;
 }
 
@@ -628,6 +632,9 @@ static int apply_stopped(struct board_card *c, void *ud)
     *dropped = c->queue_n > 1 ? c->queue_n - 1 : 0;
     c->queue_n = 0;
     c->stopped = 1;
+    /* being told what is wrong with a closed card takes it back out of the
+       archive lane and stands it in review */
+    c->closed = 0;
     return 1;
 }
 
@@ -672,11 +679,17 @@ static int apply_took(struct board_card *c, void *ud)
         set_str(c->done[c->done_n++], BOARD_ACTION_NAME, action);
     c->stopped = 0;
 
-    int k = 0;
-    for (int i = 0; i < c->queue_n; i++)
-        if (strcmp(c->queue[i], action))
-            set_str(c->queue[k++], BOARD_ACTION_NAME, c->queue[i]);
-    c->queue_n = k;
+    /* only the one that ran leaves: a queue may name an action twice, and the
+       second turn on it is still to come */
+    int at = -1;
+    for (int i = 0; i < c->queue_n && at < 0; i++)
+        if (!strcmp(c->queue[i], action))
+            at = i;
+    if (at >= 0) {
+        for (int i = at; i + 1 < c->queue_n; i++)
+            set_str(c->queue[i], BOARD_ACTION_NAME, c->queue[i + 1]);
+        c->queue_n--;
+    }
     return 1;
 }
 
@@ -745,6 +758,7 @@ int board_archive(int days)
         if (!wrote)
             break;
 
+        boardfile_drop(v[i].id);
         card_wipe(&v[i]);
         memmove(&v[i], &v[i + 1], (size_t)(n - i - 1) * sizeof *v);
         n--;

@@ -1,6 +1,7 @@
 ---
 tier: high
 in: worktree
+commits: yes
 needs: 
 ---
 

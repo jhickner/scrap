@@ -266,6 +266,7 @@ static void read_actions(struct board_cfg *c)
 
         p->where = in_from_name(mdcfg_get(&m, "in"));
         p->on_capture = !strcmp(mdcfg_get(&m, "on"), "capture");
+        p->commits = !strcmp(mdcfg_get(&m, "commits"), "yes");
         p->needs_n = names_of(mdcfg_get(&m, "needs"), p->needs, BOARD_NEEDS);
 
         p->prompt = dup_or_null(m.body ? m.body : "");
@@ -482,7 +483,7 @@ int boardcfg_missing(char *out, size_t size)
 
     char   who[128] = "";
     size_t at = 0;
-    for (int i = 0; i < cache.actions_n; i++)
+    for (int i = 0; i < cache.actions_n && at < sizeof who - 1; i++)
         if (!cache.actions[i].prompt || !*cache.actions[i].prompt)
             at += (size_t)snprintf(who + at, sizeof who - at, "%s%s",
                                    at ? ", " : "", cache.actions[i].name);

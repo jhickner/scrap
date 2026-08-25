@@ -46,6 +46,9 @@ struct board_action {
     char          needs[BOARD_NEEDS][32];
     int           needs_n;
     int           on_capture;
+    /* the action is asked to commit, so a turn that landed nothing did not do
+       what it was asked */
+    int           commits;
 
     char fail_marker[64];
 

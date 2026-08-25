@@ -648,6 +648,11 @@ static void test_the_shipped_actions_are_built_in(void)
     expect(p && p->prompt && strstr(p->prompt, "plan mode"),
            "its prompt is the body of the file it was built from");
 
+    expect(p && !p->commits, "and is not asked to commit");
+
+    const struct board_action *build_it = boardcfg_action("implement");
+    expect(build_it && build_it->commits, "implement is asked to commit");
+
     const struct board_action *name = boardcfg_action("name");
     expect(name && name->on_capture, "naming runs on capture, not on trigger");
 
@@ -723,6 +728,18 @@ static void test_the_card_file_outlives_the_worktree(void)
     expect(slurp_file(kept) == NULL, "dropping the card drops the copy");
 }
 
+static void test_archiving_drops_the_card_file(void)
+{
+    plant_stale("ag02");
+
+    char kept[4300];
+    expect(boardfile_kept("ag02", kept, sizeof kept), "the copy has a path");
+    put_file(kept, "# an archived card\n");
+
+    expect(board_archive(1) == 1, "the stale card is archived");
+    expect(slurp_file(kept) == NULL, "and its card file goes with it");
+}
+
 static void test_a_card_carries_a_queue_and_a_history(void)
 {
     with_actions();
@@ -769,10 +786,34 @@ static void test_a_card_carries_a_queue_and_a_history(void)
     expect(c && board_stands(c) == BOARD_REVIEW, "and the card is your turn");
     board_free(v, n);
 
+    const char *twice[] = {"worktree", "worktree"};
+    expect(board_queued(id, twice, 2), "a queue may name an action twice");
+    expect(board_took(id, "worktree"), "the head of it passes");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && c->queue_n == 1 && !strcmp(c->queue[0], "worktree"),
+           "and the second turn on it is still to come");
+    board_free(v, n);
+    expect(board_took(id, "worktree"), "which then passes too");
+
     expect(board_close(id), "closing it");
     n = board_load(&v);
     c = board_find(v, n, id);
     expect(c && board_stands(c) == BOARD_CLOSED, "stands it done");
+    board_free(v, n);
+
+    const char *after[] = {"merge"};
+    expect(board_queued(id, after, 1), "queueing on a closed card");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && board_stands(c) == BOARD_WORKING, "sets it working again");
+    board_free(v, n);
+
+    expect(board_close(id), "closing it once more");
+    expect(board_stopped(id), "saying what is wrong with it");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && board_stands(c) == BOARD_REVIEW, "takes it back to your turn");
     board_free(v, n);
 
     board_remove(id);
@@ -1034,6 +1075,7 @@ int main(void)
     test_revision_tracks_writes();
     test_the_shipped_actions_are_built_in();
     test_the_card_file_outlives_the_worktree();
+    test_archiving_drops_the_card_file();
     test_a_card_carries_a_queue_and_a_history();
     test_an_action_waits_on_what_it_needs();
     test_a_trigger_queues_a_pipeline();

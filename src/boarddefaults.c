@@ -5,6 +5,7 @@ const struct board_default board_defaults[] = {
      "---\n"
      "tier: high\n"
      "in: worktree\n"
+     "commits: yes\n"
      "needs: \n"
      "---\n"
      "\n"
