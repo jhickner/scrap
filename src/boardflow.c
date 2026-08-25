@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+_Static_assert(BOARD_PIPELINE_LONG <= BOARD_QUEUE,
+               "a pipeline has to fit in a card's queue");
+
 const struct board_action *boardflow_action(const struct board_card *c)
 {
     return c && c->queue_n ? boardcfg_action(c->queue[0]) : NULL;
@@ -20,21 +23,31 @@ int boardflow_gated(const struct board_card *c, const char *name)
     return 1;
 }
 
-int boardflow_offered(const struct board_card *c, const char **out, int max)
-{
-    const char *all[BOARD_ACTIONS_MAX];
-    int         n = boardcfg_actions(all, BOARD_ACTIONS_MAX);
-
-    int k = 0;
-    for (int i = 0; i < n && k < max; i++)
-        if (boardflow_gated(c, all[i]))
-            out[k++] = all[i];
-    return k;
-}
-
 int boardflow_waits_on_you(const struct board_card *c)
 {
     return board_stands(c) == BOARD_REVIEW;
+}
+
+/* A name is an action, or a pipeline standing for a run of them. Flattening
+   first means a pipeline is gated action by action, like a typed-out list. */
+static int flatten(const char *const *names, int n, const char **out, int max)
+{
+    int k = 0;
+    for (int i = 0; i < n; i++) {
+        const struct board_pipeline *p = boardcfg_pipeline(names[i]);
+        if (!p) {
+            if (k == max)
+                return -1;
+            out[k++] = names[i];
+            continue;
+        }
+        for (int j = 0; j < p->actions_n; j++) {
+            if (k == max)
+                return -1;
+            out[k++] = p->actions[j];
+        }
+    }
+    return k;
 }
 
 /* A gate a pipeline satisfies itself: an action already queued, or named
@@ -53,6 +66,53 @@ static int will_have_run(const struct board_card *c, const char *const *ahead,
     return 0;
 }
 
+static int gates_met(const struct board_card *c, const char **flat, int n,
+                     char *why, size_t size)
+{
+    for (int i = 0; i < n; i++) {
+        const struct board_action *p = boardcfg_action(flat[i]);
+        if (!p || p->on_capture) {
+            snprintf(why, size, "%s is not an action to run", flat[i]);
+            return 0;
+        }
+        for (int j = 0; j < p->needs_n; j++)
+            if (!will_have_run(c, flat, i, p->needs[j])) {
+                snprintf(why, size, "%s needs %s to have run first", flat[i],
+                         p->needs[j]);
+                return 0;
+            }
+    }
+    return 1;
+}
+
+/* Whether triggering this name right now would be taken, which is what makes a
+   pipeline offerable: every action in it has to clear its gate in turn. */
+static int takeable(const struct board_card *c, const char *name)
+{
+    const char *flat[BOARD_QUEUE];
+    char        why[128];
+
+    int n = flatten(&name, 1, flat, BOARD_QUEUE);
+    return n > 0 && gates_met(c, flat, n, why, sizeof why);
+}
+
+int boardflow_offered(const struct board_card *c, const char **out, int max)
+{
+    const char *all[BOARD_ACTIONS_MAX];
+    int         k = 0;
+
+    int n = boardcfg_actions(all, BOARD_ACTIONS_MAX);
+    for (int i = 0; i < n && k < max; i++)
+        if (boardflow_gated(c, all[i]))
+            out[k++] = all[i];
+
+    n = boardcfg_pipelines(all, BOARD_ACTIONS_MAX);
+    for (int i = 0; i < n && k < max; i++)
+        if (takeable(c, all[i]))
+            out[k++] = all[i];
+    return k;
+}
+
 int boardflow_trigger(const struct board_card *c, const char *const *names,
                       int n, char *why, size_t size)
 {
@@ -60,33 +120,24 @@ int boardflow_trigger(const struct board_card *c, const char *const *names,
         snprintf(why, size, "nothing to run");
         return 0;
     }
-    if (c->queue_n + n > BOARD_QUEUE) {
+
+    const char *flat[BOARD_QUEUE];
+    int         k = flatten(names, n, flat, BOARD_QUEUE);
+    if (k < 0 || c->queue_n + k > BOARD_QUEUE) {
         snprintf(why, size, "the queue on this card is full");
         return 0;
     }
-
-    for (int i = 0; i < n; i++) {
-        const struct board_action *p = boardcfg_action(names[i]);
-        if (!p || p->on_capture) {
-            snprintf(why, size, "%s is not an action to run", names[i]);
-            return 0;
-        }
-        for (int j = 0; j < p->needs_n; j++)
-            if (!will_have_run(c, names, i, p->needs[j])) {
-                snprintf(why, size, "%s needs %s to have run first", names[i],
-                         p->needs[j]);
-                return 0;
-            }
-    }
+    if (!gates_met(c, flat, k, why, size))
+        return 0;
 
     const char *queue[BOARD_QUEUE];
-    int         k = 0;
-    for (; k < c->queue_n; k++)
-        queue[k] = c->queue[k];
-    for (int i = 0; i < n; i++)
-        queue[k++] = names[i];
+    int         at = 0;
+    for (; at < c->queue_n; at++)
+        queue[at] = c->queue[at];
+    for (int i = 0; i < k; i++)
+        queue[at++] = flat[i];
 
-    if (!board_queued(c->id, queue, k)) {
+    if (!board_queued(c->id, queue, at)) {
         snprintf(why, size, "could not queue on card %s", c->id);
         return 0;
     }

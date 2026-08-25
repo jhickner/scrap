@@ -58,6 +58,17 @@ struct board_action {
 
 #define BOARD_ACTIONS_MAX 16
 
+/* A name for a run of actions, so a pipeline you take often is one word rather
+   than a list. Must stay within BOARD_QUEUE, which is what a card can hold. */
+#define BOARD_PIPELINES_MAX 8
+#define BOARD_PIPELINE_LONG 8
+
+struct board_pipeline {
+    char name[32];
+    char actions[BOARD_PIPELINE_LONG][BOARD_STEP_NAME];
+    int  actions_n;
+};
+
 #define BOARD_KINDS_MAX 16
 
 struct board_kind {
@@ -88,6 +99,9 @@ struct board_cfg {
     struct board_action actions[BOARD_ACTIONS_MAX];
     int                 actions_n;
 
+    struct board_pipeline pipelines[BOARD_PIPELINES_MAX];
+    int                   pipelines_n;
+
     struct board_backend backends[BOARD_BACKENDS_MAX];
     int                  backends_n;
 };
@@ -112,6 +126,10 @@ int boardcfg_set(const struct board_cfg *c);
 const struct board_action *boardcfg_action(const char *name);
 
 int boardcfg_actions(const char **out, int max);
+
+const struct board_pipeline *boardcfg_pipeline(const char *name);
+
+int boardcfg_pipelines(const char **out, int max);
 
 /* the action, with the model and effort the backend and tier ask for */
 const struct board_action *boardcfg_for_backend(const char *name,

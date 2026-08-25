@@ -413,6 +413,14 @@ static void action_def(const char *name, const char *front, const char *prompt)
     def_add(path, front, prompt);
 }
 
+static void pipeline_def(const char *name, const char *actions)
+{
+    char path[128], front[256];
+    snprintf(path, sizeof path, "pipelines/%s.md", name);
+    snprintf(front, sizeof front, "actions: %s\n", actions);
+    def_add(path, front, "");
+}
+
 static void kind_def(const char *name, const char *front, const char *body)
 {
     char path[128];
@@ -793,6 +801,7 @@ static void test_the_shipped_kinds_and_actions_are_built_in(void)
     expect(!has_dir("board/roles"), "loading clears the old roles dir");
     expect(!has_dir("board/actions"), "and writes no actions dir of its own");
     expect(!has_dir("board/kinds"), "and writes no kinds dir of its own");
+    expect(!has_dir("board/pipelines"), "nor a pipelines dir");
     expect(boardcfg_action("leftover") == NULL, "the stale role is gone");
 
     char why[512];
@@ -810,6 +819,9 @@ static void test_the_shipped_kinds_and_actions_are_built_in(void)
 
     const struct board_action *name = boardcfg_action("triage");
     expect(name && name->on_capture, "naming runs on capture, not on trigger");
+
+    const struct board_pipeline *build = boardcfg_pipeline("build");
+    expect(build && build->actions_n == 2, "build is a pipeline of two");
 
     const char *all[BOARD_ACTIONS_MAX];
     int         n = boardcfg_actions(all, BOARD_ACTIONS_MAX);
@@ -1133,6 +1145,71 @@ static void test_a_stopped_card_waits_on_you(void)
     with_actions();
 }
 
+/* a pipeline is a name for a run of actions, gated action by action */
+static void test_a_pipeline_stands_for_its_actions(void)
+{
+    defs_clear();
+    action_def("plan", "tier: high\nin: worktree\n", "plan it");
+    action_def("implement", "tier: high\nin: worktree\n", "build it");
+    action_def("merge", "tier: med\nin: repo\nneeds: implement\n", "land it");
+    action_def("deploy", "tier: med\nin: repo\nneeds: merge\n", "ship it");
+    pipeline_def("build", "plan, implement");
+    pipeline_def("ship", "merge, deploy");
+    kind_def("piped", "means: a kind a test made up\npriority: 1\nsteps: plan\n", "");
+    defs_use();
+
+    const struct board_pipeline *p = boardcfg_pipeline("build");
+    expect(p && p->actions_n == 2, "a pipeline file lists its actions");
+    expect(p && !strcmp(p->actions[0], "plan"), "in the order it names them");
+    expect(boardcfg_pipeline("plan") == NULL, "an action is not a pipeline");
+
+    char why[512];
+    expect(!boardcfg_missing(why, sizeof why), "the set hangs together");
+
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("run a pipeline by name", "/tmp/repo", id), "capture");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+
+    const char *offered[BOARD_ACTIONS_MAX];
+    int         k = boardflow_offered(c, offered, BOARD_ACTIONS_MAX);
+    int         has_build = 0, has_ship = 0;
+    for (int i = 0; i < k; i++) {
+        has_build |= !strcmp(offered[i], "build");
+        has_ship |= !strcmp(offered[i], "ship");
+    }
+    expect(has_build, "a pipeline whose actions all clear is offered");
+    expect(!has_ship, "one whose first action is gated is not");
+
+    const char *one[] = {"build"};
+    expect(c && boardflow_trigger(c, one, 1, why, sizeof why),
+           "triggering it by name is taken");
+    board_free(v, n);
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && c->queue_n == 2, "and queues what it stands for");
+    expect(c && !strcmp(c->queue[0], "plan") && !strcmp(c->queue[1], "implement"),
+           "in order, as if they had been typed out");
+
+    /* ship needs merge, which needs implement, which build has queued */
+    const char *after[] = {"ship"};
+    expect(c && boardflow_trigger(c, after, 1, why, sizeof why),
+           "a pipeline gated on one already queued may follow it");
+    board_free(v, n);
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && c->queue_n == 4 && !strcmp(c->queue[3], "deploy"),
+           "and flattens onto the end");
+    board_free(v, n);
+
+    board_remove(id);
+    with_actions();
+}
+
 int main(void)
 {
     if (!mkdtemp(home)) {
@@ -1168,6 +1245,7 @@ int main(void)
     test_an_action_waits_on_what_it_needs();
     test_a_trigger_queues_a_pipeline();
     test_a_stopped_card_waits_on_you();
+    test_a_pipeline_stands_for_its_actions();
 
     cleanup();
     if (failures)

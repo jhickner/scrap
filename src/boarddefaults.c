@@ -119,6 +119,11 @@ const struct board_default board_defaults[] = {
      "steps: plan\n"
      "---\n"
     },
+    {"pipelines/build.md",
+     "---\n"
+     "actions: plan, implement\n"
+     "---\n"
+    },
 };
 
-const int board_defaults_n = 4;
+const int board_defaults_n = 5;

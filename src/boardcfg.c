@@ -189,13 +189,14 @@ static const char *default_name(const char *path, const char *leaf, char *out,
     return out;
 }
 
-static void kind_steps(struct board_kind *k, const char *list)
+/* "implement, merge" -> the names it lists, trimmed */
+static int names_of(const char *list, char out[][BOARD_STEP_NAME], int max)
 {
     char copy[256];
-    snprintf(copy, sizeof copy, "%s", list);
+    snprintf(copy, sizeof copy, "%s", list ? list : "");
 
-    k->steps_n = 0;
-    for (char *p = copy; *p && k->steps_n < BOARD_KIND_STEPS;) {
+    int n = 0;
+    for (char *p = copy; *p && n < max;) {
         while (*p == ' ' || *p == ',')
             p++;
         char *start = p;
@@ -207,9 +208,10 @@ static void kind_steps(struct board_kind *k, const char *list)
         char kept = *end;
         *end = '\0';
         if (*start)
-            snprintf(k->steps[k->steps_n++], BOARD_STEP_NAME, "%s", start);
+            snprintf(out[n++], BOARD_STEP_NAME, "%s", start);
         *end = kept;
     }
+    return n;
 }
 
 static void read_settings(struct board_cfg *c)
@@ -242,30 +244,6 @@ static void read_settings(struct board_cfg *c)
     mdcfg_free(&m);
 }
 
-/* "implement, test" -> the two names it gates on */
-static void needs_of(struct board_action *p, const char *list)
-{
-    char copy[256];
-    snprintf(copy, sizeof copy, "%s", list);
-
-    p->needs_n = 0;
-    for (char *at = copy; *at && p->needs_n < BOARD_NEEDS;) {
-        while (*at == ' ' || *at == ',')
-            at++;
-        char *start = at;
-        while (*at && *at != ',')
-            at++;
-        char *end = at;
-        while (end > start && end[-1] == ' ')
-            end--;
-        char kept = *end;
-        *end = '\0';
-        if (*start)
-            snprintf(p->needs[p->needs_n++], sizeof p->needs[0], "%s", start);
-        *end = kept;
-    }
-}
-
 static void read_actions(struct board_cfg *c)
 {
     for (int i = 0; i < defs_n && c->actions_n < BOARD_ACTIONS_MAX; i++) {
@@ -289,7 +267,7 @@ static void read_actions(struct board_cfg *c)
 
         p->where = in_from_name(mdcfg_get(&m, "in"));
         p->on_capture = !strcmp(mdcfg_get(&m, "on"), "capture");
-        needs_of(p, mdcfg_get(&m, "needs"));
+        p->needs_n = names_of(mdcfg_get(&m, "needs"), p->needs, BOARD_NEEDS);
 
         p->prompt = dup_or_null(m.body ? m.body : "");
         mdcfg_free(&m);
@@ -341,7 +319,28 @@ static void read_kinds(struct board_cfg *c)
         snprintf(k->name, sizeof k->name, "%s", name);
         k->means = dup_or_null(mdcfg_get(&m, "means"));
         k->priority = mdcfg_int(&m, "priority", 0);
-        kind_steps(k, mdcfg_get(&m, "steps"));
+        k->steps_n = names_of(mdcfg_get(&m, "steps"), k->steps,
+                              BOARD_KIND_STEPS);
+        mdcfg_free(&m);
+    }
+}
+
+static void read_pipelines(struct board_cfg *c)
+{
+    for (int i = 0; i < defs_n && c->pipelines_n < BOARD_PIPELINES_MAX; i++) {
+        char name[MDCFG_NAME];
+        if (!default_name(defs[i].path, "pipelines", name, sizeof name))
+            continue;
+
+        struct mdcfg m;
+        if (!mdcfg_parse(&m, strdup(defs[i].text)))
+            continue;
+
+        struct board_pipeline *p = &c->pipelines[c->pipelines_n++];
+        memset(p, 0, sizeof *p);
+        snprintf(p->name, sizeof p->name, "%s", name);
+        p->actions_n = names_of(mdcfg_get(&m, "actions"), p->actions,
+                                BOARD_PIPELINE_LONG);
         mdcfg_free(&m);
     }
 }
@@ -462,11 +461,13 @@ static void read_all(void)
     drop_stale(BOARD_DIR "/roles");
     drop_stale(BOARD_DIR "/actions");
     drop_stale(BOARD_DIR "/kinds");
+    drop_stale(BOARD_DIR "/pipelines");
 
     read_settings(&cache);
     read_actions(&cache);
     read_backends(&cache);
     read_kinds(&cache);
+    read_pipelines(&cache);
 
     char seed[4300];
     if (board_path(seed, sizeof seed, BOARD_DIR, "settings") &&
@@ -530,6 +531,25 @@ int boardcfg_missing(char *out, size_t size)
                          cache.kinds[i].name, cache.kinds[i].steps[j]);
                 return 1;
             }
+
+    for (int i = 0; i < cache.pipelines_n; i++) {
+        if (!cache.pipelines[i].actions_n) {
+            snprintf(out, size, "the %s pipeline runs nothing",
+                     cache.pipelines[i].name);
+            return 1;
+        }
+        if (boardcfg_action(cache.pipelines[i].name)) {
+            snprintf(out, size, "%s is both an action and a pipeline",
+                     cache.pipelines[i].name);
+            return 1;
+        }
+        for (int j = 0; j < cache.pipelines[i].actions_n; j++)
+            if (!boardcfg_action(cache.pipelines[i].actions[j])) {
+                snprintf(out, size, "the %s pipeline runs %s, and no action is",
+                         cache.pipelines[i].name, cache.pipelines[i].actions[j]);
+                return 1;
+            }
+    }
 
     return 0;
 }
@@ -675,6 +695,26 @@ int boardcfg_actions(const char **out, int max)
     int n = 0;
     for (int i = 0; i < cache.actions_n && n < max; i++)
         out[n++] = serving_actions[i].name;
+    return n;
+}
+
+const struct board_pipeline *boardcfg_pipeline(const char *name)
+{
+    if (!name || !*name)
+        return NULL;
+    load();
+    for (int i = 0; i < cache.pipelines_n; i++)
+        if (!strcmp(cache.pipelines[i].name, name))
+            return &cache.pipelines[i];
+    return NULL;
+}
+
+int boardcfg_pipelines(const char **out, int max)
+{
+    load();
+    int n = 0;
+    for (int i = 0; i < cache.pipelines_n && n < max; i++)
+        out[n++] = cache.pipelines[i].name;
     return n;
 }
 

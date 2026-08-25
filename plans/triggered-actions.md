@@ -167,8 +167,11 @@ That is the main new UI, and it is also reachable from a key on the board.
 `/moveto <step>` becomes `/run [<action>, ...]`, the same trigger from inside
 the worker session that holds the card. With no argument it names what the
 card's gates currently allow. Both it and the form call `boardflow_trigger`,
-which gates each name on the history plus everything queued ahead of it, so
-`/run implement, merge` works where `/run merge` alone would not.
+which flattens any pipeline name to the actions it stands for and then gates
+each one on the history plus everything queued ahead of it, so `/run merge`
+alone is refused where `/run implement, merge` and `/run ship` are taken.
+`boardflow_offered` lists the actions whose gates are met and then the
+pipelines that would be taken whole, so the form's chooser carries both.
 
 ## Migration
 
