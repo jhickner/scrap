@@ -1,5 +1,6 @@
 #include "boardwork.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,8 @@
 #include "session.h"
 #include "sessionload.h"
 #include "text.h"
+#include "ui.h"
+#include "viewport.h"
 #include "workspace.h"
 
 struct worker {
@@ -290,9 +293,30 @@ static void ignore_card_file(const char *path)
     fclose(f);
 }
 
+/* a short card is its own title, and writing both prints the same line twice */
+static int same_text(const char *a, const char *b)
+{
+    while (*a && isspace((unsigned char)*a))
+        a++;
+    while (*b && isspace((unsigned char)*b))
+        b++;
+
+    size_t na = strlen(a), nb = strlen(b);
+    while (na && isspace((unsigned char)a[na - 1]))
+        na--;
+    while (nb && isspace((unsigned char)b[nb - 1]))
+        nb--;
+
+    return na == nb && !strncmp(a, b, na);
+}
+
 static void card_write(FILE *f, const struct board_card *c)
 {
-    fprintf(f, "# %s\n\n%s\n", c->title, c->body ? c->body : "");
+    const char *body = c->body ? c->body : "";
+    if (*body && !same_text(body, c->title))
+        fprintf(f, "# %s\n\n%s\n", c->title, body);
+    else
+        fprintf(f, "# %s\n", c->title);
     if (c->log_n) {
         fprintf(f, "\n## Notes\n\n");
         for (int i = 0; i < c->log_n; i++)
@@ -330,6 +354,9 @@ static void write_card_file(const char *path, const struct board_card *c)
 static void draw_card(struct session *s, void *ud)
 {
     (void)s;
+    viewport_item_begin(VIEWPORT_ROWS(1, 1));
+    ui_bar(ui_style(UI_DIM), "Card");
+    viewport_item_end();
     md_render_kept(ud, 0);
 }
 
