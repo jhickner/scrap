@@ -371,6 +371,7 @@ void view_collapse(int on)
     collapsed = on ? 1 : 0;
     viewport_on_width(rewidth);
     restate(0, 0, 1);
+    viewport_paint();
 }
 
 static const struct {

@@ -206,7 +206,6 @@ void viewport_repad(void)
             hide = items[i].hidden || items[i].nopad;
     }
     dirty = 1;
-    viewport_paint();
 }
 
 void viewport_item_update(unsigned mark)
