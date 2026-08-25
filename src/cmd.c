@@ -732,10 +732,12 @@ static void do_close(struct session *s, const char *arg)
     }
 
     char why[256] = "";
-    if (boardview_close(id, why, sizeof why))
-        reply_note("card %s closed", id);
-    else
+    if (!boardview_close(id, why, sizeof why))
         reply_error("%s", why);
+    else if (why[0])
+        reply_note("card %s closed \xc2\xb7 %s", id, why);
+    else
+        reply_note("card %s closed", id);
 }
 
 static void do_run(struct session *s, const char *arg)

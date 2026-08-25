@@ -34,6 +34,9 @@ int boardwork_poll(void);
 
 void boardwork_discard(const struct board_card *c);
 
+/* how many commits closing the card would throw away with its branch */
+int boardwork_unmerged(const struct board_card *c);
+
 int boardwork_pump(void);
 
 /* stop what the card is running and say why, leaving it in review */

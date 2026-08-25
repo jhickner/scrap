@@ -588,7 +588,7 @@ static void do_serve(char *notice, size_t size)
         snprintf(notice + used, size - used, " · %d after their current card", waiting);
 }
 
-enum { ASK_NONE, ASK_CLOSE_ALL, ASK_DELETE };
+enum { ASK_NONE, ASK_CLOSE, ASK_CLOSE_ALL, ASK_DELETE };
 
 static int do_delete(const struct board_card *c)
 {
@@ -635,6 +635,16 @@ static int in_review(const struct board_card *cards, int n, const char *filter)
         if (boardflow_waits_on_you(&cards[i]) && shows(&cards[i], filter))
             ready++;
     return ready;
+}
+
+static int unmerged(const struct board_card *cards, int n, const char *filter)
+{
+    int loses = 0;
+    for (int i = 0; i < n; i++)
+        if (boardflow_waits_on_you(&cards[i]) && shows(&cards[i], filter) &&
+            boardwork_unmerged(&cards[i]))
+            loses++;
+    return loses;
 }
 
 static int close_all(const struct board_card *cards, int n, const char *filter)
@@ -781,7 +791,13 @@ int boardview_close(const char *id, char *why, int size)
         snprintf(why, (size_t)size, "card %s is %s, and can't be closed yet",
                  id, board_stand_name(board_stands(c)));
     else {
+        int left = boardwork_unmerged(c);
         board_close(c->id);
+        if (left)
+            snprintf(why, (size_t)size,
+                     "%d commit%s %s not merged, and the branch goes with the "
+                     "card", left, left == 1 ? "" : "s",
+                     left == 1 ? "was" : "were");
         ok = 1;
     }
 
@@ -1006,7 +1022,10 @@ int boardview_run(const char *cwd)
 
             struct board_card *c = board_find(cards, n, cur.id);
             if (at >= 0 && pressed == 'y') {
-                if (what == ASK_CLOSE_ALL) {
+                if (what == ASK_CLOSE) {
+                    if (c && board_close(c->id))
+                        anchor_step(&cur);
+                } else if (what == ASK_CLOSE_ALL) {
                     int did = close_all(cards, n, filter);
                     snprintf(notice, sizeof notice, "closed %d card%s", did,
                              did == 1 ? "" : "s");
@@ -1090,17 +1109,36 @@ int boardview_run(const char *cwd)
             }
             break;
         }
-        case KEY_CLOSE:
-            if (c && board_close(c->id))
+        case KEY_CLOSE: {
+            if (!c)
+                break;
+            int left = boardwork_unmerged(c);
+            if (left) {
+                snprintf(ask, sizeof ask,
+                         "%d commit%s on this card %s not merged, and close "
+                         "deletes the branch; close it?", left,
+                         left == 1 ? "" : "s", left == 1 ? "is" : "are");
+                asking = ASK_CLOSE;
+                break;
+            }
+            if (board_close(c->id))
                 anchor_step(&cur);
             break;
+        }
         case KEY_CLOSE_ALL: {
             int ready = in_review(cards, n, filter);
             if (!ready)
                 snprintf(notice, sizeof notice, "nothing in review");
             else {
-                snprintf(ask, sizeof ask, "close %d card%s in review?", ready,
-                         ready == 1 ? "" : "s");
+                int loses = unmerged(cards, n, filter);
+                if (loses)
+                    snprintf(ask, sizeof ask,
+                             "close %d card%s in review? %d still hold%s an "
+                             "unmerged branch", ready, ready == 1 ? "" : "s",
+                             loses, loses == 1 ? "s" : "");
+                else
+                    snprintf(ask, sizeof ask, "close %d card%s in review?",
+                             ready, ready == 1 ? "" : "s");
                 asking = ASK_CLOSE_ALL;
             }
             break;

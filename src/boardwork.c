@@ -982,6 +982,29 @@ static int drop_worktree(const struct board_card *c)
     return system(step) != -1;
 }
 
+/* Commits on the card's branch that the checkout's branch does not have. A card
+   closed with any of these loses them: the board deletes the branch. */
+int boardwork_unmerged(const struct board_card *c)
+{
+    if (!c || !c->worktree[0])
+        return 0;
+
+    char root[4096];
+    if (!gitcmd_root(c->cwd, root, sizeof root))
+        return 0;
+
+    char branch[128], onto[128];
+    branch_of(c->id, branch, sizeof branch);
+    if (!gitcmd_line(root, "rev-parse --abbrev-ref HEAD", onto, sizeof onto))
+        return 0;
+
+    char args[320], count[32];
+    snprintf(args, sizeof args, "rev-list --count %s..%s", onto, branch);
+    if (!gitcmd_line(root, args, count, sizeof count))
+        return 0;
+    return atoi(count);
+}
+
 static int release(const struct board_card *c)
 {
     if (!c || !c->worktree[0] || boardwork_tab(c->id) >= 0)
