@@ -656,8 +656,9 @@ static void test_the_shipped_actions_are_built_in(void)
     const struct board_action *name = boardcfg_action("name");
     expect(name && name->on_capture, "naming runs on capture, not on trigger");
 
-    const struct board_pipeline *build = boardcfg_pipeline("build");
-    expect(build && build->actions_n == 2, "build is a pipeline of two");
+    const char *pipelines[BOARD_PIPELINES_MAX];
+    expect(!boardcfg_pipelines(pipelines, BOARD_PIPELINES_MAX),
+           "no pipeline ships with the binary");
 
     const char *all[BOARD_ACTIONS_MAX];
     int         n = boardcfg_actions(all, BOARD_ACTIONS_MAX);

@@ -739,6 +739,7 @@ static int press_button(struct state *st)
     struct form_field *f = field_at(st, st->focus);
     if (f->kind != FORM_BUTTON)
         return 0;
+    store(st);
     if (f->value && f->size)
         snprintf(f->value, f->size, "1");
     chrome_modal(NULL, NULL);

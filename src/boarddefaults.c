@@ -93,11 +93,6 @@ const struct board_default board_defaults[] = {
      "read it and come back with revisions; each time they do, rewrite the same file\n"
      "under the same name, and only rename it if what the plan is about has changed.\n"
     },
-    {"pipelines/build.md",
-     "---\n"
-     "actions: plan, implement\n"
-     "---\n"
-    },
 };
 
-const int board_defaults_n = 4;
+const int board_defaults_n = 3;
