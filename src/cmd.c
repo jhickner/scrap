@@ -26,6 +26,7 @@
 #include "sessionfork.h"
 #include "sessionlist.h"
 #include "sessionload.h"
+#include "sessionview.h"
 #include "viewport.h"
 #include "views.h"
 #include "workspace.h"
@@ -448,6 +449,7 @@ static void do_tools(struct session *s, const char *arg)
 
     session_set_compact(s, compact);
     settings_set_int(SETTING_COMPACT, compact);
+    view_collapse(compact);
     reply_note("tool calls: %s", compact ? "one row each" : "full blocks with output");
 }
 

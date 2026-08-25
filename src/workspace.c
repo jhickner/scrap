@@ -10,6 +10,7 @@
 #include "gitinfo.h"
 #include "prompt.h"
 #include "session.h"
+#include "sessionview.h"
 #include "settings.h"
 #include "status.h"
 #include "tg.h"
@@ -197,6 +198,7 @@ void workspace_show(int index)
     follow(tabs[cur].s);
     spin_follow();
     viewport_forget();
+    view_collapse(session_compact(tabs[cur].s));
 
     tg_refocus();
 }

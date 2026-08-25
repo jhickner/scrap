@@ -70,6 +70,8 @@ struct prompt {
     void        *split_ud;
     void       (*another)(void *ud);
     void        *another_ud;
+    void       (*collapse)(void *ud);
+    void        *collapse_ud;
     int        (*cancel)(void *ud);
     void        *cancel_ud;
     int          stopped;
@@ -650,6 +652,7 @@ static const struct prompt_key SHORTCUTS[] = {
     {"ctrl-t", "open a shell split in this directory"},
     {"ctrl-b", "open another session like this one, or reuse the idle one"},
     {"ctrl-n / ctrl-o", "cycle the colours of your input / of reply highlights"},
+    {"ctrl-f", "compact or full tool calls, redrawing the transcript"},
     {"page up/down", "scroll the transcript half a screen"},
     {"ctrl-l", "clear the screen"},
 };
@@ -725,6 +728,14 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             if (!live && p->another) {
                 chrome_clear();
                 p->another(p->another_ud);
+            }
+            return KEY_OK;
+        }
+        if (ev->cp == KEY_CTRL('F')) {
+            if (p->collapse) {
+                p->collapse(p->collapse_ud);
+                if (!live)
+                    repaint(p);
             }
             return KEY_OK;
         }
@@ -913,6 +924,12 @@ void prompt_set_another(struct prompt *p, void (*fn)(void *ud), void *ud)
 {
     p->another = fn;
     p->another_ud = ud;
+}
+
+void prompt_set_collapse(struct prompt *p, void (*fn)(void *ud), void *ud)
+{
+    p->collapse = fn;
+    p->collapse_ud = ud;
 }
 
 void prompt_set_split(struct prompt *p, void (*fn)(void *ud, int quiet), void *ud)

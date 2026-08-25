@@ -62,6 +62,14 @@ void *viewport_item_data(unsigned mark);
 
 void  viewport_item_update(unsigned mark);
 
+void viewport_item_hide(unsigned mark, int on);
+void viewport_item_stale(unsigned mark);
+
+typedef void (*viewport_scan_fn)(unsigned mark, const char *kind, void *ud, void *ctx);
+void viewport_scan(viewport_scan_fn fn, void *ctx);
+
+void viewport_repad(void);
+
 typedef char *(*viewport_encode_fn)(void *ud);
 void viewport_item_persist(unsigned mark, const char *kind, viewport_encode_fn encode);
 

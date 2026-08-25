@@ -52,6 +52,9 @@ void view_keep_output(const char *text, enum ui_role role, int error);
 
 void view_keep_diff(char *patch);
 
+int  view_collapsed(void);
+void view_collapse(int on);
+
 #define VIEW_KEEP_KIND "keep"
 void view_keep_load(const cJSON *st);
 

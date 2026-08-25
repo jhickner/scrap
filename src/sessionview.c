@@ -38,11 +38,47 @@ static void keep_free(void *ud)
 }
 
 static void cluster_paint(const char *line, const unsigned char *spans);
+static void tool_tag(const char *name, char *out, size_t size);
+static unsigned char *row_spans(const char *name, const char *row, size_t prefix);
+
+static int collapsed;
+
+int view_collapsed(void) { return collapsed; }
+
+static int keep_drops(const struct keep *k)
+{
+    return k->kind == KEEP_DIFF || (k->kind == KEEP_OUTPUT && !k->error);
+}
+
+static void call_collapsed(const char *name, const char *arg)
+{
+    char tag[64];
+    tool_tag(name, tag, sizeof tag);
+
+    char flat[4096];
+    text_one_line(arg ? arg : "", flat, sizeof flat);
+
+    char row[4096];
+    snprintf(row, sizeof row, "%s %s", tag, flat);
+
+    unsigned char *spans = row_spans(name, row, strlen(tag) + 1);
+    cluster_paint(row, spans);
+    free(spans);
+}
 
 static void keep_render(void *ud, int cols)
 {
     const struct keep *k = ud;
     (void)cols;
+
+    if (collapsed) {
+        if (keep_drops(k))
+            return;
+        if (k->kind == KEEP_CALL) {
+            call_collapsed(k->a, k->b);
+            return;
+        }
+    }
 
     switch (k->kind) {
     case KEEP_ACTIVITY: view_activity(k->a, k->b, k->role);              break;
@@ -123,6 +159,10 @@ static unsigned keep(struct keep *k)
     keep_render(k, ui_columns());
     viewport_item_end();
     viewport_item_persist(mark, VIEW_KEEP_KIND, keep_encode);
+    if (collapsed && keep_drops(k)) {
+        viewport_item_hide(mark, 1);
+        viewport_repad();
+    }
     return mark;
 }
 
@@ -207,6 +247,22 @@ void view_keep_diff(char *patch)
     }
     k->a = patch;
     keep(k);
+}
+
+static void recollapse(unsigned mark, const char *kind, void *ud, void *ctx)
+{
+    (void)ctx;
+    if (!ud || !kind || strcmp(kind, VIEW_KEEP_KIND) != 0)
+        return;
+    viewport_item_hide(mark, collapsed && keep_drops(ud));
+    viewport_item_stale(mark);
+}
+
+void view_collapse(int on)
+{
+    collapsed = on ? 1 : 0;
+    viewport_scan(recollapse, NULL);
+    viewport_repad();
 }
 
 static const struct {

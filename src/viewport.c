@@ -19,6 +19,8 @@ struct item {
     char **rows;
     int    nrows;
     int    cols;
+    int    pad;
+    int    hidden;
     unsigned id;
     const char        *kind;
     viewport_encode_fn encode;
@@ -147,6 +149,44 @@ void viewport_item_persist(unsigned mark, const char *kind, viewport_encode_fn e
     it->encode = encode;
 }
 
+void viewport_item_hide(unsigned mark, int on)
+{
+    struct item *it = item_by_mark(mark);
+    if (!it || it->hidden == !!on)
+        return;
+    it->hidden = !!on;
+    dirty = 1;
+}
+
+void viewport_item_stale(unsigned mark)
+{
+    struct item *it = item_by_mark(mark);
+    if (!it || !it->render)
+        return;
+    it->cols = -1;
+    dirty = 1;
+}
+
+void viewport_scan(viewport_scan_fn fn, void *ctx)
+{
+    for (int i = 0; i < nitems; i++)
+        if (!items[i].pad)
+            fn(items[i].id, items[i].kind, items[i].ud, ctx);
+}
+
+void viewport_repad(void)
+{
+    int hide = 0;
+    for (int i = nitems - 1; i >= 0; i--) {
+        if (items[i].pad)
+            items[i].hidden = hide;
+        else
+            hide = items[i].hidden;
+    }
+    dirty = 1;
+    viewport_paint();
+}
+
 void viewport_item_update(unsigned mark)
 {
     if (in_render)
@@ -180,7 +220,7 @@ static void rows_set(struct item *it, const char *body, int cols)
 {
     rows_free(it);
     it->cols = cols;
-    if (!body)
+    if (!body || !*body)
         return;
 
     int cap = 8, n = 0;
@@ -265,6 +305,8 @@ static int trailing_blanks(void)
 {
     int n = 0;
     for (int i = nitems - 1; i >= 0; i--) {
+        if (items[i].hidden)
+            continue;
         for (int r = items[i].nrows - 1; r >= 0; r--) {
             if (!row_is_blank(items[i].rows[r], strlen(items[i].rows[r])))
                 return n;
@@ -279,8 +321,10 @@ static int trailing_blanks(void)
 static void blank_push(void)
 {
     struct item *it = items_push();
-    if (it)
-        rows_set(it, "", 0);
+    if (!it)
+        return;
+    rows_set(it, "", 0);
+    it->pad = 1;
 }
 
 static void pad_seam(int before, int own)
@@ -471,8 +515,13 @@ int viewport_ends_blank(void)
     if (open_len)
         return text_ends_blank(open_buf, open_len);
     for (int i = nitems - 1; i >= 0; i--) {
-        if (items[i].nrows == 0)
+        if (items[i].hidden)
             continue;
+        if (items[i].nrows == 0) {
+            if (!items[i].render)
+                return 1;
+            continue;
+        }
         const char *last = items[i].rows[items[i].nrows - 1];
         return row_is_blank(last, strlen(last));
     }
@@ -688,6 +737,8 @@ static struct item *item_at(int r, struct item *pending)
 
 static int item_height(int r, struct item *pending, int W)
 {
+    if (item_at(r, pending)->hidden)
+        return 0;
     item_rows(item_at(r, pending), W);
     struct item *it = item_at(r, pending);
     if (it->nrows == 0)
@@ -962,6 +1013,8 @@ void viewport_paint(void)
 
     struct frame all = {0};
     for (int r = g.first; r < g.total && r <= nitems; r++) {
+        if (item_at(r, &pending)->hidden)
+            continue;
         item_rows(item_at(r, &pending), W);
         struct item *it = item_at(r, &pending);
         if (it->nrows == 0 && !it->render)

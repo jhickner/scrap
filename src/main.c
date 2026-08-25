@@ -28,6 +28,7 @@
 #include "sessionfork.h"
 #include "sessionload.h"
 #include "sessionswitch.h"
+#include "sessionview.h"
 #include "settings.h"
 #include "sidechannel.h"
 #include "status.h"
@@ -251,6 +252,18 @@ static void another(void *ud)
     }
     hud_print(workspace_current());
     ui_flush();
+}
+
+static void collapse_tools(void *ud)
+{
+    (void)ud;
+    struct session *s = workspace_current();
+    int on = !(s ? session_compact(s) : view_collapsed());
+
+    if (s)
+        session_set_compact(s, on);
+    settings_set_int(SETTING_COMPACT, on);
+    view_collapse(on);
 }
 
 static void splitter(void *ud, int quiet)
@@ -640,6 +653,8 @@ int main(int argc, char **argv)
     prompt_set_switcher(prompt, switcher, NULL);
     prompt_set_split(prompt, splitter, NULL);
     prompt_set_another(prompt, another, NULL);
+    prompt_set_collapse(prompt, collapse_tools, NULL);
+    view_collapse(session_compact(session));
     prompt_set_board(prompt, board, NULL);
     prompt_set_cancel(prompt, cancel_turn, NULL);
     workspace_on_finish(turn_done);

@@ -1,10 +1,14 @@
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
+#include "screenmodel.h"
 #include "sessionview.h"
 #include "text.h"
 #include "ui.h"
+#include "viewport.h"
 
 static int fail(const char *what, const char *out)
 {
@@ -19,6 +23,67 @@ static int lines_of(const char *s)
         if (*p == '\n')
             n++;
     return n;
+}
+
+static int tap_read = -1;
+
+static void pump(struct screen *s)
+{
+    fflush(stdout);
+    char    buf[65536];
+    ssize_t n;
+    while ((n = read(tap_read, buf, sizeof buf)) > 0)
+        feed(s, buf, (size_t)n);
+}
+
+static int collapse_redraws(void)
+{
+    char path[] = "/tmp/mux-sessionviewtest-XXXXXX";
+    int  wfd = mkstemp(path);
+    tap_read = wfd >= 0 ? open(path, O_RDONLY) : -1;
+    if (wfd < 0 || tap_read < 0)
+        return fail("no temp file", NULL);
+    unlink(path);
+    fflush(stdout);
+    if (dup2(wfd, STDOUT_FILENO) < 0)
+        return fail("cannot redirect stdout", NULL);
+    setvbuf(stdout, NULL, _IOFBF, 1 << 16);
+
+    setenv("COLUMNS", "80", 1);
+    setenv("LINES", "24", 1);
+
+    ui_init();
+    viewport_begin();
+
+    struct screen s;
+    screen_init(&s, 24, 80);
+
+    view_collapse(0);
+    view_keep_tool_call("Bash", "ls -la", 0);
+    view_keep_output("total 8\nfoo\nbar", UI_DIM, 0);
+    view_keep_tool_call("Read", "src/main.c", 1);
+    view_keep_output("read 40 lines", UI_DIM, 0);
+    viewport_paint();
+    pump(&s);
+
+    int ok = 1;
+    if (count_on_screen(&s, "ls -la") != 1 || count_on_screen(&s, "total 8") != 1)
+        ok = fail("the full view draws the call and its output", NULL) == 0;
+
+    view_collapse(1);
+    pump(&s);
+    if (count_on_screen(&s, "total 8") != 0 || count_on_screen(&s, "read 40 lines") != 0)
+        ok = fail("collapsing drops the output of a call already drawn", NULL) == 0;
+    if (count_on_screen(&s, "ls -la") != 1 || count_on_screen(&s, "src/main.c") != 1)
+        ok = fail("collapsing keeps one row per call already drawn", NULL) == 0;
+
+    view_collapse(0);
+    pump(&s);
+    if (count_on_screen(&s, "total 8") != 1 || count_on_screen(&s, "read 40 lines") != 1)
+        ok = fail("expanding brings the output back", NULL) == 0;
+
+    viewport_end();
+    return ok ? 0 : 1;
 }
 
 int main(void)
@@ -82,6 +147,10 @@ int main(void)
         return fail("view_tool_error dropped the exception", out);
     free(out);
 
-    puts("sessionviewtest: all checks passed");
+    if (collapse_redraws())
+        return 1;
+
+    fflush(stdout);
+    fprintf(stderr, "sessionviewtest: all checks passed\n");
     return 0;
 }
