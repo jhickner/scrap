@@ -79,7 +79,7 @@ struct board_cfg {
     int auto_pull;
     int auto_pick;
     int archive_after;
-    int done_shown;
+    int closed_shown;
     int open_shown;
 
     struct board_action actions[BOARD_ACTIONS_MAX];

@@ -150,7 +150,7 @@ static void test_note_and_close(void)
         return;
     }
     expect(c->closed, "closed is the one bit it carries");
-    expect(board_stands(c) == BOARD_CLOSED, "and it stands done");
+    expect(board_stands(c) == BOARD_CLOSED, "and it stands closed");
     expect(c->log_n == 2, "both notes are on it");
     expect(!strcmp(c->log[0].who, "name"), "note records who");
     expect(strstr(c->log[1].text, "landing") != NULL, "and what was said");

@@ -205,7 +205,7 @@ static int lane_cards(struct board_card *cards, int n, const char *filter,
         return 0;
     qsort(in, (size_t)k, sizeof *in, by_order);
 
-    int cap = at == BOARD_CLOSED ? boardcfg()->done_shown
+    int cap = at == BOARD_CLOSED ? boardcfg()->closed_shown
               : at == BOARD_OPEN ? boardcfg()->open_shown
                                  : 0;
     if (cap > 0 && k > cap)

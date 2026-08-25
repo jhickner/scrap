@@ -81,7 +81,7 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
     (*n)++;
 
     head(rows, n, "columns");
-    count_row(rows, n, "done shown", &c->done_shown, 0, 500, "cards");
+    count_row(rows, n, "closed shown", &c->closed_shown, 0, 500, "cards");
     count_row(rows, n, "open shown", &c->open_shown, 0, 500, "cards");
 
     head(rows, n, "backends");

@@ -116,7 +116,7 @@ static void defaults(struct board_cfg *c)
     memset(c, 0, sizeof *c);
     c->workers = 3;
     c->archive_after = 14;
-    c->done_shown = 20;
+    c->closed_shown = 20;
     c->open_shown = 20;
     snprintf(c->view, sizeof c->view, "list");
 
@@ -227,7 +227,9 @@ static void read_settings(struct board_cfg *c)
     c->auto_pull = mdcfg_int(&m, "auto pull", c->auto_pull);
     c->auto_pick = mdcfg_int(&m, "auto pick", c->auto_pick);
     c->archive_after = mdcfg_int(&m, "archive after", c->archive_after);
-    c->done_shown = mdcfg_int(&m, "done shown", c->done_shown);
+    /* the lane was called done before it was called closed */
+    int shown = mdcfg_int(&m, "done shown", c->closed_shown);
+    c->closed_shown = mdcfg_int(&m, "closed shown", shown);
     /* the lane was called the backlog before the columns went */
     c->open_shown = mdcfg_int(&m, "open shown",
                               mdcfg_int(&m, "backlog shown", c->open_shown));
@@ -334,12 +336,12 @@ static int write_settings(const struct board_cfg *c)
     snprintf(nums[1], sizeof nums[1], "%d", c->auto_pull);
     snprintf(nums[2], sizeof nums[2], "%d", c->auto_pick);
     snprintf(nums[3], sizeof nums[3], "%d", c->archive_after);
-    snprintf(nums[4], sizeof nums[4], "%d", c->done_shown);
+    snprintf(nums[4], sizeof nums[4], "%d", c->closed_shown);
     snprintf(nums[5], sizeof nums[5], "%d", c->open_shown);
 
     const char *keys[] = {"serving", "view", "workers", "auto pull",
                           "auto pick", "archive after",
-                          "done shown", "open shown"};
+                          "closed shown", "open shown"};
     const char *vals[] = {c->serving, c->view, nums[0], nums[1], nums[2],
                           nums[3], nums[4], nums[5]};
 
@@ -352,8 +354,8 @@ static int write_settings(const struct board_cfg *c)
         "auto pick is 1 to hand a worker the next queued card when its current\n"
         "task completes, switching backends to match the card; 0 to leave it on\n"
         "the card until you take it.\n"
-        "archive after is days a done card stays on the board; zero forever.\n"
-        "done shown and open shown are how many cards those lanes list; zero\n"
+        "archive after is days a closed card stays on the board; zero forever.\n"
+        "closed shown and open shown are how many cards those lanes list; zero\n"
         "lists them all.\n"
         "\n"
         "The actions a card can run, and the pipelines that name a run of them,\n"
@@ -678,7 +680,7 @@ int boardcfg_set(const struct board_cfg *c)
     cache.auto_pull = c->auto_pull;
     cache.auto_pick = c->auto_pick;
     cache.archive_after = c->archive_after;
-    cache.done_shown = c->done_shown;
+    cache.closed_shown = c->closed_shown;
     cache.open_shown = c->open_shown;
 
     snprintf(cache.serving, sizeof cache.serving, "%s", c->serving);

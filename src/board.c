@@ -22,7 +22,7 @@ static void set_str(char *dst, size_t n, const char *src)
 }
 
 static const char *const STAND_NAMES[BOARD_STANDS] = {
-    "open", "working", "review", "done",
+    "open", "working", "review", "closed",
 };
 
 const char *board_stand_name(enum board_stand stand)
