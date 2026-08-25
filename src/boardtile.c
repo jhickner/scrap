@@ -31,8 +31,8 @@ static void trim_partial(char *s)
         s[at - 1] = '\0';
 }
 
-static void column_mark(const struct board_card *c, const char **mark,
-                        unsigned char *role)
+static void stand_mark(const struct board_card *c, const char **mark,
+                       unsigned char *role)
 {
     if (boardflow_waits_on_you(c)) {
         *mark = "\xe2\x9c\x93";
@@ -147,7 +147,7 @@ int boardtile_of(const struct board_card *c, int wide, struct board_tile *out)
     out->c = c;
     snprintf(out->title, sizeof out->title, "%s",
              c->title[0] ? c->title : "(untitled)");
-    column_mark(c, &out->mark, &out->mark_role);
+    stand_mark(c, &out->mark, &out->mark_role);
 
     out->tab = boardwork_tab(c->id);
     const char *step = boardtile_step(c->id);

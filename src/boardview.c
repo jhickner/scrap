@@ -54,7 +54,7 @@
 
 struct vrow {
     char          id[BOARD_ID_MAX];
-    unsigned char col;
+    unsigned char stand;
     char         *label;
     char         *detail;
     unsigned char heading;
@@ -183,7 +183,7 @@ static int shows(const struct board_card *c, const char *filter)
     return !filter || !*filter || !strcmp(c->cwd, filter);
 }
 
-static int by_col(const void *a, const void *b)
+static int by_order(const void *a, const void *b)
 {
     const struct board_card *const *x = a, *const *y = b;
     return board_cmp(*x, *y);
@@ -192,9 +192,9 @@ static int by_col(const void *a, const void *b)
 /* Four lanes, whatever the actions are: waiting on you, being worked, open,
    and closed. */
 static int lane_cards(struct board_card *cards, int n, const char *filter,
-                      int col, const struct board_card **in, const char **name)
+                      int stand, const struct board_card **in, const char **name)
 {
-    enum board_stand at = (enum board_stand)col;
+    enum board_stand at = (enum board_stand)stand;
 
     int k = 0;
     for (int i = 0; i < n; i++)
@@ -202,10 +202,10 @@ static int lane_cards(struct board_card *cards, int n, const char *filter,
             in[k++] = &cards[i];
     if (!k)
         return 0;
-    qsort(in, (size_t)k, sizeof *in, by_col);
+    qsort(in, (size_t)k, sizeof *in, by_order);
 
     int cap = at == BOARD_CLOSED ? boardcfg()->done_shown
-              : at == BOARD_OPEN ? boardcfg()->backlog_shown
+              : at == BOARD_OPEN ? boardcfg()->open_shown
                                  : 0;
     if (cap > 0 && k > cap)
         k = cap;
@@ -224,9 +224,9 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
 
     stamp_due = 0;
 
-    for (int col = 0; col < BOARD_STANDS; col++) {
+    for (int stand = 0; stand < BOARD_STANDS; stand++) {
         const char *name = NULL;
-        int k = lane_cards(cards, n, filter, col, in, &name);
+        int k = lane_cards(cards, n, filter, stand, in, &name);
         if (!k)
             continue;
 
@@ -241,7 +241,7 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
                 break;
 
             snprintf(r->id, sizeof r->id, "%s", t.c->id);
-            r->col = (unsigned char)board_stands(t.c);
+            r->stand = (unsigned char)board_stands(t.c);
             r->label = text_dsprintf("%s", t.title);
             r->mark = t.mark;
             r->mark_role = t.mark_role;
@@ -303,9 +303,9 @@ static int build_grid(struct glist *g, struct board_card *cards, int n,
 
     stamp_due = 0;
 
-    for (int col = 0; col < lanes; col++) {
+    for (int stand = 0; stand < lanes; stand++) {
         const char *name = NULL;
-        int k = lane_cards(cards, n, filter, col, in, &name);
+        int k = lane_cards(cards, n, filter, stand, in, &name);
         if (!k)
             continue;
 
@@ -334,20 +334,21 @@ static int find_id(const struct vlist *l, const char *id)
     return -1;
 }
 
-/* col is the column the card sat in when the cursor last rested on it, or -1
-   to follow that card wherever it has gone. */
+/* stand is where the card stood when the cursor last rested on it, or -1 to
+   follow that card wherever it has gone. */
 struct anchor {
     char id[BOARD_ID_MAX];
     char next[BOARD_ID_MAX];
     char prev[BOARD_ID_MAX];
-    int  col;
+    int  stand;
     int  lane;
 };
 
-static void anchor_set(struct anchor *a, const struct vlist *l, int row, int col)
+static void anchor_set(struct anchor *a, const struct vlist *l, int row,
+                       int stand)
 {
     snprintf(a->id, sizeof a->id, "%s", l->v[row].id);
-    a->col = col;
+    a->stand = stand;
     a->lane = -1;
     a->next[0] = a->prev[0] = '\0';
     for (int i = row + 1; i < l->n; i++)
@@ -371,14 +372,14 @@ static void anchor_step(struct anchor *a)
         return;
     snprintf(a->id, sizeof a->id, "%s", to);
     a->next[0] = '\0';
-    a->col = -1;
+    a->stand = -1;
     a->lane = -1;
 }
 
 static int row_of(const struct vlist *l, const struct anchor *a)
 {
     int at = find_id(l, a->id);
-    if (at >= 0 && (a->col < 0 || (int)l->v[at].col == a->col))
+    if (at >= 0 && (a->stand < 0 || (int)l->v[at].stand == a->stand))
         return at;
 
     int by = find_id(l, a->next);
@@ -395,11 +396,11 @@ static int row_of(const struct vlist *l, const struct anchor *a)
     return 0;
 }
 
-static void anchor_tile(struct anchor *a, const struct glist *g, int at, int col,
-                        int lane)
+static void anchor_tile(struct anchor *a, const struct glist *g, int at,
+                        int stand, int lane)
 {
     snprintf(a->id, sizeof a->id, "%s", g->t[at].c->id);
-    a->col = col;
+    a->stand = stand;
     a->lane = lane;
     a->next[0] = a->prev[0] = '\0';
     if (at + 1 < g->n)
@@ -631,7 +632,7 @@ static int waiting(const struct board_card *c, const char *filter)
            shows(c, filter);
 }
 
-static int in_backlog(const struct board_card *cards, int n, const char *filter)
+static int can_start(const struct board_card *cards, int n, const char *filter)
 {
     int ready = 0;
     for (int i = 0; i < n; i++)
@@ -651,7 +652,7 @@ static int start_max(const struct board_card *cards, int n, const char *filter,
     for (int i = 0; i < n; i++)
         if (waiting(&cards[i], filter))
             in[k++] = &cards[i];
-    qsort(in, (size_t)k, sizeof *in, by_col);
+    qsort(in, (size_t)k, sizeof *in, by_order);
 
     int did = 0;
     if (why && size > 0)
@@ -861,7 +862,7 @@ int boardview_run(const char *cwd)
     snprintf(here, sizeof here, "%s", cwd ? cwd : "");
 
     static char          filter[4096];
-    static struct anchor cur = {.col = -1, .lane = -1};
+    static struct anchor cur = {.stand = -1, .lane = -1};
     char                 notice[256] = {0};
     char                 ask[280] = {0};
     int                  asking = ASK_NONE;
@@ -963,7 +964,7 @@ int boardview_run(const char *cwd)
                             at >= 0 ? -1 : (int)board_stands(g.t[row].c),
                             at >= 0 ? -1 : g.lane_of[row]);
             else
-                anchor_set(&cur, &l, row, at >= 0 ? -1 : (int)l.v[row].col);
+                anchor_set(&cur, &l, row, at >= 0 ? -1 : (int)l.v[row].stand);
         }
         if (grid && at >= 0 && !pressed && part == GRID_PART_STATUS)
             pressed = KEY_GO;
@@ -1017,7 +1018,7 @@ int boardview_run(const char *cwd)
         case KEY_NEW:
             close_list();
             do_new(filter[0] ? filter : here, cur.id);
-            cur.col = -1;
+            cur.stand = -1;
             break;
         case KEY_NAME:
             if (c)
@@ -1031,7 +1032,7 @@ int boardview_run(const char *cwd)
             }
             break;
         case KEY_START_MAX: {
-            if (!in_backlog(cards, n, filter))
+            if (!can_start(cards, n, filter))
                 snprintf(notice, sizeof notice, "nothing queued to start");
             else {
                 char why[256];

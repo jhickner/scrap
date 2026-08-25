@@ -82,7 +82,7 @@ static void build(struct row *rows, int *n, struct board_cfg *c)
 
     head(rows, n, "columns");
     count_row(rows, n, "done shown", &c->done_shown, 0, 500, "cards");
-    count_row(rows, n, "backlog shown", &c->backlog_shown, 0, 500, "cards");
+    count_row(rows, n, "open shown", &c->open_shown, 0, 500, "cards");
 
     head(rows, n, "backends");
     rows[*n].kind = ROW_SERVING;

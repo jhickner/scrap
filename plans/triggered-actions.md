@@ -162,6 +162,10 @@ changing shape when an action file is added.
 
 The grid view lays out the same lanes and needs the same change. `boardtile.c`
 already prints the running job from `boardwork_step_job`, so tiles mostly hold.
+`boardgrid.c` is already generic over lanes — it takes `lane_of`, `lane_name`
+and a count — so it needs nothing, and its `col` is a terminal column, not a
+board one. What is left is vocabulary: `vrow.col`, `anchor.col` and
+`backlog_shown` name a thing the board no longer has.
 
 `boardcard.c`'s form loses the `kind` chooser and the `column` chooser, and
 gains a trigger: a list of the actions whose gates are met, plus the pipelines.
@@ -200,8 +204,10 @@ happens in `load`, and the new shape is written back on the next update.
    **Done.**
 4. Pipelines and the trigger UI. **Done.**
 5. Delete kinds, triage, and the approve/send-back path. **Done.**
-6. Views. Mostly fell out of step 3: both views already lane by `board_stands`.
-   What is left is checking nothing still assumes a lane per action.
+6. Views. **Done.** Mostly fell out of step 3, which already laned both views
+   by `board_stands`. The grid was still anchoring on `c->col` while the list
+   anchored on the stand, so the cursor lost its place when the views were
+   switched; both read the stand now, and `col` is gone from their vocabulary.
 
 Steps 1–3 are the change; 4–6 are consequences. Each stops at a green build.
 
