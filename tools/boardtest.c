@@ -656,13 +656,20 @@ static void test_the_shipped_actions_are_built_in(void)
     const struct board_action *name = boardcfg_action("name");
     expect(name && name->on_capture, "naming runs on capture, not on trigger");
 
+    const struct board_action *merge = boardcfg_action("merge");
+    expect(merge && merge->where == BOARD_IN_REPO, "merge runs in the checkout");
+    expect(merge && merge->needs_n == 1 && !strcmp(merge->needs[0], "implement"),
+           "and is gated on implement");
+    expect(merge && !strcmp(merge->fail_marker, "MERGE BLOCKED"),
+           "and says so when it cannot land");
+
     const char *pipelines[BOARD_PIPELINES_MAX];
     expect(!boardcfg_pipelines(pipelines, BOARD_PIPELINES_MAX),
            "no pipeline ships with the binary");
 
     const char *all[BOARD_ACTIONS_MAX];
     int         n = boardcfg_actions(all, BOARD_ACTIONS_MAX);
-    expect(n == 3, "every action file is one action");
+    expect(n == 4, "every action file is one action");
 }
 
 static void put_file(const char *path, const char *text)

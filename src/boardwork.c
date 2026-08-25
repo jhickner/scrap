@@ -435,13 +435,27 @@ static char *first_turn(const struct board_card *c)
           "back to rather than this message."
         : "";
 
+    /* an action in the repo has left the worktree behind, so the turn names the
+       branch the work is on and where it came from */
+    char tree[4600] = "";
+    if (p && p->where == BOARD_IN_REPO && c->worktree[0]) {
+        char branch[128];
+        branch_of(c->id, branch, sizeof branch);
+        snprintf(tree, sizeof tree,
+                 "The work is committed on branch %s, in the worktree at %s, "
+                 "off %s. You are in the checkout at %s.",
+                 branch, c->worktree, c->base, c->cwd);
+    }
+
     size_t need = strlen(head) + strlen(body) + strlen(c->title) +
-                  strlen(card) + 256;
+                  strlen(card) + strlen(tree) + 256;
     char  *out = malloc(need);
     if (!out)
         return NULL;
 
     int at = snprintf(out, need, "%s", head);
+    if (tree[0])
+        at += snprintf(out + at, need - (size_t)at, "\n\n%s", tree);
     if (*card)
         at += snprintf(out + at, need - (size_t)at, "\n\n%s", card);
     snprintf(out + at, need - (size_t)at, "\n\n# %s\n\n%s\n", c->title, body);

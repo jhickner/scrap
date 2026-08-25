@@ -3,7 +3,7 @@
 const struct board_default board_defaults[] = {
     {"actions/implement.md",
      "---\n"
-     "tier: med\n"
+     "tier: high\n"
      "in: worktree\n"
      "commits: yes\n"
      "needs: \n"
@@ -43,6 +43,37 @@ const struct board_default board_defaults[] = {
      "Answer with what you built, which files it touched, and what to run to see it\n"
      "work.\n"
     },
+    {"actions/merge.md",
+     "---\n"
+     "tier: med\n"
+     "in: repo\n"
+     "needs: implement\n"
+     "fail marker: MERGE BLOCKED\n"
+     "---\n"
+     "\n"
+     "The work on this card was approved. Land it. You are out of the worktree now,\n"
+     "in the checkout the card came from, and the branch is named above.\n"
+     "\n"
+     "Check the checkout first. It must be on the branch the work came from and have\n"
+     "no uncommitted change to a file the branch touches. If it does, that is not\n"
+     "something the branch can fix: say what is in the way and answer with MERGE\n"
+     "BLOCKED.\n"
+     "\n"
+     "Then rebase the branch onto the checkout's branch, from inside the worktree,\n"
+     "and resolve what the rebase raises. A conflict is yours to settle: take the\n"
+     "intent of both sides rather than either one whole. Run the project's check\n"
+     "afterwards and fix what it reports, committing on the branch you rebased.\n"
+     "\n"
+     "Land it with a fast-forward merge in the checkout once the branch is clean and\n"
+     "the check passes. If it still will not go, say what stopped it and answer with\n"
+     "MERGE BLOCKED rather than forcing it.\n"
+     "\n"
+     "Leave the worktree and the branch where they are. The board removes both when\n"
+     "the card is closed.\n"
+     "\n"
+     "Answer with what you merged, any conflict you settled and how, and anything the\n"
+     "check made you change.\n"
+    },
     {"actions/name.md",
      "---\n"
      "tier: low\n"
@@ -66,7 +97,7 @@ const struct board_default board_defaults[] = {
     },
     {"actions/plan.md",
      "---\n"
-     "tier: med\n"
+     "tier: high\n"
      "in: worktree\n"
      "needs: \n"
      "---\n"
@@ -95,4 +126,4 @@ const struct board_default board_defaults[] = {
     },
 };
 
-const int board_defaults_n = 3;
+const int board_defaults_n = 4;
