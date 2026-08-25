@@ -16,6 +16,7 @@
 #include "boardflow.h"
 #include "boardlog.h"
 #include "session.h"
+#include "sessionload.h"
 #include "text.h"
 #include "workspace.h"
 
@@ -25,6 +26,7 @@ struct worker {
     char            job[32];
     char            backend[32];
     int             done;
+    int             attached;
     int             checked;
     int             handover;
     double          charged_usd;
@@ -331,6 +333,12 @@ static void draw_card(struct session *s, void *ud)
     md_render_kept(ud, 0);
 }
 
+static void replay(struct session *s, void *ud)
+{
+    (void)ud;
+    sessionload_into(s);
+}
+
 static void show_card(int at, const struct board_card *c)
 {
     char *text = card_text(c);
@@ -621,7 +629,13 @@ int boardwork_rejoin(const struct board_card *c, char *why, int size)
         return -1;
     }
 
+    struct worker *w = slot_of(c->id);
+    if (w)
+        w->attached = 1;
+
     board_note(c->id, "board", "worker rejoined the session");
+    show_card(at, c);
+    workspace_render(at, replay, NULL);
     return at;
 }
 
@@ -1048,6 +1062,10 @@ int boardwork_poll(void)
         struct board_card *c = board_find(cards, n, workers[i].id);
         if (c && strayed(&workers[i], c) && rebind(&workers[i], c))
             changed = 1;
+        /* a tab a person rejoined into is theirs: it is let go when they
+           close it, not when the card comes to rest */
+        if (workers[i].attached)
+            continue;
         if (c && holds(c)) {
             changed |= reconcile(&workers[i], c);
             continue;
