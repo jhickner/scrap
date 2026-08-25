@@ -1062,6 +1062,16 @@ int boardwork_poll(void)
         struct board_card *c = board_find(cards, n, workers[i].id);
         if (c && strayed(&workers[i], c) && rebind(&workers[i], c))
             changed = 1;
+
+        /* the card learns its session as soon as the backend reports one, so
+           a tab that goes away mid-turn can still be picked back up */
+        const char *sid = session_id(workers[i].session);
+        if (c && sid && strcmp(c->session, sid)) {
+            struct board_card edited = *c;
+            snprintf(edited.session, sizeof edited.session, "%s", sid);
+            if (board_update(&edited))
+                changed = 1;
+        }
         /* a tab a person rejoined into is theirs: it is let go when they
            close it, not when the card comes to rest */
         if (workers[i].attached)
