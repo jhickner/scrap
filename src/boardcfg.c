@@ -87,6 +87,24 @@ enum board_runs boardcfg_runs_from_name(const char *name)
     return BOARD_RUNS_WORKER;
 }
 
+static const char *const IN_NAMES[BOARD_INS] = {"worktree", "repo"};
+
+const char *boardcfg_in_name(enum board_in where)
+{
+    if (where < 0 || where >= BOARD_INS)
+        return IN_NAMES[BOARD_IN_WORKTREE];
+    return IN_NAMES[where];
+}
+
+enum board_in boardcfg_in_from_name(const char *name)
+{
+    if (name)
+        for (int i = 0; i < BOARD_INS; i++)
+            if (!strcmp(name, IN_NAMES[i]))
+                return (enum board_in)i;
+    return BOARD_IN_WORKTREE;
+}
+
 static const char *const LOCK_NAMES[BOARD_LOCKS] = {"", "repo", "machine"};
 
 const char *boardcfg_lock_name(enum board_lock lock)
@@ -140,7 +158,7 @@ static void backend_defaults(struct board_backend *b, const char *name)
 
 /* Fields a role file omits: job is the file's own name, and the step it stands
  * in is the job. */
-static void role_defaults(struct board_role *p)
+static void action_defaults(struct board_action *p)
 {
     if (!p->job[0])
         snprintf(p->job, sizeof p->job, "%s", p->name);
@@ -179,7 +197,7 @@ static int board_path(char *out, size_t size, const char *leaf, const char *name
     return (size_t)snprintf(out, size, "%s/%s.md", dir, name) < size;
 }
 
-/* Kinds and roles used to be copied into the config as markdown. They are
+/* Kinds and actions used to be copied into the config as markdown. They are
  * compiled in now, so the copies are stale the moment the binary changes. */
 static void drop_stale(const char *leaf)
 {
@@ -283,18 +301,42 @@ static void read_settings(struct board_cfg *c)
     mdcfg_free(&m);
 }
 
-static void read_roles(struct board_cfg *c)
+/* "implement, test" -> the two names it gates on */
+static void needs_of(struct board_action *p, const char *list)
 {
-    for (int i = 0; i < defs_n && c->roles_n < BOARD_ROLES_MAX; i++) {
+    char copy[256];
+    snprintf(copy, sizeof copy, "%s", list);
+
+    p->needs_n = 0;
+    for (char *at = copy; *at && p->needs_n < BOARD_NEEDS;) {
+        while (*at == ' ' || *at == ',')
+            at++;
+        char *start = at;
+        while (*at && *at != ',')
+            at++;
+        char *end = at;
+        while (end > start && end[-1] == ' ')
+            end--;
+        char kept = *end;
+        *end = '\0';
+        if (*start)
+            snprintf(p->needs[p->needs_n++], sizeof p->needs[0], "%s", start);
+        *end = kept;
+    }
+}
+
+static void read_actions(struct board_cfg *c)
+{
+    for (int i = 0; i < defs_n && c->actions_n < BOARD_ACTIONS_MAX; i++) {
         char name[MDCFG_NAME];
-        if (!default_name(defs[i].path, "roles", name, sizeof name))
+        if (!default_name(defs[i].path, "actions", name, sizeof name))
             continue;
 
         struct mdcfg m;
         if (!mdcfg_parse(&m, strdup(defs[i].text)))
             continue;
 
-        struct board_role *p = &c->roles[c->roles_n++];
+        struct board_action *p = &c->actions[c->actions_n++];
         memset(p, 0, sizeof *p);
         snprintf(p->name, sizeof p->name, "%s", name);
         snprintf(p->job, sizeof p->job, "%s", mdcfg_get(&m, "job"));
@@ -315,7 +357,11 @@ static void read_roles(struct board_cfg *c)
         p->over_lines = mdcfg_int(&m, "over lines", 0);
         snprintf(p->tier, sizeof p->tier, "%s", mdcfg_get(&m, "tier"));
 
-        role_defaults(p);
+        p->where = boardcfg_in_from_name(mdcfg_get(&m, "in"));
+        p->on_capture = !strcmp(mdcfg_get(&m, "on"), "capture");
+        needs_of(p, mdcfg_get(&m, "needs"));
+
+        action_defaults(p);
         p->skippable = mdcfg_int(&m, "skippable", 1);
 
         p->prompt = dup_or_null(m.body ? m.body : "");
@@ -455,7 +501,7 @@ static int write_out(const struct board_cfg *c)
 
 static struct board_cfg  cache;
 static int               loaded;
-static struct board_role serving_roles[BOARD_ROLES_MAX];
+static struct board_action serving_actions[BOARD_ACTIONS_MAX];
 
 #define STEPS_MAX (BOARD_KINDS_MAX * BOARD_KIND_STEPS)
 
@@ -499,24 +545,24 @@ static void resolve(void)
 {
     const struct board_backend *b = boardcfg_backend(&cache, cache.serving);
 
-    for (int i = 0; i < cache.roles_n; i++) {
-        serving_roles[i] = cache.roles[i];
+    for (int i = 0; i < cache.actions_n; i++) {
+        serving_actions[i] = cache.actions[i];
 
-        enum board_tier tier = boardcfg_tier_or_med(cache.roles[i].tier);
+        enum board_tier tier = boardcfg_tier_or_med(cache.actions[i].tier);
 
-        snprintf(serving_roles[i].backend, sizeof serving_roles[i].backend, "%s",
+        snprintf(serving_actions[i].backend, sizeof serving_actions[i].backend, "%s",
                  cache.serving[0] ? cache.serving : "claude");
-        snprintf(serving_roles[i].model, sizeof serving_roles[i].model, "%s",
+        snprintf(serving_actions[i].model, sizeof serving_actions[i].model, "%s",
                  b ? b->level[tier].model : "");
-        snprintf(serving_roles[i].effort, sizeof serving_roles[i].effort, "%s",
+        snprintf(serving_actions[i].effort, sizeof serving_actions[i].effort, "%s",
                  b ? b->level[tier].effort : "");
     }
 }
 
 static void cache_free(void)
 {
-    for (int i = 0; i < cache.roles_n; i++)
-        free(cache.roles[i].prompt);
+    for (int i = 0; i < cache.actions_n; i++)
+        free(cache.actions[i].prompt);
     for (int i = 0; i < cache.kinds_n; i++) {
         free(cache.kinds[i].means);
         free(cache.kinds[i].prompt);
@@ -532,10 +578,11 @@ static void read_all(void)
     cache_free();
     defaults(&cache);
     drop_stale(BOARD_DIR "/roles");
+    drop_stale(BOARD_DIR "/actions");
     drop_stale(BOARD_DIR "/kinds");
 
     read_settings(&cache);
-    read_roles(&cache);
+    read_actions(&cache);
     read_backends(&cache);
     read_kinds(&cache);
     order_steps(&cache);
@@ -568,7 +615,7 @@ const struct board_cfg *boardcfg(void)
     return &cache;
 }
 
-/* The kinds and roles are compiled in, so anything wrong here is wrong in
+/* The kinds and actions are compiled in, so anything wrong here is wrong in
  * board/ in the source tree, not in the config. */
 int boardcfg_missing(char *out, size_t size)
 {
@@ -579,33 +626,33 @@ int boardcfg_missing(char *out, size_t size)
         return 1;
     }
 
-    if (!cache.roles_n) {
-        snprintf(out, size, "no roles are built into this binary");
+    if (!cache.actions_n) {
+        snprintf(out, size, "no actions are built into this binary");
         return 1;
     }
 
-    for (int i = 0; i < cache.roles_n; i++)
-        for (int j = i + 1; j < cache.roles_n; j++) {
-            if (!strcmp(cache.roles[i].job, cache.roles[j].job)) {
-                snprintf(out, size, "%s and %s both do %s", cache.roles[i].name,
-                         cache.roles[j].name, cache.roles[i].job);
+    for (int i = 0; i < cache.actions_n; i++)
+        for (int j = i + 1; j < cache.actions_n; j++) {
+            if (!strcmp(cache.actions[i].job, cache.actions[j].job)) {
+                snprintf(out, size, "%s and %s both do %s", cache.actions[i].name,
+                         cache.actions[j].name, cache.actions[i].job);
                 return 1;
             }
-            if (!strcmp(cache.roles[i].step, cache.roles[j].step)) {
+            if (!strcmp(cache.actions[i].step, cache.actions[j].step)) {
                 snprintf(out, size, "%s and %s both stand in %s",
-                         cache.roles[i].name, cache.roles[j].name,
-                         cache.roles[i].step);
+                         cache.actions[i].name, cache.actions[j].name,
+                         cache.actions[i].step);
                 return 1;
             }
         }
 
     char   who[128] = "";
     size_t at = 0;
-    for (int i = 0; i < cache.roles_n; i++)
-        if (cache.roles[i].runs != BOARD_RUNS_PERSON &&
-            (!cache.roles[i].prompt || !*cache.roles[i].prompt))
+    for (int i = 0; i < cache.actions_n; i++)
+        if (cache.actions[i].runs != BOARD_RUNS_PERSON &&
+            (!cache.actions[i].prompt || !*cache.actions[i].prompt))
             at += (size_t)snprintf(who + at, sizeof who - at, "%s%s",
-                                   at ? ", " : "", cache.roles[i].name);
+                                   at ? ", " : "", cache.actions[i].name);
     if (at) {
         snprintf(out, size, "nothing to run: %s", who);
         return 1;
@@ -806,35 +853,55 @@ void boardcfg_projects_block(char *out, size_t size)
     free(full);
 }
 
-const struct board_role *boardcfg_for_job(const char *job)
+const struct board_action *boardcfg_doing(const char *job)
 {
     load();
     if (!job || !*job)
         return NULL;
-    for (int i = 0; i < cache.roles_n; i++)
-        if (!strcmp(serving_roles[i].job, job))
-            return &serving_roles[i];
+    for (int i = 0; i < cache.actions_n; i++)
+        if (!strcmp(serving_actions[i].job, job))
+            return &serving_actions[i];
     return NULL;
 }
 
-const struct board_role *boardcfg_for_step(const char *step)
+const struct board_action *boardcfg_action(const char *name)
+{
+    if (!name || !*name)
+        return NULL;
+    load();
+    for (int i = 0; i < cache.actions_n; i++)
+        if (!strcmp(serving_actions[i].name, name))
+            return &serving_actions[i];
+    return NULL;
+}
+
+int boardcfg_actions(const char **out, int max)
+{
+    load();
+    int n = 0;
+    for (int i = 0; i < cache.actions_n && n < max; i++)
+        out[n++] = serving_actions[i].name;
+    return n;
+}
+
+const struct board_action *boardcfg_for_step(const char *step)
 {
     load();
     if (!step || !*step)
         return NULL;
-    for (int i = 0; i < cache.roles_n; i++)
-        if (!strcmp(serving_roles[i].step, step))
-            return &serving_roles[i];
+    for (int i = 0; i < cache.actions_n; i++)
+        if (!strcmp(serving_actions[i].step, step))
+            return &serving_actions[i];
     return NULL;
 }
 
-const struct board_role *boardcfg_for_backend(const char *job,
+const struct board_action *boardcfg_for_backend(const char *job,
                                                  const char *backend,
                                                  const char *tier)
 {
-    static struct board_role out;
+    static struct board_action out;
 
-    const struct board_role *p = boardcfg_for_job(job);
+    const struct board_action *p = boardcfg_doing(job);
     if (!p)
         return NULL;
 
@@ -868,7 +935,7 @@ static int argv_pair(char **out, int n, int max, const char *flag, const char *v
     return n;
 }
 
-int boardcfg_argv(const struct board_role *p, const char *prompt, char **out,
+int boardcfg_argv(const struct board_action *p, const char *prompt, char **out,
                   int max)
 {
     if (!p || !prompt || max < BOARDCFG_ARGV_MAX)
@@ -928,8 +995,8 @@ struct board_cfg *boardcfg_copy(void)
     if (!c)
         return NULL;
     *c = cache;
-    for (int i = 0; i < c->roles_n; i++)
-        c->roles[i].prompt = dup_or_null(cache.roles[i].prompt);
+    for (int i = 0; i < c->actions_n; i++)
+        c->actions[i].prompt = dup_or_null(cache.actions[i].prompt);
     for (int i = 0; i < c->kinds_n; i++) {
         c->kinds[i].means = dup_or_null(cache.kinds[i].means);
         c->kinds[i].prompt = dup_or_null(cache.kinds[i].prompt);
@@ -942,8 +1009,8 @@ void boardcfg_free(struct board_cfg *c)
 {
     if (!c)
         return;
-    for (int i = 0; i < c->roles_n; i++)
-        free(c->roles[i].prompt);
+    for (int i = 0; i < c->actions_n; i++)
+        free(c->actions[i].prompt);
     for (int i = 0; i < c->kinds_n; i++) {
         free(c->kinds[i].means);
         free(c->kinds[i].prompt);

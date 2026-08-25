@@ -49,12 +49,30 @@ enum board_lock {
 const char     *boardcfg_lock_name(enum board_lock lock);
 enum board_lock boardcfg_lock_from_name(const char *name);
 
-struct board_role {
+#define BOARD_NEEDS 4
+
+/* Where an action runs: the card's worktree, or the checkout it came from.
+   merge and anything after it act on the main branch, not on a branch. */
+enum board_in {
+    BOARD_IN_WORKTREE,
+    BOARD_IN_REPO,
+    BOARD_INS,
+};
+
+const char   *boardcfg_in_name(enum board_in where);
+enum board_in boardcfg_in_from_name(const char *name);
+
+struct board_action {
     char name[32];
     char job[32];
     char step[BOARD_STEP_NAME];
     char tier[8];
     int  skippable;
+
+    enum board_in where;
+    char          needs[BOARD_NEEDS][32];
+    int           needs_n;
+    int           on_capture;
 
     enum board_runs runs;
     enum board_lock lock;
@@ -73,7 +91,7 @@ struct board_role {
     char *prompt;
 };
 
-#define BOARD_ROLES_MAX 16
+#define BOARD_ACTIONS_MAX 16
 
 #define BOARD_KINDS_MAX 16
 
@@ -106,8 +124,8 @@ struct board_cfg {
     struct board_kind kinds[BOARD_KINDS_MAX];
     int               kinds_n;
 
-    struct board_role roles[BOARD_ROLES_MAX];
-    int               roles_n;
+    struct board_action actions[BOARD_ACTIONS_MAX];
+    int                 actions_n;
 
     struct board_backend backends[BOARD_BACKENDS_MAX];
     int                  backends_n;
@@ -115,7 +133,7 @@ struct board_cfg {
 
 struct board_default;
 
-/* Kinds and roles are compiled in. Standing a different table in is for tests;
+/* Kinds and actions are compiled in. Standing a different table in is for tests;
    passing NULL goes back to the one the binary was built with. */
 void boardcfg_defaults(const struct board_default *table, int n);
 
@@ -130,11 +148,15 @@ void              boardcfg_free(struct board_cfg *c);
 
 int boardcfg_set(const struct board_cfg *c);
 
-const struct board_role *boardcfg_for_job(const char *job);
+const struct board_action *boardcfg_doing(const char *job);
 
-const struct board_role *boardcfg_for_step(const char *step);
+const struct board_action *boardcfg_action(const char *name);
 
-const struct board_role *boardcfg_for_backend(const char *job,
+int boardcfg_actions(const char **out, int max);
+
+const struct board_action *boardcfg_for_step(const char *step);
+
+const struct board_action *boardcfg_for_backend(const char *job,
                                               const char *backend,
                                               const char *tier);
 
@@ -142,7 +164,7 @@ int boardcfg_steps(const char *const **out);
 
 #define BOARDCFG_ARGV_MAX 9
 
-int boardcfg_argv(const struct board_role *p, const char *prompt, char **out,
+int boardcfg_argv(const struct board_action *p, const char *prompt, char **out,
                   int max);
 
 const char *boardcfg_serving(void);

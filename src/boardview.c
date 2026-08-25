@@ -1129,7 +1129,7 @@ int boardview_run(const char *cwd)
         case KEY_REJECT:
             if (c && (c->col == BOARD_STEP || c->col == BOARD_DONE)) {
                 close_list();
-                const struct board_role *at = boardflow_role(c);
+                const struct board_action *at = boardflow_role(c);
                 char                     asked[64];
                 if (c->col == BOARD_DONE)
                     snprintf(asked, sizeof asked, "why it is not fixed");

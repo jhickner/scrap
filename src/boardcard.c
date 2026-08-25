@@ -123,7 +123,7 @@ static int stages_of(const struct board_card *c, struct stage *out, int max)
         const char *step = boardcfg_kind_step(c->kind, at);
         if (!step)
             break;
-        const struct board_role *p = boardcfg_for_step(step);
+        const struct board_action *p = boardcfg_for_step(step);
         if (!p)
             continue;
         out[n++] = (struct stage){step, step,
@@ -383,7 +383,7 @@ enum boardcard_action boardcard_form(const struct board_card *c,
     fields[fields_n++] = (struct form_field){NULL,    FORM_TOGGLE, open_at,
                                              sizeof open_at, OPEN, 2, 0};
 
-    const struct board_role *waiting = boardflow_role(c);
+    const struct board_action *waiting = boardflow_role(c);
     char approve_label[96];
     snprintf(approve_label, sizeof approve_label, "%s",
              waiting ? waiting->pass_label : "approve");

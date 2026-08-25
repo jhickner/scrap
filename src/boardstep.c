@@ -44,7 +44,7 @@ char *boardstep_since(const struct board_card *c, const char *job)
 
 /* The session took every step before this one, so it is not told again what
  * was said: it is only told what this step is. */
-char *boardstep_prompt(const struct board_card *c, const struct board_role *p)
+char *boardstep_prompt(const struct board_card *c, const struct board_action *p)
 {
     if (!c || !p)
         return NULL;
@@ -62,7 +62,7 @@ char *boardstep_prompt(const struct board_card *c, const struct board_role *p)
     return out;
 }
 
-int boardstep_finished(const struct board_card *c, const struct board_role *p,
+int boardstep_finished(const struct board_card *c, const struct board_action *p,
                        const char *reply)
 {
     if (!c || !p)

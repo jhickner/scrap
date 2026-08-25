@@ -3,6 +3,8 @@ runs: worker
 tier: high
 step: implement
 skippable: 0
+in: worktree
+needs: 
 ---
 
 The plan below was approved. Start coding. Start with your todo list.

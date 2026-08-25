@@ -1,22 +1,14 @@
 #include "boarddefaults.h"
 
 const struct board_default board_defaults[] = {
-    {"kinds/plan.md",
-     "---\n"
-     "means: a request for a plan of the work rather than the work itself\n"
-     "priority: 1\n"
-     "steps: plan, review\n"
-     "worktree: 0\n"
-     "approval prompt: \n"
-     "next kind: \n"
-     "---\n"
-    },
-    {"roles/implement.md",
+    {"actions/implement.md",
      "---\n"
      "runs: worker\n"
      "tier: high\n"
      "step: implement\n"
      "skippable: 0\n"
+     "in: worktree\n"
+     "needs: \n"
      "---\n"
      "\n"
      "The plan below was approved. Start coding. Start with your todo list.\n"
@@ -53,12 +45,14 @@ const struct board_default board_defaults[] = {
      "Answer with what you built, which files it touched, and what to run to see it\n"
      "work.\n"
     },
-    {"roles/plan.md",
+    {"actions/plan.md",
      "---\n"
      "runs: worker\n"
      "tier: high\n"
      "step: plan\n"
      "skippable: 0\n"
+     "in: worktree\n"
+     "needs: \n"
      "---\n"
      "\n"
      "You are in plan mode. You are researching a codebase and writing a plan for\n"
@@ -83,7 +77,7 @@ const struct board_default board_defaults[] = {
      "read it and come back with revisions; each time they do, rewrite the same file\n"
      "under the same name, and only rename it if what the plan is about has changed.\n"
     },
-    {"roles/review.md",
+    {"actions/review.md",
      "---\n"
      "runs: person\n"
      "tier: med\n"
@@ -94,10 +88,11 @@ const struct board_default board_defaults[] = {
      "\n"
      "Read the plan and say what should change.\n"
     },
-    {"roles/triage.md",
+    {"actions/triage.md",
      "---\n"
      "tier: low\n"
      "skippable: 1\n"
+     "on: capture\n"
      "---\n"
      "\n"
      "You are sorting one card on a work board. Read it and answer with JSON only, no prose and no code fence.\n"
@@ -134,6 +129,16 @@ const struct board_default board_defaults[] = {
      "The card was captured in a directory, given below. Unless the card names\n"
      "somewhere else, that is the repo, and you should say so rather than leaving\n"
      "cwd empty.\n"
+    },
+    {"kinds/plan.md",
+     "---\n"
+     "means: a request for a plan of the work rather than the work itself\n"
+     "priority: 1\n"
+     "steps: plan, review\n"
+     "worktree: 0\n"
+     "approval prompt: \n"
+     "next kind: \n"
+     "---\n"
     },
 };
 

@@ -433,10 +433,10 @@ static void def_add(const char *path, const char *front, const char *body)
     defs[at].text = strdup(text);
 }
 
-static void role_def(const char *name, const char *front, const char *prompt)
+static void action_def(const char *name, const char *front, const char *prompt)
 {
     char path[128];
-    snprintf(path, sizeof path, "roles/%s.md", name);
+    snprintf(path, sizeof path, "actions/%s.md", name);
     def_add(path, front, prompt);
 }
 
@@ -489,15 +489,15 @@ static void steps_for(const char *kind, const char *steps)
 static void with_roles(void)
 {
     defs_clear();
-    role_def("worker", "runs: worker\ntier: high\nstep: worktree\n",
+    action_def("worker", "runs: worker\ntier: high\nstep: worktree\n",
              "work the card");
-    role_def("test", "runs: worker\ntier: high\n", "test the change");
-    role_def("review", "runs: person\ntier: high\n", "");
-    role_def("audit",
+    action_def("test", "runs: worker\ntier: high\n", "test the change");
+    action_def("review", "runs: person\ntier: high\n", "");
+    action_def("audit",
              "runs: worker\ntier: high\nfail marker: FINDINGS\n"
              "fail step: worktree\n",
              "read the diff");
-    role_def("merge", "runs: worker\ntier: high\n", "land it");
+    action_def("merge", "runs: worker\ntier: high\n", "land it");
     defs_use();
 }
 
@@ -605,9 +605,9 @@ static void write_kind(const char *name, const char *const *keys,
 static void test_a_planner_works_without_a_worktree(void)
 {
     defs_clear();
-    role_def("plan", "runs: worker\ntier: high\nstep: plan\n",
+    action_def("plan", "runs: worker\ntier: high\nstep: plan\n",
              "Read the repo and write the plan.");
-    role_def("review", "runs: person\ntier: med\n", "");
+    action_def("review", "runs: person\ntier: med\n", "");
     kind_def("plan", "means: a plan of the work\npriority: 1\n"
                      "steps: plan, review\nworktree: 0\n", "");
     defs_use();
@@ -847,21 +847,21 @@ static int skip_card(const char *id)
     return did;
 }
 
-static void test_roles_are_what_the_files_say(void)
+static void test_actions_are_what_the_files_say(void)
 {
     defs_clear();
-    role_def("auditor", "runs: worker\ntier: high\njob: audit\n",
+    action_def("auditor", "runs: worker\ntier: high\njob: audit\n",
              "read the diff");
-    role_def("merge", "runs: worker\ntier: high\n", "land it");
+    action_def("merge", "runs: worker\ntier: high\n", "land it");
     defs_use();
 
-    const struct board_role *p = boardcfg_for_job("audit");
-    expect(p != NULL, "a role is found by the job its file names");
+    const struct board_action *p = boardcfg_doing("audit");
+    expect(p != NULL, "an action is found by the job its file names");
     expect(p && !strcmp(p->name, "auditor"),
            "and takes its own name from that file");
     expect(p && p->prompt && strstr(p->prompt, "read the diff"),
            "the body of the file is its prompt");
-    expect(boardcfg_for_job("triage") == NULL, "a job no role does has no role");
+    expect(boardcfg_doing("triage") == NULL, "a job no role does has no role");
     expect(boardcfg_for_step("audit") == p, "the step it stands in is its own");
     expect(boardcfg_for_step("auditor") == NULL,
            "which is the job it does, not the file it is in");
@@ -870,7 +870,7 @@ static void test_roles_are_what_the_files_say(void)
 static void test_a_step_that_fails_with_nowhere_to_send_it(void)
 {
     with_roles();
-    role_def("audit", "runs: worker\ntier: high\nfail marker: FINDINGS\n",
+    action_def("audit", "runs: worker\ntier: high\nfail marker: FINDINGS\n",
              "read the diff");
     defs_use();
     steps_for("nowhere", "worktree, review, audit, merge");
@@ -907,7 +907,7 @@ static void test_a_step_is_a_file(void)
     steps_for("untested", "worktree, review, audit, merge");
     steps_for("filed", "");
 
-    const struct board_role *p = boardcfg_for_step("test");
+    const struct board_action *p = boardcfg_for_step("test");
     expect(p != NULL, "a file standing in a step is the step");
     expect(p && p->runs == BOARD_RUNS_WORKER, "a worker runs it unless it says");
     expect(p && p->skippable, "and it may be skipped by hand");
@@ -975,7 +975,7 @@ static void unskippable(int no)
 {
     with_roles();
     if (no) {
-        role_def("audit",
+        action_def("audit",
                  "runs: worker\ntier: high\nskippable: 0\n"
                  "fail marker: FINDINGS\nfail step: worktree\n",
                  "read the diff");
@@ -1198,8 +1198,9 @@ static void test_the_shipped_kinds_and_roles_are_built_in(void)
     boardcfg_defaults(NULL, 0);
 
     expect(!has_dir("board/roles"), "loading clears the old roles dir");
+    expect(!has_dir("board/actions"), "and writes no actions dir of its own");
     expect(!has_dir("board/kinds"), "and writes no kinds dir of its own");
-    expect(boardcfg_for_job("leftover") == NULL, "the stale role is gone");
+    expect(boardcfg_doing("leftover") == NULL, "the stale role is gone");
 
     char why[512];
     expect(!boardcfg_missing(why, sizeof why), "the built-in set is whole");
@@ -1210,10 +1211,19 @@ static void test_the_shipped_kinds_and_roles_are_built_in(void)
 
     expect(!boardflow_worktree("plan"), "and takes no worktree");
 
-    const struct board_role *p = boardcfg_for_step("plan");
+    const struct board_action *p = boardcfg_action("plan");
     expect(p && p->runs == BOARD_RUNS_WORKER, "a worker takes the plan step");
+    expect(p && p->where == BOARD_IN_WORKTREE, "and takes it in the worktree");
+    expect(p && !p->needs_n, "gated on nothing");
     expect(p && p->prompt && strstr(p->prompt, "plan mode"),
            "its prompt is the body of the file it was built from");
+
+    const struct board_action *name = boardcfg_action("triage");
+    expect(name && name->on_capture, "naming runs on capture, not on trigger");
+
+    const char *all[BOARD_ACTIONS_MAX];
+    int         n = boardcfg_actions(all, BOARD_ACTIONS_MAX);
+    expect(n == 4, "every action file is one action");
 }
 
 static void put_file(const char *path, const char *text)
@@ -1298,7 +1308,7 @@ int main(void)
     test_columns();
     test_attempts_reset_when_answered();
     test_a_step_answers_for_itself();
-    test_roles_are_what_the_files_say();
+    test_actions_are_what_the_files_say();
     test_a_step_is_a_file();
     test_a_step_that_fails_with_nowhere_to_send_it();
     test_skipping_a_step();

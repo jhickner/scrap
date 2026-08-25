@@ -6,7 +6,7 @@
 
 #include "boarddiff.h"
 
-const struct board_role *boardflow_role(const struct board_card *c)
+const struct board_action *boardflow_role(const struct board_card *c)
 {
     if (!c || c->col != BOARD_STEP)
         return NULL;
@@ -15,7 +15,7 @@ const struct board_role *boardflow_role(const struct board_card *c)
 
 enum board_runs boardflow_runs(const struct board_card *c)
 {
-    const struct board_role *p = boardflow_role(c);
+    const struct board_action *p = boardflow_role(c);
     return p ? p->runs : BOARD_RUNS_MODES;
 }
 
@@ -32,7 +32,7 @@ const char *boardflow_next(const struct board_card *c, const char *after,
 
     int at = after && *after ? boardcfg_kind_step_at(c->kind, after) + 1 : 0;
     for (const char *step; (step = boardcfg_kind_step(c->kind, at)); at++) {
-        const struct board_role *p = boardcfg_for_step(step);
+        const struct board_action *p = boardcfg_for_step(step);
         if (!p)
             continue;
         if (!force && !boarddiff_over(p, c))
@@ -61,7 +61,7 @@ const char *boardflow_after_turn(const struct board_card *c)
         return next;
 
     while (next) {
-        const struct board_role *p = boardcfg_for_step(next);
+        const struct board_action *p = boardcfg_for_step(next);
         if (!p || p->runs != BOARD_RUNS_PERSON)
             break;
         next = boardflow_next(c, next, 0);
@@ -71,7 +71,7 @@ const char *boardflow_after_turn(const struct board_card *c)
 
 const char *boardflow_fail(const struct board_card *c)
 {
-    const struct board_role *p = boardflow_role(c);
+    const struct board_action *p = boardflow_role(c);
     if (!p || !p->fail_step[0] || !boardcfg_kind_takes(c->kind, p->fail_step))
         return NULL;
     return boardcfg_for_step(p->fail_step) ? p->fail_step : NULL;
@@ -95,7 +95,7 @@ const char *boardflow_person(const char *kind)
         const char *step = boardcfg_kind_step(kind, at);
         if (!step)
             return last;
-        const struct board_role *p = boardcfg_for_step(step);
+        const struct board_action *p = boardcfg_for_step(step);
         if (p && p->runs == BOARD_RUNS_PERSON)
             last = p->step;
     }
@@ -121,7 +121,7 @@ char *boardflow_approval(const struct board_card *c)
 
 int boardflow_skippable(const struct board_card *c)
 {
-    const struct board_role *p = boardflow_role(c);
+    const struct board_action *p = boardflow_role(c);
     return p && p->skippable;
 }
 

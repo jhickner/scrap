@@ -120,7 +120,7 @@ int boarddiff_size_cached(const struct board_card *c, int *files, int *lines)
     return any;
 }
 
-int boarddiff_over(const struct board_role *p, const struct board_card *c)
+int boarddiff_over(const struct board_action *p, const struct board_card *c)
 {
     if (!p || (!p->over_files && !p->over_lines))
         return 1;

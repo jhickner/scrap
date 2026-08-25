@@ -1,6 +1,7 @@
 ---
 tier: low
 skippable: 1
+on: capture
 ---
 
 You are sorting one card on a work board. Read it and answer with JSON only, no prose and no code fence.

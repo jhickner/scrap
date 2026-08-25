@@ -119,7 +119,7 @@ static void card_pins(const char *id, char *backend, size_t backend_size,
     board_free(cards, n);
 }
 
-static const struct board_role *worker_role(const struct worker *w)
+static const struct board_action *worker_role(const struct worker *w)
 {
     char backend[32] = "";
     char tier[8] = "";
@@ -129,7 +129,7 @@ static const struct board_role *worker_role(const struct worker *w)
 
 static int handover(struct worker *w)
 {
-    const struct board_role *p = worker_role(w);
+    const struct board_action *p = worker_role(w);
 
     w->handover = 0;
     if (!p || !session_switch_backend(w->session, p->backend))
@@ -149,7 +149,7 @@ static int handover(struct worker *w)
 
 static int follows(const struct worker *w)
 {
-    const struct board_role *p = worker_role(w);
+    const struct board_action *p = worker_role(w);
     return strcmp(session_backend(w->session), p->backend) != 0;
 }
 
@@ -344,7 +344,7 @@ static void show_card(int at, const struct board_card *c)
 }
 
 /* The card's first step, which is the one the session opens on. */
-static const struct board_role *opening(const struct board_card *c)
+static const struct board_action *opening(const struct board_card *c)
 {
     return boardcfg_for_step(boardflow_start(c));
 }
@@ -352,7 +352,7 @@ static const struct board_role *opening(const struct board_card *c)
 static char *first_turn(const struct board_card *c)
 {
     const struct board_kind *k = boardcfg_kind(c->kind);
-    const struct board_role *first = opening(c);
+    const struct board_action *first = opening(c);
 
     const char *head = first && first->prompt ? first->prompt : "";
     char       *mine = boardcfg_expand(k && k->prompt ? k->prompt : "", c->id);
@@ -395,7 +395,7 @@ static const char *wanted_backend(const struct board_card *c)
 {
     if (c->backend_pin[0])
         return c->backend_pin;
-    const struct board_role *p = opening(c);
+    const struct board_action *p = opening(c);
     const char              *b = c->backend[0] ? c->backend
                                               : (p ? p->backend : "");
     return b[0] ? b : "claude";
@@ -498,7 +498,7 @@ static int retarget(struct session *s, const char *backend, const char *model,
 static void take_slot(struct worker *w, const struct board_card *c)
 {
     snprintf(w->id, sizeof w->id, "%s", c->id);
-    const struct board_role *p = opening(c);
+    const struct board_action *p = opening(c);
     snprintf(w->job, sizeof w->job, "%s", p ? p->job : "worker");
     snprintf(w->step, sizeof w->step, "%s", p ? p->step : "");
     w->done = 0;
@@ -527,10 +527,10 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
         return 0;
 
     const char              *backend = wanted_backend(c);
-    const struct board_role *mine = opening(c);
+    const struct board_action *mine = opening(c);
     const char              *job = mine ? mine->job : "worker";
     const char              *step = mine ? mine->step : "";
-    const struct board_role *p = boardcfg_for_backend(job, backend, c->tier_pin);
+    const struct board_action *p = boardcfg_for_backend(job, backend, c->tier_pin);
     const char *model = c->model[0] ? c->model : (p ? p->model : "");
     const char *effort = c->effort[0] ? c->effort : (p ? p->effort : "");
 
@@ -600,10 +600,10 @@ int boardwork_rejoin(const struct board_card *c, char *why, int size)
 
     const char              *backend = c->backend[0] ? c->backend
                                                      : wanted_backend(c);
-    const struct board_role *mine = boardcfg_for_step(c->step);
+    const struct board_action *mine = boardcfg_for_step(c->step);
     const char              *job = mine ? mine->job : "worker";
     const char              *step = mine ? mine->step : "";
-    const struct board_role *p = boardcfg_for_backend(job, backend, c->tier_pin);
+    const struct board_action *p = boardcfg_for_backend(job, backend, c->tier_pin);
     const char *model = c->model[0] ? c->model : (p ? p->model : "");
     const char *effort = c->effort[0] ? c->effort : (p ? p->effort : "");
     const char *cwd = c->worktree[0] ? c->worktree : c->cwd;
@@ -677,7 +677,7 @@ void boardwork_finished(struct session *s)
     boardlog_turn(w->id, w->job, NULL, failed && *failed ? failed : reply);
     boardfile_keep(c);
 
-    const struct board_role *p = boardcfg_for_step(c->step);
+    const struct board_action *p = boardcfg_for_step(c->step);
     int broke = p && p->fail_marker[0] && reply && strstr(reply, p->fail_marker);
 
     int         empty = 0;
@@ -809,7 +809,7 @@ static int pull_pump(const struct board_card *cards, int n)
 
 /* The card's own session takes the step, whichever step it is: set it to the
  * model the role asks for and send it the step's prompt. */
-static int step_send(const struct board_card *c, const struct board_role *p,
+static int step_send(const struct board_card *c, const struct board_action *p,
                      struct worker *w)
 {
     int at = workspace_index_of(w->session);
@@ -820,7 +820,7 @@ static int step_send(const struct board_card *c, const struct board_role *p,
     if (!turn)
         return 0;
 
-    const struct board_role *tiered =
+    const struct board_action *tiered =
         boardcfg_for_backend(p->job, session_backend(w->session), c->tier_pin);
     if (tiered) {
         session_set_model(w->session, tiered->model[0] ? tiered->model : NULL);
@@ -839,7 +839,7 @@ static int step_send(const struct board_card *c, const struct board_role *p,
 
 static int step_start(const struct board_card *c)
 {
-    const struct board_role *p = boardflow_role(c);
+    const struct board_action *p = boardflow_role(c);
     if (!p || p->runs == BOARD_RUNS_PERSON)
         return 0;
 
@@ -1119,7 +1119,7 @@ void boardwork_discard(const struct board_card *c)
 
 int boardwork_approve(const struct board_card *c, int force)
 {
-    const struct board_role *p = boardflow_role(c);
+    const struct board_action *p = boardflow_role(c);
     if (!c || !p)
         return 0;
 
