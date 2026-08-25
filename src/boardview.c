@@ -39,6 +39,7 @@
 #define KEY_CLOSE    'a'
 #define KEY_CLOSE_ALL 'A'
 #define KEY_STOP     'r'
+#define KEY_RUN      'R'
 #define KEY_UNSTART  'x'
 #define KEY_FEEDBACK 'f'
 #define KEY_LOG      'l'
@@ -47,7 +48,7 @@
 #define KEY_ALL      '*'
 #define KEY_VIEW     'v'
 
-#define BOARD_KEYS "ndtsSgarxflcb*Av\t"
+#define BOARD_KEYS "ndtsSgarRxflcb*Av\t"
 
 #define BOARD_RECENT_INDENT 6
 
@@ -604,6 +605,29 @@ static int run_action(const struct board_card *c, const char *name)
     return 0;
 }
 
+/* Put an action on the card, then put a worker on it. Both halves want the
+   card as it stands on disk, so it is loaded again between them. */
+static int run_now(const char *id, const char *name, char *why, int size)
+{
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    struct board_card *c = board_find(cards, n, id);
+
+    int queued = c && boardflow_trigger(c, &name, 1, why, (size_t)size);
+    board_free(cards, n);
+    if (!queued)
+        return 0;
+
+    if (boardwork_tab(id) >= 0)
+        return 1;
+
+    n = board_load(&cards);
+    c = board_find(cards, n, id);
+    int ok = c && boardwork_start(c, why, size);
+    board_free(cards, n);
+    return ok;
+}
+
 static int in_review(const struct board_card *cards, int n, const char *filter)
 {
     int ready = 0;
@@ -1079,6 +1103,38 @@ int boardview_run(const char *cwd)
                          ready == 1 ? "" : "s");
                 asking = ASK_CLOSE_ALL;
             }
+            break;
+        }
+        case KEY_RUN: {
+            if (!c)
+                break;
+            const char *offered[BOARD_ACTIONS_MAX];
+            int         on = boardflow_offered(c, offered, BOARD_ACTIONS_MAX);
+            if (!on) {
+                snprintf(notice, sizeof notice,
+                         "nothing can run on this card yet");
+                break;
+            }
+
+            struct pick_item items[BOARD_ACTIONS_MAX];
+            for (int i = 0; i < on; i++)
+                items[i] = (struct pick_item){offered[i], NULL};
+
+            char id[BOARD_ID_MAX];
+            snprintf(id, sizeof id, "%s", c->id);
+            close_list();
+            int chosen = pick_run("run on this card", items, on, 0);
+            if (chosen < 0)
+                break;
+
+            char why[256] = "";
+            char name[64];
+            snprintf(name, sizeof name, "%s", offered[chosen]);
+            if (run_now(id, name, why, sizeof why))
+                snprintf(notice, sizeof notice, "running %s", name);
+            else
+                snprintf(notice, sizeof notice, "%s",
+                         why[0] ? why : "could not run it");
             break;
         }
         case KEY_STOP:
