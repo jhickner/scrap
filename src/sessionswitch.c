@@ -602,11 +602,7 @@ static int switch_once(void)
     int pressed = 0;
 
     char title[256];
-    snprintf(title, sizeof title,
-             "sessions \xc2\xb7 enter: bring here%s \xc2\xb7 n: new "
-             "\xc2\xb7 p: new + prompt \xc2\xb7 r: rename \xc2\xb7 x: close "
-             "\xc2\xb7 tab: board \xc2\xb7 /: search",
-             livelist_tmux_window()[0] ? " \xc2\xb7 shift-enter: go there" : "");
+    snprintf(title, sizeof title, "sessions");
     struct listing listing = {rows, n, spin, marks, icons, &live, &nlive, 0, 0};
     sync_columns(&listing);
     listing.sig = listing_sig(&listing);

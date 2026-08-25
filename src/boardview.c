@@ -59,16 +59,6 @@
 
 #define BOARD_RECENT_INDENT 6
 
-#define BOARD_HINT_HEAD \
-    "enter edit  ·  s start  ·  S start max  ·  g worker  ·  "                \
-    "a approve  ·  A approve all  ·  i approve, skipping nothing\n"           \
-    "f feedback  ·  r send back  ·  x cancel start  ·  u undo  ·  "          \
-    "k skip step\n"                                                            \
-    "n new  ·  t triage  ·  l log  ·  d delete  ·  w sweep  ·  c config  ·  "  \
-    "b backend  ·  * all repos  ·  tab sessions  ·  v view"
-
-#define BOARD_HINT      BOARD_HINT_HEAD "  ·  / search"
-#define BOARD_HINT_GRID BOARD_HINT_HEAD
 
 struct vrow {
     char          id[BOARD_ID_MAX];
@@ -987,11 +977,7 @@ int boardview_run(const char *cwd)
                      shown, n, boardcfg_serving(), busy, left);
 
         char hint[512];
-        if (notice[0])
-            snprintf(hint, sizeof hint, "%s\n%s", notice,
-                     grid ? BOARD_HINT_GRID : BOARD_HINT);
-        else
-            snprintf(hint, sizeof hint, "%s", grid ? BOARD_HINT_GRID : BOARD_HINT);
+        snprintf(hint, sizeof hint, "%s", notice);
         notice[0] = '\0';
 
         int pressed = 0;
