@@ -76,11 +76,34 @@ static int collapse_redraws(void)
         ok = fail("collapsing drops the output of a call already drawn", NULL) == 0;
     if (count_on_screen(&s, "ls -la") != 1 || count_on_screen(&s, "src/main.c") != 1)
         ok = fail("collapsing keeps one row per call already drawn", NULL) == 0;
+    if (row_with(&s, "src/main.c") - row_with(&s, "ls -la") != 1)
+        ok = fail("collapsed rows sit against each other", NULL) == 0;
 
     view_collapse(0);
     pump(&s);
     if (count_on_screen(&s, "total 8") != 1 || count_on_screen(&s, "read 40 lines") != 1)
         ok = fail("expanding brings the output back", NULL) == 0;
+    if (!row_blank(&s, row_with(&s, "src/main.c") - 1))
+        ok = fail("expanding brings the gap between calls back", NULL) == 0;
+
+    view_collapse(1);
+    view_keep_tool_call("Bash", "git status", 1);
+    view_keep_output("on branch master", UI_DIM, 0);
+    view_keep_tool_call("Edit", "src/two.c", 1);
+    view_keep_diff(strdup("@@file src/two.c\n@@ -3 +3 @@\n-before\n+after\n"));
+    viewport_paint();
+    pump(&s);
+    if (count_on_screen(&s, "git status") != 1 || count_on_screen(&s, "src/two.c") != 1)
+        ok = fail("a call kept while collapsed draws one row", NULL) == 0;
+    if (count_on_screen(&s, "on branch master") != 0 || count_on_screen(&s, "after") != 0)
+        ok = fail("a call kept while collapsed draws no output", NULL) == 0;
+    if (row_with(&s, "src/two.c") - row_with(&s, "git status") != 1)
+        ok = fail("a call kept while collapsed sits against the row above", NULL) == 0;
+
+    view_collapse(0);
+    pump(&s);
+    if (count_on_screen(&s, "on branch master") != 1 || count_on_screen(&s, "after") != 1)
+        ok = fail("expanding shows what was kept while collapsed", NULL) == 0;
 
     viewport_end();
     return ok ? 0 : 1;

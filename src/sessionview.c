@@ -151,6 +151,8 @@ static char *keep_encode(void *ud)
     return out;
 }
 
+static void restate(int stale);
+
 static unsigned keep(struct keep *k)
 {
     unsigned mark = viewport_item_begin(&(struct viewport_entry){
@@ -159,10 +161,8 @@ static unsigned keep(struct keep *k)
     keep_render(k, ui_columns());
     viewport_item_end();
     viewport_item_persist(mark, VIEW_KEEP_KIND, keep_encode);
-    if (collapsed && keep_drops(k)) {
-        viewport_item_hide(mark, 1);
-        viewport_repad();
-    }
+    if (collapsed)
+        restate(0);
     return mark;
 }
 
@@ -249,20 +249,42 @@ void view_keep_diff(char *patch)
     keep(k);
 }
 
-static void recollapse(unsigned mark, const char *kind, void *ud, void *ctx)
+struct collapse {
+    int stale;
+    int after_call;
+};
+
+static void restate_item(unsigned mark, const char *kind, void *ud, void *ctx)
 {
-    (void)ctx;
-    if (!ud || !kind || strcmp(kind, VIEW_KEEP_KIND) != 0)
+    struct collapse *c = ctx;
+
+    if (!ud || !kind || strcmp(kind, VIEW_KEEP_KIND) != 0) {
+        c->after_call = 0;
         return;
-    viewport_item_hide(mark, collapsed && keep_drops(ud));
-    viewport_item_stale(mark);
+    }
+    const struct keep *k = ud;
+    int hidden = collapsed && keep_drops(k);
+    int row = collapsed && k->kind == KEEP_CALL;
+
+    viewport_item_hide(mark, hidden);
+    viewport_item_pad(mark, !(row && c->after_call));
+    if (c->stale)
+        viewport_item_stale(mark);
+    if (!hidden)
+        c->after_call = row;
+}
+
+static void restate(int stale)
+{
+    struct collapse c = {.stale = stale};
+    viewport_scan(restate_item, &c);
+    viewport_repad();
 }
 
 void view_collapse(int on)
 {
     collapsed = on ? 1 : 0;
-    viewport_scan(recollapse, NULL);
-    viewport_repad();
+    restate(1);
 }
 
 static const struct {

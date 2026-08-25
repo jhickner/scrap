@@ -256,11 +256,11 @@ static void render_event(struct session *s, const backend_event *ev)
         const char *name = ev->name ? ev->name : "?";
         char arg[4096];
         view_tool_argument(ev, s->cwd, arg, sizeof arg);
-        int collapsed = s->compact || toolstyle_collapses(name, ev->input_json, ev->arg);
+        int cluster = toolstyle_collapses(name, ev->input_json, ev->arg);
 
         status_pause();
         paused = 1;
-        if (collapsed) {
+        if (cluster) {
             if (!view_cluster_extend(&s->view, name, arg))
                 view_cluster_start(&s->view, name, arg,
                                    s->view.after_tool && !s->view.after_collapse);
@@ -271,14 +271,14 @@ static void render_event(struct session *s, const backend_event *ev)
         }
 
         char path[4096];
-        if (!collapsed && view_tool_path(ev->input_json, s->cwd, path, sizeof path))
+        if (!cluster && view_tool_path(ev->input_json, s->cwd, path, sizeof path))
             filediff_snapshot(path);
         else
             filediff_clear();
 
         s->view.after_activity = 1;
         s->view.after_tool = 1;
-        s->view.after_collapse = collapsed;
+        s->view.after_collapse = cluster;
         break;
     }
 

@@ -63,6 +63,7 @@ void *viewport_item_data(unsigned mark);
 void  viewport_item_update(unsigned mark);
 
 void viewport_item_hide(unsigned mark, int on);
+void viewport_item_pad(unsigned mark, int on);
 void viewport_item_stale(unsigned mark);
 
 typedef void (*viewport_scan_fn)(unsigned mark, const char *kind, void *ud, void *ctx);

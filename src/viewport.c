@@ -21,6 +21,7 @@ struct item {
     int    cols;
     int    pad;
     int    hidden;
+    int    nopad;
     unsigned id;
     const char        *kind;
     viewport_encode_fn encode;
@@ -158,6 +159,15 @@ void viewport_item_hide(unsigned mark, int on)
     dirty = 1;
 }
 
+void viewport_item_pad(unsigned mark, int on)
+{
+    struct item *it = item_by_mark(mark);
+    if (!it || it->nopad == !on)
+        return;
+    it->nopad = !on;
+    dirty = 1;
+}
+
 void viewport_item_stale(unsigned mark)
 {
     struct item *it = item_by_mark(mark);
@@ -181,7 +191,7 @@ void viewport_repad(void)
         if (items[i].pad)
             items[i].hidden = hide;
         else
-            hide = items[i].hidden;
+            hide = items[i].hidden || items[i].nopad;
     }
     dirty = 1;
     viewport_paint();
