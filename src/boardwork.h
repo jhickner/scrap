@@ -24,32 +24,13 @@ int boardwork_serve(int *waiting);
 
 const char *boardwork_card_of(const struct session *s);
 
-void boardwork_worktree_of(const char *root, const char *id, char *out,
-                           size_t size);
-
-void boardwork_branch_of(const char *id, char *out, size_t size);
-
-#define BOARDWORK_TIDY_MAX 16384
-
-int boardwork_tidy_step(const char *root, const char *tree, const char *branch,
-                        char *out, size_t size);
-
 int boardwork_tab(const char *id);
 
 const char *boardwork_step_job(const char *id);
 
-int boardwork_hold(const char *id, struct session *s, const char *job,
-                   const char *step);
-
-void boardwork_leave(const struct board_card *c);
-
 void boardwork_let_go(const char *id);
 
-void boardwork_halt(const char *id);
-
 int boardwork_poll(void);
-
-int boardwork_release(const struct board_card *c);
 
 void boardwork_discard(const struct board_card *c);
 

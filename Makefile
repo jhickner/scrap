@@ -117,7 +117,7 @@ $(BUILD)/muxcfgtest: tools/muxcfgtest.c src/muxcfg.o src/models.o src/settings.o
 $(BUILD)/telegramtest: tools/telegramtest.c src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
-$(BUILD)/boardtest: tools/boardtest.c src/board.o src/boardfile.o src/boardtriage.o src/boarddiff.o src/boardstep.o src/boardcfg.o src/boarddefaults.o src/boardflow.o src/boardlog.o src/mdcfg.o src/replyjson.o src/child.o src/gitcmd.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
+$(BUILD)/boardtest: tools/boardtest.c src/board.o src/boardfile.o src/boardtriage.o src/boardcfg.o src/boarddefaults.o src/boardflow.o src/boardlog.o src/mdcfg.o src/replyjson.o src/child.o src/gitcmd.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
 $(BUILD)/boardgridtest: tools/boardgridtest.c src/boardgrid.o src/chrome.o src/block.o src/prompt.o src/replframe.o src/replkeys.o src/files.o src/paste.o src/settings.o src/status.o src/tty.o src/ui.o src/viewport.o src/bash.o src/frontend.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)

@@ -19,7 +19,6 @@
 #include "boardgrid.h"
 #include "boardtile.h"
 #include "boardtriage.h"
-#include "boardundo.h"
 #include "boardwork.h"
 #include "child.h"
 #include "chrome.h"
@@ -39,20 +38,16 @@
 #define KEY_GO       'g'
 #define KEY_APPROVE  'a'
 #define KEY_APPROVE_ALL 'A'
-#define KEY_AUDIT    'i'
-#define KEY_SKIP     'k'
-#define KEY_UNDO     'u'
 #define KEY_REJECT   'r'
 #define KEY_UNSTART  'x'
 #define KEY_FEEDBACK 'f'
 #define KEY_LOG      'l'
 #define KEY_CONFIG   'c'
-#define KEY_SWEEP    'w'
 #define KEY_SERVE    'b'
 #define KEY_ALL      '*'
 #define KEY_VIEW     'v'
 
-#define BOARD_KEYS "ndtsSgarxflcbw*Aiukv\t"
+#define BOARD_KEYS "ndtsSgarxflcb*Av\t"
 
 #define BOARD_RECENT_INDENT 6
 
@@ -609,16 +604,13 @@ static int do_delete(const struct board_card *c)
     return board_remove(c->id);
 }
 
-/* Queue one action on a card, if its gate is met. */
 static int run_action(const struct board_card *c, const char *name)
 {
-    if (!c || !name || !*name)
-        return 0;
-    if (!boardflow_gated(c, name)) {
-        note("%s cannot run on this card yet", name);
-        return 0;
-    }
-    return board_queued(c->id, &name, 1);
+    char why[256];
+    if (boardflow_trigger(c, &name, 1, why, sizeof why))
+        return 1;
+    note("%s", why);
+    return 0;
 }
 
 static int in_review(const struct board_card *cards, int n, const char *filter)
@@ -642,11 +634,18 @@ static int close_all(const struct board_card *cards, int n, const char *filter)
     return did;
 }
 
+/* a card with a queue and no session on it is one a worker can be put on */
+static int waiting(const struct board_card *c, const char *filter)
+{
+    return board_stands(c) == BOARD_WORKING && boardwork_tab(c->id) < 0 &&
+           shows(c, filter);
+}
+
 static int in_backlog(const struct board_card *cards, int n, const char *filter)
 {
     int ready = 0;
     for (int i = 0; i < n; i++)
-        if (board_stands(&cards[i]) == BOARD_OPEN && shows(&cards[i], filter))
+        if (waiting(&cards[i], filter))
             ready++;
     return ready;
 }
@@ -660,7 +659,7 @@ static int start_max(const struct board_card *cards, int n, const char *filter,
 
     int k = 0;
     for (int i = 0; i < n; i++)
-        if (board_stands(&cards[i]) == BOARD_OPEN && shows(&cards[i], filter))
+        if (waiting(&cards[i], filter))
             in[k++] = &cards[i];
     qsort(in, (size_t)k, sizeof *in, by_col);
 
@@ -687,7 +686,7 @@ static int unstart(const struct board_card *c)
     if (!c || board_stands(c) != BOARD_WORKING)
         return 0;
     boardwork_let_go(c->id);
-    return board_queued(c->id, NULL, 0);
+    return board_stopped(c->id);
 }
 
 static void save_card(const char *id, const struct boardcard_edit *e)
@@ -765,8 +764,8 @@ int boardview_approve(const char *id, char *why, int size)
     if (!c)
         snprintf(why, (size_t)size, "card %s is not on the board", id);
     else if (!boardflow_waits_on_you(c))
-        snprintf(why, (size_t)size, "card %s is in %s, and can't be closed "
-                 "yet", id, board_where(c));
+        snprintf(why, (size_t)size, "card %s is %s, and can't be closed yet",
+                 id, board_stand_name(board_stands(c)));
     else {
         board_close(c->id);
         ok = 1;
@@ -776,44 +775,60 @@ int boardview_approve(const char *id, char *why, int size)
     return ok;
 }
 
-static void steps_of(const char *kind, char *out, size_t size)
+/* "implement, merge" -> the actions it names, in order. Eats its argument. */
+static int names_of(char *spec, const char **out, int max)
 {
-    size_t used = 0;
-    out[0] = '\0';
-    for (int at = 0;; at++) {
-        const char *step = boardcfg_kind_step(kind, at);
-        if (!step)
-            return;
-        used += (size_t)snprintf(out + used, size - used, "%s%s",
-                                 used ? ", " : "", step);
-        if (used >= size)
-            return;
+    int n = 0;
+    for (char *at = spec; *at && n < max;) {
+        while (*at == ' ' || *at == ',')
+            at++;
+        char *start = at;
+        while (*at && *at != ',')
+            at++;
+        char *end = at;
+        if (*at)
+            at++;
+        while (end > start && end[-1] == ' ')
+            end--;
+        *end = '\0';
+        if (*start)
+            out[n++] = start;
     }
+    return n;
 }
 
-int boardview_moveto(const char *id, const char *step, char *why, int size)
+static void offered_of(const struct board_card *c, char *out, size_t size)
+{
+    const char *offered[BOARD_ACTIONS_MAX];
+    int         n = boardflow_offered(c, offered, BOARD_ACTIONS_MAX);
+    if (!n) {
+        snprintf(out, size, "nothing can run on this card yet");
+        return;
+    }
+
+    size_t at = (size_t)snprintf(out, size, "run one of:");
+    for (int i = 0; i < n && at < size; i++)
+        at += (size_t)snprintf(out + at, size - at, "%s %s", i ? "," : "",
+                               offered[i]);
+}
+
+int boardview_trigger(const char *id, const char *spec, char *why, int size)
 {
     struct board_card *cards = NULL;
     int                n = board_load(&cards);
     struct board_card *c = board_find(cards, n, id);
 
-    char steps[512];
-    int  ok = 0;
-    if (!c)
+    int ok = 0;
+    if (!c) {
         snprintf(why, (size_t)size, "card %s is not on the board", id);
-    else if (!boardcfg_kind_takes(c->kind, step)) {
-        steps_of(c->kind, steps, sizeof steps);
-        snprintf(why, (size_t)size, "%s has no %s step%s%s",
-                 c->kind[0] ? c->kind : "this card", step,
-                 steps[0] ? " \xc2\xb7 " : "", steps);
-    } else if (board_at(c, step))
-        snprintf(why, (size_t)size, "card %s is already in %s", id, step);
-    else {
-        boardwork_leave(c);
-        boardwork_let_go(c->id);
-        ok = board_move_to(c->id, step, "you", NULL);
-        if (!ok)
-            snprintf(why, (size_t)size, "could not move card %s", id);
+    } else if (!spec || !*spec) {
+        offered_of(c, why, (size_t)size);
+    } else {
+        char        copy[256];
+        const char *names[BOARD_QUEUE];
+        snprintf(copy, sizeof copy, "%s", spec);
+        int k = names_of(copy, names, BOARD_QUEUE);
+        ok = boardflow_trigger(c, names, k, why, (size_t)size);
     }
 
     board_free(cards, n);
@@ -1022,7 +1037,7 @@ int boardview_run(const char *cwd)
             break;
         case KEY_START_MAX: {
             if (!in_backlog(cards, n, filter))
-                snprintf(notice, sizeof notice, "nothing in backlog");
+                snprintf(notice, sizeof notice, "nothing queued to start");
             else {
                 char why[256];
                 int  did = start_max(cards, n, filter, why, sizeof why);
@@ -1070,13 +1085,6 @@ int boardview_run(const char *cwd)
             }
             break;
         }
-        case KEY_UNDO:
-            if (c && boardundo_can(c)) {
-                char said[256];
-                boardundo_run(c, said, sizeof said);
-                snprintf(notice, sizeof notice, "%s", said);
-            }
-            break;
         case KEY_REJECT:
             if (c && board_stands(c) != BOARD_OPEN) {
                 close_list();

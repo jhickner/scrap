@@ -32,10 +32,10 @@ A single action is a one-element pipeline, so there is one mechanism, not two.
 
 The column is derived, not stored:
 
-    nothing in done, nothing queued  -> open
-    something queued or running      -> working
-    queue empty, done non-empty      -> review
-    closed by hand                   -> done
+    nothing run, nothing queued, never stopped  -> open
+    something queued or running                 -> working
+    queue empty over a history, or stopped      -> review
+    closed by hand                              -> done
 
 There is no `unclear`: naming never asks you anything, so nothing lands there.
 
@@ -164,6 +164,12 @@ already prints the running job from `boardwork_step_job`, so tiles mostly hold.
 gains a trigger: a list of the actions whose gates are met, plus the pipelines.
 That is the main new UI, and it is also reachable from a key on the board.
 
+`/moveto <step>` becomes `/run [<action>, ...]`, the same trigger from inside
+the worker session that holds the card. With no argument it names what the
+card's gates currently allow. Both it and the form call `boardflow_trigger`,
+which gates each name on the history plus everything queued ahead of it, so
+`/run implement, merge` works where `/run merge` alone would not.
+
 ## Migration
 
 Existing cards in `board.jsonl` carry `col` and `step` strings and will keep
@@ -212,10 +218,13 @@ itself, since `deploy` can follow `merge`. Closing by hand from review is the
 assumption; if that turns out to be a chore, the alternative is an action
 declaring itself terminal.
 
-**Open: does a pipeline survive a failure mid-way.** Written above as "clear the
-queue and stop", which is the safe reading. The other option is to hold the
-queue so you can fix the problem and resume, which is friendlier and needs a
-third state between working and review.
+**Settled: a pipeline does not survive a failure mid-way.** The queue is
+dropped and the card stands in review, waiting to be told what to run next.
+Nothing resumes by itself, so no third state between working and review is
+needed. The card carries a `stopped` bit for this: an empty queue over an empty
+history would otherwise read as a card nothing had ever been run on, which is
+the one case a failed first action would land in. `stopped` clears when
+something is queued again or an action passes.
 
 **Open: what shape a name takes.** Uniform matters more than clever, so the
 prompt should pin it rather than ask for "a short title": at most five words,

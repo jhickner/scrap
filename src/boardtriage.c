@@ -27,7 +27,7 @@ static void triage_key(const char *id, char *out, size_t size)
 
 static char *build_prompt(const struct board_card *c)
 {
-    const struct board_action *p = boardcfg_doing("triage");
+    const struct board_action *p = boardcfg_action("triage");
     const char                 *head = p && p->prompt ? p->prompt : "";
     const char                 *body = c->body && *c->body ? c->body : c->title;
 
@@ -144,7 +144,7 @@ static int apply(const char *id, const cJSON *o)
 
 static void failed(const char *id, const char *why)
 {
-    board_move(id, BOARD_UNCLEAR, NULL, "triage", why);
+    board_move(id, BOARD_UNCLEAR, "triage", why);
 }
 
 static int kind_prefix(const char *title, char *out, size_t size)
@@ -198,7 +198,7 @@ int boardtriage_start(const struct board_card *c)
         return 0;
 
     char *argv[BOARDCFG_ARGV_MAX];
-    if (!boardcfg_argv(boardcfg_doing("triage"), prompt, argv, COUNT(argv))) {
+    if (!boardcfg_argv(boardcfg_action("triage"), prompt, argv, COUNT(argv))) {
         free(prompt);
         return 0;
     }

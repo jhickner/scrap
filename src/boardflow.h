@@ -7,14 +7,17 @@
 struct board_card;
 
 /* The action at the head of the card's queue, which is the one it is on. */
-const char *boardflow_running(const struct board_card *c);
-
 const struct board_action *boardflow_action(const struct board_card *c);
 
 /* An action may run once everything it names has run on this card. */
 int boardflow_gated(const struct board_card *c, const char *name);
 
 int boardflow_offered(const struct board_card *c, const char **out, int max);
+
+/* Put actions on the end of a card's queue, in the order given. One name is a
+   pipeline of one, so triggering is the same call either way. */
+int boardflow_trigger(const struct board_card *c, const char *const *names,
+                      int n, char *why, size_t size);
 
 int boardflow_waits_on_you(const struct board_card *c);
 

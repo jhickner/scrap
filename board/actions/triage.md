@@ -1,6 +1,5 @@
 ---
 tier: low
-skippable: 1
 on: capture
 ---
 

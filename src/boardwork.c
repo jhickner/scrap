@@ -23,7 +23,6 @@ struct worker {
     char            id[BOARD_ID_MAX];
     struct session *session;
     char            job[32];
-    char            step[BOARD_STEP_NAME];
     char            backend[32];
     int             done;
     int             checked;
@@ -31,6 +30,8 @@ struct worker {
     double          charged_usd;
     long            charged_in, charged_out;
 };
+
+#define TIDY_MAX 16384
 
 static struct worker workers[WORKSPACE_MAX];
 
@@ -119,7 +120,7 @@ static void card_pins(const char *id, char *backend, size_t backend_size,
     board_free(cards, n);
 }
 
-static const struct board_action *worker_role(const struct worker *w)
+static const struct board_action *worker_action(const struct worker *w)
 {
     char backend[32] = "";
     char tier[8] = "";
@@ -129,7 +130,7 @@ static const struct board_action *worker_role(const struct worker *w)
 
 static int handover(struct worker *w)
 {
-    const struct board_action *p = worker_role(w);
+    const struct board_action *p = worker_action(w);
 
     w->handover = 0;
     if (!p || !session_switch_backend(w->session, p->backend))
@@ -149,8 +150,8 @@ static int handover(struct worker *w)
 
 static int follows(const struct worker *w)
 {
-    const struct board_action *p = worker_role(w);
-    return strcmp(session_backend(w->session), p->backend) != 0;
+    const struct board_action *p = worker_action(w);
+    return p && strcmp(session_backend(w->session), p->backend) != 0;
 }
 
 int boardwork_serve(int *waiting)
@@ -176,8 +177,7 @@ int boardwork_serve(int *waiting)
     return moved;
 }
 
-int boardwork_hold(const char *id, struct session *s, const char *job,
-                   const char *step)
+static int hold(const char *id, struct session *s, const char *job)
 {
     if (!id || !*id || !s || slot_of(id))
         return 0;
@@ -188,7 +188,6 @@ int boardwork_hold(const char *id, struct session *s, const char *job,
         memset(&workers[i], 0, sizeof workers[i]);
         snprintf(workers[i].id, sizeof workers[i].id, "%s", id);
         snprintf(workers[i].job, sizeof workers[i].job, "%s", job);
-        snprintf(workers[i].step, sizeof workers[i].step, "%s", step ? step : "");
         workers[i].session = s;
         snprintf(workers[i].backend, sizeof workers[i].backend, "%s",
                  session_backend(s));
@@ -197,19 +196,19 @@ int boardwork_hold(const char *id, struct session *s, const char *job,
     return 0;
 }
 
-void boardwork_worktree_of(const char *root, const char *id, char *out,
-                           size_t size)
+static void worktree_of(const char *root, const char *id, char *out,
+                        size_t size)
 {
     snprintf(out, size, "%s/.claude/worktrees/%s", root, id);
 }
 
-void boardwork_branch_of(const char *id, char *out, size_t size)
+static void branch_of(const char *id, char *out, size_t size)
 {
     snprintf(out, size, "worktree-%s", id);
 }
 
-int boardwork_tidy_step(const char *root, const char *tree, const char *branch,
-                        char *out, size_t size)
+static int tidy_step(const char *root, const char *tree, const char *branch,
+                     char *out, size_t size)
 {
     char qroot[4200], qtree[4200];
     if (!text_shell_quote(root, qroot, sizeof qroot) ||
@@ -227,7 +226,7 @@ static int worktree_make(const char *root, const char *id, const char *path,
                          char *why, int size)
 {
     char branch[128];
-    boardwork_branch_of(id, branch, sizeof branch);
+    branch_of(id, branch, sizeof branch);
     if (gitcmd_worktree_add(root, path, branch))
         return 1;
     snprintf(why, (size_t)size, "could not make a worktree at %s", path);
@@ -436,7 +435,7 @@ static int card_tree(const struct board_card *c, char *path, size_t path_size,
         snprintf(why, (size_t)size, "%s is not in a git repo", c->cwd);
         return 0;
     }
-    boardwork_worktree_of(root, c->id, path, path_size);
+    worktree_of(root, c->id, path, path_size);
     if (!worktree_make(root, c->id, path, why, size))
         return 0;
 
@@ -473,12 +472,11 @@ static int retarget(struct session *s, const char *backend, const char *model,
     return 1;
 }
 
-static void take_slot(struct worker *w, const struct board_card *c)
+static void take_slot(struct worker *w, const struct board_card *c,
+                      const char *job)
 {
     snprintf(w->id, sizeof w->id, "%s", c->id);
-    const struct board_action *p = boardflow_action(c);
-    snprintf(w->job, sizeof w->job, "%s", p ? p->name : "worker");
-    snprintf(w->step, sizeof w->step, "%s", p ? p->name : "");
+    snprintf(w->job, sizeof w->job, "%s", job);
     w->done = 0;
     w->checked = 0;
     w->handover = 0;
@@ -486,6 +484,22 @@ static void take_slot(struct worker *w, const struct board_card *c)
     w->charged_in = 0;
     w->charged_out = 0;
     snprintf(w->backend, sizeof w->backend, "%s", session_backend(w->session));
+}
+
+/* The action the card's next turn takes, and the model and effort it runs on:
+   what that action asks for on this backend, unless the card pins its own. */
+static const struct board_action *aimed_at(const struct board_card *c,
+                                           const char *backend,
+                                           const char **model,
+                                           const char **effort)
+{
+    const struct board_action *mine = boardflow_action(c);
+    const struct board_action *p =
+        mine ? boardcfg_for_backend(mine->name, backend, c->tier_pin) : NULL;
+
+    *model = c->model[0] ? c->model : (p ? p->model : "");
+    *effort = c->effort[0] ? c->effort : (p ? p->effort : "");
+    return mine;
 }
 
 static int start_on(const struct board_card *c, struct worker *onto, char *why,
@@ -498,19 +512,20 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
         return 0;
     }
 
+    const char                *backend = wanted_backend(c);
+    const char                *model, *effort;
+    const struct board_action *mine = aimed_at(c, backend, &model, &effort);
+    if (!mine) {
+        snprintf(why, (size_t)size, "nothing queued on the card");
+        return 0;
+    }
+    const char *job = mine->name;
+
     int  lands = 0;
     char path[4200];
     char base[64];
     if (!card_tree(c, path, sizeof path, base, sizeof base, &lands, why, size))
         return 0;
-
-    const char                *backend = wanted_backend(c);
-    const struct board_action *mine = boardflow_action(c);
-    const char                *job = mine ? mine->name : "worker";
-    const char                *step = job;
-    const struct board_action *p = boardcfg_for_backend(job, backend, c->tier_pin);
-    const char *model = c->model[0] ? c->model : (p ? p->model : "");
-    const char *effort = c->effort[0] ? c->effort : (p ? p->effort : "");
 
     int             at;
     struct session *s;
@@ -526,7 +541,7 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
             snprintf(why, (size_t)size, "could not start a %s session", backend);
             return 0;
         }
-        take_slot(onto, c);
+        take_slot(onto, c, job);
     } else {
         int front = workspace_index();
         at = workspace_spawn(backend, model[0] ? model : NULL,
@@ -537,7 +552,7 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
         }
         workspace_show(front);
         s = workspace_at(at);
-        boardwork_hold(c->id, s, job, step);
+        hold(c->id, s, job);
     }
 
     show_card(at, c);
@@ -574,15 +589,14 @@ int boardwork_rejoin(const struct board_card *c, char *why, int size)
     if (boardwork_blocked(c, why, size))
         return -1;
 
-    const char              *backend = c->backend[0] ? c->backend
-                                                     : wanted_backend(c);
-    const struct board_action *mine = boardflow_action(c);
-    const char                *job = mine ? mine->name : "worker";
-    const char                *step = job;
-    const struct board_action *p = boardcfg_for_backend(job, backend, c->tier_pin);
-    const char *model = c->model[0] ? c->model : (p ? p->model : "");
-    const char *effort = c->effort[0] ? c->effort : (p ? p->effort : "");
-    const char *cwd = boardflow_cwd(c, mine);
+    /* rejoining is picking a conversation back up, so it is allowed on a card
+       at rest: there is no action to run, only one to talk to. */
+    const char                *backend = c->backend[0] ? c->backend
+                                                       : wanted_backend(c);
+    const char                *model, *effort;
+    const struct board_action *mine = aimed_at(c, backend, &model, &effort);
+    const char                *job = mine ? mine->name : "";
+    const char                *cwd = boardflow_cwd(c, mine);
 
     int at = workspace_spawn(backend, model[0] ? model : NULL,
                              effort[0] ? effort : NULL, cwd, c->session);
@@ -599,7 +613,7 @@ int boardwork_rejoin(const struct board_card *c, char *why, int size)
         return -1;
     }
 
-    if (!boardwork_hold(c->id, s, job, step)) {
+    if (!hold(c->id, s, job)) {
         workspace_close(at);
         snprintf(why, (size_t)size, "no worker slot left");
         return -1;
@@ -657,8 +671,9 @@ void boardwork_finished(struct session *s)
     int empty = !broke && nothing_landed(c, p);
 
     /* An action that errored, tripped its marker, or committed nothing did not
-       pass, so it does not join the history and the rest of the queue is
-       dropped: the card stops here and waits for you. */
+       pass, so it does not join the history and the rest of the pipeline is
+       dropped: the card stands in review and waits to be told what to run
+       next, whether or not anything passed before it. */
     int passed = ran && !broke && !empty && (!failed || !*failed);
 
     int stored = board_update(&edited);
@@ -667,7 +682,7 @@ void boardwork_finished(struct session *s)
     if (passed)
         stored &= board_took(w->id, ran);
     else if (ran)
-        stored &= board_queued(w->id, NULL, 0);
+        stored &= board_stopped(w->id);
 
     if (!stored)
         board_note(w->id, "board", "the store did not take the update");
@@ -694,11 +709,6 @@ void boardwork_finished(struct session *s)
 
 static char pull_failed[BOARD_ID_MAX];
 
-static int pull_priority(const struct board_card *c)
-{
-    return c->priority;
-}
-
 static const struct board_card *pull_next(const struct board_card *cards, int n,
                                          int reuse)
 {
@@ -721,11 +731,11 @@ static const struct board_card *pull_next(const struct board_card *cards, int n,
             continue;
         }
 
-        int p = pull_priority(c);
-        if (best && p <= best_p && (p != best_p || c->created >= best->created))
+        if (best && c->priority <= best_p &&
+            (c->priority != best_p || c->created >= best->created))
             continue;
         best = c;
-        best_p = p;
+        best_p = c->priority;
     }
     return best;
 }
@@ -780,8 +790,8 @@ static int pull_pump(const struct board_card *cards, int n)
     return 1;
 }
 
-/* The card's own session takes the step, whichever step it is: set it to the
- * model the role asks for and send it the step's prompt. */
+/* The card's own session takes the action, whichever action it is: set it to
+ * the model that action asks for and send it that action's prompt. */
 static int step_send(const struct board_card *c, const struct board_action *p,
                      struct worker *w)
 {
@@ -800,8 +810,8 @@ static int step_send(const struct board_card *c, const struct board_action *p,
         session_set_effort(w->session, tiered->effort[0] ? tiered->effort : NULL);
     }
 
-    /* merge and what follows it act on the checkout, so the session walks out
-       of the worktree to take them and back in afterwards. */
+    /* an action that runs in the repo acts on the checkout, so the session
+       walks out of the worktree to take it and back in afterwards. */
     const char *want = boardflow_cwd(c, p);
     const char *here = session_cwd(w->session);
     if (want && *want && (!here || strcmp(here, want)) &&
@@ -811,7 +821,6 @@ static int step_send(const struct board_card *c, const struct board_action *p,
     }
 
     snprintf(w->job, sizeof w->job, "%s", p->name);
-    snprintf(w->step, sizeof w->step, "%s", p->name);
     w->checked = 0;
 
     workspace_send(at, turn, c->title);
@@ -831,7 +840,7 @@ static int step_start(const struct board_card *c)
         char why[256];
         return boardwork_start(c, why, sizeof why);
     }
-    if (!strcmp(w->step, p->name))
+    if (!strcmp(w->job, p->name))
         return 0;
     return step_send(c, p, w);
 }
@@ -855,17 +864,17 @@ static int drop_worktree(const struct board_card *c)
 {
     boardfile_keep(c);
 
-    char root[4096], branch[128], step[BOARDWORK_TIDY_MAX];
+    char root[4096], branch[128], step[TIDY_MAX];
     if (!gitcmd_root(c->cwd, root, sizeof root))
         return 1;
 
-    boardwork_branch_of(c->id, branch, sizeof branch);
-    if (!boardwork_tidy_step(root, c->worktree, branch, step, sizeof step))
+    branch_of(c->id, branch, sizeof branch);
+    if (!tidy_step(root, c->worktree, branch, step, sizeof step))
         return 1;
     return system(step) != -1;
 }
 
-int boardwork_release(const struct board_card *c)
+static int release(const struct board_card *c)
 {
     if (!c || !c->worktree[0] || boardwork_tab(c->id) >= 0)
         return 0;
@@ -876,39 +885,6 @@ int boardwork_release(const struct board_card *c)
     edited.worktree[0] = '\0';
     edited.base[0] = '\0';
     return board_update(&edited);
-}
-
-static int base_tab(const char *cwd)
-{
-    int any = -1;
-    for (int i = 0; i < workspace_count(); i++) {
-        struct session *s = workspace_at(i);
-        if (boardwork_card_of(s))
-            continue;
-        const char *at = session_cwd(s);
-        if (cwd && *cwd && at && !strcmp(at, cwd))
-            return i;
-        if (any < 0)
-            any = i;
-    }
-    return any;
-}
-
-void boardwork_leave(const struct board_card *c)
-{
-    struct worker *w = c ? slot_of(c->id) : NULL;
-    if (!w || workspace_index_of(w->session) != workspace_index())
-        return;
-
-    int at = base_tab(c->cwd);
-    if (at >= 0) {
-        workspace_show(at);
-        return;
-    }
-
-    char backend[32];
-    snprintf(backend, sizeof backend, "%s", session_backend(w->session));
-    workspace_spawn(backend, NULL, NULL, c->cwd[0] ? c->cwd : NULL, NULL);
 }
 
 void boardwork_let_go(const char *id)
@@ -922,16 +898,20 @@ void boardwork_let_go(const char *id)
         workspace_close(at);
 }
 
-/* The session stays with the card for every step of it, so it is held until
- * the card leaves the steps altogether. */
+/* The session stays with the card for every action in its queue, so it is held
+ * until the queue empties and the card comes to rest. */
 static int holds(const struct board_card *c)
 {
-    return c->col == BOARD_STEP;
+    return board_stands(c) == BOARD_WORKING;
 }
 
+/* The turn ended without boardwork_finished seeing it — the session answered
+   while the board was not watching. Count the action the worker is on, so long
+   as it is still the one the card is on. */
 static int reconcile(struct worker *w, const struct board_card *c)
 {
-    if (strcmp(c->step, w->step))
+    const struct board_action *p = boardflow_action(c);
+    if (!p || strcmp(p->name, w->job))
         return 0;
 
     int at = workspace_index_of(w->session);
@@ -944,11 +924,7 @@ static int reconcile(struct worker *w, const struct board_card *c)
     w->checked = 1;
 
     const char *reply = session_last_reply(w->session);
-    if (!reply || !*reply)
-        return 0;
-
-    const struct board_action *p = boardflow_action(c);
-    if (!p || nothing_landed(c, p))
+    if (!reply || !*reply || nothing_landed(c, p))
         return 0;
 
     return board_took(c->id, p->name);
@@ -1039,9 +1015,11 @@ int boardwork_poll(void)
             changed = 1;
             continue;
         }
-        if (c && board_at(c, workers[i].step)) {
-            board_move(workers[i].id, BOARD_BACKLOG, NULL, "board",
-                       "worker session ended");
+        /* the session went away mid-queue, so nothing is running any more and
+           the card comes back to rest rather than looking busy */
+        if (c && board_stands(c) == BOARD_WORKING) {
+            board_stopped(workers[i].id);
+            board_note(workers[i].id, "board", "worker session ended");
             changed = 1;
         }
         board_free(cards, n);
@@ -1070,7 +1048,7 @@ int boardwork_poll(void)
             continue;
         if (cards[i].col != BOARD_DONE)
             continue;
-        if (!boardwork_release(&cards[i]))
+        if (!release(&cards[i]))
             continue;
         board_note(cards[i].id, "board", "worktree removed");
         changed = 1;
@@ -1079,7 +1057,7 @@ int boardwork_poll(void)
     return changed;
 }
 
-void boardwork_halt(const char *id)
+static void halt(const char *id)
 {
     char key[CHILD_KEY_MAX];
     snprintf(key, sizeof key, "triage:%s", id);
@@ -1093,7 +1071,7 @@ void boardwork_discard(const struct board_card *c)
     if (!c)
         return;
 
-    boardwork_halt(c->id);
+    halt(c->id);
     if (c->worktree[0])
         drop_worktree(c);
     boardfile_drop(c->id);
@@ -1104,15 +1082,9 @@ int boardwork_send_back(const struct board_card *c, const char *why)
     if (!c || !why || !*why)
         return 0;
 
-    struct board_card edited = *c;
-    edited.merge_into[0] = '\0';
-    edited.merge_from[0] = '\0';
-    edited.merge_to[0] = '\0';
-    board_update(&edited);
-
     boardwork_let_go(c->id);
     board_note(c->id, "you", why);
-    return board_queued(c->id, NULL, 0);
+    return board_stopped(c->id);
 }
 
 void boardwork_spoke_to(struct session *s)

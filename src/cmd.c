@@ -738,25 +738,20 @@ static void do_approve(struct session *s, const char *arg)
         reply_error("%s", why);
 }
 
-static void do_moveto(struct session *s, const char *arg)
+static void do_run(struct session *s, const char *arg)
 {
     const char *held = boardwork_card_of(s);
     if (!held) {
-        reply_error("/moveto \xe2\x80\x94 this session is not working a card");
-        return;
-    }
-    if (!arg || !*arg) {
-        reply_error("/moveto <step> \xe2\x80\x94 no step to move to");
+        reply_error("/run \xe2\x80\x94 this session is not working a card");
         return;
     }
 
-    /* boardview_moveto lets the worker go, clearing the slot held points into */
     char id[BOARD_ID_MAX];
     snprintf(id, sizeof id, "%s", held);
 
     char why[512] = "";
-    if (boardview_moveto(id, arg, why, sizeof why))
-        reply_note("card %s moved to %s", id, arg);
+    if (boardview_trigger(id, arg, why, sizeof why))
+        reply_note("card %s runs %s next", id, arg);
     else
         reply_error("%s", why);
 }
@@ -836,8 +831,8 @@ static const struct cmd COMMANDS[] = {
     {"/card", "add a card to the board, untriaged", "<text>", CMD_LIVE, do_card},
     {"/board", "show the cards, by column", NULL, CMD_LIVE, do_board},
     {"/approve", "approve this session's card", NULL, CMD_LIVE, do_approve},
-    {"/moveto", "move this session's card to a step", "<step>", CMD_LIVE,
-     do_moveto},
+    {"/run", "queue actions on this session's card", "[<action>, ...]", CMD_LIVE,
+     do_run},
     {"/status", "reprint the status bar", NULL, CMD_LIVE, do_status},
     {"/session", "show this session's info and totals", NULL, CMD_LIVE, do_session},
     {"/rename", "name this session, or ask the model to name it again", "[name]",

@@ -13,14 +13,11 @@ enum board_col {
     BOARD_NEW,
     BOARD_UNCLEAR,
     BOARD_BACKLOG,
-    BOARD_STEP,
     BOARD_DONE,
     BOARD_COLS,
 };
 
 const char *board_col_name(enum board_col col);
-
-const char *board_where(const struct board_card *c);
 
 #define BOARD_ID_MAX    16
 #define BOARD_TITLE_MAX 200
@@ -30,9 +27,9 @@ const char *board_where(const struct board_card *c);
 #define BOARD_QUEUE       12
 #define BOARD_DONE_MAX    16
 
-/* Where a card stands, read off its two lists rather than stored: nothing run
-   and nothing waiting is open, a queue is working, an empty queue over a
-   history is your turn, and done is you closing it. */
+/* Where a card stands, read off its lists rather than stored: nothing run and
+   nothing waiting is open, a queue is working, and an empty queue is your turn
+   once anything has been run on it. Done is you closing it. */
 enum board_stand {
     BOARD_OPEN,
     BOARD_WORKING,
@@ -53,13 +50,15 @@ struct board_note {
 struct board_card {
     char           id[BOARD_ID_MAX];
     enum board_col col;
-    char           step[BOARD_STEP_NAME];
     char           kind[16];
 
     char queue[BOARD_QUEUE][BOARD_ACTION_NAME];
     int  queue_n;
     char done[BOARD_DONE_MAX][BOARD_ACTION_NAME];
     int  done_n;
+    /* the queue was dropped rather than run out, so the card waits on you even
+       with nothing in its history */
+    int  stopped;
     char           title[BOARD_TITLE_MAX];
     char          *body;
     char           cwd[4096];
@@ -74,10 +73,6 @@ struct board_card {
     char   session[128];
     char   worktree[4096];
     char   base[24];
-
-    char merge_into[128];
-    char merge_from[48];
-    char merge_to[48];
 
     double cost_usd;
     long   tokens_in, tokens_out;
@@ -100,8 +95,6 @@ void board_free(struct board_card *cards, int n);
 
 struct board_card *board_find(struct board_card *cards, int n, const char *id);
 
-const char *board_said(const struct board_card *c, const char *who);
-
 int board_add(const char *text, const char *cwd, char id_out[BOARD_ID_MAX]);
 
 void board_title_of(const char *text, char *out, size_t size);
@@ -116,20 +109,16 @@ int board_archive(int days);
 
 int board_note(const char *id, const char *who, const char *text);
 
-int board_move(const char *id, enum board_col col, const char *step,
-               const char *who, const char *why);
-
-int board_move_to(const char *id, const char *step, const char *who,
-                  const char *why);
-
-int board_move_back(const char *id, const char *step, const char *who,
-                    const char *why);
-
-int board_at(const struct board_card *c, const char *step);
+int board_move(const char *id, enum board_col col, const char *who,
+               const char *why);
 
 int board_ran(const struct board_card *c, const char *action);
 
 int board_queued(const char *id, const char *const *actions, int n);
+
+/* Drop what is queued and stand the card in review: an action that did not
+   pass takes the rest of its pipeline down with it, and waits to be told. */
+int board_stopped(const char *id);
 
 int board_took(const char *id, const char *action);
 

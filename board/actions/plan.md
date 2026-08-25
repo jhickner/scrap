@@ -1,8 +1,5 @@
 ---
-runs: worker
 tier: high
-step: plan
-skippable: 0
 in: worktree
 needs: 
 ---

@@ -9,11 +9,8 @@
 #include "text.h"
 #include "boarddefaults.h"
 #include "boardfile.h"
-#include "boarddiff.h"
 #include "boardcfg.h"
 #include "boardflow.h"
-#include "boardstep.h"
-#include "boardstep.h"
 #include "boardtriage.h"
 #include "gitcmd.h"
 #include "mdcfg.h"
@@ -55,22 +52,6 @@ static int count_in(struct board_card *v, int n, enum board_col col)
     for (int i = 0; i < n; i++)
         k += v[i].col == col;
     return k;
-}
-
-static const char *where(const char *id)
-{
-    static char out[BOARD_STEP_NAME];
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    struct board_card *c = board_find(v, n, id);
-    snprintf(out, sizeof out, "%s", c ? board_where(c) : "");
-    board_free(v, n);
-    return out;
-}
-
-static int at(const char *id, const char *place)
-{
-    return !strcmp(where(id), place);
 }
 
 static void test_capture(void)
@@ -166,9 +147,9 @@ static void test_note_and_move(void)
     expect(board_add("worktree cleanup after approve", "/tmp/repo", id), "capture");
 
     expect(board_note(id, "triage", "feature, mux, priority 0"), "note appends");
-    expect(board_move(id, BOARD_BACKLOG, NULL, "triage", "classified as feature"),
+    expect(board_move(id, BOARD_BACKLOG, "triage", "classified as feature"),
            "move with a reason");
-    expect(board_move(id, BOARD_STEP, "worktree", "you", NULL), "move without a reason");
+    expect(board_move(id, BOARD_DONE, "you", NULL), "move without a reason");
 
     struct board_card *v = NULL;
     int                n = board_load(&v);
@@ -178,7 +159,7 @@ static void test_note_and_move(void)
         board_free(v, n);
         return;
     }
-    expect(board_at(c, "worktree"), "column follows the last move");
+    expect(c->col == BOARD_DONE, "column follows the last move");
     expect(c->log_n == 2, "a move with no reason logs nothing");
     expect(!strcmp(c->log[0].who, "triage"), "note records who");
     expect(strstr(c->log[1].text, "classified") != NULL, "move logs its reason");
@@ -225,7 +206,7 @@ static void test_update_preserves_created(void)
     expect(c->priority == 2, "priority round-trips");
     expect(c->cost_usd > 0.41 && c->cost_usd < 0.43, "cost round-trips");
     expect(c->tokens_in == 12345 && c->tokens_out == 678, "tokens round-trip");
-    expect(board_at(c, "review"), "column round-trips");
+    expect(c->col == BOARD_BACKLOG, "column round-trips");
     expect(c->created == created, "update leaves created alone");
     board_free(v, n);
 }
@@ -246,7 +227,7 @@ static void test_update_leaves_others_alone(void)
     int intact = 1;
     for (int i = 0; i < n_before; i++) {
         struct board_card *c = board_find(after, n_after, before[i].id);
-        if (!c || strcmp(board_where(c), board_where(&before[i])) ||
+        if (!c || c->col != before[i].col ||
             strcmp(c->title, before[i].title) ||
             c->log_n != before[i].log_n)
             intact = 0;
@@ -285,18 +266,10 @@ static void test_columns(void)
     board_put(&where_at, "unclear");
     expect(where_at.col == BOARD_UNCLEAR, "one of the board's own columns by name");
     board_put(&where_at, "nonsense");
-    expect(board_at(&where_at, "nonsense"),
-           "a column the board does not know is a step it has not read yet");
-    board_put(&where_at, "review");
-    expect(board_at(&where_at, "review"), "a step is a column of its own");
-    board_put(&where_at, "merging");
-    expect(board_at(&where_at, "merge"), "a column the store used to write");
-    board_put(&where_at, "active");
-    expect(board_at(&where_at, "worktree"), "and the one a working card had");
+    expect(where_at.col == BOARD_BACKLOG,
+           "a column the board does not know named a step, and lands in backlog");
 
     for (int i = 0; i < BOARD_COLS; i++) {
-        if (i == BOARD_STEP)
-            continue;
         board_put(&where_at, board_col_name((enum board_col)i));
         if ((int)where_at.col != i) {
             fail("every column round-trips");
@@ -321,7 +294,7 @@ static void test_attempts_reset_when_answered(void)
            "a fresh card has had no turns");
     board_free(v, n);
 
-    board_move(id, BOARD_UNCLEAR, NULL, "triage", "which thing?");
+    board_move(id, BOARD_UNCLEAR, "triage", "which thing?");
     n = board_load(&v);
     expect(boardtriage_attempts(board_find(v, n, id)) == 1, "unclear counts a turn");
     board_free(v, n);
@@ -338,7 +311,7 @@ static void test_attempts_reset_when_answered(void)
            "answering it makes it new again");
     board_free(v, n);
 
-    board_move(id, BOARD_UNCLEAR, NULL, "triage", "still cannot tell");
+    board_move(id, BOARD_UNCLEAR, "triage", "still cannot tell");
     n = board_load(&v);
     expect(boardtriage_attempts(board_find(v, n, id)) == 1,
            "the next turn counts from the answer");
@@ -365,7 +338,7 @@ static void test_archive(void)
     char busy[BOARD_ID_MAX] = {0}, fresh[BOARD_ID_MAX] = {0};
     expect(board_add("still being worked on", "/tmp/repo", busy), "capture");
     expect(board_add("finished just now", "/tmp/repo", fresh), "capture");
-    expect(board_move(fresh, BOARD_DONE, NULL, "you", NULL), "done");
+    expect(board_move(fresh, BOARD_DONE, "you", NULL), "done");
     plant_stale("aged");
 
     struct board_card *v = NULL;
@@ -473,15 +446,11 @@ static void steps_for(const char *kind, const char *steps)
 static void with_actions(void)
 {
     defs_clear();
-    action_def("worker", "runs: worker\ntier: high\nstep: worktree\n",
-             "work the card");
-    action_def("test", "runs: worker\ntier: high\n", "test the change");
-    action_def("review", "runs: person\ntier: high\n", "");
-    action_def("audit",
-             "runs: worker\ntier: high\nfail marker: FINDINGS\n"
-             "fail step: worktree\n",
-             "read the diff");
-    action_def("merge", "runs: worker\ntier: high\n", "land it");
+    action_def("worktree", "tier: high\n", "work the card");
+    action_def("test", "tier: high\n", "test the change");
+    action_def("review", "tier: high\n", "read the plan");
+    action_def("audit", "tier: high\nfail marker: FINDINGS\n", "read the diff");
+    action_def("merge", "tier: high\n", "land it");
     defs_use();
 }
 
@@ -636,36 +605,19 @@ static void test_projects_block(void)
 static void test_actions_are_what_the_files_say(void)
 {
     defs_clear();
-    action_def("auditor", "runs: worker\ntier: high\njob: audit\n",
+    action_def("auditor", "tier: high\nfail marker: FINDINGS\n",
              "read the diff");
-    action_def("merge", "runs: worker\ntier: high\n", "land it");
+    action_def("merge", "tier: high\n", "land it");
     defs_use();
 
-    const struct board_action *p = boardcfg_doing("audit");
-    expect(p != NULL, "an action is found by the job its file names");
-    expect(p && !strcmp(p->name, "auditor"),
-           "and takes its own name from that file");
+    const struct board_action *p = boardcfg_action("auditor");
+    expect(p != NULL, "an action is found by the name of its file");
+    expect(p && !strcmp(p->tier, "high"), "and carries what the file sets");
+    expect(p && !strcmp(p->fail_marker, "FINDINGS"), "including its fail marker");
     expect(p && p->prompt && strstr(p->prompt, "read the diff"),
            "the body of the file is its prompt");
-    expect(boardcfg_doing("triage") == NULL, "a job no role does has no role");
-    expect(boardcfg_for_step("audit") == p, "the step it stands in is its own");
-    expect(boardcfg_for_step("auditor") == NULL,
-           "which is the job it does, not the file it is in");
-}
-
-
-
-static void unskippable(int no)
-{
-    with_actions();
-    if (no) {
-        action_def("audit",
-                 "runs: worker\ntier: high\nskippable: 0\n"
-                 "fail marker: FINDINGS\nfail step: worktree\n",
-                 "read the diff");
-        defs_use();
-    }
-    steps_for("skipped", "worktree, review, audit, merge");
+    expect(boardcfg_action("audit") == NULL,
+           "and nothing else answers to a name no file has");
 }
 
 
@@ -810,7 +762,7 @@ static void test_revision_tracks_writes(void)
     expect(board_revision() == added, "a read leaves the revision alone");
     board_free(v, n);
 
-    expect(board_move(id, BOARD_STEP, "review", "worker", "finished"), "move");
+    expect(board_move(id, BOARD_BACKLOG, "worker", "finished"), "move");
     expect(board_revision() != added, "a move moves the revision");
 
     board_remove(id);
@@ -826,7 +778,7 @@ static int has_dir(const char *leaf)
     return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-static void test_the_shipped_kinds_and_roles_are_built_in(void)
+static void test_the_shipped_kinds_and_actions_are_built_in(void)
 {
     char dir[4096], path[4300];
     expect(mdcfg_dir(dir, sizeof dir, "board/roles"), "an old roles dir");
@@ -841,18 +793,17 @@ static void test_the_shipped_kinds_and_roles_are_built_in(void)
     expect(!has_dir("board/roles"), "loading clears the old roles dir");
     expect(!has_dir("board/actions"), "and writes no actions dir of its own");
     expect(!has_dir("board/kinds"), "and writes no kinds dir of its own");
-    expect(boardcfg_doing("leftover") == NULL, "the stale role is gone");
+    expect(boardcfg_action("leftover") == NULL, "the stale role is gone");
 
     char why[512];
     expect(!boardcfg_missing(why, sizeof why), "the built-in set is whole");
 
     const struct board_kind *k = boardcfg_kind("plan");
     expect(k != NULL, "plan is a kind without a file anywhere");
-    expect(k && k->steps_n == 2, "walking the two steps it names");
+    expect(k && k->steps_n == 1, "walking the one step it names");
 
     const struct board_action *p = boardcfg_action("plan");
-    expect(p && p->runs == BOARD_RUNS_WORKER, "a worker takes the plan step");
-    expect(p && p->where == BOARD_IN_WORKTREE, "and takes it in the worktree");
+    expect(p && p->where == BOARD_IN_WORKTREE, "the plan action runs in the worktree");
     expect(p && !p->needs_n, "gated on nothing");
     expect(p && p->prompt && strstr(p->prompt, "plan mode"),
            "its prompt is the body of the file it was built from");
@@ -862,7 +813,7 @@ static void test_the_shipped_kinds_and_roles_are_built_in(void)
 
     const char *all[BOARD_ACTIONS_MAX];
     int         n = boardcfg_actions(all, BOARD_ACTIONS_MAX);
-    expect(n == 4, "every action file is one action");
+    expect(n == 3, "every action file is one action");
 }
 
 static void put_file(const char *path, const char *text)
@@ -1011,6 +962,7 @@ static void test_a_card_written_before_the_history_reads_forward(void)
     expect(c && !board_ran(c, "audit"), "but not the one it stopped on");
     expect(c && !board_ran(c, "merge"), "nor the ones after it");
     expect(c && !c->queue_n, "and nothing is queued on it");
+    expect(c && c->col == BOARD_BACKLOG, "the step it named is not a column");
     board_free(v, n);
 
     board_remove("old1");
@@ -1019,17 +971,11 @@ static void test_a_card_written_before_the_history_reads_forward(void)
 static void test_an_action_waits_on_what_it_needs(void)
 {
     defs_clear();
-    action_def("plan", "runs: worker\ntier: high\nin: worktree\n", "plan it");
-    action_def("implement", "runs: worker\ntier: high\nin: worktree\n",
-               "build it");
-    action_def("test", "runs: worker\ntier: med\nin: worktree\n"
-                       "needs: implement\n",
-               "test it");
-    action_def("merge", "runs: worker\ntier: med\nin: repo\n"
-                        "needs: implement\n",
-               "land it");
-    action_def("deploy", "runs: worker\ntier: med\nin: repo\nneeds: merge\n",
-               "ship it");
+    action_def("plan", "tier: high\nin: worktree\n", "plan it");
+    action_def("implement", "tier: high\nin: worktree\n", "build it");
+    action_def("test", "tier: med\nin: worktree\nneeds: implement\n", "test it");
+    action_def("merge", "tier: med\nin: repo\nneeds: implement\n", "land it");
+    action_def("deploy", "tier: med\nin: repo\nneeds: merge\n", "ship it");
     action_def("name", "tier: low\non: capture\n", "name it");
     defs_use();
 
@@ -1078,6 +1024,115 @@ static void test_an_action_waits_on_what_it_needs(void)
     with_actions();
 }
 
+/* the gates a pipeline satisfies for itself */
+static void test_a_trigger_queues_a_pipeline(void)
+{
+    defs_clear();
+    action_def("plan", "tier: high\nin: worktree\n", "plan it");
+    action_def("implement", "tier: high\nin: worktree\n", "build it");
+    action_def("merge", "tier: med\nin: repo\nneeds: implement\n", "land it");
+    action_def("deploy", "tier: med\nin: repo\nneeds: merge\n", "ship it");
+    action_def("name", "tier: low\non: capture\n", "name it");
+    defs_use();
+
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("trigger a pipeline", "/tmp/repo", id), "capture");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+
+    char        why[512] = "";
+    const char *one[] = {"merge"};
+    expect(c && !boardflow_trigger(c, one, 1, why, sizeof why),
+           "an action whose gate is unmet is refused");
+    expect(strstr(why, "implement") != NULL, "and says what it is waiting on");
+
+    const char *both[] = {"implement", "merge"};
+    expect(c && boardflow_trigger(c, both, 2, why, sizeof why),
+           "naming what it needs ahead of it lets it through");
+    board_free(v, n);
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && c->queue_n == 2 && !strcmp(c->queue[1], "merge"),
+           "both land on the queue, in order");
+
+    const char *after[] = {"deploy"};
+    expect(c && boardflow_trigger(c, after, 1, why, sizeof why),
+           "an action gated on one already queued may follow it");
+    board_free(v, n);
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && c->queue_n == 3 && !strcmp(c->queue[0], "implement"),
+           "and goes on the end, leaving the queue in front of it alone");
+
+    const char *capture[] = {"name"};
+    expect(c && !boardflow_trigger(c, capture, 1, why, sizeof why),
+           "a capture action is not one to trigger");
+    const char *stranger[] = {"nonsense"};
+    expect(c && !boardflow_trigger(c, stranger, 1, why, sizeof why),
+           "nor is a name no file has");
+    board_free(v, n);
+
+    board_remove(id);
+    with_actions();
+}
+
+/* a pipeline that fails part-way stops where it is and waits to be told */
+static void test_a_stopped_card_waits_on_you(void)
+{
+    defs_clear();
+    action_def("plan", "tier: high\nin: worktree\n", "plan it");
+    action_def("implement", "tier: high\nin: worktree\n", "build it");
+    action_def("merge", "tier: med\nin: repo\nneeds: implement\n", "land it");
+    defs_use();
+
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("a pipeline that breaks", "/tmp/repo", id), "capture");
+
+    const char *both[] = {"implement", "merge"};
+    expect(board_queued(id, both, 2), "two actions are queued");
+
+    /* the head of the queue did not pass */
+    expect(board_stopped(id), "the card is stopped on it");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    expect(c && !c->queue_n, "the rest of the pipeline is dropped");
+    expect(c && !c->done_n, "nothing joins the history");
+    expect(c && board_stands(c) == BOARD_REVIEW,
+           "and the card waits on you, with nothing behind it");
+    expect(c && !boardflow_gated(c, "merge"),
+           "the gate the failed action guards stays shut");
+    board_free(v, n);
+
+    char        why[512] = "";
+    const char *again[] = {"implement"};
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && boardflow_trigger(c, again, 1, why, sizeof why),
+           "triggering it again is the answer");
+    board_free(v, n);
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && board_stands(c) == BOARD_WORKING, "which sets it working again");
+    board_free(v, n);
+
+    expect(board_took(id, "implement"), "and this time it passes");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && board_stands(c) == BOARD_REVIEW, "leaving the card in review");
+    expect(c && !c->stopped, "no longer stopped, but done with what it was given");
+    board_free(v, n);
+
+    board_remove(id);
+    with_actions();
+}
+
 int main(void)
 {
     if (!mkdtemp(home)) {
@@ -1106,11 +1161,13 @@ int main(void)
     test_worktree_name_is_stable();
     test_auto_pick_roundtrip();
     test_revision_tracks_writes();
-    test_the_shipped_kinds_and_roles_are_built_in();
+    test_the_shipped_kinds_and_actions_are_built_in();
     test_the_card_file_outlives_the_worktree();
     test_a_card_carries_a_queue_and_a_history();
     test_a_card_written_before_the_history_reads_forward();
     test_an_action_waits_on_what_it_needs();
+    test_a_trigger_queues_a_pipeline();
+    test_a_stopped_card_waits_on_you();
 
     cleanup();
     if (failures)

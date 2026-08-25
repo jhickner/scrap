@@ -1,8 +1,5 @@
 ---
-runs: worker
 tier: high
-step: implement
-skippable: 0
 in: worktree
 needs: 
 ---

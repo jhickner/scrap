@@ -5,41 +5,6 @@
 #include <string.h>
 
 #include "board.h"
-#include "boardlog.h"
-
-char *boardstep_since(const struct board_card *c, const char *job)
-{
-    if (!c || !job || !*job)
-        return NULL;
-
-    int from = -1;
-    for (int i = c->log_n - 1; i >= 0 && from < 0; i--)
-        if (!strcmp(c->log[i].who, job))
-            from = i;
-    if (from < 0)
-        return NULL;
-
-    char  *out = NULL;
-    size_t len = 0;
-    FILE  *f = open_memstream(&out, &len);
-    if (!f)
-        return NULL;
-
-    for (int i = from; i < c->log_n; i++) {
-        const char *who = c->log[i].who, *text = c->log[i].text;
-        if (!text || !*text)
-            continue;
-        if (!strcmp(who, "board"))
-            continue;
-        fprintf(f, "%s%s said:\n\n%s\n", len ? "\n" : "", who, text);
-    }
-    fclose(f);
-
-    if (len)
-        return out;
-    free(out);
-    return NULL;
-}
 
 /* The session took every step before this one, so it is not told again what
  * was said: it is only told what this step is. */

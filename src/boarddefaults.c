@@ -3,10 +3,7 @@
 const struct board_default board_defaults[] = {
     {"actions/implement.md",
      "---\n"
-     "runs: worker\n"
      "tier: high\n"
-     "step: implement\n"
-     "skippable: 0\n"
      "in: worktree\n"
      "needs: \n"
      "---\n"
@@ -47,10 +44,7 @@ const struct board_default board_defaults[] = {
     },
     {"actions/plan.md",
      "---\n"
-     "runs: worker\n"
      "tier: high\n"
-     "step: plan\n"
-     "skippable: 0\n"
      "in: worktree\n"
      "needs: \n"
      "---\n"
@@ -77,21 +71,9 @@ const struct board_default board_defaults[] = {
      "read it and come back with revisions; each time they do, rewrite the same file\n"
      "under the same name, and only rename it if what the plan is about has changed.\n"
     },
-    {"actions/review.md",
-     "---\n"
-     "runs: person\n"
-     "tier: med\n"
-     "skippable: 1\n"
-     "pass label: approve\n"
-     "fail label: send back\n"
-     "---\n"
-     "\n"
-     "Read the plan and say what should change.\n"
-    },
     {"actions/triage.md",
      "---\n"
      "tier: low\n"
-     "skippable: 1\n"
      "on: capture\n"
      "---\n"
      "\n"
@@ -134,12 +116,9 @@ const struct board_default board_defaults[] = {
      "---\n"
      "means: a request for a plan of the work rather than the work itself\n"
      "priority: 1\n"
-     "steps: plan, review\n"
-     "worktree: 0\n"
-     "approval prompt: \n"
-     "next kind: \n"
+     "steps: plan\n"
      "---\n"
     },
 };
 
-const int board_defaults_n = 5;
+const int board_defaults_n = 4;

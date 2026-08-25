@@ -16,7 +16,6 @@
 #include "ui.h"
 #include "workspace.h"
 
-#define STEPS_SHOWN (BOARD_KINDS_MAX * BOARD_KIND_STEPS)
 
 /* what a collapsed card shows of its spec and of its log */
 #define CARD_SPEC_ROWS 6

@@ -6,7 +6,6 @@
 #include <time.h>
 
 #include "board.h"
-#include "boardcfg.h"
 #include "gitcmd.h"
 
 int boarddiff_size(const struct board_card *c, int *files, int *lines)
@@ -118,20 +117,4 @@ int boarddiff_size_cached(const struct board_card *c, int *files, int *lines)
     if (lines)
         *lines = got_lines;
     return any;
-}
-
-int boarddiff_over(const struct board_action *p, const struct board_card *c)
-{
-    if (!p || (!p->over_files && !p->over_lines))
-        return 1;
-
-    int files = 0, lines = 0;
-    if (!boarddiff_size(c, &files, &lines))
-        return 0;
-
-    if (p->over_files && files > p->over_files)
-        return 1;
-    if (p->over_lines && lines > p->over_lines)
-        return 1;
-    return 0;
 }
