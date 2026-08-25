@@ -64,7 +64,6 @@ struct state {
     int              folds; /* the form has something collapsed to show */
     char             more[FORM_FIELDS][24];
     char             more_notes[24];
-    int              budget;
 
     struct replframe frame;
     int              framed;
@@ -167,9 +166,21 @@ static int value_budget(int columns)
 
 #define REPL_GUTTER 2
 
-static int repl_width(const struct state *st)
+static int inline_budget(const struct state *st, int columns)
 {
-    return st->budget + REPL_GUTTER;
+    int budget = columns - inline_column(st) - 2;
+    return budget < 8 ? 8 : budget;
+}
+
+/* a text field wraps at the width of the column it is painted in: beside its
+   label while it holds one row, under it once it does not */
+static int repl_width(const struct state *st, int i)
+{
+    int columns = ui_columns();
+    int inl = inline_budget(st, columns) + REPL_GUTTER;
+    if (repl_input_rows(&st->slots[i].repl, inl) <= 1)
+        return inl;
+    return value_budget(columns) + REPL_GUTTER;
 }
 
 static struct line *line_add(struct lines *l)
@@ -202,7 +213,7 @@ static int folded(struct state *st, int i)
     if (f->kind != FORM_TEXT || f->rows_max <= 0 || expanded(st))
         return 0;
     return st->slots[i].rows >= f->rows_max &&
-           repl_input_rows(&st->slots[i].repl, repl_width(st)) > f->rows_max;
+           repl_input_rows(&st->slots[i].repl, repl_width(st, i)) > f->rows_max;
 }
 
 static struct line *more_row(struct lines *out, const char *text)
@@ -323,9 +334,7 @@ static int layout(struct state *st, int columns)
     int note_budget = columns - note_column(st) - 2;
     if (note_budget < 8)
         note_budget = 8;
-    int inline_budget = columns - inline_column(st) - 2;
-    if (inline_budget < 8)
-        inline_budget = 8;
+    int inline_room = inline_budget(st, columns);
 
     int exp = expanded(st);
     int from = -1;
@@ -350,7 +359,7 @@ static int layout(struct state *st, int columns)
                     (form->note_labels && form->note_labels[i + 1]);
         if (head >= 0 && alone) {
             int was = out->n;
-            fold_inline(out, head, inline_budget);
+            fold_inline(out, head, inline_room);
             if (from > head && out->n < was)
                 from -= was - out->n;
         }
@@ -371,7 +380,6 @@ static int layout(struct state *st, int columns)
                                      .role = UI_DIM};
     }
 
-    st->budget = value_budget(columns);
     blank_row(out);
 
     for (int i = 0; i < form->fields_n; i++) {
@@ -399,7 +407,7 @@ static int layout(struct state *st, int columns)
             continue;
         }
 
-        int rows = repl_input_rows(&st->slots[i].repl, repl_width(st));
+        int rows = repl_input_rows(&st->slots[i].repl, repl_width(st, i));
         if (rows < 1)
             rows = 1;
 
@@ -479,7 +487,7 @@ static int framed(struct state *st, int i)
         return 1;
     st->framed = -1;
     if (!replframe_render(&st->frame, &st->slots[i].repl, st->slots[i].rows,
-                          repl_width(st), 1))
+                          repl_width(st, i), 1))
         return 0;
     st->framed = i;
     return 1;
@@ -754,8 +762,7 @@ static int feed(struct state *st, const ReplEvent *ev)
     if (folded(st, st->focus))
         open_up(st);
 
-    st->budget = value_budget(ui_columns());
-    repl_set_width(&s->repl, repl_width(st));
+    repl_set_width(&s->repl, repl_width(st, st->focus));
     st->framed = -1;
     st->pinned = 0;
     return repl_handle_input(&s->repl, ev);
