@@ -7,11 +7,11 @@
 #include "board.h"
 #include "child.h"
 #include "text.h"
+#include "boarddefaults.h"
 #include "boarddiff.h"
 #include "boardcfg.h"
 #include "boardflow.h"
 #include "boardstep.h"
-#include "boardplan.h"
 #include "boardsweep.h"
 #include "boardstep.h"
 #include "boardtriage.h"
@@ -409,11 +409,57 @@ static void test_empty_and_missing(void)
     board_free(v, n);
 }
 
-static void role_add(struct board_cfg *cfg, const char *name, const char *job,
-                     const char *prompt);
+#define DEFS_MAX 32
 
-static void write_kind(const char *name, const char *const *keys,
-                       const char *const *vals, int n, const char *body);
+static struct board_default defs[DEFS_MAX];
+static int                  defs_n;
+
+static void def_add(const char *path, const char *front, const char *body)
+{
+    char text[8192];
+    snprintf(text, sizeof text, "---\n%s---\n\n%s", front, body ? body : "");
+
+    int at = defs_n;
+    for (int i = 0; i < defs_n; i++)
+        if (!strcmp(defs[i].path, path))
+            at = i;
+    if (at == defs_n) {
+        if (defs_n == DEFS_MAX)
+            return;
+        defs[defs_n++].path = strdup(path);
+    } else {
+        free((char *)defs[at].text);
+    }
+    defs[at].text = strdup(text);
+}
+
+static void role_def(const char *name, const char *front, const char *prompt)
+{
+    char path[128];
+    snprintf(path, sizeof path, "roles/%s.md", name);
+    def_add(path, front, prompt);
+}
+
+static void kind_def(const char *name, const char *front, const char *body)
+{
+    char path[128];
+    snprintf(path, sizeof path, "kinds/%s.md", name);
+    def_add(path, front, body);
+}
+
+static void defs_clear(void)
+{
+    for (int i = 0; i < defs_n; i++) {
+        free((char *)defs[i].path);
+        free((char *)defs[i].text);
+    }
+    defs_n = 0;
+}
+
+static void defs_use(void)
+{
+    boardcfg_defaults(defs, defs_n);
+}
 
 static struct board_card of_kind(const char *kind)
 {
@@ -433,38 +479,31 @@ static int goes(const char *kind, const char *from, const char *want)
 
 static void steps_for(const char *kind, const char *steps)
 {
-    const char *keys[] = {"means", "priority", "steps"};
-    const char *vals[] = {"a kind a test made up", "1", steps};
-    write_kind(kind, keys, vals, 3, "");
-    boardcfg_reload();
+    char front[512];
+    snprintf(front, sizeof front,
+             "means: a kind a test made up\npriority: 1\nsteps: %s\n", steps);
+    kind_def(kind, front, "");
+    defs_use();
 }
 
-static struct board_cfg *with_roles(void)
+static void with_roles(void)
 {
-    struct board_cfg *cfg = boardcfg_copy();
-    cfg->roles_n = 0;
-    role_add(cfg, "worker", "worker", "work the card");
-    cfg->roles[cfg->roles_n - 1].runs = BOARD_RUNS_WORKER;
-    snprintf(cfg->roles[cfg->roles_n - 1].step, BOARD_STEP_NAME, "worktree");
-    role_add(cfg, "test", "test", "test the change");
-    role_add(cfg, "review", "review", "");
-    cfg->roles[cfg->roles_n - 1].runs = BOARD_RUNS_PERSON;
-    role_add(cfg, "audit", "audit", "read the diff");
-    snprintf(cfg->roles[cfg->roles_n - 1].fail_marker,
-             sizeof cfg->roles[0].fail_marker, "FINDINGS");
-    snprintf(cfg->roles[cfg->roles_n - 1].fail_step,
-             sizeof cfg->roles[0].fail_step, "worktree");
-    role_add(cfg, "merge", "merge", "land it");
-    cfg->roles[cfg->roles_n - 1].runs = BOARD_RUNS_COMMAND;
-    return cfg;
+    defs_clear();
+    role_def("worker", "runs: worker\ntier: high\nstep: worktree\n",
+             "work the card");
+    role_def("test", "runs: agent\ntier: high\n", "test the change");
+    role_def("review", "runs: person\ntier: high\n", "");
+    role_def("audit",
+             "runs: agent\ntier: high\nfail marker: FINDINGS\n"
+             "fail step: worktree\n",
+             "read the diff");
+    role_def("merge", "runs: command\ntier: high\n", "land it");
+    defs_use();
 }
 
 static void test_a_step_answers_for_itself(void)
 {
-    struct board_cfg *cfg = with_roles();
-    expect(boardcfg_set(cfg), "the roles are written out");
-    boardcfg_free(cfg);
-    boardcfg_reload();
+    with_roles();
     steps_for("audited", "worktree, review, audit, merge");
 
     char id[BOARD_ID_MAX] = {0};
@@ -554,72 +593,34 @@ static void test_reply_json(void)
 static void write_kind(const char *name, const char *const *keys,
                        const char *const *vals, int n, const char *body)
 {
-    char dir[4096], path[4300];
-    expect(mdcfg_dir(dir, sizeof dir, "board/kinds"), "kinds dir");
-    snprintf(path, sizeof path, "%s/%s.md", dir, name);
-    expect(mdcfg_write(path, keys, vals, n, body), "kind file is written");
+    char front[2048];
+    size_t at = 0;
+    front[0] = '\0';
+    for (int i = 0; i < n && at < sizeof front; i++)
+        at += (size_t)snprintf(front + at, sizeof front - at, "%s: %s\n",
+                               keys[i], vals[i]);
+    kind_def(name, front, body);
 }
 
-static void test_plan_files_a_card(void)
+static void test_a_planner_works_without_a_worktree(void)
 {
-    const char *keys[] = {"means", "priority", "steps", "next kind"};
-    const char *vals[] = {"a request for a plan of the work", "1", "review",
-                          "feature"};
-    write_kind("plan", keys, vals, 4, "Read the repo and write the plan.\n");
-    boardcfg_reload();
+    defs_clear();
+    role_def("plan", "runs: worker\ntier: high\nstep: plan\nworktree: 0\n",
+             "Read the repo and write the plan.");
+    role_def("review", "runs: person\ntier: med\n", "");
+    steps_for("plan", "plan, review");
 
-    const struct board_kind *k = boardcfg_kind("plan");
-    expect(k && !strcmp(k->next_kind, "feature"), "next kind comes off the file");
-    expect(!boardcfg_kind_takes("plan", "worktree"), "a plan gets no worktree");
-    expect(goes("plan", NULL, "review"), "and stops for a person");
+    const struct board_role *worker = boardcfg_worker();
+    expect(worker && !strcmp(worker->step, "plan"), "the worker stands in plan");
+    expect(worker && !worker->worktree, "and asks for no worktree");
 
-    char id[BOARD_ID_MAX] = {0};
-    expect(board_add("plan the telegram menus", "/tmp/planrepo", id), "capture");
+    expect(boardflow_lands("plan"), "a plan card is the worker's to take");
+    expect(!boardflow_worktree("plan"), "and gets no worktree to take it in");
+    expect(goes("plan", NULL, "plan"), "it starts on the worker");
+    expect(goes("plan", "plan", "review"), "then stops for a person");
+    expect(goes("plan", "review", NULL), "and approving that finishes it");
 
-    struct board_card *v = NULL;
-    int                n = board_load(&v);
-    struct board_card *c = board_find(v, n, id);
-    if (!c) {
-        fail("the plan card is stored");
-        board_free(v, n);
-        return;
-    }
-
-    struct board_card edited = *c;
-    snprintf(edited.kind, sizeof edited.kind, "plan");
-    board_put(&edited, "review");
-    expect(board_update(&edited), "the plan card is filed for review");
-    board_free(v, n);
-
-    expect(board_note(id, "worker",
-                      "1. read the menu code\n2. rewrite the cancel row"),
-           "the plan lands in the log");
-    expect(board_note(id, "you", "keep the back row"), "and so does the reply");
-
-    n = board_load(&v);
-    c = board_find(v, n, id);
-    expect(c && boardplan_is(c), "the card is a plan");
-    expect(c && boardplan_approve(c), "approving it files a card");
-    board_free(v, n);
-
-    n = board_load(&v);
-    struct board_card *made = NULL;
-    for (int i = 0; i < n; i++)
-        if (v[i].col == BOARD_BACKLOG && !strcmp(v[i].cwd, "/tmp/planrepo"))
-            made = &v[i];
-    expect(made != NULL, "the filed card waits in the backlog");
-    expect(made && made->body && strstr(made->body, "rewrite the cancel row") &&
-               strstr(made->body, "keep the back row"),
-           "with the whole discussion as its plan");
-    expect(made && made->body && strstr(made->body, "plan the telegram menus"),
-           "over the spec the plan card carried");
-    expect(made && !strcmp(made->kind, "feature"), "as the kind the plan names");
-    expect(made && !strcmp(made->title, "plan the telegram menus"),
-           "under the title of the card that asked for it");
-
-    c = board_find(v, n, id);
-    expect(c && c->col == BOARD_DONE, "and the plan card is done");
-    board_free(v, n);
+    with_roles();
 }
 
 static void test_a_kind_file_carries_its_approval_prompt(void)
@@ -627,8 +628,9 @@ static void test_a_kind_file_carries_its_approval_prompt(void)
     const char *keys[] = {"means", "priority", "steps", "approval prompt"};
     const char *vals[] = {"something the person wants to buy", "1", "review",
                           "Order it, and say what was ordered."};
+    with_roles();
     write_kind("buy", keys, vals, 4, "Search Amazon with the web skill.\n");
-    boardcfg_reload();
+    defs_use();
 
     const struct board_kind *k = boardcfg_kind("buy");
     if (!k) {
@@ -675,7 +677,7 @@ static void test_a_kind_prompt_takes_the_card_id(void)
     const char *vals[] = {"something the person wants to buy", "1", "review",
                           "Order it in the web-{id} window."};
     write_kind("buy", keys, vals, 4, "Drive the web-{id} window.\n");
-    boardcfg_reload();
+    defs_use();
 
     struct board_card card = {0};
     snprintf(card.id, sizeof card.id, "c7f2");
@@ -701,6 +703,7 @@ static void test_a_kind_prompt_takes_the_card_id(void)
 
 static void write_the_shipped_kinds(void)
 {
+    with_roles();
     static const char *const keys[] = {"means", "priority", "steps"};
     static const char *const work = "worktree, review, audit, merge";
     static const struct {
@@ -718,7 +721,7 @@ static void write_the_shipped_kinds(void)
                               kinds[i].steps ? kinds[i].steps : work};
         write_kind(kinds[i].name, keys, vals, 3, "");
     }
-    boardcfg_reload();
+    defs_use();
 }
 
 static void test_a_named_kind_skips_triage(void)
@@ -890,29 +893,13 @@ static int skip_card(const char *id)
     return did;
 }
 
-static void role_add(struct board_cfg *cfg, const char *name, const char *job,
-                     const char *prompt)
-{
-    struct board_role *r = &cfg->roles[cfg->roles_n++];
-    memset(r, 0, sizeof *r);
-    snprintf(r->name, sizeof r->name, "%s", name);
-    snprintf(r->job, sizeof r->job, "%s", job);
-    snprintf(r->tier, sizeof r->tier, "high");
-    snprintf(r->step, sizeof r->step, "%s", job);
-    r->skippable = 1;
-    r->prompt = strdup(prompt);
-}
-
 static void test_roles_are_what_the_files_say(void)
 {
-    struct board_cfg *cfg = boardcfg_copy();
-    cfg->roles_n = 0;
-    role_add(cfg, "auditor", "audit", "read the diff");
-    role_add(cfg, "merge", "merge", "land it");
-    expect(boardcfg_set(cfg), "the roles are written out");
-    boardcfg_free(cfg);
-
-    boardcfg_reload();
+    defs_clear();
+    role_def("auditor", "runs: agent\ntier: high\njob: audit\n",
+             "read the diff");
+    role_def("merge", "runs: command\ntier: high\n", "land it");
+    defs_use();
 
     const struct board_role *p = boardcfg_for_job("audit");
     expect(p != NULL, "a role is found by the job its file names");
@@ -928,12 +915,10 @@ static void test_roles_are_what_the_files_say(void)
 
 static void test_a_step_that_fails_with_nowhere_to_send_it(void)
 {
-    struct board_cfg *cfg = with_roles();
-    for (int i = 0; i < cfg->roles_n; i++)
-        cfg->roles[i].fail_step[0] = '\0';
-    expect(boardcfg_set(cfg), "an audit with no fail step");
-    boardcfg_free(cfg);
-    boardcfg_reload();
+    with_roles();
+    role_def("audit", "runs: agent\ntier: high\nfail marker: FINDINGS\n",
+             "read the diff");
+    defs_use();
     steps_for("nowhere", "worktree, review, audit, merge");
 
     char id[BOARD_ID_MAX] = {0};
@@ -963,10 +948,7 @@ static void test_a_step_that_fails_with_nowhere_to_send_it(void)
 
 static void test_a_step_is_a_file(void)
 {
-    struct board_cfg *cfg = with_roles();
-    expect(boardcfg_set(cfg), "the roles are written out");
-    boardcfg_free(cfg);
-    boardcfg_reload();
+    with_roles();
     steps_for("tested", "worktree, test, review, audit, merge");
     steps_for("untested", "worktree, review, audit, merge");
     steps_for("filed", "");
@@ -1038,12 +1020,22 @@ static void test_a_step_is_a_file(void)
     board_remove(id);
 }
 
+static void unskippable(int no)
+{
+    with_roles();
+    if (no) {
+        role_def("audit",
+                 "runs: agent\ntier: high\nskippable: 0\n"
+                 "fail marker: FINDINGS\nfail step: worktree\n",
+                 "read the diff");
+        defs_use();
+    }
+    steps_for("skipped", "worktree, review, audit, merge");
+}
+
 static void test_skipping_a_step(void)
 {
-    struct board_cfg *cfg = with_roles();
-    expect(boardcfg_set(cfg), "roles for the steps a card walks");
-    boardcfg_free(cfg);
-    boardcfg_reload();
+    with_roles();
     steps_for("skipped", "worktree, review, audit, merge");
 
     char id[BOARD_ID_MAX] = {0};
@@ -1060,18 +1052,12 @@ static void test_skipping_a_step(void)
     }
     board_free(v, n);
 
-    cfg = boardcfg_copy();
-    for (int i = 0; i < cfg->roles_n; i++)
-        cfg->roles[i].skippable = 0;
-    boardcfg_set(cfg);
+    unskippable(1);
 
     expect(!boardflow_skip(NULL), "a missing card is not skipped");
     expect(!skip_card(id), "an unskippable step holds the card");
 
-    for (int i = 0; i < cfg->roles_n; i++)
-        cfg->roles[i].skippable = 1;
-    boardcfg_set(cfg);
-    boardcfg_free(cfg);
+    unskippable(0);
 
     expect(skip_card(id), "a skippable step is skipped");
     expect(at(id, "merge"), "skipping the audit sends it on to land");
@@ -1091,9 +1077,19 @@ static void test_skipping_a_step(void)
     board_remove(id);
 }
 
+static void sweep_every(int cards)
+{
+    struct board_cfg *cfg = boardcfg_copy();
+    cfg->sweep_every = cards;
+    expect(boardcfg_set(cfg), "the sweep interval is written out");
+    boardcfg_free(cfg);
+    boardcfg_reload();
+}
+
 static void test_sweep_counts_landed_cards(void)
 {
     const char *cwd = "/tmp/sweeprepo";
+    sweep_every(8);
     int         every = boardcfg()->sweep_every;
     char        due[4096];
 
@@ -1108,7 +1104,7 @@ static void test_sweep_counts_landed_cards(void)
     const char *sweep_vals[] = {"a card the board raised itself", "0",
                                 "sweep, review"};
     write_kind("sweep", sweep_keys, sweep_vals, 3, "");
-    boardcfg_reload();
+    defs_use();
 
     char id[BOARD_ID_MAX] = {0};
     expect(boardsweep_open(cwd, id, sizeof id), "a sweep card is minted");
@@ -1151,6 +1147,7 @@ static void test_sweep_review_can_refuse(void)
     const char *cwd = "/tmp/refusedsweep";
     char        due[4096], id[BOARD_ID_MAX] = {0};
 
+    sweep_every(8);
     land_cards(cwd, boardcfg()->sweep_every, "dropped card");
     expect(sweep_due(due, sizeof due), "the interval makes the repo due");
     expect(boardsweep_open(cwd, id, sizeof id), "a sweep card is minted");
@@ -1178,6 +1175,7 @@ static void test_sweep_with_nothing_to_raise(void)
     const char *cwd = "/tmp/quietsweep";
     char        due[4096], id[BOARD_ID_MAX] = {0};
 
+    sweep_every(8);
     land_cards(cwd, boardcfg()->sweep_every, "quiet card");
     expect(sweep_due(due, sizeof due), "the interval makes the repo due");
     expect(boardsweep_open(cwd, id, sizeof id), "a sweep card is minted");
@@ -1219,6 +1217,7 @@ static void test_sweep_files_against_the_repo(void)
         return;
     }
 
+    sweep_every(8);
     land_cards(tree, boardcfg()->sweep_every, "worktree card");
 
     char id[BOARD_ID_MAX] = {0};
@@ -1391,6 +1390,46 @@ static void test_revision_tracks_writes(void)
     board_remove(id);
 }
 
+static int has_dir(const char *leaf)
+{
+    char base[4096], path[4200];
+    if (!path_config_dir(base, sizeof base))
+        return 0;
+    snprintf(path, sizeof path, "%s/%s", base, leaf);
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+static void test_the_shipped_kinds_and_roles_are_built_in(void)
+{
+    char dir[4096], path[4300];
+    expect(mdcfg_dir(dir, sizeof dir, "board/roles"), "an old roles dir");
+    snprintf(path, sizeof path, "%s/leftover.md", dir);
+    const char *keys[] = {"runs"};
+    const char *vals[] = {"agent"};
+    expect(mdcfg_write(path, keys, vals, 1, "a role from an older mux"),
+           "with a role file in it");
+
+    boardcfg_defaults(NULL, 0);
+
+    expect(!has_dir("board/roles"), "loading clears the old roles dir");
+    expect(!has_dir("board/kinds"), "and writes no kinds dir of its own");
+    expect(boardcfg_for_job("leftover") == NULL, "the stale role is gone");
+
+    char why[512];
+    expect(!boardcfg_missing(why, sizeof why), "the built-in set is whole");
+
+    const struct board_kind *k = boardcfg_kind("plan");
+    expect(k != NULL, "plan is a kind without a file anywhere");
+    expect(k && k->steps_n == 2, "walking the two steps it names");
+
+    const struct board_role *p = boardcfg_worker();
+    expect(p && !strcmp(p->name, "plan"), "the planner is the worker");
+    expect(p && !p->worktree, "and takes no worktree");
+    expect(p && p->prompt && strstr(p->prompt, "plan mode"),
+           "its prompt is the body of the file it was built from");
+}
+
 int main(void)
 {
     if (!mkdtemp(home)) {
@@ -1418,7 +1457,7 @@ int main(void)
     test_sweep_review_can_refuse();
     test_sweep_with_nothing_to_raise();
     test_sweep_files_against_the_repo();
-    test_plan_files_a_card();
+    test_a_planner_works_without_a_worktree();
     test_reply_json();
     test_kinds();
     test_a_named_kind_skips_triage();
@@ -1431,6 +1470,7 @@ int main(void)
     test_worktree_name_is_stable();
     test_auto_pick_roundtrip();
     test_revision_tracks_writes();
+    test_the_shipped_kinds_and_roles_are_built_in();
 
     cleanup();
     if (failures)

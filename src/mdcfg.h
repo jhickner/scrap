@@ -15,6 +15,9 @@ struct mdcfg {
 };
 
 int  mdcfg_load(struct mdcfg *m, const char *path);
+
+/* takes ownership of text, which mdcfg_free releases */
+int  mdcfg_parse(struct mdcfg *m, char *text);
 void mdcfg_free(struct mdcfg *m);
 
 const char *mdcfg_get(const struct mdcfg *m, const char *key);

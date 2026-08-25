@@ -18,7 +18,6 @@
 #include "boardflow.h"
 #include "boardgrid.h"
 #include "boardcmd.h"
-#include "boardplan.h"
 #include "boardsweep.h"
 #include "boardtile.h"
 #include "boardtriage.h"
@@ -643,15 +642,6 @@ static int approve(const struct board_card *c, int force)
         boardwork_let_go(c->id);
         return boardsweep_approve(c);
     }
-    if (boardplan_is(c)) {
-        boardwork_leave(c);
-        boardwork_let_go(c->id);
-        int moved = boardplan_approve(c);
-        if (!moved)
-            note("the plan is empty");
-        return moved;
-    }
-
     char *say = approval_prompt_of(c);
     int   moved;
     if (!say)

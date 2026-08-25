@@ -29,6 +29,8 @@ int boardflow_skip(const struct board_card *c);
 
 int boardflow_lands(const char *kind);
 
+int boardflow_worktree(const char *kind);
+
 const char *boardflow_person(const char *kind);
 
 #endif

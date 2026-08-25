@@ -12,7 +12,6 @@
 #include "board.h"
 #include "child.h"
 #include "boardcfg.h"
-#include "boardflow.h"
 #include "boardlog.h"
 #include "replyjson.h"
 #include "vendor/cJSON.h"
@@ -132,9 +131,7 @@ static int apply(const char *id, const cJSON *o)
         snprintf(edited.kind, sizeof edited.kind, "%s", kind);
 
         edited.col = BOARD_BACKLOG;
-        snprintf(said, sizeof said, "%s · %s · priority %d", kind,
-                 boardflow_lands(kind) ? "to build" : "to file",
-                 edited.priority);
+        snprintf(said, sizeof said, "%s · priority %d", kind, edited.priority);
     }
 
     int ok = board_update(&edited);
@@ -177,8 +174,7 @@ static int classify_as(const struct board_card *c, const char *kind)
         return 0;
 
     char said[256];
-    snprintf(said, sizeof said, "%s · %s · priority %d", kind,
-             boardflow_lands(kind) ? "to build" : "to file", edited.priority);
+    snprintf(said, sizeof said, "%s · priority %d", kind, edited.priority);
     board_note(c->id, "triage", said);
     return 1;
 }

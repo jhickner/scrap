@@ -57,6 +57,7 @@ struct board_role {
     char step[BOARD_STEP_NAME];
     char tier[8];
     int  skippable;
+    int  worktree;
 
     enum board_runs runs;
     enum board_lock lock;
@@ -115,6 +116,12 @@ struct board_cfg {
     int                  backends_n;
 };
 
+struct board_default;
+
+/* Kinds and roles are compiled in. Standing a different table in is for tests;
+   passing NULL goes back to the one the binary was built with. */
+void boardcfg_defaults(const struct board_default *table, int n);
+
 const struct board_cfg *boardcfg(void);
 
 void boardcfg_reload(void);
@@ -171,8 +178,6 @@ const char *boardcfg_kind_step(const char *kind, int at);
 int boardcfg_kind_step_at(const char *kind, const char *step);
 
 void boardcfg_kind_steps(struct board_kind *k, const char *list);
-
-void boardcfg_kind_steps_default(struct board_kind *k);
 
 void boardcfg_kinds_block(char *out, size_t size);
 

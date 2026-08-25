@@ -15,7 +15,6 @@
 #include "boardflow.h"
 #include "boardlog.h"
 #include "boardcmd.h"
-#include "boardplan.h"
 #include "boardsweep.h"
 #include "session.h"
 #include "text.h"
@@ -521,7 +520,7 @@ static char *first_turn(const struct board_card *c)
     const char *head = lands ? worker_prompt() : "";
     char       *mine = boardcfg_expand(k && k->prompt ? k->prompt : "", c->id);
     const char *body = c->body && *c->body ? c->body : c->title;
-    const char *card = lands
+    const char *card = boardflow_worktree(c->kind)
         ? "The card is also written to CARD.md here, which is the copy to go "
           "back to rather than this message."
         : "";
@@ -612,7 +611,7 @@ static int card_tree(const struct board_card *c, char *path, size_t path_size,
                      char *base, size_t base_size, int *lands_out, char *why,
                      int size)
 {
-    int lands = boardflow_lands(c->kind);
+    int lands = boardflow_worktree(c->kind);
     if (lands_out)
         *lands_out = lands;
     if (base && base_size)
@@ -808,7 +807,7 @@ int boardwork_rejoin(const struct board_card *c, char *why, int size)
 static const char *landed(const struct board_card *c, int *empty_out)
 {
     int files = 0, lines = 0;
-    int empty = boardflow_lands(c->kind) && c->worktree[0] && c->base[0] &&
+    int empty = boardflow_worktree(c->kind) && c->worktree[0] && c->base[0] &&
                 !boarddiff_size(c, &files, &lines);
     if (empty_out)
         *empty_out = empty;

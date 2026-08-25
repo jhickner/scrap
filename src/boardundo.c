@@ -105,7 +105,7 @@ int boardundo_run(const struct board_card *c, char *said, size_t size)
     }
 
     if (!c->merge_to[0] || !c->merge_from[0] || !c->merge_into[0]) {
-        if (boardflow_lands(c->kind)) {
+        if (boardflow_worktree(c->kind)) {
             snprintf(said, size, "no merge on record to undo");
             return 0;
         }

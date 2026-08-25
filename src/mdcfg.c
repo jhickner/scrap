@@ -23,10 +23,20 @@ static char *trim(char *s)
 
 int mdcfg_load(struct mdcfg *m, const char *path)
 {
-    memset(m, 0, sizeof *m);
-    m->text = text_slurp(path, 1u << 20, NULL);
-    if (!m->text)
+    char *text = text_slurp(path, 1u << 20, NULL);
+    if (!text) {
+        memset(m, 0, sizeof *m);
         return 0;
+    }
+    return mdcfg_parse(m, text);
+}
+
+int mdcfg_parse(struct mdcfg *m, char *text)
+{
+    memset(m, 0, sizeof *m);
+    if (!text)
+        return 0;
+    m->text = text;
 
     char *p = m->text;
 

@@ -84,6 +84,12 @@ int boardflow_lands(const char *kind)
     return p && boardcfg_kind_takes(kind, p->step);
 }
 
+int boardflow_worktree(const char *kind)
+{
+    const struct board_role *p = boardcfg_worker();
+    return p && p->worktree && boardcfg_kind_takes(kind, p->step);
+}
+
 const char *boardflow_person(const char *kind)
 {
     const char *last = NULL;

@@ -7,7 +7,6 @@
 #include "boardcmd.h"
 #include "boarddiff.h"
 #include "boardflow.h"
-#include "boardplan.h"
 #include "boardsweep.h"
 #include "boardtriage.h"
 #include "boardwork.h"

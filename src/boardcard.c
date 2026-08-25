@@ -9,7 +9,6 @@
 #include "board.h"
 #include "boardcfg.h"
 #include "boardflow.h"
-#include "boardplan.h"
 #include "boardsweep.h"
 #include "boardwork.h"
 #include "form.h"
@@ -413,8 +412,6 @@ enum boardcard_action boardcard_form(const struct board_card *c,
                      sizeof approve_label - strlen(approve_label),
                      " \xc2\xb7 no %s", most);
     }
-    if (boardflow_waits_on_you(c) && boardplan_is(c))
-        snprintf(approve_label, sizeof approve_label, "approve \xc2\xb7 file a card");
     if (proposals) {
         int raised = boardsweep_proposed(c);
         snprintf(approve_label, sizeof approve_label,

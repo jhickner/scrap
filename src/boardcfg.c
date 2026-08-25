@@ -160,7 +160,7 @@ static void defaults(struct board_cfg *c)
 {
     memset(c, 0, sizeof *c);
     c->workers = 3;
-    c->sweep_every = 8;
+    c->sweep_every = 0;
     c->archive_after = 14;
     c->done_shown = 20;
     c->backlog_shown = 20;
@@ -182,58 +182,55 @@ static int board_path(char *out, size_t size, const char *leaf, const char *name
     return (size_t)snprintf(out, size, "%s/%s.md", dir, name) < size;
 }
 
-static int dir_has_md(const char *leaf)
+/* Kinds and roles used to be copied into the config as markdown. They are
+ * compiled in now, so the copies are stale the moment the binary changes. */
+static void drop_stale(const char *leaf)
 {
-    char dir[4096];
-    if (!mdcfg_dir(dir, sizeof dir, leaf))
-        return 1;
+    char base[4096];
+    if (!path_config_dir(base, sizeof base))
+        return;
 
-    char names[1][MDCFG_NAME];
-    return mdcfg_list(dir, names, 1) > 0;
-}
+    char dir[4200];
+    if ((size_t)snprintf(dir, sizeof dir, "%s/%s", base, leaf) >= sizeof dir)
+        return;
 
-static int write_body(FILE *f, void *ud)
-{
-    return fputs(ud, f) >= 0;
-}
-
-#define SEED_DIRS 8
-
-static void seed_defaults(void)
-{
-    char seen[SEED_DIRS][64];
-    int  copy[SEED_DIRS], n = 0;
-
-    for (int i = 0; i < board_defaults_n; i++) {
-        const char *file = strrchr(board_defaults[i].path, '/');
-        if (!file)
-            continue;
-
-        char leaf[64];
-        snprintf(leaf, sizeof leaf, BOARD_DIR "/%.*s",
-                 (int)(file - board_defaults[i].path), board_defaults[i].path);
-
-        int at = -1;
-        for (int j = 0; j < n && at < 0; j++)
-            if (!strcmp(seen[j], leaf))
-                at = j;
-        if (at < 0) {
-            if (n == SEED_DIRS)
-                continue;
-            at = n++;
-            snprintf(seen[at], sizeof seen[at], "%s", leaf);
-            copy[at] = !dir_has_md(leaf);
-        }
-        if (!copy[at])
-            continue;
-
-        char dir[4096], path[4300];
-        if (!mdcfg_dir(dir, sizeof dir, leaf))
-            continue;
-        if ((size_t)snprintf(path, sizeof path, "%s/%s", dir, file + 1) >= sizeof path)
-            continue;
-        text_spit(path, write_body, (void *)board_defaults[i].text);
+    char names[BOARD_KINDS_MAX * 4][MDCFG_NAME];
+    int  n = mdcfg_list(dir, names, BOARD_KINDS_MAX * 4);
+    for (int i = 0; i < n; i++) {
+        char path[4400];
+        if ((size_t)snprintf(path, sizeof path, "%s/%s.md", dir, names[i]) <
+            sizeof path)
+            unlink(path);
     }
+    rmdir(dir);
+}
+
+static const struct board_default *defs = board_defaults;
+static int                         defs_n;
+
+void boardcfg_defaults(const struct board_default *table, int n)
+{
+    defs = table ? table : board_defaults;
+    defs_n = table ? n : board_defaults_n;
+    boardcfg_reload();
+}
+
+/* The name a compiled-in file stands under: kinds/plan.md is the plan kind. */
+static const char *default_name(const char *path, const char *leaf, char *out,
+                                size_t size)
+{
+    size_t at = strlen(leaf);
+    if (strncmp(path, leaf, at) || path[at] != '/')
+        return NULL;
+
+    const char *file = path + at + 1;
+    const char *dot = strrchr(file, '.');
+    size_t      len = dot ? (size_t)(dot - file) : strlen(file);
+    if (!len || len >= size)
+        return NULL;
+    memcpy(out, file, len);
+    out[len] = '\0';
+    return out;
 }
 
 void boardcfg_kind_steps(struct board_kind *k, const char *list)
@@ -257,15 +254,6 @@ void boardcfg_kind_steps(struct board_kind *k, const char *list)
             snprintf(k->steps[k->steps_n++], BOARD_STEP_NAME, "%s", start);
         *end = kept;
     }
-}
-
-static void steps_str(const struct board_kind *k, char *out, size_t size)
-{
-    size_t at = 0;
-    out[0] = '\0';
-    for (int i = 0; i < k->steps_n && at < size; i++)
-        at += (size_t)snprintf(out + at, size - at, "%s%s", at ? ", " : "",
-                               k->steps[i]);
 }
 
 static void read_settings(struct board_cfg *c)
@@ -299,27 +287,20 @@ static void read_settings(struct board_cfg *c)
     mdcfg_free(&m);
 }
 
-static int read_roles(struct board_cfg *c)
+static void read_roles(struct board_cfg *c)
 {
-    char dir[4096];
-    if (!mdcfg_dir(dir, sizeof dir, BOARD_DIR "/roles"))
-        return 0;
-
-    char names[BOARD_ROLES_MAX][MDCFG_NAME];
-    int  found = mdcfg_list(dir, names, BOARD_ROLES_MAX);
-    int  aged = 0;
-
-    for (int i = 0; i < found && c->roles_n < BOARD_ROLES_MAX; i++) {
-        char path[4300];
-        if (!board_path(path, sizeof path, BOARD_DIR "/roles", names[i]))
+    for (int i = 0; i < defs_n && c->roles_n < BOARD_ROLES_MAX; i++) {
+        char name[MDCFG_NAME];
+        if (!default_name(defs[i].path, "roles", name, sizeof name))
             continue;
 
         struct mdcfg m;
-        if (!mdcfg_load(&m, path))
+        if (!mdcfg_parse(&m, strdup(defs[i].text)))
             continue;
 
         struct board_role *p = &c->roles[c->roles_n++];
-        snprintf(p->name, sizeof p->name, "%s", names[i]);
+        memset(p, 0, sizeof *p);
+        snprintf(p->name, sizeof p->name, "%s", name);
         snprintf(p->job, sizeof p->job, "%s", mdcfg_get(&m, "job"));
         snprintf(p->step, sizeof p->step, "%s", mdcfg_get(&m, "step"));
         snprintf(p->fail_marker, sizeof p->fail_marker, "%s",
@@ -336,24 +317,15 @@ static int read_roles(struct board_cfg *c)
         p->lock = boardcfg_lock_from_name(mdcfg_get(&m, "lock"));
         p->over_files = mdcfg_int(&m, "over files", 0);
         p->over_lines = mdcfg_int(&m, "over lines", 0);
-
-        const char *tier = mdcfg_get(&m, "tier");
-        if (boardcfg_tier_from_name(tier) < BOARD_TIERS)
-            snprintf(p->tier, sizeof p->tier, "%s", tier);
-        else
-            aged = 1;
+        snprintf(p->tier, sizeof p->tier, "%s", mdcfg_get(&m, "tier"));
 
         role_defaults(p);
         p->skippable = mdcfg_int(&m, "skippable", 1);
-
-        if (mdcfg_has(&m, "backend") || mdcfg_has(&m, "model") ||
-            mdcfg_has(&m, "effort"))
-            aged = 1;
+        p->worktree = mdcfg_int(&m, "worktree", 1);
 
         p->prompt = dup_or_null(m.body ? m.body : "");
         mdcfg_free(&m);
     }
-    return aged;
 }
 
 static void level_key(char *out, size_t size, enum board_tier tier,
@@ -387,24 +359,18 @@ static void read_backends(struct board_cfg *c)
 
 static void read_kinds(struct board_cfg *c)
 {
-    char dir[4096];
-    if (!mdcfg_dir(dir, sizeof dir, BOARD_DIR "/kinds"))
-        return;
-
-    char names[BOARD_KINDS_MAX][MDCFG_NAME];
-    int  found = mdcfg_list(dir, names, BOARD_KINDS_MAX);
-
-    for (int i = 0; i < found; i++) {
-        char path[4300];
-        if (!board_path(path, sizeof path, BOARD_DIR "/kinds", names[i]))
+    for (int i = 0; i < defs_n && c->kinds_n < BOARD_KINDS_MAX; i++) {
+        char name[MDCFG_NAME];
+        if (!default_name(defs[i].path, "kinds", name, sizeof name))
             continue;
 
         struct mdcfg m;
-        if (!mdcfg_load(&m, path))
+        if (!mdcfg_parse(&m, strdup(defs[i].text)))
             continue;
 
         struct board_kind *k = &c->kinds[c->kinds_n++];
-        snprintf(k->name, sizeof k->name, "%s", names[i]);
+        memset(k, 0, sizeof *k);
+        snprintf(k->name, sizeof k->name, "%s", name);
         k->means = dup_or_null(mdcfg_get(&m, "means"));
         k->prompt = dup_or_null(m.body ? m.body : "");
         k->approval_prompt = dup_or_null(mdcfg_get(&m, "approval prompt"));
@@ -452,91 +418,8 @@ static int write_settings(const struct board_cfg *c)
         "projects is the directory the repos sit in; triage sets a card cwd\n"
         "from the project it names. Empty leaves the cwd it was captured in.\n"
         "\n"
-        "What each step of a card does is in board/roles; which steps a kind\n"
-        "takes, and in what order, is in board/kinds.\n");
-}
-
-static int write_roles(const struct board_cfg *c)
-{
-    char dir[4096];
-    if (!mdcfg_dir(dir, sizeof dir, BOARD_DIR "/roles"))
-        return 0;
-
-    char had[BOARD_ROLES_MAX * 2][MDCFG_NAME];
-    int  found = mdcfg_list(dir, had, BOARD_ROLES_MAX * 2);
-    for (int i = 0; i < found; i++) {
-        int still = 0;
-        for (int j = 0; j < c->roles_n && !still; j++)
-            still = !strcmp(c->roles[j].name, had[i]);
-        char gone[4300];
-        if (!still && board_path(gone, sizeof gone, BOARD_DIR "/roles", had[i]))
-            unlink(gone);
-    }
-
-    int ok = 1;
-    for (int i = 0; i < c->roles_n; i++) {
-        const struct board_role *p = &c->roles[i];
-
-        char path[4300];
-        if (!board_path(path, sizeof path, BOARD_DIR "/roles", p->name)) {
-            ok = 0;
-            continue;
-        }
-
-        char skip[8], files[16], lines[16];
-        snprintf(skip, sizeof skip, "%d", p->skippable);
-        snprintf(files, sizeof files, "%d", p->over_files);
-        snprintf(lines, sizeof lines, "%d", p->over_lines);
-
-        const char *keys[12], *vals[12];
-        int         n = 0;
-        keys[n] = "runs";
-        vals[n++] = boardcfg_runs_name(p->runs);
-        keys[n] = "tier";
-        vals[n++] = p->tier;
-        if (strcmp(p->job, p->name)) {
-            keys[n] = "job";
-            vals[n++] = p->job;
-        }
-        if (strcmp(p->step, p->job)) {
-            keys[n] = "step";
-            vals[n++] = p->step;
-        }
-        keys[n] = "skippable";
-        vals[n++] = skip;
-        if (p->runs == BOARD_RUNS_AGENT && p->fail_marker[0]) {
-            keys[n] = "fail marker";
-            vals[n++] = p->fail_marker;
-        }
-        if (p->fail_step[0]) {
-            keys[n] = "fail step";
-            vals[n++] = p->fail_step;
-        }
-        if (p->fail_prompt[0]) {
-            keys[n] = "fail prompt";
-            vals[n++] = p->fail_prompt;
-        }
-        if (p->runs == BOARD_RUNS_PERSON) {
-            keys[n] = "pass label";
-            vals[n++] = p->pass_label;
-            keys[n] = "fail label";
-            vals[n++] = p->fail_label;
-        }
-        if (p->over_files || p->over_lines) {
-            keys[n] = "over files";
-            vals[n++] = files;
-            keys[n] = "over lines";
-            vals[n++] = lines;
-        }
-        if (p->lock != BOARD_LOCK_NONE) {
-            keys[n] = "lock";
-            vals[n++] = boardcfg_lock_name(p->lock);
-        }
-
-        if (!mdcfg_write(path, keys, vals, n, p->prompt))
-            ok = 0;
-    }
-    return ok;
+        "The kinds a card can be, and the steps each one walks, are built into\n"
+        "the binary and are not read from here.\n");
 }
 
 static int write_backends(const struct board_cfg *c)
@@ -568,56 +451,10 @@ static int write_backends(const struct board_cfg *c)
     return ok;
 }
 
-static int write_kinds(const struct board_cfg *c)
-{
-    char dir[4096];
-    if (!mdcfg_dir(dir, sizeof dir, BOARD_DIR "/kinds"))
-        return 0;
-
-    char names[BOARD_KINDS_MAX * 2][MDCFG_NAME];
-    int  had = mdcfg_list(dir, names, BOARD_KINDS_MAX * 2);
-    for (int i = 0; i < had; i++) {
-        int still = 0;
-        for (int j = 0; j < c->kinds_n && !still; j++)
-            still = !strcmp(c->kinds[j].name, names[i]);
-        if (still)
-            continue;
-        char gone[4300];
-        if (board_path(gone, sizeof gone, BOARD_DIR "/kinds", names[i]))
-            unlink(gone);
-    }
-
-    int ok = 1;
-    for (int i = 0; i < c->kinds_n; i++) {
-        char path[4300];
-        if (!board_path(path, sizeof path, BOARD_DIR "/kinds", c->kinds[i].name)) {
-            ok = 0;
-            continue;
-        }
-        char steps[128], priority[16];
-        steps_str(&c->kinds[i], steps, sizeof steps);
-        snprintf(priority, sizeof priority, "%d", c->kinds[i].priority);
-
-        const char *keys[] = {"means", "priority", "steps", "approval prompt",
-                              "next kind"};
-        const char *vals[] = {c->kinds[i].means ? c->kinds[i].means : "",
-                              priority, steps,
-                              c->kinds[i].approval_prompt ? c->kinds[i].approval_prompt : "",
-                              c->kinds[i].next_kind};
-        if (!mdcfg_write(path, keys, vals, 5, c->kinds[i].prompt))
-            ok = 0;
-    }
-    return ok;
-}
-
 static int write_out(const struct board_cfg *c)
 {
     int ok = write_settings(c);
-    if (!write_roles(c))
-        ok = 0;
     if (!write_backends(c))
-        ok = 0;
-    if (!write_kinds(c))
         ok = 0;
     return ok;
 }
@@ -695,19 +532,23 @@ static void cache_free(void)
 
 static void read_all(void)
 {
+    if (defs == board_defaults)
+        defs_n = board_defaults_n;
+
     cache_free();
     defaults(&cache);
-    seed_defaults();
+    drop_stale(BOARD_DIR "/roles");
+    drop_stale(BOARD_DIR "/kinds");
 
     read_settings(&cache);
-    int aged = read_roles(&cache);
+    read_roles(&cache);
     read_backends(&cache);
     read_kinds(&cache);
     order_steps(&cache);
 
     char seed[4300];
-    if (aged || (board_path(seed, sizeof seed, BOARD_DIR, "settings") &&
-                 access(seed, F_OK)))
+    if (board_path(seed, sizeof seed, BOARD_DIR, "settings") &&
+        access(seed, F_OK))
         write_out(&cache);
 }
 
@@ -733,22 +574,19 @@ const struct board_cfg *boardcfg(void)
     return &cache;
 }
 
+/* The kinds and roles are compiled in, so anything wrong here is wrong in
+ * board/ in the source tree, not in the config. */
 int boardcfg_missing(char *out, size_t size)
 {
     load();
 
-    char full[4096], dir[4096];
-    if (!mdcfg_dir(full, sizeof full, BOARD_DIR))
-        return 0;
-    path_home_relative(full, dir, sizeof dir);
-
     if (!cache.kinds_n) {
-        snprintf(out, size, "no kinds in %s/kinds", dir);
+        snprintf(out, size, "no kinds are built into this binary");
         return 1;
     }
 
     if (!cache.roles_n) {
-        snprintf(out, size, "no roles in %s/roles", dir);
+        snprintf(out, size, "no roles are built into this binary");
         return 1;
     }
 
@@ -768,7 +606,7 @@ int boardcfg_missing(char *out, size_t size)
         }
 
     if (!boardcfg_worker()) {
-        snprintf(out, size, "no role in %s/roles runs a worker", dir);
+        snprintf(out, size, "no role runs a worker");
         return 1;
     }
 
@@ -780,16 +618,16 @@ int boardcfg_missing(char *out, size_t size)
             at += (size_t)snprintf(who + at, sizeof who - at, "%s%s",
                                    at ? ", " : "", cache.roles[i].name);
     if (at) {
-        snprintf(out, size, "nothing to run in %s/roles: %s", dir, who);
+        snprintf(out, size, "nothing to run: %s", who);
         return 1;
     }
 
     for (int i = 0; i < cache.kinds_n; i++)
         for (int j = 0; j < cache.kinds[i].steps_n; j++)
             if (!boardcfg_for_step(cache.kinds[i].steps[j])) {
-                snprintf(out, size, "%s takes the %s step, and no role in "
-                         "%s/roles stands in it", cache.kinds[i].name,
-                         cache.kinds[i].steps[j], dir);
+                snprintf(out, size,
+                         "%s takes the %s step, and no role stands in it",
+                         cache.kinds[i].name, cache.kinds[i].steps[j]);
                 return 1;
             }
 
@@ -848,14 +686,6 @@ const char *boardcfg_kind_step(const char *kind, int at)
     if (at < 0 || at >= k->steps_n)
         return NULL;
     return k->steps[at];
-}
-
-void boardcfg_kind_steps_default(struct board_kind *k)
-{
-    load();
-    k->steps_n = 0;
-    for (int i = 0; i < steps_n && k->steps_n < BOARD_KIND_STEPS; i++)
-        snprintf(k->steps[k->steps_n++], BOARD_STEP_NAME, "%s", steps[i]);
 }
 
 int boardcfg_steps(const char *const **out)
@@ -1148,14 +978,6 @@ int boardcfg_set(const struct board_cfg *c)
         return 0;
     load();
 
-    for (int i = 0; i < cache.roles_n; i++)
-        free(cache.roles[i].prompt);
-    memset(cache.roles, 0, sizeof cache.roles);
-    cache.roles_n = c->roles_n;
-    for (int i = 0; i < cache.roles_n; i++) {
-        cache.roles[i] = c->roles[i];
-        cache.roles[i].prompt = dup_or_null(c->roles[i].prompt);
-    }
     cache.workers = c->workers;
     cache.auto_pull = c->auto_pull;
     cache.auto_pick = c->auto_pick;
@@ -1163,20 +985,6 @@ int boardcfg_set(const struct board_cfg *c)
     cache.archive_after = c->archive_after;
     cache.done_shown = c->done_shown;
     cache.backlog_shown = c->backlog_shown;
-
-    for (int i = 0; i < cache.kinds_n; i++) {
-        free(cache.kinds[i].means);
-        free(cache.kinds[i].prompt);
-        free(cache.kinds[i].approval_prompt);
-    }
-    memset(cache.kinds, 0, sizeof cache.kinds);
-    cache.kinds_n = c->kinds_n;
-    for (int i = 0; i < cache.kinds_n; i++) {
-        cache.kinds[i] = c->kinds[i];
-        cache.kinds[i].means = dup_or_null(c->kinds[i].means);
-        cache.kinds[i].prompt = dup_or_null(c->kinds[i].prompt);
-        cache.kinds[i].approval_prompt = dup_or_null(c->kinds[i].approval_prompt);
-    }
 
     snprintf(cache.projects, sizeof cache.projects, "%s", c->projects);
     snprintf(cache.serving, sizeof cache.serving, "%s", c->serving);
