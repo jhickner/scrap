@@ -8,7 +8,6 @@
 #include "child.h"
 #include "text.h"
 #include "boarddefaults.h"
-#include "boardfile.h"
 #include "boardcfg.h"
 #include "boardflow.h"
 #include "boardlog.h"
@@ -687,80 +686,9 @@ static void test_the_shipped_actions_are_built_in(void)
     expect(n == 4, "every action file is one action");
 }
 
-static void put_file(const char *path, const char *text)
-{
-    FILE *f = fopen(path, "w");
-    if (!f) {
-        fail("the file is written");
-        return;
-    }
-    fputs(text, f);
-    fclose(f);
-}
-
 static char *slurp_file(const char *path)
 {
     return text_slurp(path, 1u << 20, NULL);
-}
-
-static void test_the_card_file_outlives_the_worktree(void)
-{
-    struct board_card c = {0};
-    snprintf(c.id, sizeof c.id, "cf01");
-    snprintf(c.worktree, sizeof c.worktree, "%s/tree", home);
-    mkdir(c.worktree, 0700);
-
-    char in_tree[4300];
-    snprintf(in_tree, sizeof in_tree, "%s/CARD.md", c.worktree);
-    put_file(in_tree, "# a card\n\n## Plan\n\nrewrite the cancel row\n");
-
-    boardfile_keep(&c);
-
-    char kept[4300];
-    expect(boardfile_kept(c.id, kept, sizeof kept), "the copy has a path");
-    char *saved = slurp_file(kept);
-    expect(saved && strstr(saved, "rewrite the cancel row"),
-           "and holds what the worker wrote");
-    free(saved);
-
-    char gone[4400];
-    snprintf(gone, sizeof gone, "rm -rf %s", c.worktree);
-    expect(system(gone) == 0, "the worktree goes");
-
-    mkdir(c.worktree, 0700);
-    expect(boardfile_put(c.worktree, &c), "a new worktree takes the copy back");
-    char *back = slurp_file(in_tree);
-    expect(back && strstr(back, "rewrite the cancel row"),
-           "with the plan still in it");
-    free(back);
-
-    unlink(in_tree);
-    boardfile_keep(&c);
-    saved = slurp_file(kept);
-    expect(saved && strstr(saved, "rewrite the cancel row"),
-           "a card file that is gone leaves the last copy standing");
-    free(saved);
-
-    struct board_card other = {0};
-    snprintf(other.id, sizeof other.id, "cf02");
-    snprintf(other.worktree, sizeof other.worktree, "%s", c.worktree);
-    expect(!boardfile_put(other.worktree, &other),
-           "a card with no copy kept has nothing to put back");
-
-    boardfile_drop(c.id);
-    expect(slurp_file(kept) == NULL, "dropping the card drops the copy");
-}
-
-static void test_archiving_drops_the_card_file(void)
-{
-    plant_stale("ag02");
-
-    char kept[4300];
-    expect(boardfile_kept("ag02", kept, sizeof kept), "the copy has a path");
-    put_file(kept, "# an archived card\n");
-
-    expect(board_archive(1) == 1, "the stale card is archived");
-    expect(slurp_file(kept) == NULL, "and its card file goes with it");
 }
 
 static void test_a_card_carries_a_queue_and_a_history(void)
@@ -1274,8 +1202,6 @@ int main(void)
     test_auto_pick_roundtrip();
     test_revision_tracks_writes();
     test_the_shipped_actions_are_built_in();
-    test_the_card_file_outlives_the_worktree();
-    test_archiving_drops_the_card_file();
     test_a_card_carries_a_queue_and_a_history();
     test_an_action_waits_on_what_it_needs();
     test_a_trigger_queues_a_pipeline();

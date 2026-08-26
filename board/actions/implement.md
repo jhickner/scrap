@@ -5,12 +5,17 @@ commits: yes
 needs: 
 ---
 
-The plan below was approved. Start coding. Start with your todo list.
+Read CARD.md at the root of the worktree first. Its `## Plan` section was
+approved and is the spec; it supersedes the card body inlined below, which is
+only what the card was opened with. If there is no such section, the card body
+is all there is.
 
-The plan is the spec. Work to it rather than to your own reading of the card:
-if a step of it looks wrong, say so and carry on with the rest, and do not
-redesign it midway. What the plan does not settle is yours to settle, in the
-style of the code around it.
+Start coding. Start with your todo list.
+
+Work to the plan rather than to your own reading of the card: if a step of it
+looks wrong, say so and carry on with the rest, and do not redesign it midway.
+What the plan does not settle is yours to settle, in the style of the code
+around it.
 
 You are in a worktree of your own, on a branch of its own. Do not merge, do not
 switch branches, do not touch the main branch, and do not start work the plan
@@ -18,7 +23,8 @@ does not ask for.
 
 Reach a state someone else can test, commit it to the branch you are already
 on, and then stop and say how to test it. Commit even when the work is
-unfinished: uncommitted work does not exist to anything downstream.
+unfinished: uncommitted work does not exist to anything downstream. CARD.md is
+tracked on the branch too — commit it with the rest if you wrote to it.
 
 The CLAUDE.md files in scope are binding, not advisory. Two rules they state
 are broken most often, so they are repeated here as tests to apply to your own

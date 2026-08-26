@@ -26,6 +26,13 @@ Resolve what the rebase raises. A conflict is yours to settle: take the intent
 of both sides rather than either one whole. Run the project's check afterwards
 and fix what it reports, committing on the branch you rebased.
 
+CARD.md is tracked on the branch and must not land at the root of the
+checkout. Remove it on the branch before merging, so the plan stays in the
+branch's history and out of the tree:
+
+    git -C {worktree} rm -q --ignore-unmatch CARD.md
+    git -C {worktree} commit --quiet -m 'card: drop CARD.md' -- CARD.md
+
 Land it with a fast-forward merge once the branch is clean and the check
 passes:
 
