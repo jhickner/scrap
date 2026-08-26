@@ -91,6 +91,12 @@ int session_set_cwd(struct session *s, const char *path);
 
 int session_set_model(struct session *s, const char *model);
 
+/* Point the session at a model, an effort and a directory in one backend
+   replacement, rather than one for each. A directory it is already in keeps
+   the conversation: the child is started on the session it resumes. */
+int session_retarget(struct session *s, const char *model, const char *effort,
+                     const char *cwd);
+
 int session_set_effort(struct session *s, const char *effort);
 const char *session_effort(const struct session *s);
 int session_can_set_effort(const struct session *s);

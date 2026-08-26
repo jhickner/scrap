@@ -1,6 +1,7 @@
 #include "boardwork.h"
 
 #include <ctype.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -558,20 +559,11 @@ static int retarget(struct session *s, const char *backend, const char *model,
         session_clear(s);
         if (!session_switch_backend(s, backend))
             return 0;
-    }
-    if (switch_d) {
-        if (!session_set_cwd(s, cwd))
-            return 0;
-    } else if (!switch_b) {
+    } else if (!switch_d) {
         session_clear(s);
     }
 
-    session_set_model(s, model && *model ? model : NULL);
-    if (effort && *effort)
-        session_set_effort(s, effort);
-    else
-        session_set_effort(s, NULL);
-    return 1;
+    return session_retarget(s, model, effort, cwd);
 }
 
 static void take_slot(struct worker *w, const struct board_card *c,
@@ -955,17 +947,12 @@ static int step_send(const struct board_card *c, const struct board_action *p,
 
     const struct board_action *tiered =
         boardcfg_for_backend(p->name, session_backend(w->session), c->tier_pin);
-    if (tiered) {
-        session_set_model(w->session, tiered->model[0] ? tiered->model : NULL);
-        session_set_effort(w->session, tiered->effort[0] ? tiered->effort : NULL);
-    }
 
     /* an action that runs in the repo acts on the checkout, so the session
        walks out of the worktree to take it and back in afterwards. */
     const char *want = boardflow_cwd(c, p);
-    const char *here = session_cwd(w->session);
-    if (want && *want && (!here || strcmp(here, want)) &&
-        !session_set_cwd(w->session, want)) {
+    if (!session_retarget(w->session, tiered ? tiered->model : NULL,
+                          tiered ? tiered->effort : NULL, want)) {
         free(turn);
         return 0;
     }
@@ -1030,6 +1017,17 @@ int boardwork_pump(void)
     return started;
 }
 
+static void *tidy_thread(void *ud)
+{
+    char *step = ud;
+    (void)system(step);
+    free(step);
+    return NULL;
+}
+
+/* Removing the worktree deletes a checkout, which the poll that asks for it
+   would stand still for. The card has already let go of the path, so the git
+   commands go on a thread of their own. */
 static int drop_worktree(const struct board_card *c)
 {
     boardfile_keep(c);
@@ -1041,7 +1039,19 @@ static int drop_worktree(const struct board_card *c)
     branch_of(c->id, branch, sizeof branch);
     if (!tidy_step(root, c->worktree, branch, step, sizeof step))
         return 1;
-    return system(step) != -1;
+
+    char *command = strdup(step);
+    if (!command)
+        return system(step) != -1;
+
+    pthread_t t;
+    if (pthread_create(&t, NULL, tidy_thread, command) != 0) {
+        int ok = system(command) != -1;
+        free(command);
+        return ok;
+    }
+    pthread_detach(t);
+    return 1;
 }
 
 /* Commits on the card's branch that the checkout's branch does not have. A card

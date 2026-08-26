@@ -117,6 +117,11 @@ static void replace(char **slot, const char *value)
     *slot = value ? strdup(value) : NULL;
 }
 
+static int same_string(const char *a, const char *b)
+{
+    return a == b || (a && b && !strcmp(a, b));
+}
+
 static void stream_append(struct session *s, const char *value)
 {
     if (!value || !*value)
@@ -153,6 +158,7 @@ struct session *session_set_drawing(struct session *s)
 }
 
 static void remember_model(const struct session *s);
+static void retire(Backend *b);
 static int dir_alive(const char *path);
 static int ground_target(const char *gone, char *out, size_t size);
 
@@ -762,8 +768,11 @@ void session_free(struct session *s)
         if (s->wake[i] >= 0)
             close(s->wake[i]);
     free(s->asked);
-    if (s->agent)
-        s->agent->close(s->agent);
+    if (s->agent) {
+        s->agent->set_event_cb(s->agent, NULL, NULL);
+        s->agent->set_abort_check(s->agent, NULL);
+        retire(s->agent);
+    }
     free(s->backend);
     free(s->cwd);
     free(s->workdir);
@@ -1143,6 +1152,33 @@ int session_resume(struct session *s, const char *id)
     return 1;
 }
 
+/* A directory change is a conversation of its own: nothing the last one
+   counted, said or was called carries into it. */
+static void started_over(struct session *s)
+{
+    s->turns = 0;
+    s->cost_usd = 0;
+    s->tokens_in = s->tokens_out = 0;
+    s->context_tokens = 0;
+    replace(&s->workdir, NULL);
+    replace(&s->last_reply, NULL);
+    replace(&s->failed_prompt, NULL);
+    replace(&s->last_block, NULL);
+    transcript_clear(&s->transcript);
+    s->title[0] = '\0';
+    s->stale_title[0] = '\0';
+    s->announce_title = 0;
+    s->retitle = 1;
+    s->named = 0;
+    status_set_note(NULL);
+
+    s->id[0] = '\0';
+    const char *id = s->agent->session_id(s->agent);
+    if (id)
+        set_id(s, id);
+    gitinfo_forget();
+}
+
 int session_set_cwd(struct session *s, const char *path)
 {
     if (!s || !path || !*path)
@@ -1169,27 +1205,72 @@ int session_set_cwd(struct session *s, const char *path)
     retire(previous);
     free(was);
 
-    s->turns = 0;
-    s->cost_usd = 0;
-    s->tokens_in = s->tokens_out = 0;
-    s->context_tokens = 0;
-    replace(&s->workdir, NULL);
-    replace(&s->last_reply, NULL);
-    replace(&s->failed_prompt, NULL);
-    replace(&s->last_block, NULL);
-    transcript_clear(&s->transcript);
-    s->title[0] = '\0';
-    s->stale_title[0] = '\0';
-    s->announce_title = 0;
-    s->retitle = 1;
-    s->named = 0;
-    status_set_note(NULL);
+    started_over(s);
+    return 1;
+}
 
-    s->id[0] = '\0';
-    const char *id = s->agent->session_id(s->agent);
-    if (id)
-        set_id(s, id);
-    gitinfo_forget();
+/* Setting a model, an effort and a directory one at a time restarts the child
+   for each, and claude takes its effort as a turn over the stream, which the
+   caller waits out. This asks for all three at once: one replacement, started
+   with what it needs on its command line and answering nothing. */
+int session_retarget(struct session *s, const char *model, const char *effort,
+                     const char *cwd)
+{
+    if (!s)
+        return 0;
+
+    const char *want = cwd && *cwd ? cwd : s->cwd;
+    if (!want)
+        return 0;
+
+    int moved = !s->cwd || strcmp(s->cwd, want) != 0;
+    char *next_model = dup_model(s->backend, model && *model ? model : NULL);
+    char *next_effort = effort && *effort ? strdup(effort) : NULL;
+    char *next_cwd = strdup(want);
+    if ((model && *model && !next_model) || (effort && *effort && !next_effort) ||
+        !next_cwd) {
+        free(next_model);
+        free(next_effort);
+        free(next_cwd);
+        return 0;
+    }
+
+    if (!moved && same_string(s->model, next_model) &&
+        same_string(s->effort, next_effort)) {
+        free(next_model);
+        free(next_effort);
+        free(next_cwd);
+        return 1;
+    }
+
+    Backend *previous = s->agent;
+    char    *was_model = s->model, *was_effort = s->effort, *was_cwd = s->cwd;
+    s->model = next_model;
+    s->effort = next_effort;
+    s->cwd = next_cwd;
+    s->agent = NULL;
+
+    const char *resume = moved || !s->id[0] ? NULL : s->id;
+    if (!agent(s) || !s->agent->start(s->agent, resume)) {
+        if (s->agent)
+            s->agent->close(s->agent);
+        s->agent = previous;
+        free(s->model);
+        free(s->effort);
+        free(s->cwd);
+        s->model = was_model;
+        s->effort = was_effort;
+        s->cwd = was_cwd;
+        return 0;
+    }
+    retire(previous);
+    free(was_model);
+    free(was_effort);
+    free(was_cwd);
+
+    replace(&s->resolved, NULL);
+    if (moved)
+        started_over(s);
     return 1;
 }
 
