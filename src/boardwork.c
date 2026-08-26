@@ -823,6 +823,10 @@ void boardwork_finished(struct session *s)
         board_note(w->id, "board", "no commit on the branch");
     else if ((!failed || !*failed) && stored)
         pick_after(w);
+
+    /* the rest of the queue starts on the turn that finished the action before
+       it, rather than waiting for the board view to be opened and tick */
+    boardwork_pump();
 }
 
 static char pull_failed[BOARD_ID_MAX];
@@ -963,6 +967,26 @@ static int step_start(const struct board_card *c)
     if (!strcmp(w->job, p->name))
         return 0;
     return step_send(c, p, w);
+}
+
+/* step_start's "the worker is already on this action" guard is what keeps the
+   board's tick from sending the same action twice; a trigger has just asked
+   for this one, so it sends whatever the card is now on. */
+void boardwork_step(const char *id)
+{
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+    struct board_card *c = board_find(cards, n, id);
+
+    const struct board_action *p = boardflow_action(c);
+    struct worker             *w = p ? slot_of(id) : NULL;
+    if (p && w) {
+        step_send(c, p, w);
+    } else if (p) {
+        char why[256];
+        boardwork_start(c, why, sizeof why);
+    }
+    board_free(cards, n);
 }
 
 int boardwork_pump(void)

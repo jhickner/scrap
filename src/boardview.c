@@ -696,8 +696,10 @@ static int run_now(const char *id, const char *name, char *why, int size)
     if (!queued)
         return 0;
 
-    if (boardwork_tab(id) >= 0)
+    if (boardwork_tab(id) >= 0) {
+        boardwork_step(id);
         return 1;
+    }
 
     n = board_load(&cards);
     c = board_find(cards, n, id);

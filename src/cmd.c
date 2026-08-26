@@ -752,10 +752,13 @@ static void do_run(struct session *s, const char *arg)
     snprintf(id, sizeof id, "%s", held);
 
     char why[512] = "";
-    if (boardview_trigger(id, arg, why, sizeof why))
-        reply_note("card %s runs %s next", id, arg);
-    else
+    if (!boardview_trigger(id, arg, why, sizeof why)) {
         reply_error("%s", why);
+        return;
+    }
+
+    reply_note("card %s runs %s next", id, arg);
+    boardwork_step(id);
 }
 
 static void do_board(struct session *s, const char *arg)

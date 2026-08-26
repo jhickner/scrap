@@ -37,6 +37,10 @@ void boardwork_discard(const struct board_card *c);
 /* how many commits closing the card would throw away with its branch */
 int boardwork_unmerged(const struct board_card *c);
 
+/* Run the action the card is on now, rather than waiting for the board's next
+   tick, which only comes round while the board view is open. */
+void boardwork_step(const char *id);
+
 int boardwork_pump(void);
 
 /* stop what the card is running and say why, leaving it in review */
