@@ -800,9 +800,7 @@ int boardwork_rejoin(const struct board_card *c, char *why, int size)
         return -1;
     }
 
-    struct worker *w = slot_of(c->id);
-    if (w)
-        w->attached = 1;
+    boardwork_keep(c->id);
 
     board_note(c->id, "board", "worker rejoined the session");
     show_card(at, c);
@@ -1185,6 +1183,13 @@ void boardwork_let_go(const char *id)
         workspace_close_to_base(at);
 }
 
+void boardwork_keep(const char *id)
+{
+    struct worker *w = slot_of(id);
+    if (w)
+        w->attached = 1;
+}
+
 /* The session stays with the card for every action in its queue, so it is held
  * until the queue empties and the card comes to rest. */
 static int holds(const struct board_card *c)
@@ -1351,18 +1356,21 @@ int boardwork_poll(void)
             changed = 1;
             continue;
         }
-        /* a tab a person rejoined into is theirs: it is let go when they
-           close it, not when the card comes to rest. The action it was on is
-           not still running, though, so the slot drops the step. */
-        if (workers[i].attached) {
-            if (c && !holds(c) && workers[i].job[0]) {
+        if (c && holds(c)) {
+            changed |= reconcile(&workers[i], c);
+            continue;
+        }
+        /* a tab a person is in is theirs: it is let go when they close it,
+           not when the card comes to rest. The board opens over that tab,
+           so a tick here would close the session they are in. The action
+           it was on is not still running, though, so the slot drops the
+           step. */
+        if (workers[i].attached ||
+            workspace_index_of(workers[i].session) == workspace_index()) {
+            if (workers[i].job[0]) {
                 workers[i].job[0] = '\0';
                 changed = 1;
             }
-            continue;
-        }
-        if (c && holds(c)) {
-            changed |= reconcile(&workers[i], c);
             continue;
         }
         boardwork_let_go(workers[i].id);
@@ -1418,6 +1426,10 @@ void boardwork_spoke_to(struct session *s)
     struct worker *w = slot_by_session(s);
     if (!w)
         return;
+
+    /* a turn the board started is sent to a tab that is not this one */
+    if (workspace_index_of(s) == workspace_index())
+        w->attached = 1;
 
     struct board_card *cards = NULL;
     int                n = board_load(&cards);

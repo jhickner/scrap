@@ -951,8 +951,10 @@ static int card_tab(const struct board_card *c, char *notice, size_t size)
             return -1;
         tab = boardwork_rejoin(c, why, sizeof why);
     }
-    if (tab >= 0)
+    if (tab >= 0) {
+        boardwork_keep(c->id);
         return tab;
+    }
 
     if (step)
         snprintf(notice, size, "%s is running without a tab", step);

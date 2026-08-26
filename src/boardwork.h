@@ -33,6 +33,8 @@ const char *boardwork_step_job(const char *id);
 
 void boardwork_let_go(const char *id);
 
+void boardwork_keep(const char *id);
+
 int boardwork_poll(void);
 
 void boardwork_discard(const struct board_card *c);
