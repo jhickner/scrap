@@ -530,9 +530,12 @@ static void test_worktree_name_is_stable(void)
     char path[4200];
     snprintf(path, sizeof path, "%s/.claude/worktrees/abcd", root);
 
-    expect(gitcmd_worktree_add(root, path, "worktree-abcd"), "first add");
-    expect(gitcmd_worktree_add(root, path, "worktree-abcd"),
+    int made = 0;
+    expect(gitcmd_worktree_add(root, path, "worktree-abcd", &made), "first add");
+    expect(made == 1, "the first add reports it made the worktree");
+    expect(gitcmd_worktree_add(root, path, "worktree-abcd", &made),
            "a second add reuses the same path");
+    expect(made == 0, "and reports it made nothing");
 
     char file[4300];
     snprintf(file, sizeof file, "%s/kept.txt", path);
@@ -543,8 +546,9 @@ static void test_worktree_name_is_stable(void)
         fclose(f);
     }
 
-    expect(gitcmd_worktree_add(root, path, "worktree-abcd"),
+    expect(gitcmd_worktree_add(root, path, "worktree-abcd", &made),
            "add after a failed job still lands at the same path");
+    expect(made == 0, "and reports it made nothing");
     f = fopen(file, "r");
     expect(f != NULL, "uncommitted work is still there");
     if (f) {
@@ -562,8 +566,9 @@ static void test_worktree_name_is_stable(void)
              path, path, path);
     expect(system(cmd) == 0, "commit then lose the directory");
 
-    expect(gitcmd_worktree_add(root, path, "worktree-abcd"),
+    expect(gitcmd_worktree_add(root, path, "worktree-abcd", &made),
            "add after the directory is gone still uses the same path");
+    expect(made == 1, "and reports it made the worktree again");
     f = fopen(file, "r");
     expect(f != NULL, "the committed file is checked out again");
     if (f) {
