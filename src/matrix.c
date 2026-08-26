@@ -1014,6 +1014,9 @@ static int open_cells(struct view *v, struct session *s, const char *cwd,
         }
         c->s = workspace_at(at);
         session_set_naming(c->s, 0);
+        /* a session that has taken no turn has no id yet: the rows open all
+           the same and simply hang under nothing */
+        session_set_parent(c->s, session_id(s));
         session_set_permission(c->s, session_permission(s));
         session_set_thinking(c->s, session_thinking(s));
         session_set_observer(c->s, cell_event, c);

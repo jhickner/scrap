@@ -23,6 +23,7 @@
 #include "restart.h"
 #include "md.h"
 #include "models.h"
+#include "parent.h"
 #include "sessionprefs.h"
 #include "sessionview.h"
 #include "viewport.h"
@@ -76,6 +77,7 @@ struct session {
     int    (*abort_hook)(void *ud);
     void    *abort_ud;
     int      skip_naming;
+    char     parent[128];
     int      thinking;
     int      compact;
     int      customizations;
@@ -966,6 +968,13 @@ void session_set_abort_hook(struct session *s, int (*fn)(void *ud), void *ud)
 
 void session_set_naming(struct session *s, int on) { s->skip_naming = !on; }
 
+void session_set_parent(struct session *s, const char *parent_id)
+{
+    snprintf(s->parent, sizeof s->parent, "%s", parent_id ? parent_id : "");
+    if (s->id[0])
+        parent_set(s->id, s->parent);
+}
+
 void session_set_thinking(struct session *s, int on) { s->thinking = on; }
 
 int session_thinking(const struct session *s) { return s->thinking; }
@@ -984,6 +993,8 @@ static void set_id(struct session *s, const char *id)
     int changed = strcmp(s->id, id) != 0;
     snprintf(s->id, sizeof s->id, "%s", id);
     if (changed) {
+        if (s->parent[0])
+            parent_set(s->id, s->parent);
         s->title[0] = '\0';
         s->stale_title[0] = '\0';
         s->announce_title = 0;
@@ -2067,6 +2078,15 @@ void session_report(const struct session *s)
         ui_note("  chat     %s", tg_label());
     if (s->id[0])
         ui_note("  session  %s", s->id);
+    if (s->id[0]) {
+        char up[128];
+        if (parent_of(s->id, up, sizeof up)) {
+            char name[200];
+            if (!title_lookup(up, name, sizeof name))
+                snprintf(name, sizeof name, "%s", up);
+            ui_note("  parent   %s", name);
+        }
+    }
 
     char scratch[512];
     path_home_relative(s->cwd, scratch, sizeof scratch);

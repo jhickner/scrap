@@ -17,6 +17,7 @@
 #include "boardwork.h"
 #include "livelist.h"
 #include "models.h"
+#include "parent.h"
 #include "pick.h"
 #include "scrollback.h"
 #include "sessionload.h"
@@ -58,6 +59,7 @@ struct row {
     char mark[4];
     char card[16];
     char id[128];
+    char parent[128];
     char cwd[512];
     char label[256];
     char detail[512];
@@ -89,6 +91,8 @@ static void tab_rows(struct row *rows, int *n)
         if (card)
             snprintf(r->card, sizeof r->card, "%s", card);
         snprintf(r->id, sizeof r->id, "%s", session_id(s) ? session_id(s) : "");
+        if (r->id[0])
+            parent_of(r->id, r->parent, sizeof r->parent);
         snprintf(r->detail, sizeof r->detail, "%s %s",
                  session_backend(s),
                  models_short_name(session_backend(s), session_model_label(s)));
@@ -186,8 +190,79 @@ static void live_rows(struct row *rows, int *n, const struct live_session *live,
         r->kind = ROW_LIVE;
         r->at = i;
         snprintf(r->id, sizeof r->id, "%s", v->id);
+        snprintf(r->parent, sizeof r->parent, "%s", v->parent);
         path_home_relative(v->cwd, r->cwd, sizeof r->cwd);
         fill_live(r, v);
+    }
+}
+
+/* a row nests under its parent only when the parent is in the same directory
+   group: a heading has to keep describing every row under it */
+static int in_group(const struct row *in, int n, const char *group, const char *id)
+{
+    for (int i = 0; i < n; i++)
+        if (!strcmp(in[i].cwd, group) && in[i].id[0] && !strcmp(in[i].id, id))
+            return 1;
+    return 0;
+}
+
+static void nest_label(struct row *r, int depth)
+{
+    const char *text = strchr(r->label, ' ');
+    text = text ? text + 1 : r->label;
+
+    char under[sizeof r->label];
+    snprintf(under, sizeof under, "%*s\xe2\x94\x94 %s", depth * 2, "", text);
+    snprintf(r->label, sizeof r->label, "%s", under);
+}
+
+static void note_parent(struct row *r)
+{
+    char name[200];
+    if (!title_lookup(r->parent, name, sizeof name))
+        snprintf(name, sizeof name, "%.8s", r->parent);
+
+    char said[sizeof r->detail];
+    snprintf(said, sizeof said, "%s \xc2\xb7 from %s", r->detail, name);
+    snprintf(r->detail, sizeof r->detail, "%s", said);
+}
+
+/* The parent file is hand-editable, so a cycle in it must not hang the list:
+   a row is emitted once and the walk stops at four deep. */
+#define NEST_MAX 4
+
+static void emit_tree(const struct row *in, int n, char *used, struct row *out,
+                      unsigned char *heading, int *m, int max, const char *group,
+                      const char *under, int depth)
+{
+    if (depth > NEST_MAX)
+        return;
+
+    for (int i = 0; i < n; i++) {
+        if (used[i] || strcmp(in[i].cwd, group) != 0)
+            continue;
+
+        int nested = in[i].parent[0] && in_group(in, n, group, in[i].parent);
+        if (!under) {
+            if (nested)
+                continue;
+        } else if (!nested || strcmp(in[i].parent, under)) {
+            continue;
+        }
+
+        used[i] = 1;
+        if (*m < max) {
+            out[*m] = in[i];
+            if (depth)
+                nest_label(&out[*m], depth);
+            else if (out[*m].parent[0])
+                note_parent(&out[*m]);
+            heading[*m] = 0;
+            (*m)++;
+        }
+        if (in[i].id[0])
+            emit_tree(in, n, used, out, heading, m, max, group, in[i].id,
+                      depth + 1);
     }
 }
 
@@ -223,6 +298,9 @@ static int group_rows(const struct row *in, int n, struct row *out,
             heading[m] = PICK_HEADING;
             m++;
         }
+        emit_tree(in, n, used, out, heading, &m, max, group, NULL, 0);
+
+        /* whatever a cycle or the depth cap stranded still has to be listed */
         for (int i = 0; i < n; i++) {
             if (used[i] || strcmp(in[i].cwd, group) != 0)
                 continue;

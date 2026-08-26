@@ -37,6 +37,10 @@ void session_set_abort_hook(struct session *s, int (*fn)(void *ud), void *ud);
 
 void session_set_naming(struct session *s, int on);
 
+/* the session this one was opened from; held until this one has an id of its
+   own to hang it under */
+void session_set_parent(struct session *s, const char *parent_id);
+
 void session_set_thinking(struct session *s, int on);
 int  session_thinking(const struct session *s);
 
