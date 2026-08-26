@@ -7,10 +7,11 @@
 #include "ui.h"
 #include "viewport.h"
 
-#define ROWS_MAX 128
+#define ROWS_MAX 512
 
 static int row_edit = -1;
 static int have;
+static int fill;
 
 static int split(char *body, char **line, int max)
 {
@@ -31,6 +32,8 @@ static int split(char *body, char **line, int max)
     return n;
 }
 
+void block_fill(int on) { fill = on ? 1 : 0; }
+
 void block_begin(void)
 {
     row_edit = -1;
@@ -45,12 +48,18 @@ void block_end(int caret_row, int caret_col)
         return;
     }
 
+    static char blank[] = "";
+
     char *line[ROWS_MAX];
     int   n = split(body, line, ROWS_MAX);
 
-    int limit = tty_rows() - 1;
+    int limit = tty_rows() - !fill;
+    if (limit > ROWS_MAX)
+        limit = ROWS_MAX;
     if (n > limit)
         n = limit > 0 ? limit : 1;
+    while (fill && n < limit)
+        line[n++] = blank;
 
     viewport_chrome(line, n, caret_row, caret_col);
     have = n > 0;

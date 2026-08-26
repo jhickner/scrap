@@ -427,7 +427,7 @@ struct grid {
 
 static int grid_rows(const struct grid *v)
 {
-    int rows = tty_rows() - 3 - chrome_gap() - (GRID_HEAD - 1);
+    int rows = chrome_modal_rows() - GRID_HEAD;
     rows -= chrome_foot_rows(v->ask, v->hint, ui_columns());
     return rows < 3 ? 3 : rows;
 }

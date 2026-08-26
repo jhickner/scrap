@@ -35,7 +35,7 @@ static int width_of(void)
 
 static int room_for(void)
 {
-    int rows = tty_rows() - 3 - chrome_gap();
+    int rows = chrome_modal_rows() - 1;
     return rows < 1 ? 1 : rows;
 }
 

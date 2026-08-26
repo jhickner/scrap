@@ -17,6 +17,12 @@ int  chrome_rows_left(void);
 
 int  chrome_gap(void);
 
+/* a modal covers the whole screen, leaving no session row painted behind it */
+void chrome_full(int on);
+
+/* the rows a modal has to paint over */
+int  chrome_modal_rows(void);
+
 /* the bar and the title a modal heads with */
 void chrome_title_paint(const char *title);
 

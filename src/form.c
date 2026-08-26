@@ -490,7 +490,7 @@ static void put_value_row(struct state *st, int i, int row, int focused)
 
 static int room_for(void)
 {
-    int rows = tty_rows() - 4 - chrome_gap();
+    int rows = chrome_modal_rows() - 2;
     return rows < 3 ? 3 : rows;
 }
 

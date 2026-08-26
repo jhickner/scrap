@@ -1041,7 +1041,7 @@ static void close_list(void)
     chrome_modal(NULL, NULL);
 }
 
-int boardview_run(const char *cwd)
+static int board_loop(const char *cwd)
 {
     boardcfg_reload();
 
@@ -1421,4 +1421,12 @@ int boardview_run(const char *cwd)
         }
         board_free(cards, n);
     }
+}
+
+int boardview_run(const char *cwd)
+{
+    chrome_full(1);
+    int at = board_loop(cwd);
+    chrome_full(0);
+    return at;
 }

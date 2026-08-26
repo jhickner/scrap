@@ -148,7 +148,7 @@ static void step(struct view *v, int dir)
 
 static int visible_cap(const struct view *v)
 {
-    int rows = tty_rows() - 3 - chrome_gap();
+    int rows = chrome_modal_rows() - 1;
     if (v->live)
         rows -= chrome_foot_rows(v->live->ask, v->live->hint, ui_columns());
     if (v->heading) {

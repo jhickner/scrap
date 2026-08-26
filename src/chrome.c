@@ -15,6 +15,7 @@ static chrome_modal_fn  modal;
 static void            *modal_ud;
 
 static int budget;
+static int full;
 static int spin_row = -1;
 static int above_rows;
 
@@ -122,7 +123,19 @@ static void fit_above(struct above *a, const struct heights *h, int room)
 
 int chrome_gap(void)
 {
+    if (full && modal)
+        return 0;
     return viewport_active() && !viewport_ends_blank();
+}
+
+void chrome_full(int on)
+{
+    full = on ? 1 : 0;
+}
+
+int chrome_modal_rows(void)
+{
+    return full ? tty_rows() : tty_rows() - 2 - chrome_gap();
 }
 
 void chrome_title_paint(const char *title)
@@ -223,6 +236,7 @@ void chrome_paint(void)
         above_rows = 0;
         if (chrome_gap())
             ui_put("\n");
+        block_fill(full);
         modal(modal_ud);
         block_end(0, -1);
         return;
@@ -244,6 +258,7 @@ void chrome_paint(void)
     fit_above(&a, &h, tty_rows() - 1 - input_rows - spinning - gap);
 
     block_begin();
+    block_fill(0);
     budget = tty_rows() - 1;
     spin_row = -1;
 
