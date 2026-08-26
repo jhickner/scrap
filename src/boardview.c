@@ -905,6 +905,8 @@ static void card_menu(const struct board_card *c, struct menu *m)
     int         on = boardflow_offered(c, offered, BOARD_ACTIONS_MAX);
 
     menu_clear(m);
+    if (on > MENU_MAX - 1)
+        on = MENU_MAX - 1;
     for (int i = 0; i < on; i++)
         menu_add(m, offered[i], 0);
     menu_add(m, "attach", on > 0);
