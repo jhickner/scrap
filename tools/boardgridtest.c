@@ -291,6 +291,29 @@ static void test_a_working_card_shows_its_log(void)
     boardgrid_layout_free(&g);
 }
 
+static int height_of(int cols, int lanes)
+{
+    struct grid_layout g = {0};
+    expect(boardgrid_layout(tiles, lane_of, tiles_n, lanes, cols, 24, 0, &g),
+           "the pinned card lays out");
+    int h = g.tiles ? g.tile[0].h : 0;
+    boardgrid_layout_free(&g);
+    return h;
+}
+
+static void test_the_pins_share_the_status_row(void)
+{
+    reset();
+    tile(0, "short", "$0.02 \xc2\xb7 23m ago");
+    int bare = height_of(80, 1);
+
+    snprintf(tiles[0].pins, sizeof tiles[0].pins, "pi");
+    expect(height_of(80, 1) == bare, "pins that fit take no row of their own");
+
+    snprintf(tiles[0].pins, sizeof tiles[0].pins, "opus \xc2\xb7 thinking hard for a while");
+    expect(height_of(80, 1) == bare + 1, "pins that do not fit take a row");
+}
+
 int main(void)
 {
     test_lane_widths();
@@ -301,6 +324,7 @@ int main(void)
     test_the_selection_stays_on_screen();
     test_a_tile_taller_than_the_lane();
     test_a_working_card_shows_its_log();
+    test_the_pins_share_the_status_row();
 
     if (failures) {
         fprintf(stderr, "%d failure(s)\n", failures);

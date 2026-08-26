@@ -78,6 +78,20 @@ static int foot_of(const struct board_tile *t, char *out, size_t size)
     return out[0] != '\0';
 }
 
+/* the status and the pins share a row when the two fit in one */
+static int foot_joined(const struct board_tile *t, int budget, char *out,
+                       size_t size)
+{
+    char foot[GRID_LINE_MAX];
+    if (!has_status(t) || !foot_of(t, foot, sizeof foot))
+        return 0;
+    int room = t->spin ? budget - GRID_SPIN : budget;
+    if ((int)ui_cells(t->status) + 3 + (int)ui_cells(foot) > room)
+        return 0;
+    snprintf(out, size, "%s \xc2\xb7 %s", t->status, foot);
+    return 1;
+}
+
 /* the last lines of the session log, while the card is working */
 static int say_rows(const struct board_tile *t)
 {
@@ -85,11 +99,13 @@ static int say_rows(const struct board_tile *t)
 }
 
 /* the rows a tile carries below its status row */
-static int under_status(const struct board_tile *t)
+static int under_status(const struct board_tile *t, int budget)
 {
     char foot[GRID_LINE_MAX];
     int  say = say_rows(t);
-    return foot_of(t, foot, sizeof foot) + (say ? 1 + say : 0);
+    int  own = foot_of(t, foot, sizeof foot) &&
+              !foot_joined(t, budget, foot, sizeof foot);
+    return own + (say ? 1 + say : 0);
 }
 
 static int tile_height(const struct board_tile *t, int lane_w)
@@ -101,6 +117,8 @@ static int tile_height(const struct board_tile *t, int lane_w)
 
     char foot[GRID_LINE_MAX];
     int  under = has_status(t) + foot_of(t, foot, sizeof foot);
+    if (foot_joined(t, budget, foot, sizeof foot))
+        under--;
     if (under)
         h += 1 + under;
 
@@ -275,7 +293,7 @@ int boardgrid_layout(const struct board_tile *t, const int *lane_of, int n,
     for (int i = 0; i < out->tiles; i++) {
         struct grid_rect        *r = &out->tile[i];
         const struct board_tile *tile = &t[r->tile];
-        int                      under = under_status(tile);
+        int under = under_status(tile, text_width(out->lane_w));
         /* a tile clipped to a short lane has lost its status row: what sits
            where the row would be is title, and a click there is not the worker */
         if (has_status(tile) && r->h == tile_height(tile, out->lane_w)) {
@@ -393,7 +411,12 @@ static void tile_lines(const struct board_tile *t, int budget, struct lines *out
     if ((has_status(t) || has_foot) && out->n < GRID_TILE_ROWS)
         out->rule[out->n++] = 1;
 
-    if (has_status(t))
+    char joined[GRID_LINE_MAX];
+    if (foot_joined(t, budget, joined, sizeof joined)) {
+        add_line(out, joined, t->spin ? budget - GRID_SPIN : budget, UI_DIM,
+                 t->spin ? GRID_SPIN : 0);
+        has_foot = 0;
+    } else if (has_status(t))
         add_line(out, t->status, t->spin ? budget - GRID_SPIN : budget, UI_DIM,
                  t->spin ? GRID_SPIN : 0);
     if (has_foot)
