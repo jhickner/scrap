@@ -134,6 +134,13 @@ void boardgrid_layout_free(struct grid_layout *g)
     memset(g, 0, sizeof *g);
 }
 
+/* the rows a card takes in its lane, the menu hanging off it included */
+static int slot_height(const struct grid_layout *g, int j)
+{
+    return g->height[j] +
+           (g->gap_rows > 0 && g->order[j] == g->gap_tile ? g->gap_rows : 0);
+}
+
 /* the first card of a lane to draw so that the one at s is on screen */
 static int scroll_top(const struct grid_layout *g, int k, int s, int limit)
 {
@@ -141,9 +148,9 @@ static int scroll_top(const struct grid_layout *g, int k, int s, int limit)
     while (s < k && top < s) {
         int used = 0, fits = 0;
         for (int j = top; j <= s; j++) {
-            if (used + g->height[j] > limit)
+            if (used + slot_height(g, j) > limit)
                 break;
-            used += g->height[j];
+            used += slot_height(g, j);
             fits = j == s;
         }
         if (fits)
@@ -159,9 +166,12 @@ static int place_lane(struct grid_layout *g, int lane, int li, int k, int top,
     int row = 0, placed = 0;
     for (int j = top; j < k; j++) {
         int h = g->height[j];
-        if (j == top && h > limit)
+        int slot = slot_height(g, j);
+        if (j == top && h > limit) {
             h = limit;
-        if (row + h > limit)
+            slot = limit;
+        }
+        if (row + slot > limit)
             break;
 
         struct grid_rect *r = &g->tile[g->tiles++];
@@ -172,7 +182,7 @@ static int place_lane(struct grid_layout *g, int lane, int li, int k, int top,
         r->w = g->lane_w - 1;
         r->h = h;
         r->status_row = -1;
-        row += h;
+        row += slot;
         placed++;
     }
     return placed;
@@ -406,9 +416,18 @@ static int grid_rows(const struct grid *v)
     return rows < 3 ? 3 : rows;
 }
 
+static struct menu *open_menu(const struct grid *v)
+{
+    return v->menu && v->menu->open && v->menu->n ? v->menu : NULL;
+}
+
 static int relayout(struct grid *v)
 {
+    struct menu *m = open_menu(v);
+
     v->rows = grid_rows(v);
+    v->g.gap_tile = v->sel;
+    v->g.gap_rows = m ? menu_rows(m) : 0;
     v->ok = boardgrid_layout(v->t, v->lane_of, v->n, v->lanes, ui_columns(),
                              v->rows, v->sel, &v->g);
     if (!v->ok)
@@ -426,11 +445,6 @@ static int relayout(struct grid *v)
     for (int i = 0; i < v->g.tiles; i++)
         tile_lines(&v->t[v->g.tile[i].tile], budget, &v->drawn[i]);
     return 1;
-}
-
-static struct menu *open_menu(const struct grid *v)
-{
-    return v->menu && v->menu->open && v->menu->n ? v->menu : NULL;
 }
 
 /* where the box hangs against the tile the cursor is on, pulled up the lane
@@ -791,6 +805,10 @@ int boardgrid_run(const char *title, const struct board_tile *tiles,
             if (ev.key == TK_ESCAPE ||
                 (ev.key == TK_CHAR && (ev.cp == 3 || ev.cp == 4))) {
                 v.menu->open = 0;
+                if (!relayout(&v)) {
+                    result = GRID_NARROW;
+                    goto done;
+                }
                 chrome_paint();
                 continue;
             }

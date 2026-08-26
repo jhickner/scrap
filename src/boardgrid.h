@@ -27,6 +27,8 @@ struct grid_rect {
 struct grid_layout {
     int lane_w, lanes_shown, lane_first, lanes;
 
+    int gap_tile, gap_rows;
+
     struct grid_rect *tile;
     int               tiles;
 
