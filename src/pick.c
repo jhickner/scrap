@@ -52,6 +52,11 @@ static int item_heading(const struct view *v, int i)
            (v->heading[i] == PICK_HEADING || v->heading[i] == PICK_TEXT);
 }
 
+static int item_text(const struct view *v, int i)
+{
+    return v->heading && v->heading[i] == PICK_TEXT;
+}
+
 static int item_group(const struct view *v, int i)
 {
     return v->heading && v->heading[i] == PICK_HEADING;
@@ -305,9 +310,20 @@ static void paint_under(struct view *v, struct menu *box, int *box_row)
             ui_esc(ui_style(UI_DIM));
             ui_put("  ");
             size_t budget = columns > 3 ? (size_t)(columns - 3) : 1;
-            size_t fit = ui_fit_bytes(items[i].label, budget);
+            int    cut = 0;
+            size_t fit;
+            if (item_text(v, i) && pad_to) {
+                size_t mark = (v->live && (v->live->spin || v->live->mark)) ? 2 : 0;
+                size_t cap = pad_to + 2 + mark;
+                if (budget > cap)
+                    budget = cap;
+                fit = fit_bytes(items[i].label, budget, &cut);
+            } else {
+                fit = ui_fit_bytes(items[i].label, budget);
+                cut = items[i].label[fit] != '\0';
+            }
             ui_putn(items[i].label, fit);
-            if (items[i].label[fit])
+            if (cut)
                 ui_put("…");
             ui_esc(ui_style(UI_RESET));
             ui_put("\n");
