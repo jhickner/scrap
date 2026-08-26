@@ -219,16 +219,27 @@ static int laned(const struct lane *lanes, int n, const char *step)
     return 0;
 }
 
+/* Which side of the review lane a step stands on: an action that runs in the
+   checkout comes after review, the rest before it. */
+static int steps_in(const char *step, enum board_in where)
+{
+    const struct board_action *a = boardcfg_action(step);
+    enum board_in              at = a ? a->where : BOARD_IN_WORKTREE;
+    return at == where;
+}
+
 /* The steps in the order the config names them, then anything a card is on
    that the config no longer has. */
 static int work_lanes(const struct board_card *cards, int n, const char *filter,
-                      struct lane *out, int max)
+                      enum board_in where, struct lane *out, int max)
 {
     const char *acts[BOARD_ACTIONS_MAX];
     int         acts_n = boardcfg_actions(acts, BOARD_ACTIONS_MAX);
     int         k = 0;
 
-    for (int i = 0; i < acts_n && k < max; i++)
+    for (int i = 0; i < acts_n && k < max; i++) {
+        if (!steps_in(acts[i], where))
+            continue;
         for (int j = 0; j < n; j++) {
             const char *step = board_step(&cards[j]);
             if (board_stands(&cards[j]) != BOARD_WORKING ||
@@ -239,11 +250,13 @@ static int work_lanes(const struct board_card *cards, int n, const char *filter,
             k++;
             break;
         }
+    }
 
     for (int j = 0; j < n && k < max; j++) {
         const char *step = board_step(&cards[j]);
         if (board_stands(&cards[j]) != BOARD_WORKING ||
-            !shows(&cards[j], filter) || !step || laned(out, k, step))
+            !shows(&cards[j], filter) || !step || !steps_in(step, where) ||
+            laned(out, k, step))
             continue;
         out[k].stand = BOARD_WORKING;
         out[k].step = step;
@@ -258,9 +271,10 @@ static int board_lanes(const struct board_card *cards, int n, const char *filter
     int k = 0;
     if (k < max)
         out[k++] = (struct lane){BOARD_OPEN, NULL};
-    k += work_lanes(cards, n, filter, out + k, max - k);
+    k += work_lanes(cards, n, filter, BOARD_IN_WORKTREE, out + k, max - k);
     if (k < max)
         out[k++] = (struct lane){BOARD_REVIEW, NULL};
+    k += work_lanes(cards, n, filter, BOARD_IN_REPO, out + k, max - k);
     if (k < max)
         out[k++] = (struct lane){BOARD_CLOSED, NULL};
     return k;
