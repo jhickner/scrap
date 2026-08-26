@@ -323,6 +323,8 @@ static void card_write(FILE *f, const struct board_card *c)
         fprintf(f, "# %s\n\n%s\n", c->title, body);
     else
         fprintf(f, "# %s\n", c->title);
+    if (c->worktree[0])
+        fprintf(f, "\nworktree %s\n", c->worktree);
     if (c->log_n) {
         fprintf(f, "\n## Notes\n\n");
         for (int i = 0; i < c->log_n; i++)
@@ -367,9 +369,15 @@ static struct card_show *card_show_new(const struct board_card *c)
         return NULL;
 
     const char *body = c->body ? c->body : "";
-    k->text = *body && !same_text(body, c->title)
-        ? text_dsprintf("%s\n\n%s", c->title, body)
-        : text_dsprintf("%s", c->title);
+    if (*body && !same_text(body, c->title))
+        k->text = c->worktree[0]
+            ? text_dsprintf("%s\n\n%s\n\nworktree %s", c->title, body,
+                            c->worktree)
+            : text_dsprintf("%s\n\n%s", c->title, body);
+    else
+        k->text = c->worktree[0]
+            ? text_dsprintf("%s\n\nworktree %s", c->title, c->worktree)
+            : text_dsprintf("%s", c->title);
     if (!k->text) {
         card_show_free(k);
         return NULL;
@@ -610,7 +618,12 @@ static int card_tree(const struct board_card *c, char *path, size_t path_size,
 
     base_of(root, path, c->base, base, base_size);
     ignore_card_file(path);
-    write_card_file(path, c);
+
+    struct board_card file = *c;
+    snprintf(file.worktree, sizeof file.worktree, "%s", path);
+    if (base && base[0])
+        snprintf(file.base, sizeof file.base, "%s", base);
+    write_card_file(path, &file);
     return 1;
 }
 
@@ -729,19 +742,21 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
         hold(c->id, c->cwd, s, job);
     }
 
-    show_card(at, c);
-
-    char *turn = first_turn(c);
-    if (turn) {
-        workspace_send(at, turn, c->title);
-        boardlog_turn(c->id, job, turn, NULL);
-        free(turn);
-    }
-
     struct board_card edited = *c;
     snprintf(edited.worktree, sizeof edited.worktree, "%s", lands ? path : "");
     snprintf(edited.base, sizeof edited.base, "%s", base);
     snprintf(edited.backend, sizeof edited.backend, "%s", backend);
+
+    show_card(at, &edited);
+    if (edited.worktree[0])
+        boardlog_worktree(edited.id, edited.worktree);
+
+    char *turn = first_turn(&edited);
+    if (turn) {
+        workspace_send(at, turn, edited.title);
+        boardlog_turn(edited.id, job, turn, NULL);
+        free(turn);
+    }
     board_update(&edited);
 
     wait_clear(c->id);

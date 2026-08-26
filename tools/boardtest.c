@@ -11,6 +11,7 @@
 #include "boardfile.h"
 #include "boardcfg.h"
 #include "boardflow.h"
+#include "boardlog.h"
 #include "boardname.h"
 #include "boardstep.h"
 #include "gitcmd.h"
@@ -1124,6 +1125,42 @@ static void test_a_pipeline_stands_for_its_actions(void)
 
 /* nothing triggers naming and nothing waits on it: the reply lands on the card
    the key names, and a reply with no name in it leaves the title alone */
+static void test_the_worker_log_names_the_worktree(void)
+{
+    const char *tree = "/tmp/repo/.claude/worktrees/ab12";
+
+    boardlog_worktree("ab12", "");
+    char path[4300];
+    expect(boardlog_path("ab12", path, sizeof path), "the log has a path");
+    expect(access(path, F_OK) != 0, "an empty path does not open a log");
+
+    boardlog_note("ab12", "board", "named");
+    boardlog_worktree("ab12", tree);
+
+    char *text = slurp_file(path);
+    expect(text && !strncmp(text, "# card ab12\n", 12),
+           "the log still opens with the card");
+    expect(text && !strncmp(text + 12, "worktree ", 9) &&
+               strstr(text, tree) == text + 21,
+           "and the worktree is the next line");
+    expect(text && strstr(text, "named"), "the rest of the log is still there");
+
+    const char *first = text ? strstr(text, "worktree ") : NULL;
+    const char *again = first ? strstr(first + 1, "worktree ") : NULL;
+    expect(first && !again, "starting twice does not duplicate the worktree");
+    free(text);
+
+    const char *moved = "/tmp/repo/.claude/worktrees/moved";
+    boardlog_worktree("ab12", moved);
+    text = slurp_file(path);
+    expect(text && strstr(text, moved) == text + 21,
+           "a new path replaces the old one");
+    expect(text && !strstr(text, tree), "and drops the path that is gone");
+    free(text);
+
+    boardlog_remove("ab12");
+}
+
 static void test_the_merge_turn_carries_its_commands(void)
 {
     char root[4096];
@@ -1246,6 +1283,7 @@ int main(void)
     test_an_action_closes_the_card();
     test_a_pipeline_stands_for_its_actions();
     test_a_name_lands_on_the_card();
+    test_the_worker_log_names_the_worktree();
     test_the_merge_turn_carries_its_commands();
 
     cleanup();
