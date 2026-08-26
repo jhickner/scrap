@@ -6,6 +6,7 @@
 
 #include "chrome.h"
 #include "frontend.h"
+#include "menu.h"
 #include "status.h"
 #include "text.h"
 #include "tty.h"
@@ -34,6 +35,15 @@ struct view {
     char query[64];
     short hit[HIT_MAX];
 };
+
+/* the indent a menu box hangs at, under the label of the row it belongs to */
+#define MENU_INDENT 6
+
+static struct menu *open_menu(const struct view *v)
+{
+    struct menu *m = v->live ? v->live->menu : NULL;
+    return m && m->open && m->n ? m : NULL;
+}
 
 static int item_heading(const struct view *v, int i)
 {
@@ -140,6 +150,9 @@ static int visible_cap(const struct view *v)
     int rows = tty_rows() - 3 - chrome_gap();
     if (v->live)
         rows -= chrome_foot_rows(v->live->ask, v->live->hint, ui_columns());
+    struct menu *m = open_menu(v);
+    if (m)
+        rows -= menu_rows(m);
     if (v->heading) {
         int breaks = 0;
         for (int i = 0; i < v->count; i++)
@@ -351,6 +364,20 @@ static void paint(void *ud)
         }
         ui_put("\n");
         rows++;
+
+        struct menu *m = selected ? open_menu(v) : NULL;
+        if (m) {
+            int width = menu_width(m);
+            int room = columns - MENU_INDENT - 1;
+            if (width > room)
+                width = room;
+            for (int line = 0; line < menu_rows(m); line++) {
+                ui_pad(MENU_INDENT);
+                menu_paint_row(m, line, width);
+                ui_put("\n");
+                rows++;
+            }
+        }
     }
 
     if (!count) {
@@ -499,6 +526,39 @@ static int run(const char *title, const struct pick_item *items, int count,
             goto done;
         }
 
+        struct menu *m = open_menu(&v);
+        if (m) {
+            if (ev.key == TK_TEXT) {
+                free(ev.text);
+                continue;
+            }
+            if (ev.key == TK_UP || ev.key == TK_DOWN) {
+                menu_step(m, ev.key == TK_UP ? -1 : 1);
+                chrome_paint();
+                continue;
+            }
+            if (ev.key == TK_ENTER) {
+                result = v.order[v.sel];
+                if (pressed)
+                    *pressed = PICK_KEY_MENU;
+                goto done;
+            }
+            if (ev.key == TK_ESCAPE ||
+                (ev.key == TK_CHAR && (ev.cp == 3 || ev.cp == 4))) {
+                m->open = 0;
+                refilter(&v);
+                chrome_paint();
+                continue;
+            }
+            if (ev.key == TK_EOF)
+                goto done;
+            if (ev.key == TK_RESIZE) {
+                refilter(&v);
+                chrome_paint();
+            }
+            continue;
+        }
+
         int typing = filter && (!slash || v.searching);
         if (ev.key == TK_TEXT) {
             int took = typing && type_into(&v, ev.text, ev.text ? strlen(ev.text) : 0);
@@ -568,6 +628,8 @@ static int run(const char *title, const struct pick_item *items, int count,
             if (!v.count || row_heading(&v, v.sel))
                 break;
             result = v.order[v.sel];
+            if (pressed && v.live && v.live->menu)
+                *pressed = PICK_KEY_MENU;
             goto done;
         case TK_ESCAPE:
             if (filter && (v.searching || v.query[0])) {

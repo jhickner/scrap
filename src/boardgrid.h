@@ -3,6 +3,8 @@
 
 #include "boardtile.h"
 
+struct menu;
+
 #define GRID_LANE_MIN 24
 #define GRID_LANE_MAX 40
 
@@ -52,6 +54,6 @@ int boardgrid_run(const char *title, const struct board_tile *tiles,
                   const int *lane_of, const char *const *lane_name, int n,
                   int lanes, int initial, const char *hint, const char *ask,
                   const char *shortcuts, int *pressed, int (*tick)(void *ud),
-                  void *tick_ud, int *cursor, int *part);
+                  void *tick_ud, int *cursor, int *part, struct menu *menu);
 
 #endif

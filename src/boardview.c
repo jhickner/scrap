@@ -24,6 +24,7 @@
 #include "chrome.h"
 #include "form.h"
 #include "gitcmd.h"
+#include "menu.h"
 #include "pick.h"
 #include "text.h"
 #include "ui.h"
@@ -47,8 +48,9 @@
 #define KEY_SERVE    'b'
 #define KEY_ALL      '*'
 #define KEY_VIEW     'v'
+#define KEY_EDIT     'e'
 
-#define BOARD_KEYS "ndsSgarRxflcb*Av\t"
+#define BOARD_KEYS "ndsSgarRxflcb*Ave\t"
 
 #define BOARD_RECENT_INDENT 6
 
@@ -112,7 +114,8 @@ static void vlist_free(struct vlist *l)
 
 static int vlist_run(const char *title, struct vlist *l, int initial,
                      const char *hint, const char *ask, const char *shortcuts,
-                     int *pressed, int (*tick)(void *ud), void *tick_ud, int *cursor)
+                     int *pressed, int (*tick)(void *ud), void *tick_ud,
+                     int *cursor, struct menu *menu)
 {
     struct pick_item *items = calloc((size_t)l->n, sizeof *items);
     unsigned char    *heading = calloc((size_t)l->n, 1);
@@ -139,6 +142,7 @@ static int vlist_run(const char *title, struct vlist *l, int initial,
 
     struct pick_live live = {
         .heading = heading,
+        .menu = menu,
         .spin = spin,
         .mark = mark,
         .mark_role = role,
@@ -873,6 +877,40 @@ static void do_card(const struct board_card *c)
     board_free(cards, n);
 }
 
+/* the tab the card's worker is on, taking a stopped worker back if need be */
+static int card_tab(const struct board_card *c, char *notice, size_t size)
+{
+    if (!c)
+        return -1;
+
+    int         tab = boardwork_tab(c->id);
+    const char *step = boardtile_step(c->id);
+    char        why[256] = "";
+    if (tab < 0 && !step)
+        tab = boardwork_rejoin(c, why, sizeof why);
+    if (tab >= 0)
+        return tab;
+
+    if (step)
+        snprintf(notice, size, "%s is running without a tab", step);
+    else
+        snprintf(notice, size, "%s", why[0] ? why : "no worker on that card");
+    return -1;
+}
+
+/* what enter offers on a card: the actions it can run now, then attach */
+static void card_menu(const struct board_card *c, struct menu *m)
+{
+    const char *offered[BOARD_ACTIONS_MAX];
+    int         on = boardflow_offered(c, offered, BOARD_ACTIONS_MAX);
+
+    menu_clear(m);
+    for (int i = 0; i < on; i++)
+        menu_add(m, offered[i], 0);
+    menu_add(m, "attach", on > 0);
+    m->open = 1;
+}
+
 int boardview_close(const char *id, char *why, int size)
 {
     struct board_card *cards = NULL;
@@ -999,6 +1037,7 @@ int boardview_run(const char *cwd)
 
     static char          filter[4096];
     static struct anchor cur = {.stand = -1, .lane = -1};
+    static struct menu   card;
     char                 notice[256] = {0};
     char                 ask[280] = {0};
     int                  asking = ASK_NONE;
@@ -1019,6 +1058,9 @@ int boardview_run(const char *cwd)
         }
 
         shown_rev = board_revision();
+
+        if (card.open && !board_find(cards, n, cur.id))
+            card.open = 0;
 
         int grid = !strcmp(boardcfg_view(), "grid");
 
@@ -1080,7 +1122,8 @@ int boardview_run(const char *cwd)
         if (grid) {
             at = boardgrid_run(title, g.t, g.lane_of, g.name, g.n, g.lanes,
                                tile_of(&g, &cur), hint, ask, BOARD_KEYS,
-                               &pressed, board_tick, NULL, &cursor, &part);
+                               &pressed, board_tick, NULL, &cursor, &part,
+                               &card);
             if (at == GRID_NARROW) {
                 grid_free(&g);
                 grid = 0;
@@ -1091,7 +1134,7 @@ int boardview_run(const char *cwd)
         }
         if (!grid)
             at = vlist_run(title, &l, row_of(&l, &cur), hint, ask, BOARD_KEYS,
-                           &pressed, board_tick, NULL, &cursor);
+                           &pressed, board_tick, NULL, &cursor, &card);
 
         int row = at >= 0 ? at : cursor;
         if (row >= 0) {
@@ -1102,8 +1145,8 @@ int boardview_run(const char *cwd)
             else
                 anchor_set(&cur, &l, row, at >= 0 ? -1 : (int)l.v[row].stand);
         }
-        if (grid && at >= 0 && !pressed && part == GRID_PART_STATUS)
-            pressed = KEY_GO;
+        if (grid && at >= 0 && !pressed)
+            pressed = part == GRID_PART_STATUS ? KEY_GO : PICK_KEY_MENU;
         vlist_free(&l);
         grid_free(&g);
 
@@ -1148,7 +1191,38 @@ int boardview_run(const char *cwd)
 
         struct board_card *c = board_find(cards, n, cur.id);
         switch (pressed) {
-        case 0:
+        case PICK_KEY_MENU: {
+            if (!c) {
+                card.open = 0;
+                break;
+            }
+            if (!card.open) {
+                card_menu(c, &card);
+                break;
+            }
+            card.open = 0;
+
+            if (card.sel == card.n - 1) {
+                int tab = card_tab(c, notice, sizeof notice);
+                if (tab >= 0) {
+                    close_list();
+                    board_free(cards, n);
+                    return tab;
+                }
+                break;
+            }
+
+            char why[256] = "";
+            char name[64];
+            snprintf(name, sizeof name, "%s", card.item[card.sel]);
+            if (run_now(c->id, name, why, sizeof why))
+                snprintf(notice, sizeof notice, "running %s", name);
+            else
+                snprintf(notice, sizeof notice, "%s",
+                         why[0] ? why : "could not run it");
+            break;
+        }
+        case KEY_EDIT:
             if (c) {
                 close_list();
                 do_card(c);
@@ -1182,22 +1256,11 @@ int boardview_run(const char *cwd)
             break;
         }
         case KEY_GO: {
-            int tab = c ? boardwork_tab(c->id) : -1;
-            const char *step = c ? boardtile_step(c->id) : NULL;
-            char        why[256] = "";
-            if (tab < 0 && c && !step)
-                tab = boardwork_rejoin(c, why, sizeof why);
+            int tab = card_tab(c, notice, sizeof notice);
             if (tab >= 0) {
                 close_list();
                 board_free(cards, n);
                 return tab;
-            }
-            if (c) {
-                close_list();
-                if (step)
-                    note("%s is running without a tab", step);
-                else
-                    note("%s", why[0] ? why : "no worker on that card");
             }
             break;
         }

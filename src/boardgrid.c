@@ -6,6 +6,7 @@
 
 #include "chrome.h"
 #include "frontend.h"
+#include "menu.h"
 #include "pick.h"
 #include "status.h"
 #include "tty.h"
@@ -381,6 +382,7 @@ static void tile_lines(const struct board_tile *t, int budget, struct lines *out
 
 struct grid {
     const char              *title;
+    struct menu             *menu;
     const struct board_tile *t;
     const int               *lane_of;
     const char *const       *lane_name;
@@ -424,6 +426,37 @@ static int relayout(struct grid *v)
     for (int i = 0; i < v->g.tiles; i++)
         tile_lines(&v->t[v->g.tile[i].tile], budget, &v->drawn[i]);
     return 1;
+}
+
+static struct menu *open_menu(const struct grid *v)
+{
+    return v->menu && v->menu->open && v->menu->n ? v->menu : NULL;
+}
+
+/* where the box hangs against the tile the cursor is on, pulled up the lane
+   when the rows under the tile have run out */
+static int menu_box(const struct grid *v, int *top, int *col, int *w)
+{
+    struct menu *m = open_menu(v);
+    if (!m)
+        return -1;
+
+    for (int i = 0; i < v->g.tiles; i++) {
+        const struct grid_rect *r = &v->g.tile[i];
+        if (r->tile != v->sel)
+            continue;
+        int rows = menu_rows(m);
+        int at = r->row + r->h;
+        if (at + rows > v->rows)
+            at = v->rows - rows;
+        if (at < 0)
+            at = 0;
+        *top = at;
+        *col = r->col;
+        *w = menu_width(m) > r->w ? r->w : menu_width(m);
+        return r->lane;
+    }
+    return -1;
 }
 
 static const struct grid_rect *rect_at(const struct grid *v, int lane, int row,
@@ -502,9 +535,20 @@ static void paint_names(struct grid *v)
 static void paint_row(struct grid *v, int row)
 {
     int used = 0;
+    int m_top = 0, m_col = 0, m_w = 0;
+    int m_lane = menu_box(v, &m_top, &m_col, &m_w);
+
     for (int li = 0; li < v->g.lanes_shown; li++) {
         int lane = v->g.lane_first + li;
         int at = -1;
+
+        if (lane == m_lane && row >= m_top && row < m_top + menu_rows(v->menu)) {
+            pad_to(&used, m_col);
+            menu_paint_row(v->menu, row - m_top, m_w);
+            used += m_w;
+            continue;
+        }
+
         const struct grid_rect *r = rect_at(v, lane, row, &at);
 
         if (!r) {
@@ -652,7 +696,7 @@ int boardgrid_run(const char *title, const struct board_tile *tiles,
                   const int *lane_of, const char *const *lane_name, int n,
                   int lanes, int initial, const char *hint, const char *ask,
                   const char *shortcuts, int *pressed, int (*tick)(void *ud),
-                  void *tick_ud, int *cursor, int *part)
+                  void *tick_ud, int *cursor, int *part, struct menu *menu)
 {
     if (pressed)
         *pressed = 0;
@@ -675,6 +719,7 @@ int boardgrid_run(const char *title, const struct board_tile *tiles,
     v.sel = initial >= 0 && initial < n ? initial : 0;
     v.hint = hint;
     v.ask = ask;
+    v.menu = menu;
 
     int result = -1;
     if (!relayout(&v)) {
@@ -730,6 +775,35 @@ int boardgrid_run(const char *title, const struct board_tile *tiles,
             free(ev.text);
             continue;
         }
+
+        if (open_menu(&v)) {
+            if (ev.key == TK_UP || ev.key == TK_DOWN) {
+                menu_step(v.menu, ev.key == TK_UP ? -1 : 1);
+                chrome_paint();
+                continue;
+            }
+            if (ev.key == TK_ENTER) {
+                result = v.sel;
+                if (pressed)
+                    *pressed = PICK_KEY_MENU;
+                goto done;
+            }
+            if (ev.key == TK_ESCAPE ||
+                (ev.key == TK_CHAR && (ev.cp == 3 || ev.cp == 4))) {
+                v.menu->open = 0;
+                chrome_paint();
+                continue;
+            }
+            if (ev.key == TK_EOF)
+                goto done;
+            if (ev.key == TK_RESIZE && !relayout(&v)) {
+                result = GRID_NARROW;
+                goto done;
+            }
+            chrome_paint();
+            continue;
+        }
+
         if (move_key(&v, ev.key, ev.key == TK_CHAR ? ev.cp : 0, shortcuts)) {
             chrome_paint();
             continue;

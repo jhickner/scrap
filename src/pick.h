@@ -17,6 +17,7 @@ enum pick_search {
 };
 
 #define PICK_KEY_RIGHT '\x1c'
+#define PICK_KEY_MENU  '\x1d'
 
 #define PICK_TICK_REOPEN 2
 #define PICK_REOPEN      (-2)
@@ -28,8 +29,13 @@ enum pick_search {
 #define PICK_APART   2
 #define PICK_TEXT    3
 
+struct menu;
+
 struct pick_live {
     const unsigned char *heading;
+
+    /* the box enter opens against the row the cursor rests on */
+    struct menu *menu;
 
     const unsigned char *spin;
     const char *const   *mark;
