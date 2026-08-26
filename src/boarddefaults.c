@@ -109,7 +109,7 @@ const struct board_default board_defaults[] = {
     },
     {"actions/plan.md",
      "---\n"
-     "tier: high\n"
+     "tier: med\n"
      "in: worktree\n"
      "needs: \n"
      "---\n"
