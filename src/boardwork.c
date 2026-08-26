@@ -230,11 +230,11 @@ static int tidy_step(const char *root, const char *tree, const char *branch,
 }
 
 static int worktree_make(const char *root, const char *id, const char *path,
-                         char *why, int size)
+                         int *made, char *why, int size)
 {
     char branch[128];
     board_branch(id, branch, sizeof branch);
-    if (gitcmd_worktree_add(root, path, branch))
+    if (gitcmd_worktree_add(root, path, branch, made))
         return 1;
     snprintf(why, (size_t)size, "could not make a worktree at %s", path);
     return 0;
@@ -327,7 +327,7 @@ static int same_text(const char *a, const char *b)
     return na == nb && !strncmp(a, b, na);
 }
 
-static void card_write(FILE *f, const struct board_card *c)
+static void card_write(FILE *f, const struct board_card *c, int notes)
 {
     const char *body = c->body ? c->body : "";
     if (*body && !same_text(body, c->title))
@@ -336,7 +336,7 @@ static void card_write(FILE *f, const struct board_card *c)
         fprintf(f, "# %s\n", c->title);
     if (c->worktree[0])
         fprintf(f, "\nworktree %s\n", c->worktree);
-    if (c->log_n) {
+    if (notes && c->log_n) {
         fprintf(f, "\n## Notes\n\n");
         for (int i = 0; i < c->log_n; i++)
             fprintf(f, "- %s: %s\n", c->log[i].who,
@@ -353,9 +353,14 @@ static int commit_card_file(const char *tree, const char *why)
     if (!text_shell_quote(why, quoted, sizeof quoted))
         return 0;
 
+    if (!gitcmd_run(tree, "add -- CARD.md"))
+        return 0;
+    if (gitcmd_run(tree, "diff --cached --quiet -- CARD.md"))
+        return 0;
+
     char args[512];
     snprintf(args, sizeof args, "commit --quiet -m %s -- CARD.md", quoted);
-    return gitcmd_run(tree, "add -- CARD.md") && gitcmd_run(tree, args);
+    return gitcmd_run(tree, args);
 }
 
 static int write_card_file(const char *path, const struct board_card *c)
@@ -365,7 +370,7 @@ static int write_card_file(const char *path, const struct board_card *c)
     FILE *f = fopen(file, "w");
     if (!f)
         return 0;
-    card_write(f, c);
+    card_write(f, c, 0);
     fclose(f);
 
     return commit_card_file(path, "card: the card as the board wrote it");
@@ -493,7 +498,7 @@ static char *first_turn(const struct board_card *c)
               "and its `## Plan` section supersedes the card body below.",
               out);
     fputs("\n\n", out);
-    card_write(out, c);
+    card_write(out, c, 1);
     fclose(out);
     free(head);
     return buf;
@@ -637,10 +642,14 @@ static int card_tree(const struct board_card *c, char *path, size_t path_size,
         return 0;
     }
     worktree_of(root, c->id, path, path_size);
-    if (!worktree_make(root, c->id, path, why, size))
+    int made = 0;
+    if (!worktree_make(root, c->id, path, &made, why, size))
         return 0;
 
     base_of(root, path, c->base, base, base_size);
+    if (!made)
+        return 1;
+
     unignore_card_file(path);
 
     struct board_card file = *c;

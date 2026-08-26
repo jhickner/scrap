@@ -79,8 +79,11 @@ static int worktree_take(const char *qroot, const char *qpath,
     return system(cmd) == 0;
 }
 
-int gitcmd_worktree_add(const char *root, const char *path, const char *branch)
+int gitcmd_worktree_add(const char *root, const char *path, const char *branch,
+                        int *made)
 {
+    if (made)
+        *made = 0;
     if (!root || !path || !branch || !*root || !*path || !*branch)
         return 0;
 
@@ -95,8 +98,11 @@ int gitcmd_worktree_add(const char *root, const char *path, const char *branch)
         !text_shell_quote(branch, qbranch, sizeof qbranch))
         return 0;
 
-    if (worktree_take(qroot, qpath, qbranch))
+    if (worktree_take(qroot, qpath, qbranch)) {
+        if (made)
+            *made = 1;
         return 1;
+    }
 
     /* a worktree whose directory has gone is still registered, and its path
        cannot be taken again until that entry goes */
@@ -104,6 +110,11 @@ int gitcmd_worktree_add(const char *root, const char *path, const char *branch)
     snprintf(cmd, sizeof cmd, "git -C %s worktree prune >/dev/null 2>&1", qroot);
     system(cmd);
 
-    return worktree_take(qroot, qpath, qbranch) || inside(path) ||
-           dir_exists(path);
+    if (worktree_take(qroot, qpath, qbranch)) {
+        if (made)
+            *made = 1;
+        return 1;
+    }
+
+    return inside(path) || dir_exists(path);
 }

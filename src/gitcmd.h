@@ -10,6 +10,9 @@ int gitcmd_run(const char *dir, const char *args);
 
 int gitcmd_root(const char *dir, char *out, size_t size);
 
-int gitcmd_worktree_add(const char *root, const char *path, const char *branch);
+/* made, when given, says whether this call created the worktree; a path that
+   was already a worktree leaves it 0 */
+int gitcmd_worktree_add(const char *root, const char *path, const char *branch,
+                        int *made);
 
 #endif
