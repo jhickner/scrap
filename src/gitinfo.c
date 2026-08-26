@@ -1,6 +1,7 @@
 #include "gitinfo.h"
 #include "text.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,9 +9,12 @@
 
 #define TTL_MS 3000
 
-static struct gitinfo cache;
-static char           cached_dir[4096];
-static double         read_at;
+static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static struct gitinfo  latest;
+static char            latest_dir[4096];
+static double          read_at;
+static int             reading;
+static struct gitinfo  shown;
 
 static double now_ms(void)
 {
@@ -95,19 +99,65 @@ static void reread(const char *dir, struct gitinfo *g)
     pclose(f);
 }
 
-void gitinfo_forget(void) { read_at = 0; }
+static void *read_thread(void *arg)
+{
+    char          *dir = arg;
+    struct gitinfo g;
+    reread(dir, &g);
 
+    pthread_mutex_lock(&lock);
+    latest = g;
+    snprintf(latest_dir, sizeof latest_dir, "%s", dir);
+    read_at = now_ms();
+    reading = 0;
+    pthread_mutex_unlock(&lock);
+
+    free(dir);
+    return NULL;
+}
+
+static void start_read(const char *dir)
+{
+    char *copy = strdup(dir);
+    if (!copy)
+        return;
+
+    pthread_t t;
+    reading = 1;
+    if (pthread_create(&t, NULL, read_thread, copy) != 0) {
+        reading = 0;
+        free(copy);
+        return;
+    }
+    pthread_detach(t);
+}
+
+void gitinfo_forget(void)
+{
+    pthread_mutex_lock(&lock);
+    read_at = 0;
+    pthread_mutex_unlock(&lock);
+}
+
+/* Answers from the last read and refreshes behind the caller: the four git
+   commands take long enough on a large repo to be felt as a stall in the
+   render they were asked from. */
 const struct gitinfo *gitinfo_get(const char *dir)
 {
     if (!dir || !*dir) {
-        memset(&cache, 0, sizeof cache);
-        return &cache;
+        memset(&shown, 0, sizeof shown);
+        return &shown;
     }
-    double t = now_ms();
-    if (strcmp(dir, cached_dir) != 0 || read_at == 0 || t - read_at >= TTL_MS) {
-        snprintf(cached_dir, sizeof cached_dir, "%s", dir);
-        reread(dir, &cache);
-        read_at = t;
-    }
-    return &cache;
+
+    pthread_mutex_lock(&lock);
+    int here = strcmp(dir, latest_dir) == 0;
+    if (here)
+        shown = latest;
+    else
+        memset(&shown, 0, sizeof shown);
+    if (!reading && (!here || read_at == 0 || now_ms() - read_at >= TTL_MS))
+        start_read(dir);
+    pthread_mutex_unlock(&lock);
+
+    return &shown;
 }
