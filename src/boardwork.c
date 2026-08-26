@@ -771,6 +771,16 @@ void boardwork_finished(struct session *s)
     boardlog_turn(w->id, w->job, NULL, failed && *failed ? failed : reply);
     boardfile_keep(c);
 
+    /* an interrupt cancels the turn, not the action: the card keeps its queue
+       and its session, and the action stands where it was */
+    if (session_last_interrupted(s)) {
+        if (!board_update(&edited))
+            board_note(w->id, "board", "the store did not take the update");
+        board_free(cards, n);
+        board_note(w->id, "board", "the turn was interrupted");
+        return;
+    }
+
     const struct board_action *p = boardflow_action(c);
     const char *ran = p ? p->name : NULL;
     int broke = p && p->fail_marker[0] && reply && strstr(reply, p->fail_marker);
@@ -1053,6 +1063,11 @@ static int reconcile(struct worker *w, const struct board_card *c)
     if (w->checked)
         return 0;
     w->checked = 1;
+
+    /* the turn was cancelled rather than answered, so what it left behind is
+       not the action running to a finish */
+    if (session_last_interrupted(w->session))
+        return 0;
 
     const char *reply = session_last_reply(w->session);
     if (!reply || !*reply)
