@@ -155,7 +155,6 @@ struct session *session_set_drawing(struct session *s)
 static void remember_model(const struct session *s);
 static int dir_alive(const char *path);
 static int ground_target(const char *gone, char *out, size_t size);
-static void await_model(struct session *s);
 
 static void note_recent(struct session *s, const backend_event *ev)
 {
@@ -824,8 +823,29 @@ static Backend *agent(struct session *s)
     return s->agent;
 }
 
-static void await_model(struct session *s);
 static void remember_window(const struct session *s);
+
+static void *retire_thread(void *arg)
+{
+    Backend *b = arg;
+    b->close(b);
+    return NULL;
+}
+
+/* Closing a backend stops its child and waits on the reader thread it owns,
+   which the caller would feel as a stall. Nothing reaches the replaced backend
+   any more, so it can go on a thread of its own. */
+static void retire(Backend *b)
+{
+    if (!b)
+        return;
+
+    pthread_t t;
+    if (pthread_create(&t, NULL, retire_thread, b) != 0)
+        b->close(b);
+    else
+        pthread_detach(t);
+}
 
 int session_switch_backend(struct session *s, const char *backend)
 {
@@ -871,10 +891,7 @@ int session_switch_backend(struct session *s, const char *backend)
     s->tokens_in = s->tokens_out = 0;
     s->context_tokens = 0;
     s->context_window = 0;
-    if (previous)
-        previous->close(previous);
-
-    await_model(s);
+    retire(previous);
     return 1;
 }
 
@@ -1007,8 +1024,6 @@ int session_set_model(struct session *s, const char *model)
         free(previous);
         replace(&s->resolved, NULL);
         prefs_remember_choice("model", s->backend, s->model);
-        await_model(s);
-        remember_model(s);
         return 1;
     }
     free(s->model);
@@ -1151,8 +1166,7 @@ int session_set_cwd(struct session *s, const char *path)
         s->cwd = was;
         return 0;
     }
-    if (previous)
-        previous->close(previous);
+    retire(previous);
     free(was);
 
     s->turns = 0;
@@ -1176,7 +1190,6 @@ int session_set_cwd(struct session *s, const char *path)
     if (id)
         set_id(s, id);
     gitinfo_forget();
-    await_model(s);
     return 1;
 }
 
@@ -1766,17 +1779,6 @@ static void remember_model(const struct session *s)
 {
     const char *id = s->resolved && *s->resolved ? s->resolved : backend_model(s);
     prefs_remember_resolved_model(s->backend, s->model, id);
-}
-
-static void await_model(struct session *s)
-{
-    if (!s->agent || !s->agent->model)
-        return;
-    double deadline = now_seconds() + 1.5;
-    while (!backend_model(s) && now_seconds() < deadline) {
-        struct timespec nap = {0, 20 * 1000 * 1000};
-        nanosleep(&nap, NULL);
-    }
 }
 
 const char *session_model_label(const struct session *s)
