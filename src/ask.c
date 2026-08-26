@@ -6,23 +6,16 @@
 
 #include "chrome.h"
 #include "frontend.h"
-#include "replframe.h"
-#include "replkeys.h"
+#include "replbox.h"
 #include "tty.h"
 #include "ui.h"
 
 #define ASK_INDENT 2
 #define ASK_GUTTER 2
 
-#define KEY_CTRL(c) ((c) - 'A' + 1)
-
 struct field {
-    const char *title;
-    Repl        repl;
-
-    struct replframe frame;
-    int              rows;
-    int              top;
+    const char     *title;
+    struct replbox  box;
 };
 
 static int width_of(void)
@@ -39,42 +32,20 @@ static int room_for(void)
     return rows < 1 ? 1 : rows;
 }
 
-static int framed(struct field *f)
-{
-    int width = width_of();
-    f->rows = repl_input_rows(&f->repl, width);
-    if (f->rows < 1)
-        f->rows = 1;
-    return replframe_render(&f->frame, &f->repl, f->rows, width, 1);
-}
-
-static void scroll_to_caret(struct field *f, int room)
-{
-    if (f->rows <= room) {
-        f->top = 0;
-        return;
-    }
-    int caret = f->frame.have_cursor ? f->frame.cursor_y : f->rows - 1;
-    if (caret < f->top)
-        f->top = caret;
-    if (caret >= f->top + room)
-        f->top = caret - room + 1;
-    if (f->top > f->rows - room)
-        f->top = f->rows - room;
-    if (f->top < 0)
-        f->top = 0;
-}
-
 static void paint(void *ud)
 {
     struct field *f = ud;
     int           columns = ui_columns();
 
-    if (!framed(f))
+    replbox_width(&f->box, width_of());
+
+    int rows = replbox_wants(&f->box);
+    if (!replbox_render(&f->box, rows))
         return;
 
     int room = room_for();
-    scroll_to_caret(f, room);
+    replbox_scroll(&f->box, room);
+    int top = replbox_top(&f->box);
 
     ui_esc(ui_style(UI_CHROME));
     ui_put(UI_BAR);
@@ -84,9 +55,9 @@ static void paint(void *ud)
     {
         char        said[256];
         const char *title = f->title ? f->title : "";
-        if (f->rows > room)
+        if (rows > room)
             snprintf(said, sizeof said, "%s \xc2\xb7 %d\xe2\x80\x93%d of %d", title,
-                     f->top + 1, f->top + room, f->rows);
+                     top + 1, top + room, rows);
         else
             snprintf(said, sizeof said, "%s", title);
         ui_putn(said, ui_fit_bytes(said, (size_t)(columns > 3 ? columns - 3 : 1)));
@@ -94,12 +65,10 @@ static void paint(void *ud)
     ui_esc(ui_style(UI_RESET));
     ui_put("\n");
 
-    int end = f->rows <= room ? f->rows : f->top + room;
-    for (int y = f->top; y < end; y++) {
+    int end = rows <= room ? rows : top + room;
+    for (int y = top; y < end; y++) {
         ui_pad(ASK_INDENT);
-        replframe_paint_row(&f->frame, y, ASK_GUTTER, 1,
-                            f->repl.cursor >= f->repl.len ||
-                                f->repl.buf[f->repl.cursor] == '\n');
+        replbox_paint_row(&f->box, y, ASK_GUTTER, 1);
         ui_put("\n");
     }
 
@@ -109,17 +78,10 @@ static void paint(void *ud)
     ui_esc(ui_style(UI_RESET));
 }
 
-static void feed(struct field *f, const ReplEvent *ev)
-{
-    repl_set_width(&f->repl, width_of());
-    repl_handle_input(&f->repl, ev);
-}
-
 static char *leave(struct field *f, char *out)
 {
     chrome_modal(NULL, NULL);
-    repl_free(&f->repl);
-    replframe_free(&f->frame);
+    replbox_free(&f->box);
     return out;
 }
 
@@ -129,10 +91,9 @@ char *ask_run(const char *title, const char *initial)
         return NULL;
 
     struct field f = {.title = title ? title : ""};
-    repl_init(&f.repl, NULL, 0);
-    repl_set_width(&f.repl, width_of());
-    if (initial && *initial)
-        repl_insert_text(&f.repl, initial);
+    replbox_init(&f.box, NULL, 0);
+    replbox_width(&f.box, width_of());
+    replbox_set_text(&f.box, initial);
 
     chrome_modal(paint, &f);
     for (;;) {
@@ -144,29 +105,19 @@ char *ask_run(const char *title, const char *initial)
         }
 
         switch (ev.key) {
-        case TK_ENTER: {
-            const char *line = repl_line(&f.repl);
-            return leave(&f, strdup(line ? line : ""));
-        }
+        case TK_ENTER:
+            return leave(&f, strdup(replbox_line(&f.box)));
 
         case TK_ESCAPE:
         case TK_EOF:
             return leave(&f, NULL);
 
-        default: {
+        default:
             if (ev.key == TK_CHAR && (ev.cp == 3 || ev.cp == 4))
                 return leave(&f, NULL);
-            if (ev.key == TK_CHAR && ev.cp == KEY_CTRL('V')) {
-                replkeys_paste(&f.repl);
-                free(ev.text);
-                break;
-            }
-            ReplEvent re;
-            if (replkeys_map(&ev, &re))
-                feed(&f, &re);
+            replbox_key(&f.box, &ev);
             free(ev.text);
             break;
-        }
         }
         chrome_paint();
     }

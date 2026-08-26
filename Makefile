@@ -138,10 +138,13 @@ $(BUILD)/viewstest: tools/viewstest.c src/views.o | $(BUILD)
 $(BUILD)/highlighttest: tools/highlighttest.c src/highlight.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
+$(BUILD)/replboxtest: tools/replboxtest.c src/replbox.o src/replframe.o src/replkeys.o src/paste.o src/ui.o src/viewport.o src/tty.o src/settings.o src/text.o src/files.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
+
 CHECKS  := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest reflowtest toolstyletest sessionlisttest claudetest codextest \
            groktest filedifftest pitest agenttabstest statustest transcripttest \
            sessionviewtest highlighttest muxcfgtest telegramtest boardtest modelstest \
-           boardgridtest boardtiletest viewstest
+           boardgridtest boardtiletest viewstest replboxtest
 
 check: $(addprefix $(BUILD)/,$(CHECKS))
 	@for t in $^; do echo "$$t"; ./$$t || exit 1; done

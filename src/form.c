@@ -7,13 +7,10 @@
 #include "chrome.h"
 #include "frontend.h"
 #include "md.h"
-#include "replframe.h"
-#include "replkeys.h"
+#include "replbox.h"
 #include "tty.h"
 #include "ui.h"
 #include "viewport.h"
-
-#define KEY_CTRL(c) ((c) - 'A' + 1)
 
 #define FORM_INDENT 2
 
@@ -29,9 +26,9 @@
 #define HIT_MAX 128
 
 struct slot {
-    Repl repl;
-    int  choice;
-    int  rows;
+    struct replbox box;
+    int            choice;
+    int            rows;
 };
 
 struct line {
@@ -65,9 +62,6 @@ struct state {
     char             more[FORM_FIELDS][24];
     char             more_notes[24];
 
-    struct replframe frame;
-    int              framed;
-
     short hit[HIT_MAX];
 };
 
@@ -85,7 +79,7 @@ static const char *slot_shown(const struct state *st, int i)
             return "";
         return f->choices[at];
     }
-    return repl_line(&st->slots[i].repl);
+    return replbox_line(&st->slots[i].box);
 }
 
 static void cycle(struct state *st, int i, int delta)
@@ -168,9 +162,11 @@ static int inline_budget(const struct state *st, int columns)
 
 /* a text field keeps the column it starts in, however many rows it takes: it
    wraps under itself beside its label rather than moving out from under it */
-static int repl_width(const struct state *st)
+static void widths(struct state *st)
 {
-    return inline_budget(st, ui_columns()) + REPL_GUTTER;
+    int cols = inline_budget(st, ui_columns()) + REPL_GUTTER;
+    for (int i = 0; i < st->form->fields_n; i++)
+        replbox_width(&st->slots[i].box, cols);
 }
 
 static struct line *line_add(struct lines *l)
@@ -203,7 +199,7 @@ static int folded(struct state *st, int i)
     if (f->kind != FORM_TEXT || f->rows_max <= 0 || expanded(st))
         return 0;
     return st->slots[i].rows >= f->rows_max &&
-           repl_input_rows(&st->slots[i].repl, repl_width(st)) > f->rows_max;
+           replbox_wants(&st->slots[i].box) > f->rows_max;
 }
 
 static struct line *more_row(struct lines *out, const char *text)
@@ -397,9 +393,7 @@ static int layout(struct state *st, int columns)
             continue;
         }
 
-        int rows = repl_input_rows(&st->slots[i].repl, repl_width(st));
-        if (rows < 1)
-            rows = 1;
+        int rows = replbox_wants(&st->slots[i].box);
 
         int shown = rows;
         if (f->rows_max > 0 && rows > f->rows_max) {
@@ -466,26 +460,11 @@ static void put_choice(const struct state *st, int i, int focused)
     }
 }
 
-static int framed(struct state *st, int i)
-{
-    if (st->framed == i)
-        return 1;
-    st->framed = -1;
-    if (!replframe_render(&st->frame, &st->slots[i].repl, st->slots[i].rows,
-                          repl_width(st), 1))
-        return 0;
-    st->framed = i;
-    return 1;
-}
-
 static void put_value_row(struct state *st, int i, int row, int focused)
 {
-    if (!framed(st, i))
+    if (!replbox_render(&st->slots[i].box, st->slots[i].rows))
         return;
-
-    const Repl *r = &st->slots[i].repl;
-    replframe_paint_row(&st->frame, row, REPL_GUTTER, focused,
-                        r->cursor >= r->len || r->buf[r->cursor] == '\n');
+    replbox_paint_row(&st->slots[i].box, row, REPL_GUTTER, focused);
 }
 
 static int room_for(void)
@@ -500,7 +479,7 @@ static void paint(void *ud)
     struct form  *form = st->form;
     int           columns = ui_columns();
 
-    st->framed = -1;
+    widths(st);
     int                n = layout(st, columns);
     const struct line *lines = st->lines.v;
     int room = room_for();
@@ -530,9 +509,11 @@ static void paint(void *ud)
                 body = i;
             last = i;
         }
+        struct replbox *box = &st->slots[st->focus].box;
         if (body >= 0 && field_at(st, st->focus)->kind == FORM_TEXT &&
-            framed(st, st->focus) && st->frame.have_cursor)
-            caret = body + st->frame.cursor_y;
+            replbox_render(box, st->slots[st->focus].rows) &&
+            replbox_caret(box) >= 0)
+            caret = body + replbox_caret(box);
 
         if (first >= 0) {
             if (first < st->top)
@@ -648,7 +629,6 @@ static void paint(void *ud)
 
 static void load(struct state *st)
 {
-    st->framed = -1;
     if (st->form->notes_n > 0) {
         st->notes = calloc((size_t)st->form->notes_n, sizeof *st->notes);
         for (int i = 0; st->notes && i < st->form->notes_n; i++)
@@ -659,7 +639,7 @@ static void load(struct state *st)
         struct form_field *f = field_at(st, i);
         struct slot       *s = &st->slots[i];
 
-        repl_init(&s->repl, NULL, 0);
+        replbox_init(&s->box, NULL, 0);
 
         if (f->kind == FORM_BUTTON)
             continue;
@@ -674,8 +654,8 @@ static void load(struct state *st)
                     s->choice = c;
                     break;
                 }
-        } else if (f->value && *f->value) {
-            repl_insert_text(&s->repl, f->value);
+        } else if (f->value) {
+            replbox_set_text(&s->box, f->value);
         }
 
         int cells = (int)ui_cells(f->label ? f->label : "");
@@ -695,14 +675,13 @@ static void load(struct state *st)
 static void unload(struct state *st)
 {
     for (int i = 0; i < st->form->fields_n; i++)
-        repl_free(&st->slots[i].repl);
+        replbox_free(&st->slots[i].box);
     for (int i = 0; st->notes && i < st->form->notes_n; i++)
         md_text_free(st->notes[i]);
     free(st->notes);
     st->notes = NULL;
     free(st->lines.v);
     memset(&st->lines, 0, sizeof st->lines);
-    replframe_free(&st->frame);
 }
 
 static void store(struct state *st)
@@ -740,17 +719,14 @@ static int press_button(struct state *st)
     return 1;
 }
 
-static int feed(struct state *st, const ReplEvent *ev)
+static int feed(struct state *st, const tty_event *ev)
 {
-    struct slot *s = &st->slots[st->focus];
-
     if (folded(st, st->focus))
         open_up(st);
 
-    repl_set_width(&s->repl, repl_width(st));
-    st->framed = -1;
+    widths(st);
     st->pinned = 0;
-    return repl_handle_input(&s->repl, ev);
+    return replbox_key(&st->slots[st->focus].box, ev);
 }
 
 static void scroll_by(struct state *st, int rows)
@@ -776,17 +752,15 @@ static void step_or_scroll(struct state *st, int delta)
         scroll_by(st, delta);
 }
 
-static void step_or_leave(struct state *st, int delta)
+static void step_or_leave(struct state *st, int delta, const tty_event *ev)
 {
-    struct slot *s = &st->slots[st->focus];
     if (field_at(st, st->focus)->kind != FORM_TEXT || folded(st, st->focus)) {
         step_or_scroll(st, delta);
         return;
     }
-    int       was = s->repl.cursor;
-    ReplEvent ev = {.key = delta < 0 ? REPL_KEY_UP : REPL_KEY_DOWN};
-    feed(st, &ev);
-    if (s->repl.cursor == was)
+    size_t was = replbox_repl(&st->slots[st->focus].box)->cursor;
+    feed(st, ev);
+    if (replbox_repl(&st->slots[st->focus].box)->cursor == was)
         step_or_scroll(st, delta);
 }
 
@@ -824,10 +798,10 @@ int form_run(struct form *form)
 
         switch (ev.key) {
         case TK_UP:
-            step_or_leave(&st, -1);
+            step_or_leave(&st, -1, &ev);
             break;
         case TK_DOWN:
-            step_or_leave(&st, 1);
+            step_or_leave(&st, 1, &ev);
             break;
 
         case TK_TAB:
@@ -898,16 +872,7 @@ int form_run(struct form *form)
                 free(ev.text);
                 break;
             }
-            if (ev.key == TK_CHAR && ev.cp == KEY_CTRL('V')) {
-                st.framed = -1;
-                st.pinned = 0;
-                replkeys_paste(&st.slots[st.focus].repl);
-                free(ev.text);
-                break;
-            }
-            ReplEvent re;
-            if (replkeys_map(&ev, &re))
-                feed(&st, &re);
+            feed(&st, &ev);
             free(ev.text);
             break;
         }

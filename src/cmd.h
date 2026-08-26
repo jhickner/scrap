@@ -20,6 +20,9 @@ enum cmd_result {
 
 enum cmd_result cmd_dispatch(struct session *s, const char *line);
 
+/* a line typed at a session: a mid-turn command, a command, or a send */
+enum cmd_result cmd_submit(struct session *s, const char *line);
+
 int cmd_runs_mid_turn(const char *line);
 
 int cmd_runs_live(const char *line);
