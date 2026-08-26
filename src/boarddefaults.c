@@ -3,7 +3,7 @@
 const struct board_default board_defaults[] = {
     {"actions/implement.md",
      "---\n"
-     "tier: high\n"
+     "tier: med\n"
      "in: worktree\n"
      "commits: yes\n"
      "needs: \n"

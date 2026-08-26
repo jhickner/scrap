@@ -1,5 +1,5 @@
 ---
-tier: high
+tier: med
 in: worktree
 commits: yes
 needs: 
