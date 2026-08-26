@@ -33,6 +33,9 @@
 #define KEY_GO     'g'
 #define KEY_RENAME 'r'
 #define KEY_ASK    'p'
+#define KEY_ALL    '*'
+
+static int show_all;
 
 #define KEY_CTRL(c) ((c) & 0x1f)
 
@@ -172,6 +175,8 @@ static void fill_live(struct row *r, const struct live_session *v)
 
 static void live_rows(struct row *rows, int *n, const struct live_session *live, int count)
 {
+    if (!show_all)
+        return;
     for (int i = 0; i < count && *n < MAX_ROWS; i++) {
         const struct live_session *v = &live[i];
         if (v->mine || !v->id[0])
@@ -567,6 +572,7 @@ static int switch_once(void)
     }
 
     char shortcuts[16] = {KEY_CLOSE, KEY_NEW, KEY_ASK, KEY_GO, KEY_RENAME,
+                          KEY_ALL,
                           KEY_CTRL(KEY_CLOSE), KEY_CTRL(KEY_NEW), KEY_CTRL(KEY_ASK),
                           KEY_CTRL(KEY_GO), KEY_CTRL(KEY_RENAME), '\n',
                           PICK_KEY_RIGHT, '\t', 0};
@@ -574,11 +580,17 @@ static int switch_once(void)
 
     char title[256];
     snprintf(title, sizeof title, "sessions");
+    char hint[128];
+    snprintf(hint, sizeof hint, "%c ", KEY_ALL);
+    if (show_all)
+        snprintf(hint + 2, sizeof hint - 2, "only this instance");
+    else
+        snprintf(hint + 2, sizeof hint - 2, "all instances");
     struct listing listing = {rows, n, spin, marks, icons, &live, &nlive, 0, 0};
     sync_columns(&listing);
     listing.sig = listing_sig(&listing);
     struct pick_live shown = {.heading = heading, .spin = spin, .mark = marks,
-                              .icon = icons, .tick = relist, .ud = &listing};
+                              .icon = icons, .hint = hint, .tick = relist, .ud = &listing};
     int picked = pick_run_live(title, items, n, initial, &shown, PICK_SEARCH_SLASH,
                                shortcuts, &pressed);
 
@@ -599,6 +611,13 @@ static int switch_once(void)
     free(spin);
     free(marks);
     free(icons);
+
+    if (pressed == KEY_ALL) {
+        show_all = !show_all;
+        resume_row = picked;
+        free(live);
+        return 1;
+    }
 
     if (pressed == '\t') {
         free(live);
