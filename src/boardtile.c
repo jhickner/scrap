@@ -171,6 +171,8 @@ int boardtile_of(const struct board_card *c, int wide, struct board_tile *out)
                  c->backend_pin[0] && c->tier_pin[0] ? " " : "",
                  c->tier_pin[0] ? c->tier_pin : "");
 
+    out->working = board_stands(c) == BOARD_WORKING;
+
     if (out->tab >= 0 && board_stands(c) != BOARD_CLOSED)
         out->recent_n =
             session_recent(workspace_at(out->tab), out->recent, BOARD_RECENT);

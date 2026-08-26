@@ -19,6 +19,7 @@ struct board_tile {
     time_t                   stamp;
     const char              *recent[BOARD_RECENT];
     int                      recent_n;
+    unsigned char            working;
 };
 
 /* the step a running child is at, or NULL */

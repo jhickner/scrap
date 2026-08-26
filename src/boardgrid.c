@@ -16,8 +16,9 @@
 
 #define GRID_LINE_MAX  256
 
-/* the title, the divider under it, then the status and the footer */
-#define GRID_TILE_ROWS (GRID_TITLE_ROWS + 3)
+/* the title, the divider under it, the status and the footer, then the
+   divider over the log preview and the preview itself */
+#define GRID_TILE_ROWS (GRID_TITLE_ROWS + 4 + BOARD_RECENT)
 
 /* the left border and the space after it */
 #define GRID_INDENT 2
@@ -77,17 +78,35 @@ static int foot_of(const struct board_tile *t, char *out, size_t size)
     return out[0] != '\0';
 }
 
-static int tile_height(const struct board_tile *t, int lane_w)
+/* the last lines of the session log, while the card is working */
+static int say_rows(const struct board_tile *t)
+{
+    return t->working ? t->recent_n : 0;
+}
+
+/* the rows a tile carries below its status row */
+static int under_status(const struct board_tile *t)
 {
     char foot[GRID_LINE_MAX];
-    int  budget = text_width(lane_w);
-    int  h = text_rows(t->title, budget, GRID_TITLE_ROWS);
+    int  say = say_rows(t);
+    return foot_of(t, foot, sizeof foot) + (say ? 1 + say : 0);
+}
+
+static int tile_height(const struct board_tile *t, int lane_w)
+{
+    int budget = text_width(lane_w);
+    int h = text_rows(t->title, budget, GRID_TITLE_ROWS);
     if (!h)
         h = 1;
 
-    int under = has_status(t) + foot_of(t, foot, sizeof foot);
+    char foot[GRID_LINE_MAX];
+    int  under = has_status(t) + foot_of(t, foot, sizeof foot);
     if (under)
         h += 1 + under;
+
+    int say = say_rows(t);
+    if (say)
+        h += 1 + say;
     return h + GRID_BORDER;
 }
 
@@ -256,8 +275,7 @@ int boardgrid_layout(const struct board_tile *t, const int *lane_of, int n,
     for (int i = 0; i < out->tiles; i++) {
         struct grid_rect        *r = &out->tile[i];
         const struct board_tile *tile = &t[r->tile];
-        char                     foot[GRID_LINE_MAX];
-        int                      under = foot_of(tile, foot, sizeof foot);
+        int                      under = under_status(tile);
         /* a tile clipped to a short lane has lost its status row: what sits
            where the row would be is title, and a click there is not the worker */
         if (has_status(tile) && r->h == tile_height(tile, out->lane_w)) {
@@ -368,10 +386,11 @@ static void tile_lines(const struct board_tile *t, int budget, struct lines *out
 
     char foot[GRID_LINE_MAX];
     int  has_foot = foot_of(t, foot, sizeof foot);
-    if (!has_status(t) && !has_foot)
+    int  say = say_rows(t);
+    if (!has_status(t) && !has_foot && !say)
         return;
 
-    if (out->n < GRID_TILE_ROWS)
+    if ((has_status(t) || has_foot) && out->n < GRID_TILE_ROWS)
         out->rule[out->n++] = 1;
 
     if (has_status(t))
@@ -379,6 +398,12 @@ static void tile_lines(const struct board_tile *t, int budget, struct lines *out
                  t->spin ? GRID_SPIN : 0);
     if (has_foot)
         add_line(out, foot, budget, UI_DIM, 0);
+
+    if (say && out->n < GRID_TILE_ROWS) {
+        out->rule[out->n++] = 1;
+        for (int i = 0; i < say; i++)
+            add_line(out, t->recent[i], budget, UI_DIM, 0);
+    }
 }
 
 struct grid {

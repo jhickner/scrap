@@ -263,6 +263,34 @@ static void test_a_tile_taller_than_the_lane(void)
     boardgrid_layout_free(&g);
 }
 
+static void test_a_working_card_shows_its_log(void)
+{
+    struct grid_layout g = {0};
+
+    reset();
+    tile(0, "a card", "tab 1 \xc2\xb7 2m");
+    expect(boardgrid_layout(tiles, lane_of, tiles_n, 1, 80, 30, 0, &g),
+           "a quiet card lays out");
+    int plain = g.tile[0].h;
+    int status = g.tile[0].status_row;
+
+    reset();
+    tile(0, "a card", "tab 1 \xc2\xb7 2m");
+    tiles[0].working = 1;
+    tiles[0].recent[0] = "reading boardgrid.c";
+    tiles[0].recent[1] = "editing boardgrid.c";
+    tiles[0].recent[2] = "running make";
+    tiles[0].recent_n = 3;
+    expect(boardgrid_layout(tiles, lane_of, tiles_n, 1, 80, 30, 0, &g),
+           "a working card lays out");
+    expect(g.tile[0].h == plain + 4,
+           "the log preview takes a divider and three rows");
+    expect(g.tile[0].status_row == status,
+           "the status row stays where it was");
+
+    boardgrid_layout_free(&g);
+}
+
 int main(void)
 {
     test_lane_widths();
@@ -272,6 +300,7 @@ int main(void)
     test_every_corner_hits_its_tile();
     test_the_selection_stays_on_screen();
     test_a_tile_taller_than_the_lane();
+    test_a_working_card_shows_its_log();
 
     if (failures) {
         fprintf(stderr, "%d failure(s)\n", failures);
