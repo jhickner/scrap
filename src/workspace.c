@@ -408,6 +408,14 @@ static int pump(int hold)
             if (on_settled)
                 on_settled(s);
 
+            /* the callback may close the tab it was handed -- a card whose
+               last action finished lets go of its session -- which frees the
+               session and shifts every tab after it down a slot */
+            if (i >= ntabs || tabs[i].s != s) {
+                i--;
+                continue;
+            }
+
             if (i != cur)
                 session_set_unseen(s, 1);
         }
