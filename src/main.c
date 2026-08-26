@@ -461,7 +461,7 @@ int main(int argc, char **argv)
     sessionfork_set_program(argv[0]);
 
     if (resume && optind < argc) {
-        fprintf(stderr, APP_NAME ": --resume takes no prompt — it starts with the picker\n");
+        fprintf(stderr, APP_NAME ": --resume takes no prompt\n");
         return 2;
     }
 
@@ -487,7 +487,7 @@ int main(int argc, char **argv)
             return 0;
         }
         if (rest <= 0) {
-            fprintf(stderr, APP_NAME ": --card takes the text to file\n");
+            fprintf(stderr, APP_NAME ": --card takes a task description\n");
             return 2;
         }
         size_t need = 1;
@@ -538,7 +538,7 @@ int main(int argc, char **argv)
     int interactive = optind >= argc;
 
     if (telegram && !interactive) {
-        fprintf(stderr, APP_NAME ": --telegram takes no prompt — it is a session\n");
+        fprintf(stderr, APP_NAME ": --telegram takes no prompt\n");
         return 2;
     }
 
