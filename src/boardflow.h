@@ -34,4 +34,8 @@ int boardflow_worktree(const struct board_card *c);
 const char *boardflow_cwd(const struct board_card *c,
                           const struct board_action *p);
 
+/* An action in the repo works on the checkout every card shares, so one card
+   takes it at a time and the rest wait their turn. */
+int boardflow_exclusive(const struct board_action *p);
+
 #endif

@@ -172,6 +172,11 @@ int boardflow_worktree(const struct board_card *c)
     return 0;
 }
 
+int boardflow_exclusive(const struct board_action *p)
+{
+    return p && p->where == BOARD_IN_REPO;
+}
+
 /* merge and anything gated on it act on the checkout the card came from, not
    on the branch, so the session moves out of the worktree to take them. */
 const char *boardflow_cwd(const struct board_card *c,

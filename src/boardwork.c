@@ -27,6 +27,7 @@ struct worker {
     char            id[BOARD_ID_MAX];
     struct session *session;
     char            job[32];
+    char            repo[4096];
     char            backend[32];
     int             done;
     int             attached;
@@ -189,7 +190,8 @@ int boardwork_serve(int *waiting)
     return moved;
 }
 
-static int hold(const char *id, struct session *s, const char *job)
+static int hold(const char *id, const char *repo, struct session *s,
+                const char *job)
 {
     if (!id || !*id || !s || slot_of(id))
         return 0;
@@ -200,6 +202,7 @@ static int hold(const char *id, struct session *s, const char *job)
         memset(&workers[i], 0, sizeof workers[i]);
         snprintf(workers[i].id, sizeof workers[i].id, "%s", id);
         snprintf(workers[i].job, sizeof workers[i].job, "%s", job);
+        snprintf(workers[i].repo, sizeof workers[i].repo, "%s", repo ? repo : "");
         workers[i].session = s;
         workers[i].began = now_seconds();
         snprintf(workers[i].backend, sizeof workers[i].backend, "%s",
@@ -483,6 +486,76 @@ static const char *wanted_backend(const struct board_card *c)
 
 static void pick_after(struct worker *w);
 
+/* Two cards working the same checkout at once would step on each other, so an
+   action that runs in the repo is taken by one card at a time. */
+static int same_repo(const char *a, const char *b)
+{
+    if (!a || !b || !*a || !*b)
+        return 0;
+    if (!strcmp(a, b))
+        return 1;
+
+    char ra[4096], rb[4096];
+    return gitcmd_root(a, ra, sizeof ra) && gitcmd_root(b, rb, sizeof rb) &&
+           !strcmp(ra, rb);
+}
+
+static const char *checkout_held(const struct board_card *c, const char *job)
+{
+    if (!c || !job || !*job || !boardflow_exclusive(boardcfg_action(job)))
+        return NULL;
+
+    for (int i = 0; i < WORKSPACE_MAX; i++) {
+        const struct worker *w = &workers[i];
+        if (!w->session || !strcmp(w->id, c->id))
+            continue;
+        if (!boardflow_exclusive(boardcfg_action(w->job)))
+            continue;
+        if (same_repo(w->repo, c->cwd))
+            return w->id;
+    }
+    return NULL;
+}
+
+/* the card is asked for its turn on every tick, so it is told it is waiting
+   once rather than on each of them */
+static char waiting[WORKSPACE_MAX][BOARD_ID_MAX];
+
+static void wait_note(const char *id, const char *holder)
+{
+    int at = -1;
+    for (int i = 0; i < WORKSPACE_MAX; i++) {
+        if (!strcmp(waiting[i], id))
+            return;
+        if (!waiting[i][0] && at < 0)
+            at = i;
+    }
+    if (at < 0)
+        return;
+
+    snprintf(waiting[at], BOARD_ID_MAX, "%s", id);
+
+    char said[96];
+    snprintf(said, sizeof said, "waiting on card %s in the checkout", holder);
+    board_note(id, "board", said);
+}
+
+static void wait_clear(const char *id)
+{
+    for (int i = 0; i < WORKSPACE_MAX; i++)
+        if (!strcmp(waiting[i], id))
+            waiting[i][0] = '\0';
+}
+
+static int queued_behind(const struct board_card *c, const char *job)
+{
+    const char *holder = checkout_held(c, job);
+    if (!holder)
+        return 0;
+    wait_note(c->id, holder);
+    return 1;
+}
+
 static int card_blocked(const struct board_card *c, char *why, int size)
 {
     snprintf(why, (size_t)size, "%s", "");
@@ -573,6 +646,7 @@ static void take_slot(struct worker *w, const struct board_card *c,
         w->began = now_seconds();
     snprintf(w->id, sizeof w->id, "%s", c->id);
     snprintf(w->job, sizeof w->job, "%s", job);
+    snprintf(w->repo, sizeof w->repo, "%s", c->cwd);
     w->done = 0;
     w->checked = 0;
     w->handover = 0;
@@ -617,6 +691,13 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
     }
     const char *job = mine->name;
 
+    const char *holder = checkout_held(c, job);
+    if (holder) {
+        wait_note(c->id, holder);
+        snprintf(why, (size_t)size, "card %s is in the checkout", holder);
+        return 0;
+    }
+
     int  lands = 0;
     char path[4200];
     char base[64];
@@ -652,7 +733,7 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
         }
         workspace_show(front);
         s = workspace_at(at);
-        hold(c->id, s, job);
+        hold(c->id, c->cwd, s, job);
     }
 
     show_card(at, c);
@@ -670,6 +751,7 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
     snprintf(edited.backend, sizeof edited.backend, "%s", backend);
     board_update(&edited);
 
+    wait_clear(c->id);
     board_note(c->id, "board", "started");
     return 1;
 }
@@ -719,7 +801,7 @@ int boardwork_rejoin(const struct board_card *c, char *why, int size)
         return -1;
     }
 
-    if (!hold(c->id, s, job)) {
+    if (!hold(c->id, c->cwd, s, job)) {
         workspace_close(at);
         snprintf(why, (size_t)size, "no worker slot left");
         return -1;
@@ -863,6 +945,10 @@ static const struct board_card *pull_next(const struct board_card *cards, int n,
         if (!strcmp(c->id, pull_failed))
             continue;
 
+        const struct board_action *head = boardflow_action(c);
+        if (queued_behind(c, head ? head->name : NULL))
+            continue;
+
         char why[256];
         if (reuse) {
             if (card_blocked(c, why, sizeof why))
@@ -940,6 +1026,8 @@ static int step_send(const struct board_card *c, const struct board_action *p,
     int at = workspace_index_of(w->session);
     if (at < 0 || session_turn_running(w->session) || workspace_queued(at))
         return 0;
+    if (queued_behind(c, p->name))
+        return 0;
 
     char *turn = boardstep_prompt(c, p);
     if (!turn)
@@ -959,6 +1047,7 @@ static int step_send(const struct board_card *c, const struct board_action *p,
 
     snprintf(w->job, sizeof w->job, "%s", p->name);
     w->checked = 0;
+    wait_clear(c->id);
 
     workspace_send(at, turn, c->title);
     boardlog_turn(c->id, p->name, turn, NULL);
@@ -1092,6 +1181,8 @@ static int release(const struct board_card *c)
 
 void boardwork_let_go(const char *id)
 {
+    wait_clear(id);
+
     struct worker *w = slot_of(id);
     if (!w)
         return;

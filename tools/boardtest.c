@@ -883,6 +883,11 @@ static void test_an_action_waits_on_what_it_needs(void)
     expect(!strcmp(boardflow_cwd(&c, boardcfg_action("merge")), "/tmp/repo"),
            "and merge runs in the checkout it came from");
 
+    expect(boardflow_exclusive(boardcfg_action("merge")),
+           "merge takes the checkout to itself");
+    expect(!boardflow_exclusive(boardcfg_action("implement")),
+           "an action in a worktree of its own does not");
+
     struct board_card only_repo = {0};
     snprintf(only_repo.queue[only_repo.queue_n++], BOARD_ACTION_NAME, "merge");
     expect(!boardflow_worktree(&only_repo),
