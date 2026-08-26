@@ -711,6 +711,8 @@ int main(int argc, char **argv)
         unlink(tabs_arg);
     }
 
+    boardwork_reattach();
+
     if (!resume && session_arg && !restore_arg)
         sessionload_into(session);
 
