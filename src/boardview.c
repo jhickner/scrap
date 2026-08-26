@@ -734,13 +734,21 @@ static int unmerged(const struct board_card *cards, int n, const char *filter)
     return loses;
 }
 
+static int close_card(const char *id)
+{
+    if (!board_close(id))
+        return 0;
+    boardwork_let_go(id);
+    return 1;
+}
+
 static int close_all(const struct board_card *cards, int n, const char *filter)
 {
     int did = 0;
     for (int i = 0; i < n; i++) {
         if (!boardflow_waits_on_you(&cards[i]) || !shows(&cards[i], filter))
             continue;
-        board_close(cards[i].id);
+        close_card(cards[i].id);
         did++;
     }
     return did;
@@ -860,7 +868,7 @@ static void do_card(const struct board_card *c)
         else if (act == BOARDCARD_RUN)
             run_action(live, edit.run);
         else if (act == BOARDCARD_CLOSE)
-            board_close(live->id);
+            close_card(live->id);
     }
     board_free(cards, n);
 }
@@ -879,7 +887,7 @@ int boardview_close(const char *id, char *why, int size)
                  id, board_stand_name(board_stands(c)));
     else {
         int left = boardwork_unmerged(c);
-        board_close(c->id);
+        close_card(c->id);
         if (left)
             snprintf(why, (size_t)size,
                      "%d commit%s %s not merged, and the branch goes with the "
@@ -1111,7 +1119,7 @@ int boardview_run(const char *cwd)
             struct board_card *c = board_find(cards, n, cur.id);
             if (at >= 0 && pressed == 'y') {
                 if (what == ASK_CLOSE) {
-                    if (c && board_close(c->id))
+                    if (c && close_card(c->id))
                         anchor_step(&cur);
                 } else if (what == ASK_CLOSE_ALL) {
                     int did = close_all(cards, n, filter);
@@ -1205,7 +1213,7 @@ int boardview_run(const char *cwd)
                 asking = ASK_CLOSE;
                 break;
             }
-            if (board_close(c->id))
+            if (close_card(c->id))
                 anchor_step(&cur);
             break;
         }

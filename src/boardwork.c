@@ -1224,6 +1224,13 @@ int boardwork_poll(void)
             if (board_update(&edited))
                 changed = 1;
         }
+        /* a closed card is done with its session, even one a person rejoined:
+           there is nothing left for the worker to be on */
+        if (c && c->closed) {
+            boardwork_let_go(workers[i].id);
+            changed = 1;
+            continue;
+        }
         /* a tab a person rejoined into is theirs: it is let go when they
            close it, not when the card comes to rest. The action it was on is
            not still running, though, so the slot drops the step. */
