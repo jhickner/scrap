@@ -61,10 +61,10 @@ static void test_lane_widths(void)
     struct {
         int cols, shown, lane_w;
     } want[] = {
-        {60, 2, 29},
-        {80, 3, 26},
-        {120, 4, 29},
-        {200, 8, 24},
+        {60, 3, 19},
+        {80, 5, 15},
+        {120, 7, 16},
+        {200, 9, 22},
     };
 
     for (int i = 0; i < (int)(sizeof want / sizeof *want); i++) {
@@ -85,8 +85,14 @@ static void test_lane_widths(void)
 
     fill(3, 1);
     g.lane_first = 0;
-    expect(!boardgrid_layout(tiles, lane_of, tiles_n, 3, 20, 20, 0, &g),
+    expect(!boardgrid_layout(tiles, lane_of, tiles_n, 3, GRID_LANE_MIN + 1, 20,
+                             0, &g),
            "a screen narrower than a lane has no layout");
+    g.lane_first = 0;
+    expect(boardgrid_layout(tiles, lane_of, tiles_n, 3, GRID_LANE_MIN + 2, 20, 0,
+                            &g),
+           "a screen the width of one lane lays out");
+    expect(g.lane_w == GRID_LANE_MIN, "the narrowest lane is the minimum");
 
     boardgrid_layout_free(&g);
 }
@@ -314,9 +320,38 @@ static void test_the_pins_share_the_status_row(void)
     expect(height_of(80, 1) == bare + 1, "pins that do not fit take a row");
 }
 
+static void test_the_narrowest_lane(void)
+{
+    struct grid_layout g = {0};
+    reset();
+    for (int l = 0; l < 4; l++) {
+        tile(l, "a card title long enough to wrap more than once",
+             "tab 2 \xc2\xb7 4m");
+        snprintf(tiles[tiles_n - 1].pins, sizeof tiles[0].pins, "opus");
+    }
+
+    for (int cols = GRID_LANE_MIN + 2; cols <= 4 * GRID_LANE_MIN + 2; cols++) {
+        g.lane_first = 0;
+        expect(boardgrid_layout(tiles, lane_of, tiles_n, 4, cols, 20, 0, &g),
+               "a board as wide as one lane lays out");
+        expect(g.lane_w >= GRID_LANE_MIN,
+               "a lane is no narrower than the minimum");
+        for (int i = 0; i < g.tiles; i++) {
+            const struct grid_rect *r = &g.tile[i];
+            expect(r->col >= 1 && r->col + r->w <= cols,
+                   "a narrow tile stays inside the screen");
+            expect(r->w >= GRID_LANE_MIN - 1,
+                   "a narrow tile keeps room for its text");
+        }
+    }
+
+    boardgrid_layout_free(&g);
+}
+
 int main(void)
 {
     test_lane_widths();
+    test_the_narrowest_lane();
     test_the_window_follows_the_selection();
     test_a_lane_scrolls_on_its_own();
     test_tiles_keep_to_their_lane();

@@ -5,7 +5,7 @@
 
 struct menu;
 
-#define GRID_LANE_MIN 24
+#define GRID_LANE_MIN 15
 #define GRID_LANE_MAX 40
 
 #define GRID_TITLE_ROWS 2
