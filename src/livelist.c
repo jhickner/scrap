@@ -12,6 +12,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "parent.h"
 #include "session.h"
 #include "text.h"
 #include "title.h"
@@ -229,6 +230,10 @@ void livelist_publish(const struct session *s, const char *status)
     cJSON_AddStringToObject(rec, "effort", session_effort(s));
     cJSON_AddStringToObject(rec, "cwd", session_cwd(s) ? session_cwd(s) : "");
     cJSON_AddStringToObject(rec, "id", id ? id : "");
+    char up[128] = "";
+    if (id)
+        parent_of(id, up, sizeof up);
+    cJSON_AddStringToObject(rec, "parent", up);
     cJSON_AddStringToObject(rec, "title", name);
     cJSON_AddStringToObject(rec, "status", status);
     cJSON_AddNumberToObject(rec, "unseen", session_unseen(s) ? 1 : 0);
@@ -346,6 +351,7 @@ int livelist_load(struct live_session **out)
         copy_str(v->effort, sizeof v->effort, rec, "effort");
         copy_str(v->cwd, sizeof v->cwd, rec, "cwd");
         copy_str(v->id, sizeof v->id, rec, "id");
+        copy_str(v->parent, sizeof v->parent, rec, "parent");
         copy_str(v->title, sizeof v->title, rec, "title");
         copy_str(v->status, sizeof v->status, rec, "status");
         copy_str(v->card, sizeof v->card, rec, "card");
