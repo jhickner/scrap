@@ -8,16 +8,22 @@
 
 /* a small box of choices drawn against the row it belongs to */
 struct menu {
-    char          item[MENU_MAX][MENU_LABEL];
-    unsigned char apart[MENU_MAX];
-    int           n;
-    int           sel;
-    int           open;
+    char               item[MENU_MAX][MENU_LABEL];
+    unsigned char      apart[MENU_MAX];
+    unsigned char      extra[MENU_MAX];
+    char               suffix[MENU_LABEL];
+    const char *const *choices;
+    int                choices_n;
+    int                choice;
+    int                n;
+    int                sel;
+    int                open;
 };
 
 void menu_clear(struct menu *m);
 int  menu_add(struct menu *m, const char *label, int apart);
 void menu_step(struct menu *m, int dir);
+int  menu_steer(struct menu *m, int dir);
 
 int  menu_rows(const struct menu *m);
 int  menu_width(const struct menu *m);

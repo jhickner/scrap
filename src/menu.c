@@ -19,9 +19,7 @@
 
 void menu_clear(struct menu *m)
 {
-    m->n = 0;
-    m->sel = 0;
-    m->open = 0;
+    memset(m, 0, sizeof *m);
 }
 
 int menu_add(struct menu *m, const char *label, int apart)
@@ -45,6 +43,20 @@ void menu_step(struct menu *m, int dir)
         m->sel = m->n - 1;
 }
 
+int menu_steer(struct menu *m, int dir)
+{
+    if (!m || m->sel < 0 || m->sel >= m->n || !m->extra[m->sel] ||
+        m->choices_n < 1)
+        return 0;
+    m->choice += dir;
+    if (m->choice >= m->choices_n)
+        m->choice = 0;
+    else if (m->choice < 0)
+        m->choice = m->choices_n - 1;
+    snprintf(m->suffix, sizeof m->suffix, "%s", m->choices[m->choice]);
+    return 1;
+}
+
 int menu_rows(const struct menu *m)
 {
     int rows = m->n + 2;
@@ -53,11 +65,47 @@ int menu_rows(const struct menu *m)
     return rows;
 }
 
+static size_t extra_cells(const struct menu *m)
+{
+    size_t extra = 0;
+    if (m->choices_n > 0) {
+        for (int i = 0; i < m->choices_n; i++) {
+            size_t w = ui_cells(m->choices[i]);
+            if (w > extra)
+                extra = w;
+        }
+    } else if (m->suffix[0]) {
+        extra = ui_cells(m->suffix);
+    }
+    return extra ? 3 + extra : 0;
+}
+
+static size_t item_cells(const struct menu *m, int i)
+{
+    size_t cells = ui_cells(m->item[i]);
+    if (m->extra[i])
+        cells += extra_cells(m);
+    return cells;
+}
+
+static int put_item(const struct menu *m, int at, int picked, size_t budget)
+{
+    char        shown[MENU_LABEL * 2 + 8];
+    const char *s = m->item[at];
+    if (picked && m->extra[at] && m->suffix[0]) {
+        snprintf(shown, sizeof shown, "%s \xc2\xb7 %s", m->item[at], m->suffix);
+        s = shown;
+    }
+    size_t fit = ui_fit_bytes(s, budget);
+    ui_putn(s, fit);
+    return (int)ui_cells_n(s, fit);
+}
+
 int menu_width(const struct menu *m)
 {
     size_t wide = 0;
     for (int i = 0; i < m->n; i++) {
-        size_t cells = ui_cells(m->item[i]);
+        size_t cells = item_cells(m, i);
         if (cells > wide)
             wide = cells;
     }
@@ -125,12 +173,11 @@ void menu_paint_row(const struct menu *m, int row, int width)
     ui_put(picked ? " \xe2\x86\x92 " : "   ");
 
     size_t budget = (size_t)(width - MENU_TRIM);
-    size_t fit = at >= 0 ? ui_fit_bytes(m->item[at], budget) : 0;
+    int    used = 4;
     if (at >= 0)
-        ui_putn(m->item[at], fit);
+        used += put_item(m, at, picked, budget);
     ui_esc(ui_style(UI_RESET));
 
-    int used = 4 + (at >= 0 ? (int)ui_cells_n(m->item[at], fit) : 0);
     if (width - 1 > used)
         ui_pad(width - 1 - used);
 

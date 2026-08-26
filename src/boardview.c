@@ -966,6 +966,16 @@ struct card_menu_rows {
     int attach;
 };
 
+static const char *menu_backend(const struct board_card *c)
+{
+    if (c->backend_pin[0])
+        return c->backend_pin;
+    if (c->backend[0])
+        return c->backend;
+    const char *serving = boardcfg_serving();
+    return serving && serving[0] ? serving : "claude";
+}
+
 static struct card_menu_rows card_menu(const struct board_card *c,
                                        struct menu *m)
 {
@@ -975,8 +985,28 @@ static struct card_menu_rows card_menu(const struct board_card *c,
     menu_clear(m);
     if (on > MENU_MAX - 2)
         on = MENU_MAX - 2;
-    for (int i = 0; i < on; i++)
+    for (int i = 0; i < on; i++) {
         menu_add(m, offered[i], 0);
+        m->extra[i] = 1;
+    }
+
+    static const char *backends[BOARD_BACKENDS_MAX];
+    const char        *all[BOARD_BACKENDS_MAX + 1];
+    int n = boardcfg_backend_choices(boardcfg(), all, COUNT(all));
+    int k = 0;
+    for (int i = 0; i < n && k < BOARD_BACKENDS_MAX; i++)
+        if (all[i][0])
+            backends[k++] = all[i];
+    m->choices = backends;
+    m->choices_n = k;
+
+    const char *want = menu_backend(c);
+    m->choice = 0;
+    for (int i = 0; i < k; i++)
+        if (!strcmp(backends[i], want))
+            m->choice = i;
+    if (k)
+        snprintf(m->suffix, sizeof m->suffix, "%s", backends[m->choice]);
 
     struct card_menu_rows rows = {.edit = -1, .attach = -1};
     if (menu_add(m, "edit", on > 0))
@@ -1303,6 +1333,8 @@ static int board_loop(const char *cwd)
             char why[256] = "";
             char name[64];
             snprintf(name, sizeof name, "%s", card.item[card.sel]);
+            if (card.extra[card.sel] && card.suffix[0])
+                board_pin(c->id, card.suffix, NULL);
             if (run_now(c->id, name, why, sizeof why))
                 snprintf(notice, sizeof notice, "running %s", name);
             else

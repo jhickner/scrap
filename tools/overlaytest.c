@@ -105,6 +105,45 @@ int main(void)
     want(drawn, 3, "four│ → implement │ four");
     free(drawn);
 
+    struct menu cycled = {0};
+    menu_add(&cycled, "implement", 0);
+    menu_add(&cycled, "plan", 0);
+    menu_add(&cycled, "attach", 1);
+    cycled.extra[0] = 1;
+    cycled.extra[1] = 1;
+    static const char *backends[] = {"claude", "grok"};
+    cycled.choices = backends;
+    cycled.choices_n = 2;
+    cycled.choice = 0;
+    snprintf(cycled.suffix, sizeof cycled.suffix, "%s", backends[0]);
+    cycled.open = 1;
+
+    o = menu_overlay(&cycled, 2, 4, menu_width(&cycled));
+    drawn = composited(&o, under);
+    want(drawn, 2, "    ╭──────────────────────╮");
+    want(drawn, 3, "four│ → implement · claude │");
+    want(drawn, 4, "five│   plan               │");
+    free(drawn);
+
+    menu_step(&cycled, 1);
+    o = menu_overlay(&cycled, 2, 4, menu_width(&cycled));
+    drawn = composited(&o, under);
+    want(drawn, 3, "four│   implement          │");
+    want(drawn, 4, "five│ → plan · claude      │");
+    free(drawn);
+
+    menu_steer(&cycled, 1);
+    o = menu_overlay(&cycled, 2, 4, menu_width(&cycled));
+    drawn = composited(&o, under);
+    want(drawn, 4, "five│ → plan · grok        │");
+    free(drawn);
+
+    menu_step(&cycled, 1);
+    o = menu_overlay(&cycled, 2, 4, menu_width(&cycled));
+    drawn = composited(&o, under);
+    want(drawn, 6, "seve│ → attach             │");
+    free(drawn);
+
     printf(failures ? "overlaytest: %d failed\n" : "overlaytest: ok\n", failures);
     return failures ? 1 : 0;
 }

@@ -574,6 +574,11 @@ static int run(const char *title, const struct pick_item *items, int count,
                 chrome_paint();
                 continue;
             }
+            if (ev.key == TK_LEFT || ev.key == TK_RIGHT) {
+                if (menu_steer(m, ev.key == TK_LEFT ? -1 : 1))
+                    chrome_paint();
+                continue;
+            }
             if (ev.key == TK_ENTER) {
                 result = v.order[v.sel];
                 if (pressed)

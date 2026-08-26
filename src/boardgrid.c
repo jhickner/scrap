@@ -815,6 +815,11 @@ int boardgrid_run(const char *title, const struct board_tile *tiles,
                 chrome_paint();
                 continue;
             }
+            if (ev.key == TK_LEFT || ev.key == TK_RIGHT) {
+                if (menu_steer(v.menu, ev.key == TK_LEFT ? -1 : 1))
+                    chrome_paint();
+                continue;
+            }
             if (ev.key == TK_ENTER) {
                 result = v.sel;
                 if (pressed)
