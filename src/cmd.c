@@ -12,7 +12,7 @@
 #include "boardview.h"
 #include "boardwork.h"
 #include "chrome.h"
-#include "fanout.h"
+#include "matrix.h"
 #include "frontend.h"
 #include "hud.h"
 #include "models.h"
@@ -382,6 +382,8 @@ static void do_mux(struct session *s, const char *arg)
         return;
     }
     if (!arg || !*arg) {
+        if (matrix_reopen(s))
+            return;
         struct mux_spec v[MUX_MAX];
         int             n = muxcfg_load(v, MUX_MAX);
         reply_note("/mux <prompt> — asks the whole matrix at once; "
@@ -403,7 +405,7 @@ static void do_mux(struct session *s, const char *arg)
         ui_flush();
         return;
     }
-    fanout_run(s, arg);
+    matrix_run(s, arg);
 }
 
 static void do_btw(struct session *s, const char *arg)

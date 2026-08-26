@@ -18,6 +18,11 @@ int  workspace_index_of(const struct session *s);
 int  workspace_spawn(const char *backend, const char *model, const char *effort,
                      const char *cwd, const char *id);
 
+/* the standing prompt has to be set before the backend is built, so a caller
+   that wants one cannot set it on the tab it gets back */
+int  workspace_spawn_ex(const char *backend, const char *model, const char *effort,
+                        const char *cwd, const char *id, const char *system);
+
 int  workspace_open(struct session *s);
 
 void workspace_show(int index);
