@@ -684,6 +684,10 @@ int boardwork_rejoin(const struct board_card *c, char *why, int size)
         snprintf(why, (size_t)size, "no worker on that card");
         return -1;
     }
+    if (c->closed) {
+        snprintf(why, (size_t)size, "card %s is closed", c->id);
+        return -1;
+    }
     if (boardwork_blocked(c, why, size))
         return -1;
 

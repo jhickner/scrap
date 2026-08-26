@@ -898,7 +898,8 @@ static int card_tab(const struct board_card *c, char *notice, size_t size)
     return -1;
 }
 
-static void card_menu(const struct board_card *c, struct menu *m)
+/* the row attach sits on, or -1 when the card has no worker to attach to */
+static int card_menu(const struct board_card *c, struct menu *m)
 {
     const char *offered[BOARD_ACTIONS_MAX];
     int         on = boardflow_offered(c, offered, BOARD_ACTIONS_MAX);
@@ -908,8 +909,13 @@ static void card_menu(const struct board_card *c, struct menu *m)
         on = MENU_MAX - 1;
     for (int i = 0; i < on; i++)
         menu_add(m, offered[i], 0);
-    menu_add(m, "attach", on > 0);
-    m->open = 1;
+
+    int attach = -1;
+    if (board_stands(c) != BOARD_CLOSED)
+        attach = menu_add(m, "attach", on > 0) ? m->n - 1 : -1;
+
+    m->open = m->n > 0;
+    return attach;
 }
 
 int boardview_close(const char *id, char *why, int size)
@@ -1039,6 +1045,7 @@ int boardview_run(const char *cwd)
     static char          filter[4096];
     static struct anchor cur = {.stand = -1, .lane = -1};
     static struct menu   card;
+    static int           card_attach = -1;
     char                 notice[256] = {0};
     char                 ask[280] = {0};
     int                  asking = ASK_NONE;
@@ -1198,12 +1205,15 @@ int boardview_run(const char *cwd)
                 break;
             }
             if (!card.open) {
-                card_menu(c, &card);
+                card_attach = card_menu(c, &card);
+                if (!card.open)
+                    snprintf(notice, sizeof notice,
+                             "card %s has nothing to run", c->id);
                 break;
             }
             card.open = 0;
 
-            if (card.sel == card.n - 1) {
+            if (card.sel == card_attach) {
                 int tab = card_tab(c, notice, sizeof notice);
                 if (tab >= 0) {
                     close_list();

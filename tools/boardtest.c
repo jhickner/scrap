@@ -139,11 +139,20 @@ static void test_note_and_close(void)
 
     expect(board_note(id, "name", "worktree cleanup"), "note appends");
     expect(board_note(id, "you", "after landing, not before"), "and again");
-    expect(board_close(id), "closing the card");
 
     struct board_card *v = NULL;
     int                n = board_load(&v);
     struct board_card *c = board_find(v, n, id);
+    if (c) {
+        snprintf(c->session, sizeof c->session, "%s", "sess-1");
+        expect(board_update(c), "the card records a session");
+    }
+    board_free(v, n);
+
+    expect(board_close(id), "closing the card");
+
+    n = board_load(&v);
+    c = board_find(v, n, id);
     if (!c) {
         fail("card survives its notes");
         board_free(v, n);
@@ -155,6 +164,7 @@ static void test_note_and_close(void)
     expect(!strcmp(c->log[0].who, "name"), "note records who");
     expect(strstr(c->log[1].text, "landing") != NULL, "and what was said");
     expect(c->log[0].ts > 0, "note is stamped");
+    expect(!c->session[0], "and it lets go of its session");
     board_free(v, n);
 }
 

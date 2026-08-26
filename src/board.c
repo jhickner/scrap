@@ -712,11 +712,14 @@ int board_took(const char *id, const char *action)
     return with_card(id, apply_took, (void *)action);
 }
 
+/* the board takes the worktree back from a closed card, so the conversation
+   the session names has nothing left to be picked back up in */
 static int apply_close(struct board_card *c, void *ud)
 {
     (void)ud;
     c->queue_n = 0;
     c->closed = 1;
+    c->session[0] = '\0';
     return 1;
 }
 
