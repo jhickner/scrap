@@ -202,6 +202,23 @@ int main(void)
     pump(&s);
     if (s.cursor_visible)
         fail("a modal opened after a turn keeps the terminal cursor hidden");
+
+    repaint(&s);
+    if (row_of(&s, "filler") < 0)
+        fail("a modal leaves the session on screen above it");
+    if (chrome_modal_rows() >= 24)
+        fail("a modal is offered fewer rows than the screen");
+
+    chrome_full(1);
+    repaint(&s);
+    if (row_of(&s, "filler") >= 0)
+        fail("a full modal covers the session");
+    if (row_of(&s, "MENU") != 0)
+        fail("a full modal starts on the top row");
+    if (chrome_modal_rows() != 24)
+        fail("a full modal is offered every row");
+    chrome_full(0);
+
     chrome_modal(NULL, NULL);
 
     chrome_bind(NULL);
