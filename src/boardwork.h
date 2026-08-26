@@ -26,6 +26,9 @@ const char *boardwork_card_of(const struct session *s);
 
 int boardwork_tab(const char *id);
 
+/* how long the card's run has been going, over every step of it */
+double boardwork_elapsed(const char *id);
+
 const char *boardwork_step_job(const char *id);
 
 void boardwork_let_go(const char *id);

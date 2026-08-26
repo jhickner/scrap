@@ -31,6 +31,7 @@ struct worker {
     int             attached;
     int             checked;
     int             handover;
+    double          began;
     double          charged_usd;
     long            charged_in, charged_out;
 };
@@ -90,6 +91,12 @@ const char *boardwork_step_job(const char *id)
 {
     struct worker *w = id ? slot_of(id) : NULL;
     return w && w->job[0] ? w->job : NULL;
+}
+
+double boardwork_elapsed(const char *id)
+{
+    struct worker *w = id ? slot_of(id) : NULL;
+    return w && w->began ? now_seconds() - w->began : 0;
 }
 
 int boardwork_tab(const char *id)
@@ -193,6 +200,7 @@ static int hold(const char *id, struct session *s, const char *job)
         snprintf(workers[i].id, sizeof workers[i].id, "%s", id);
         snprintf(workers[i].job, sizeof workers[i].job, "%s", job);
         workers[i].session = s;
+        workers[i].began = now_seconds();
         snprintf(workers[i].backend, sizeof workers[i].backend, "%s",
                  session_backend(s));
         return 1;
@@ -569,6 +577,8 @@ static int retarget(struct session *s, const char *backend, const char *model,
 static void take_slot(struct worker *w, const struct board_card *c,
                       const char *job)
 {
+    if (strcmp(w->id, c->id))
+        w->began = now_seconds();
     snprintf(w->id, sizeof w->id, "%s", c->id);
     snprintf(w->job, sizeof w->job, "%s", job);
     w->done = 0;

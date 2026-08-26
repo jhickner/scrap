@@ -97,7 +97,7 @@ static void status_of(const struct board_card *c, int wide, const char *step,
     text_ago(c->updated ? c->updated : c->created, c->closed, ts,
              sizeof ts);
     char   ran[32] = "";
-    double running = tab >= 0 ? session_turn_elapsed(workspace_at(tab)) : 0;
+    double running = boardwork_elapsed(c->id);
     if (running > 0)
         text_duration(running, ran, sizeof ran);
 
