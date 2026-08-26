@@ -1,5 +1,5 @@
 ---
-tier: low
+tier: med
 on: capture
 ---
 

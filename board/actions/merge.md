@@ -2,6 +2,7 @@
 tier: med
 in: repo
 needs: implement
+closes: yes
 fail marker: MERGE BLOCKED
 ---
 
