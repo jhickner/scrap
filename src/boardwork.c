@@ -429,8 +429,8 @@ static void show_card(int at, const struct board_card *c)
         workspace_render(at, draw_card, k);
 }
 
-/* The turn that opens a card's session: the action it is on, the card, and a
-   pointer at CARD.md when there is a worktree holding one. */
+/* The turn that opens a card's session: the action it is on and the card in
+   full, notes and all, so there is nothing left to go and read. */
 static char *first_turn(const struct board_card *c)
 {
     const struct board_action *p = boardflow_action(c);
@@ -439,33 +439,32 @@ static char *first_turn(const struct board_card *c)
     if (!head)
         return NULL;
 
-    const char *body = c->body && *c->body ? c->body : c->title;
-    const char *card = boardflow_worktree(c)
-        ? "The card is also written to CARD.md here, which is the copy to go "
-          "back to rather than this message."
-        : "";
-
     /* an action in the repo has left the worktree behind, so the turn names the
        branch the work is on and where it came from */
     char tree[8600];
     boardstep_where(c, p, tree, sizeof tree);
 
-    size_t need = strlen(head) + strlen(body) + strlen(c->title) +
-                  strlen(card) + strlen(tree) + 256;
-    char  *out = malloc(need);
+    char  *buf = NULL;
+    size_t len = 0;
+    FILE  *out = open_memstream(&buf, &len);
     if (!out) {
         free(head);
         return NULL;
     }
 
-    int at = snprintf(out, need, "%s", head);
+    fputs(head, out);
     if (tree[0])
-        at += snprintf(out + at, need - (size_t)at, "\n\n%s", tree);
-    if (*card)
-        at += snprintf(out + at, need - (size_t)at, "\n\n%s", card);
-    snprintf(out + at, need - (size_t)at, "\n\n# %s\n\n%s\n", c->title, body);
+        fprintf(out, "\n\n%s", tree);
+    if (boardflow_worktree(c))
+        fputs("\n\nThe card is below in full, and the same text is in CARD.md "
+              "here to write back to and to pick up again later. Do not open "
+              "it to start: it holds nothing you have not been given.",
+              out);
+    fputs("\n\n", out);
+    card_write(out, c);
+    fclose(out);
     free(head);
-    return out;
+    return buf;
 }
 
 static const char *wanted_backend(const struct board_card *c)
