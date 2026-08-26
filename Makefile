@@ -126,13 +126,16 @@ $(BUILD)/boardtest: tools/boardtest.c src/board.o src/boardfile.o src/boardname.
 $(BUILD)/boardgridtest: tools/boardgridtest.c src/boardgrid.o src/menu.o src/overlay.o src/chrome.o src/block.o src/prompt.o src/replframe.o src/replkeys.o src/files.o src/paste.o src/settings.o src/status.o src/tty.o src/ui.o src/viewport.o src/bash.o src/frontend.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
+$(BUILD)/boardtiletest: tools/boardtiletest.c src/boardtile.o src/text.o | $(BUILD)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
+
 $(BUILD)/highlighttest: tools/highlighttest.c src/highlight.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
 CHECKS  := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest reflowtest toolstyletest sessionlisttest claudetest codextest \
            groktest filedifftest pitest agenttabstest statustest transcripttest \
            sessionviewtest highlighttest muxcfgtest telegramtest boardtest \
-           boardgridtest
+           boardgridtest boardtiletest
 
 check: $(addprefix $(BUILD)/,$(CHECKS))
 	@for t in $^; do echo "$$t"; ./$$t || exit 1; done

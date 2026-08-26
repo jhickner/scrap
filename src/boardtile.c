@@ -145,6 +145,15 @@ static void status_of(const struct board_card *c, int wide, const char *step,
         if (where[0])
             snprintf(head, sizeof head, "%s · ", where);
         snprintf(out, size, "%s$%.2f · %s", head, c->cost_usd, when);
+    } else if (board_stands(c) == BOARD_CLOSED &&
+               (c->tokens_in || c->tokens_out)) {
+        char in[32], out_tokens[32], head[320] = "";
+        text_humanize(c->tokens_in, in, sizeof in);
+        text_humanize(c->tokens_out, out_tokens, sizeof out_tokens);
+        if (where[0])
+            snprintf(head, sizeof head, "%s · ", where);
+        snprintf(out, size, "%s%s in · %s out · %s", head, in,
+                 out_tokens, when);
     } else if (where[0])
         snprintf(out, size, "%s · %s", where, when);
     else
