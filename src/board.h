@@ -91,6 +91,9 @@ int board_add(const char *text, const char *cwd, char id_out[BOARD_ID_MAX]);
 
 void board_title_of(const char *text, char *out, size_t size);
 
+/* the branch a card's work is on, named after its id */
+void board_branch(const char *id, char *out, size_t size);
+
 int board_update(const struct board_card *card);
 
 int board_pin(const char *id, const char *backend, const char *tier);

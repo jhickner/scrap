@@ -491,6 +491,11 @@ void board_title_of(const char *text, char *out, size_t size)
     free(first);
 }
 
+void board_branch(const char *id, char *out, size_t size)
+{
+    snprintf(out, size, "worktree-%s", id ? id : "");
+}
+
 int board_add(const char *text, const char *cwd, char id_out[BOARD_ID_MAX])
 {
     if (!text || !*text)

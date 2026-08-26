@@ -218,11 +218,6 @@ static void worktree_of(const char *root, const char *id, char *out,
     snprintf(out, size, "%s/.claude/worktrees/%s", root, id);
 }
 
-static void branch_of(const char *id, char *out, size_t size)
-{
-    snprintf(out, size, "worktree-%s", id);
-}
-
 static int tidy_step(const char *root, const char *tree, const char *branch,
                      char *out, size_t size)
 {
@@ -242,7 +237,7 @@ static int worktree_make(const char *root, const char *id, const char *path,
                          char *why, int size)
 {
     char branch[128];
-    branch_of(id, branch, sizeof branch);
+    board_branch(id, branch, sizeof branch);
     if (gitcmd_worktree_add(root, path, branch))
         return 1;
     snprintf(why, (size_t)size, "could not make a worktree at %s", path);
@@ -440,7 +435,10 @@ static char *first_turn(const struct board_card *c)
 {
     const struct board_action *p = boardflow_action(c);
 
-    const char *head = p && p->prompt ? p->prompt : "";
+    char *head = boardstep_fill(p && p->prompt ? p->prompt : "", c);
+    if (!head)
+        return NULL;
+
     const char *body = c->body && *c->body ? c->body : c->title;
     const char *card = boardflow_worktree(c)
         ? "The card is also written to CARD.md here, which is the copy to go "
@@ -449,21 +447,16 @@ static char *first_turn(const struct board_card *c)
 
     /* an action in the repo has left the worktree behind, so the turn names the
        branch the work is on and where it came from */
-    char tree[4600] = "";
-    if (p && p->where == BOARD_IN_REPO && c->worktree[0]) {
-        char branch[128];
-        branch_of(c->id, branch, sizeof branch);
-        snprintf(tree, sizeof tree,
-                 "The work is committed on branch %s, in the worktree at %s, "
-                 "off %s. You are in the checkout at %s.",
-                 branch, c->worktree, c->base, c->cwd);
-    }
+    char tree[8600];
+    boardstep_where(c, p, tree, sizeof tree);
 
     size_t need = strlen(head) + strlen(body) + strlen(c->title) +
                   strlen(card) + strlen(tree) + 256;
     char  *out = malloc(need);
-    if (!out)
+    if (!out) {
+        free(head);
         return NULL;
+    }
 
     int at = snprintf(out, need, "%s", head);
     if (tree[0])
@@ -471,6 +464,7 @@ static char *first_turn(const struct board_card *c)
     if (*card)
         at += snprintf(out + at, need - (size_t)at, "\n\n%s", card);
     snprintf(out + at, need - (size_t)at, "\n\n# %s\n\n%s\n", c->title, body);
+    free(head);
     return out;
 }
 
@@ -1125,7 +1119,7 @@ static int drop_worktree(const struct board_card *c)
     if (!gitcmd_root(c->cwd, root, sizeof root))
         return 1;
 
-    branch_of(c->id, branch, sizeof branch);
+    board_branch(c->id, branch, sizeof branch);
     if (!tidy_step(root, c->worktree, branch, step, sizeof step))
         return 1;
 
@@ -1155,7 +1149,7 @@ int boardwork_unmerged(const struct board_card *c)
         return 0;
 
     char branch[128], onto[128];
-    branch_of(c->id, branch, sizeof branch);
+    board_branch(c->id, branch, sizeof branch);
     if (!gitcmd_line(root, "rev-parse --abbrev-ref HEAD", onto, sizeof onto))
         return 0;
 

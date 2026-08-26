@@ -12,6 +12,7 @@
 #include "boardcfg.h"
 #include "boardflow.h"
 #include "boardname.h"
+#include "boardstep.h"
 #include "gitcmd.h"
 #include "mdcfg.h"
 #include "replyjson.h"
@@ -1116,6 +1117,62 @@ static void test_a_pipeline_stands_for_its_actions(void)
 
 /* nothing triggers naming and nothing waits on it: the reply lands on the card
    the key names, and a reply with no name in it leaves the title alone */
+static void test_the_merge_turn_carries_its_commands(void)
+{
+    char root[4096];
+    if (!make_repo(root, sizeof root)) {
+        fprintf(stderr, "skipping merge turn test: no git\n");
+        return;
+    }
+
+    boardcfg_defaults(NULL, 0);
+
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("work to land", root, id), "capture");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    if (!c) {
+        fail("the card is there");
+        board_free(v, n);
+        return;
+    }
+    snprintf(c->worktree, sizeof c->worktree, "%s/.claude/worktrees/%s", root,
+             id);
+    snprintf(c->base, sizeof c->base, "abc1234");
+
+    char branch[160];
+    board_branch(id, branch, sizeof branch);
+
+    char *turn = boardstep_prompt(c, boardcfg_action("merge"));
+    expect(turn != NULL, "the merge turn is built");
+    if (turn) {
+        char want[8600];
+        snprintf(want, sizeof want, "git -C %s merge --ff-only %s", root,
+                 branch);
+        expect(strstr(turn, want) != NULL,
+               "and carries the merge command with the paths in it");
+
+        char onto[128] = "";
+        gitcmd_line(root, "rev-parse --abbrev-ref HEAD", onto, sizeof onto);
+        snprintf(want, sizeof want, "git -C %s rebase %s", c->worktree, onto);
+        expect(strstr(turn, want) != NULL,
+               "and the rebase command, onto the checkout's branch");
+        expect(strstr(turn, "{repo}") == NULL, "no placeholder is left behind");
+        expect(strstr(turn, c->base) != NULL,
+               "and the turn still says where the branch came from");
+        free(turn);
+    }
+
+    char *plan = boardstep_prompt(c, boardcfg_action("plan"));
+    expect(plan && !strstr(plan, "You are in the checkout"),
+           "an action in the worktree is not told about the checkout");
+    free(plan);
+
+    board_free(v, n);
+}
+
 static void test_a_name_lands_on_the_card(void)
 {
     char id[BOARD_ID_MAX] = {0};
@@ -1182,6 +1239,7 @@ int main(void)
     test_an_action_closes_the_card();
     test_a_pipeline_stands_for_its_actions();
     test_a_name_lands_on_the_card();
+    test_the_merge_turn_carries_its_commands();
 
     cleanup();
     if (failures)
