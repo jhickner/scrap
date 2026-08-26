@@ -26,12 +26,19 @@ Resolve what the rebase raises. A conflict is yours to settle: take the intent
 of both sides rather than either one whole. Run the project's check afterwards
 and fix what it reports, committing on the branch you rebased.
 
-CARD.md is tracked on the branch and must not land at the root of the
-checkout. Remove it on the branch before merging, so the plan stays in the
-branch's history and out of the tree:
+CARD.md is tracked on the branch and must not reach the checkout, in the tree
+or in the history. Strip it out of the rebased commits rather than deleting it
+in one on top of them, so the checkout's log carries the work and nothing else:
 
-    git -C {worktree} rm -q --ignore-unmatch CARD.md
-    git -C {worktree} commit --quiet -m 'card: drop CARD.md' -- CARD.md
+    FILTER_BRANCH_SQUELCH_WARNING=1 git -C {worktree} filter-branch -f \
+        --prune-empty --index-filter \
+        'git rm -q --cached --ignore-unmatch CARD.md' {onto}..HEAD
+
+That rewrites each commit's index rather than replaying a patch, so it cannot
+conflict. A commit that carried only CARD.md is pruned; one that carried it
+alongside code keeps the code. The branch as it stood is left behind at
+refs/original/refs/heads/{branch}. If nothing was rewritten, the branch never
+tracked CARD.md and there is nothing to strip; carry on.
 
 Land it with a fast-forward merge once the branch is clean and the check
 passes:
