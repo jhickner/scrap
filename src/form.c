@@ -758,7 +758,7 @@ static void step_or_leave(struct state *st, int delta, const tty_event *ev)
         step_or_scroll(st, delta);
         return;
     }
-    size_t was = replbox_repl(&st->slots[st->focus].box)->cursor;
+    int was = replbox_repl(&st->slots[st->focus].box)->cursor;
     feed(st, ev);
     if (replbox_repl(&st->slots[st->focus].box)->cursor == was)
         step_or_scroll(st, delta);
