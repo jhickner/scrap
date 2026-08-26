@@ -1056,6 +1056,39 @@ static void test_a_pipeline_stands_for_its_actions(void)
     with_actions();
 }
 
+/* nothing triggers naming and nothing waits on it: the reply lands on the card
+   the key names, and a reply with no name in it leaves the title alone */
+static void test_a_name_lands_on_the_card(void)
+{
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("the strip of tabs along the top wraps as soon as there "
+                     "are more of them than fit in 80 columns",
+                     "/tmp/repo", id),
+           "capture");
+
+    char key[CHILD_KEY_MAX];
+    snprintf(key, sizeof key, "name:%s", id);
+
+    expect(!boardname_take("card:something", "{\"title\":\"not a name\"}"),
+           "a reply from another turn is not a name");
+    expect(boardname_take(key, "{\"title\":\"tab strip wraps at 80\"}"),
+           "a naming reply is taken");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    expect(c && !strcmp(c->title, "tab strip wraps at 80"),
+           "and stands as the title of the card");
+    board_free(v, n);
+
+    expect(boardname_take(key, "sorry, I could not"), "a reply with no JSON is taken");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && !strcmp(c->title, "tab strip wraps at 80"),
+           "and leaves the title the card already had");
+    board_free(v, n);
+}
+
 int main(void)
 {
     if (!mkdtemp(home)) {
@@ -1089,6 +1122,7 @@ int main(void)
     test_a_trigger_queues_a_pipeline();
     test_a_stopped_card_waits_on_you();
     test_a_pipeline_stands_for_its_actions();
+    test_a_name_lands_on_the_card();
 
     cleanup();
     if (failures)

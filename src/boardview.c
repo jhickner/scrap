@@ -32,7 +32,6 @@
 
 #define KEY_NEW      'n'
 #define KEY_DELETE   'd'
-#define KEY_NAME     't'
 #define KEY_START    's'
 #define KEY_START_MAX 'S'
 #define KEY_GO       'g'
@@ -48,7 +47,7 @@
 #define KEY_ALL      '*'
 #define KEY_VIEW     'v'
 
-#define BOARD_KEYS "ndtsSgarRxflcb*Av\t"
+#define BOARD_KEYS "ndsSgarRxflcb*Av\t"
 
 #define BOARD_RECENT_INDENT 6
 
@@ -613,7 +612,7 @@ static void do_new(const char *cwd, char *sel_id)
         return;
 
     char id[BOARD_ID_MAX] = {0};
-    if (!board_add(spec, cwd, id))
+    if (!boardview_capture(spec, cwd, id, sizeof id))
         return;
     snprintf(sel_id, BOARD_ID_MAX, "%s", id);
     if (backend[0] || tier[0])
@@ -1141,10 +1140,6 @@ int boardview_run(const char *cwd)
             close_list();
             do_new(filter[0] ? filter : here, cur.id);
             cur.stand = -1;
-            break;
-        case KEY_NAME:
-            if (c)
-                boardname_start(c);
             break;
         case KEY_START:
             if (c) {
