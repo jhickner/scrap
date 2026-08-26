@@ -3,7 +3,7 @@
 
 struct board_card;
 
-/* Naming a card is a headless turn on the low tier, fired when the card is
+/* Naming a card is a headless turn on the med tier, fired when the card is
    captured. It cannot fail in a way you need to answer: a card carries its own
    first line as a title until a better one comes back, so nothing waits on it
    and nothing lands anywhere for you to sort out. */

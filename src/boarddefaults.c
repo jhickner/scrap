@@ -77,7 +77,7 @@ const struct board_default board_defaults[] = {
     },
     {"actions/name.md",
      "---\n"
-     "tier: low\n"
+     "tier: med\n"
      "on: capture\n"
      "---\n"
      "\n"
