@@ -586,9 +586,11 @@ static void board_free(void *ud)
 
 /* ---- the view ---- */
 
+/* Nothing here stops a cell mid-turn: the interrupt is ^c at the prompt, and
+   ^c in the view already means leave. The second line says where to go. */
 static const char HINT[] =
-    "enter send  \xc2\xb7  \xe2\x86\x91\xe2\x86\x93 pick a cell  \xc2\xb7  esc all\n"
-    "enter on an empty line opens the cell as a tab  \xc2\xb7  ^c leave";
+    "enter send  \xc2\xb7  \xe2\x86\x91\xe2\x86\x93 pick a cell  \xc2\xb7  esc all  \xc2\xb7  ^c leave\n"
+    "enter on an empty line opens the cell as a tab, where its turn can be stopped";
 
 static void target_prefix(const struct view *v, char *out, size_t cap)
 {
