@@ -961,24 +961,31 @@ static int card_tab(const struct board_card *c, char *notice, size_t size)
     return -1;
 }
 
-/* the row attach sits on, or -1 when the card has no worker to attach to */
-static int card_menu(const struct board_card *c, struct menu *m)
+struct card_menu_rows {
+    int edit;
+    int attach;
+};
+
+static struct card_menu_rows card_menu(const struct board_card *c,
+                                       struct menu *m)
 {
     const char *offered[BOARD_ACTIONS_MAX];
     int         on = boardflow_offered(c, offered, BOARD_ACTIONS_MAX);
 
     menu_clear(m);
-    if (on > MENU_MAX - 1)
-        on = MENU_MAX - 1;
+    if (on > MENU_MAX - 2)
+        on = MENU_MAX - 2;
     for (int i = 0; i < on; i++)
         menu_add(m, offered[i], 0);
 
-    int attach = -1;
+    struct card_menu_rows rows = {.edit = -1, .attach = -1};
+    if (menu_add(m, "edit", on > 0))
+        rows.edit = m->n - 1;
     if (board_stands(c) != BOARD_CLOSED)
-        attach = menu_add(m, "attach", on > 0) ? m->n - 1 : -1;
+        rows.attach = menu_add(m, "attach", 0) ? m->n - 1 : -1;
 
     m->open = m->n > 0;
-    return attach;
+    return rows;
 }
 
 int boardview_close(const char *id, char *why, int size)
@@ -1107,8 +1114,8 @@ static int board_loop(const char *cwd)
 
     static char          filter[4096];
     static struct anchor cur = {.stand = -1, .lane = -1};
-    static struct menu   card;
-    static int           card_attach = -1;
+    static struct menu           card;
+    static struct card_menu_rows card_rows;
     char                 notice[256] = {0};
     char                 ask[280] = {0};
     int                  asking = ASK_NONE;
@@ -1270,7 +1277,7 @@ static int board_loop(const char *cwd)
                 break;
             }
             if (!card.open) {
-                card_attach = card_menu(c, &card);
+                card_rows = card_menu(c, &card);
                 if (!card.open)
                     snprintf(notice, sizeof notice,
                              "card %s has nothing to run", c->id);
@@ -1278,7 +1285,12 @@ static int board_loop(const char *cwd)
             }
             card.open = 0;
 
-            if (card.sel == card_attach) {
+            if (card.sel == card_rows.edit) {
+                close_list();
+                do_card(c);
+                break;
+            }
+            if (card.sel == card_rows.attach) {
                 int tab = card_tab(c, notice, sizeof notice);
                 if (tab >= 0) {
                     close_list();
