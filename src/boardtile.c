@@ -116,7 +116,13 @@ static void status_of(const struct board_card *c, int wide, const char *step,
     if (board_stands(c) == BOARD_WORKING && boardwork_tab(c->id) < 0)
         boardwork_blocked(c, waiting, sizeof waiting);
 
-    if (waiting[0])
+    double quiet = tab >= 0 ? session_quiet(workspace_at(tab)) : 0;
+
+    if (quiet >= SESSION_QUIET_SECONDS) {
+        char since[32];
+        text_duration(quiet, since, sizeof since);
+        snprintf(out, size, "quiet for %s", since);
+    } else if (waiting[0])
         snprintf(out, size, "waiting · %s", waiting);
     else if (boardflow_waits_on_you(c) && c->worktree[0]) {
         int files = 0, lines = 0;

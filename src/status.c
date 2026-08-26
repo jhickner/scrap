@@ -22,6 +22,7 @@ static int     visible;
 static int     frame;
 static double  frame_at;
 static char    word[64] = "working";
+static char    alert[64];
 static char    note[128];
 
 static int              painted;
@@ -55,6 +56,16 @@ void status_set_word(const char *text)
     if (strcmp(next, word) == 0)
         return;
     memcpy(word, next, sizeof word);
+    dirty = 1;
+}
+
+void status_set_alert(const char *text)
+{
+    char next[sizeof alert];
+    snprintf(next, sizeof next, "%s", text ? text : "");
+    if (strcmp(next, alert) == 0)
+        return;
+    memcpy(alert, next, sizeof alert);
     dirty = 1;
 }
 
@@ -107,19 +118,6 @@ static void erase_block(void)
 {
     chrome_clear();
     painted = 0;
-}
-
-static void humanize(double seconds, char *out, size_t n)
-{
-    long total = (long)seconds;
-    if (total < 0)
-        total = 0;
-    if (total < 60)
-        snprintf(out, n, "%lds", total);
-    else if (total < 3600)
-        snprintf(out, n, "%ldm %lds", total / 60, total % 60);
-    else
-        snprintf(out, n, "%ldh %ldm", total / 3600, (total % 3600) / 60);
 }
 
 static int sticky_gone(void)
@@ -178,7 +176,7 @@ int status_sticky_rows(void)
 void status_paint_spin(void)
 {
     char clock[32], left[64];
-    humanize(status_elapsed(), clock, sizeof clock);
+    text_duration(status_elapsed(), clock, sizeof clock);
     snprintf(left, sizeof left, "%s %s", spin_glyph(frame), clock);
 
     ui_esc(ui_style(UI_SPIN));
@@ -186,10 +184,11 @@ void status_paint_spin(void)
     spin_width = (int)ui_cells(left);
 
     char spin_word[80];
-    snprintf(spin_word, sizeof spin_word, " · %s", word[0] ? word : "working");
+    const char *said = alert[0] ? alert : (word[0] ? word : "working");
+    snprintf(spin_word, sizeof spin_word, " · %s", said);
     int word_width = (int)ui_cells(spin_word);
     if (spin_width + word_width <= ui_columns() - 1) {
-        ui_esc(ui_style(UI_DIM));
+        ui_esc(ui_style(alert[0] ? UI_ERROR : UI_DIM));
         ui_put(spin_word);
         spin_width += word_width;
     }
@@ -234,6 +233,7 @@ void status_begin_at(double elapsed)
     active = 1;
     visible = 1;
     painted = 0;
+    alert[0] = '\0';
     paint();
 }
 
@@ -318,4 +318,5 @@ void status_end(void)
     visible = 0;
     active = 0;
     started = 0;
+    alert[0] = '\0';
 }

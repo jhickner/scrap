@@ -107,6 +107,56 @@ static int looks_like_spinner(const char *out)
     return 0;
 }
 
+static void spin_begin(void) { status_begin(); }
+static void spin_end(void)   { status_end(); }
+
+static void alert_spin(void)
+{
+    status_set_word("working");
+    status_set_alert("codex quiet for 2m 5s");
+    status_touch();
+    status_tick();
+}
+
+static void alert_gone(void)
+{
+    status_set_alert(NULL);
+    status_touch();
+    status_tick();
+}
+
+static void check_alert(void)
+{
+    free(capture(spin_begin));
+
+    char *out = capture(alert_spin);
+    if (!out)
+        fail("capture a spinner with an alert");
+    else {
+        if (!strstr(out, "codex quiet for 2m 5s"))
+            fail("an alert is painted on the spinner");
+        if (strstr(out, "working"))
+            fail("an alert stands in for the word");
+    }
+    free(out);
+
+    char *back = capture(alert_gone);
+    if (!back)
+        fail("capture a spinner after the alert clears");
+    else if (!strstr(back, "working"))
+        fail("clearing the alert brings the word back");
+    free(back);
+
+    free(capture(alert_spin));
+    free(capture(spin_end));
+    free(capture(spin_begin));
+    char *fresh = capture(alert_gone);
+    if (fresh && strstr(fresh, "quiet for"))
+        fail("a fresh turn starts with no alert");
+    free(fresh);
+    free(capture(spin_end));
+}
+
 static void echo_then_mark(const char *text)
 {
     viewport_write("<echo>\n", 7);
@@ -286,6 +336,7 @@ int main(void)
         fail("resume after end painted a spinner");
     free(after);
 
+    check_alert();
     check_sticky();
     check_spin_rate();
 

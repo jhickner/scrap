@@ -30,6 +30,8 @@ void text_humanize(long n, char *out, size_t size);
 
 void text_ago(time_t then, int suffix, char *out, size_t size);
 
+void text_duration(double seconds, char *out, size_t size);
+
 double now_seconds(void);
 
 int path_config_dir(char *out, size_t size);

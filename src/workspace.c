@@ -63,15 +63,18 @@ static void spin_follow(void)
     static const struct session *spinning;
     const struct session *want = ntabs && session_turn_running(tabs[cur].s)
                                  ? tabs[cur].s : NULL;
-    if (want == spinning)
+    if (want == spinning) {
+        if (want)
+            session_spin_word(want);
         return;
+    }
 
     if (spinning)
         status_end();
     spinning = want;
     if (want) {
-        session_spin_word(want);
         status_begin_at(session_turn_elapsed(want));
+        session_spin_word(want);
     }
 }
 

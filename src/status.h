@@ -22,6 +22,8 @@ int    status_spinning(void);
 
 void   status_set_word(const char *text);
 
+void   status_set_alert(const char *text);
+
 void   status_set_note(const char *text);
 
 void   status_tick(void);

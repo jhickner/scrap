@@ -218,6 +218,19 @@ void text_ago(time_t then, int suffix, char *out, size_t size)
         snprintf(out, size, "%ldd%s", secs / 86400, tail);
 }
 
+void text_duration(double seconds, char *out, size_t size)
+{
+    long total = (long)seconds;
+    if (total < 0)
+        total = 0;
+    if (total < 60)
+        snprintf(out, size, "%lds", total);
+    else if (total < 3600)
+        snprintf(out, size, "%ldm %lds", total / 60, total % 60);
+    else
+        snprintf(out, size, "%ldh %ldm", total / 3600, (total % 3600) / 60);
+}
+
 int text_shell_quote(const char *s, char *out, size_t size)
 {
     size_t n = 0;

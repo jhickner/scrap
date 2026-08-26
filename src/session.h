@@ -63,6 +63,10 @@ int  session_turn_pump(struct session *s);
 int  session_wake_fd(const struct session *s);
 double session_turn_elapsed(const struct session *s);
 
+#define SESSION_QUIET_SECONDS 60.0
+
+double session_quiet(const struct session *s);
+
 void session_turn_wait(struct session *s);
 
 void session_interrupt(struct session *s);

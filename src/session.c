@@ -85,6 +85,8 @@ struct session {
     char    *error_note;
     int      idle_busy;
     int      trust_requested;
+    volatile double heard_at;
+    volatile int    tool_open;
     int      interrupted;
     int      unseen;
 
@@ -376,9 +378,22 @@ static void queue_drop(struct session *s)
         evcopy_free(e);
 }
 
+/* The turn's stream is the only sign the backend is still talking to its
+ * provider: a CLI that has lost the network keeps its pipe open and retries in
+ * silence. */
+static void heard(struct session *s, const backend_event *ev)
+{
+    s->heard_at = now_seconds();
+    if (ev->kind == BACKEND_EV_TOOL)
+        s->tool_open = 1;
+    else if (ev->kind == BACKEND_EV_TOOL_RESULT)
+        s->tool_open = 0;
+}
+
 static void on_event(void *ud, const backend_event *ev)
 {
     struct session *s = ud;
+    heard(s, ev);
     if (s->running) {
         enqueue(s, ev);
         return;
@@ -593,6 +608,29 @@ static const char *spin_effort(const struct session *s)
     return NULL;
 }
 
+/* A tool the backend is still running explains any amount of silence; nothing
+ * else does. */
+double session_quiet(const struct session *s)
+{
+    if (!s || !s->heard_at || s->tool_open)
+        return 0;
+    double quiet = now_seconds() - s->heard_at;
+    return quiet > 0 ? quiet : 0;
+}
+
+static void set_spin_alert(const struct session *s)
+{
+    double quiet = session_quiet(s);
+    if (quiet < SESSION_QUIET_SECONDS) {
+        status_set_alert(NULL);
+        return;
+    }
+    char since[32], text[64];
+    text_duration(quiet, since, sizeof since);
+    snprintf(text, sizeof text, "%s quiet for %s", s->backend, since);
+    status_set_alert(text);
+}
+
 static void set_spin_word(const struct session *s)
 {
     const char *effort = spin_effort(s);
@@ -637,8 +675,10 @@ static int abort_check(void)
 
     name_poll(live);
     usage_poll(live);
-    if (live)
+    if (live) {
         set_spin_word(live);
+        set_spin_alert(live);
+    }
 
     int interrupt = session_poll_input();
     if (live && live->abort_hook)
@@ -1403,6 +1443,8 @@ static void turn_prepare(struct session *s, const char *text)
     s->view.after_collapse = 0;
     view_keep_break();
     s->started = now_seconds();
+    s->heard_at = s->started;
+    s->tool_open = 0;
     s->idle_busy = 1;
     s->interrupted = 0;
     s->abort_request = 0;
@@ -1414,6 +1456,7 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
 {
     const backend_result m = *meta;
     const char *text = s->prompt ? s->prompt : "";
+    s->heard_at = 0;
     const char *id = s->agent->session_id(s->agent);
     if (id)
         set_id(s, id);
@@ -1893,8 +1936,10 @@ static const char *auth_description(const struct session *s)
 
 void session_spin_word(const struct session *s)
 {
-    if (s)
-        set_spin_word(s);
+    if (!s)
+        return;
+    set_spin_word(s);
+    set_spin_alert(s);
 }
 
 void session_report(const struct session *s)
