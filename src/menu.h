@@ -1,6 +1,8 @@
 #ifndef MENU_H
 #define MENU_H
 
+#include "overlay.h"
+
 #define MENU_MAX   16
 #define MENU_LABEL 40
 
@@ -22,5 +24,8 @@ int  menu_width(const struct menu *m);
 
 /* paints one row of the box, 0 to menu_rows() - 1, in exactly width cells */
 void menu_paint_row(const struct menu *m, int row, int width);
+
+/* the box as a block to composite over a painted view */
+struct overlay menu_overlay(struct menu *m, int row, int col, int width);
 
 #endif

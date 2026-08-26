@@ -138,3 +138,20 @@ void menu_paint_row(const struct menu *m, int row, int width)
     ui_put(BOX_V);
     ui_esc(ui_style(UI_RESET));
 }
+
+static void paint_row(void *ud, int at, int width)
+{
+    menu_paint_row(ud, at, width);
+}
+
+struct overlay menu_overlay(struct menu *m, int row, int col, int width)
+{
+    if (width > menu_width(m))
+        width = menu_width(m);
+    return (struct overlay){.row = row,
+                            .col = col,
+                            .w = width,
+                            .rows = menu_rows(m),
+                            .paint_row = paint_row,
+                            .ud = m};
+}

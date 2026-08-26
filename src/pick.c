@@ -7,6 +7,7 @@
 #include "chrome.h"
 #include "frontend.h"
 #include "menu.h"
+#include "overlay.h"
 #include "status.h"
 #include "text.h"
 #include "tty.h"
@@ -221,9 +222,34 @@ static int run(const char *title, const struct pick_item *items, int count,
                int initial, const struct pick_live *live, const char *shortcuts,
                int *pressed, int filter, int slash);
 
+static void paint_under(struct view *v, struct menu *box, int *box_row);
+
 static void paint(void *ud)
 {
     struct view *v = ud;
+    struct menu *box = open_menu(v);
+    if (!box) {
+        paint_under(v, NULL, NULL);
+        return;
+    }
+
+    int width = menu_width(box);
+    int room = ui_columns() - MENU_INDENT - 1;
+    if (width > room)
+        width = room;
+
+    int   row = 0;
+    ui_sink_begin();
+    paint_under(v, box, &row);
+    char *under = ui_sink_end();
+
+    struct overlay o = menu_overlay(box, row, MENU_INDENT, width);
+    overlay_put(under, &o);
+    free(under);
+}
+
+static void paint_under(struct view *v, struct menu *box, int *box_row)
+{
     const struct pick_item *items = v->items;
     int count = v->count, sel = v->sel;
     char title[192];
@@ -245,7 +271,6 @@ static void paint(void *ud)
     if (v->top < 0)
         v->top = 0;
 
-    struct menu *box = open_menu(v);
     if (box) {
         int under = sel + menu_rows(box);
         if (under >= v->top + v->visible)
@@ -267,29 +292,10 @@ static void paint(void *ud)
     chrome_title_paint(title);
     rows++;
 
-    int box_w = 0;
-    int box_at = -1;
-    if (box) {
-        box_w = menu_width(box);
-        int room = columns - MENU_INDENT - 1;
-        if (box_w > room)
-            box_w = room;
-    }
-
     int end = v->top + v->visible;
     if (end > count)
         end = count;
     for (int row = v->top; row < end; row++) {
-        /* the box stands over the rows under the cursor rather than pushing
-           them down the screen */
-        if (box_at >= 0 && box_at < menu_rows(box)) {
-            ui_pad(MENU_INDENT);
-            menu_paint_row(box, box_at++, box_w);
-            ui_put("\n");
-            rows++;
-            continue;
-        }
-
         int i = v->order ? v->order[row] : row;
         if (item_heading(v, i)) {
             if (item_group(v, i) && row > v->top) {
@@ -391,16 +397,8 @@ static void paint(void *ud)
         }
         ui_put("\n");
         rows++;
-        if (selected && box)
-            box_at = 0;
-    }
-
-    /* the last rows of the list have nothing under them to stand over */
-    while (box_at >= 0 && box_at < menu_rows(box)) {
-        ui_pad(MENU_INDENT);
-        menu_paint_row(box, box_at++, box_w);
-        ui_put("\n");
-        rows++;
+        if (selected && box_row)
+            *box_row = rows;
     }
 
     if (!count) {
