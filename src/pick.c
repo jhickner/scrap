@@ -607,6 +607,8 @@ static int run(const char *title, const struct pick_item *items, int count,
             result = v.order[v.sel];
             if (pressed && shortcuts && strchr(shortcuts, PICK_KEY_RIGHT))
                 *pressed = PICK_KEY_RIGHT;
+            else if (pressed && v.live && v.live->menu)
+                *pressed = PICK_KEY_MENU;
             goto done;
         case TK_TAB:
             if (!shortcuts || !strchr(shortcuts, '\t'))

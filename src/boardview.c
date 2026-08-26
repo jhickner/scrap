@@ -898,7 +898,6 @@ static int card_tab(const struct board_card *c, char *notice, size_t size)
     return -1;
 }
 
-/* what enter offers on a card: the actions it can run now, then attach */
 static void card_menu(const struct board_card *c, struct menu *m)
 {
     const char *offered[BOARD_ACTIONS_MAX];
