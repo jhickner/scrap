@@ -578,7 +578,7 @@ static void paint_row(struct grid *v, int row)
 
         const struct board_tile *t = &v->t[r->tile];
         int                      picked = r->tile == v->sel;
-        enum ui_role edge = picked ? UI_ACCENT : (enum ui_role)t->mark_role;
+        enum ui_role edge = picked ? UI_ACCENT : UI_DIM;
 
         pad_to(&used, r->col);
         if (row == r->row || row == r->row + r->h - 1) {
