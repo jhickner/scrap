@@ -150,9 +150,6 @@ static int visible_cap(const struct view *v)
     int rows = tty_rows() - 3 - chrome_gap();
     if (v->live)
         rows -= chrome_foot_rows(v->live->ask, v->live->hint, ui_columns());
-    struct menu *m = open_menu(v);
-    if (m)
-        rows -= menu_rows(m);
     if (v->heading) {
         int breaks = 0;
         for (int i = 0; i < v->count; i++)
@@ -248,6 +245,17 @@ static void paint(void *ud)
     if (v->top < 0)
         v->top = 0;
 
+    struct menu *box = open_menu(v);
+    if (box) {
+        int under = sel + menu_rows(box);
+        if (under >= v->top + v->visible)
+            v->top = under - v->visible + 1;
+        if (v->top > sel)
+            v->top = sel;
+        if (v->top < 0)
+            v->top = 0;
+    }
+
     int    columns = ui_columns();
     int    rows = 0;
     int    base = chrome_gap();
@@ -259,10 +267,29 @@ static void paint(void *ud)
     chrome_title_paint(title);
     rows++;
 
+    int box_w = 0;
+    int box_at = -1;
+    if (box) {
+        box_w = menu_width(box);
+        int room = columns - MENU_INDENT - 1;
+        if (box_w > room)
+            box_w = room;
+    }
+
     int end = v->top + v->visible;
     if (end > count)
         end = count;
     for (int row = v->top; row < end; row++) {
+        /* the box stands over the rows under the cursor rather than pushing
+           them down the screen */
+        if (box_at >= 0 && box_at < menu_rows(box)) {
+            ui_pad(MENU_INDENT);
+            menu_paint_row(box, box_at++, box_w);
+            ui_put("\n");
+            rows++;
+            continue;
+        }
+
         int i = v->order ? v->order[row] : row;
         if (item_heading(v, i)) {
             if (item_group(v, i) && row > v->top) {
@@ -364,20 +391,16 @@ static void paint(void *ud)
         }
         ui_put("\n");
         rows++;
+        if (selected && box)
+            box_at = 0;
+    }
 
-        struct menu *m = selected ? open_menu(v) : NULL;
-        if (m) {
-            int width = menu_width(m);
-            int room = columns - MENU_INDENT - 1;
-            if (width > room)
-                width = room;
-            for (int line = 0; line < menu_rows(m); line++) {
-                ui_pad(MENU_INDENT);
-                menu_paint_row(m, line, width);
-                ui_put("\n");
-                rows++;
-            }
-        }
+    /* the last rows of the list have nothing under them to stand over */
+    while (box_at >= 0 && box_at < menu_rows(box)) {
+        ui_pad(MENU_INDENT);
+        menu_paint_row(box, box_at++, box_w);
+        ui_put("\n");
+        rows++;
     }
 
     if (!count) {
