@@ -10,6 +10,7 @@
 
 #include "boardfile.h"
 #include "boardlog.h"
+#include "gitcmd.h"
 #include "text.h"
 #include "vendor/cJSON.h"
 
@@ -495,6 +496,16 @@ int board_add(const char *text, const char *cwd, char id_out[BOARD_ID_MAX])
     if (!text || !*text)
         return 0;
 
+    /* a card captured from a session sitting in another card's worktree
+       belongs to the checkout that worktree came from */
+    char        here[4096];
+    char        where[4096] = "";
+    const char *from = cwd && *cwd ? cwd : NULL;
+    if (!from && getcwd(here, sizeof here))
+        from = here;
+    if (from && !gitcmd_root(from, where, sizeof where))
+        set_str(where, sizeof where, from);
+
     int lock = store_lock(LOCK_EX);
 
     struct board_card *v = NULL;
@@ -515,11 +526,7 @@ int board_add(const char *text, const char *cwd, char id_out[BOARD_ID_MAX])
     board_title_of(text, c->title, sizeof c->title);
     c->body = dup_or_empty(text);
 
-    char here[4096];
-    if (cwd && *cwd)
-        set_str(c->cwd, sizeof c->cwd, cwd);
-    else if (getcwd(here, sizeof here))
-        set_str(c->cwd, sizeof c->cwd, here);
+    set_str(c->cwd, sizeof c->cwd, where);
 
     n++;
 

@@ -23,6 +23,7 @@
 #include "child.h"
 #include "chrome.h"
 #include "form.h"
+#include "gitcmd.h"
 #include "pick.h"
 #include "text.h"
 #include "ui.h"
@@ -985,7 +986,8 @@ int boardview_run(const char *cwd)
     }
 
     char here[4096];
-    snprintf(here, sizeof here, "%s", cwd ? cwd : "");
+    if (!cwd || !*cwd || !gitcmd_root(cwd, here, sizeof here))
+        snprintf(here, sizeof here, "%s", cwd ? cwd : "");
 
     static char          filter[4096];
     static struct anchor cur = {.stand = -1, .lane = -1};
