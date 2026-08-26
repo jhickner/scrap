@@ -190,28 +190,97 @@ static int by_order(const void *a, const void *b)
     return board_cmp(*x, *y);
 }
 
-/* Four lanes, whatever the actions are: waiting on you, being worked, open,
-   and closed. */
-static int lane_cards(struct board_card *cards, int n, const char *filter,
-                      int stand, const struct board_card **in, const char **name)
-{
-    enum board_stand at = (enum board_stand)stand;
+/* A lane is a stand, except that the working stand runs one lane per action,
+   so a card being worked stands under the step it is on. */
+struct lane {
+    enum board_stand stand;
+    const char      *step;
+};
 
+static int lane_holds(const struct board_card *c, const struct lane *lane)
+{
+    if (board_stands(c) != lane->stand)
+        return 0;
+    if (!lane->step)
+        return 1;
+    const char *step = board_step(c);
+    return step && !strcmp(step, lane->step);
+}
+
+static int laned(const struct lane *lanes, int n, const char *step)
+{
+    for (int i = 0; i < n; i++)
+        if (lanes[i].step && !strcmp(lanes[i].step, step))
+            return 1;
+    return 0;
+}
+
+/* The steps in the order the config names them, then anything a card is on
+   that the config no longer has. */
+static int work_lanes(const struct board_card *cards, int n, const char *filter,
+                      struct lane *out, int max)
+{
+    const char *acts[BOARD_ACTIONS_MAX];
+    int         acts_n = boardcfg_actions(acts, BOARD_ACTIONS_MAX);
+    int         k = 0;
+
+    for (int i = 0; i < acts_n && k < max; i++)
+        for (int j = 0; j < n; j++) {
+            const char *step = board_step(&cards[j]);
+            if (board_stands(&cards[j]) != BOARD_WORKING ||
+                !shows(&cards[j], filter) || !step || strcmp(step, acts[i]))
+                continue;
+            out[k].stand = BOARD_WORKING;
+            out[k].step = acts[i];
+            k++;
+            break;
+        }
+
+    for (int j = 0; j < n && k < max; j++) {
+        const char *step = board_step(&cards[j]);
+        if (board_stands(&cards[j]) != BOARD_WORKING ||
+            !shows(&cards[j], filter) || !step || laned(out, k, step))
+            continue;
+        out[k].stand = BOARD_WORKING;
+        out[k].step = step;
+        k++;
+    }
+    return k;
+}
+
+static int board_lanes(const struct board_card *cards, int n, const char *filter,
+                       struct lane *out, int max)
+{
+    int k = 0;
+    if (k < max)
+        out[k++] = (struct lane){BOARD_OPEN, NULL};
+    k += work_lanes(cards, n, filter, out + k, max - k);
+    if (k < max)
+        out[k++] = (struct lane){BOARD_REVIEW, NULL};
+    if (k < max)
+        out[k++] = (struct lane){BOARD_CLOSED, NULL};
+    return k;
+}
+
+static int lane_cards(struct board_card *cards, int n, const char *filter,
+                      const struct lane *lane, const struct board_card **in,
+                      const char **name)
+{
     int k = 0;
     for (int i = 0; i < n; i++)
-        if (board_stands(&cards[i]) == at && shows(&cards[i], filter))
+        if (lane_holds(&cards[i], lane) && shows(&cards[i], filter))
             in[k++] = &cards[i];
     if (!k)
         return 0;
     qsort(in, (size_t)k, sizeof *in, by_order);
 
-    int cap = at == BOARD_CLOSED ? boardcfg()->closed_shown
-              : at == BOARD_OPEN ? boardcfg()->open_shown
-                                 : 0;
+    int cap = lane->stand == BOARD_CLOSED ? boardcfg()->closed_shown
+              : lane->stand == BOARD_OPEN ? boardcfg()->open_shown
+                                          : 0;
     if (cap > 0 && k > cap)
         k = cap;
 
-    *name = board_stand_name(at);
+    *name = lane->step ? lane->step : board_stand_name(lane->stand);
     return k;
 }
 
@@ -219,15 +288,20 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
                        const char *filter, int wide)
 {
     const struct board_card **in = calloc((size_t)(n ? n : 1), sizeof *in);
-    if (!in)
+    struct lane *lanes = calloc((size_t)(n + BOARD_STANDS), sizeof *lanes);
+    if (!in || !lanes) {
+        free(in);
+        free(lanes);
         return 0;
+    }
     int shown = 0;
 
     stamp_due = 0;
 
-    for (int stand = 0; stand < BOARD_STANDS; stand++) {
+    int lanes_n = board_lanes(cards, n, filter, lanes, n + BOARD_STANDS);
+    for (int lane = 0; lane < lanes_n; lane++) {
         const char *name = NULL;
-        int k = lane_cards(cards, n, filter, stand, in, &name);
+        int k = lane_cards(cards, n, filter, &lanes[lane], in, &name);
         if (!k)
             continue;
 
@@ -267,6 +341,7 @@ static int build_board(struct vlist *l, struct board_card *cards, int n,
         }
     }
     free(in);
+    free(lanes);
     return shown;
 }
 
@@ -290,23 +365,26 @@ static int build_grid(struct glist *g, struct board_card *cards, int n,
 {
     memset(g, 0, sizeof *g);
 
-    int lanes = BOARD_STANDS;
+    int max = n + BOARD_STANDS;
 
     const struct board_card **in = calloc((size_t)(n ? n : 1), sizeof *in);
+    struct lane *lanes = calloc((size_t)max, sizeof *lanes);
     g->t = calloc((size_t)(n ? n : 1), sizeof *g->t);
     g->lane_of = calloc((size_t)(n ? n : 1), sizeof *g->lane_of);
-    g->name = calloc((size_t)lanes, sizeof *g->name);
-    if (!in || !g->t || !g->lane_of || !g->name) {
+    g->name = calloc((size_t)max, sizeof *g->name);
+    if (!in || !lanes || !g->t || !g->lane_of || !g->name) {
         free(in);
+        free(lanes);
         grid_free(g);
         return 0;
     }
 
     stamp_due = 0;
 
-    for (int stand = 0; stand < lanes; stand++) {
+    int lanes_n = board_lanes(cards, n, filter, lanes, max);
+    for (int at = 0; at < lanes_n; at++) {
         const char *name = NULL;
-        int k = lane_cards(cards, n, filter, stand, in, &name);
+        int k = lane_cards(cards, n, filter, &lanes[at], in, &name);
         if (!k)
             continue;
 
@@ -323,6 +401,7 @@ static int build_grid(struct glist *g, struct board_card *cards, int n,
         }
     }
     free(in);
+    free(lanes);
     return g->n;
 }
 

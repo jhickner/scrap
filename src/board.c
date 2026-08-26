@@ -45,6 +45,11 @@ enum board_stand board_stands(const struct board_card *c)
     return BOARD_OPEN;
 }
 
+const char *board_step(const struct board_card *c)
+{
+    return c && c->queue_n ? c->queue[0] : NULL;
+}
+
 int board_ran(const struct board_card *c, const char *action)
 {
     if (!c || !action || !*action)

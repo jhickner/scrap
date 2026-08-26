@@ -31,6 +31,9 @@ enum board_stand {
 const char      *board_stand_name(enum board_stand stand);
 enum board_stand board_stands(const struct board_card *c);
 
+/* the action the card is on, or NULL when nothing is queued */
+const char *board_step(const struct board_card *c);
+
 struct board_note {
     time_t ts;
     char   who[BOARD_WHO_MAX];
