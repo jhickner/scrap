@@ -12,8 +12,9 @@ const struct board_action *boardflow_action(const struct board_card *c);
 /* An action may run once everything it names has run on this card. */
 int boardflow_gated(const struct board_card *c, const char *name);
 
-/* The actions whose gates are met, then the pipelines that would be taken
-   whole. Either kind of name can be handed straight to boardflow_trigger. */
+/* The actions whose gates are met, furthest along the card first, then the
+   pipelines that would be taken whole. Either kind of name can be handed
+   straight to boardflow_trigger. */
 int boardflow_offered(const struct board_card *c, const char **out, int max);
 
 /* Put actions on the end of a card's queue, in the order given. A name may be

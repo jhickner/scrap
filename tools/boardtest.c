@@ -870,10 +870,15 @@ static void test_an_action_waits_on_what_it_needs(void)
     expect(boardflow_gated(&c, "merge"), "and merge");
     expect(!boardflow_gated(&c, "deploy"), "but not deploy, which needs merge");
 
+    n = boardflow_offered(&c, offered, BOARD_ACTIONS_MAX);
+    expect(n == 4 && !strcmp(offered[0], "test") && !strcmp(offered[1], "merge"),
+           "and offers what implement opened ahead of what needed nothing");
+
     snprintf(c.done[c.done_n++], BOARD_ACTION_NAME, "merge");
     expect(boardflow_gated(&c, "deploy"), "merging opens deploy");
     n = boardflow_offered(&c, offered, BOARD_ACTIONS_MAX);
     expect(n == 5, "and every action is offered by then");
+    expect(!strcmp(offered[0], "deploy"), "deploy, two gates in, leads them");
 
     /* where each one runs, which is what moves the session */
     expect(!strcmp(boardflow_cwd(&c, boardcfg_action("implement")), "/tmp/repo"),

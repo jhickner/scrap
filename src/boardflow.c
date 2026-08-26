@@ -104,6 +104,23 @@ static int takeable(const struct board_card *c, const char *name)
     return n > 0 && gates_met(c, flat, n, why, sizeof why);
 }
 
+/* How far along the card an action sits: the longest run of gates behind it.
+   The bound stops a config whose gates name each other in a circle. */
+static int depth(const char *name, int left)
+{
+    const struct board_action *p = boardcfg_action(name);
+    if (!p || left <= 0)
+        return 0;
+
+    int deep = 0;
+    for (int i = 0; i < p->needs_n; i++) {
+        int d = 1 + depth(p->needs[i], left - 1);
+        if (d > deep)
+            deep = d;
+    }
+    return deep;
+}
+
 int boardflow_offered(const struct board_card *c, const char **out, int max)
 {
     const char *all[BOARD_ACTIONS_MAX];
@@ -111,8 +128,13 @@ int boardflow_offered(const struct board_card *c, const char **out, int max)
 
     int n = boardcfg_actions(all, BOARD_ACTIONS_MAX);
     for (int i = 0; i < n && k < max; i++)
-        if (boardflow_gated(c, all[i]))
-            out[k++] = all[i];
+        if (boardflow_gated(c, all[i])) {
+            int at = k++;
+            int deep = depth(all[i], BOARD_ACTIONS_MAX);
+            for (; at > 0 && depth(out[at - 1], BOARD_ACTIONS_MAX) < deep; at--)
+                out[at] = out[at - 1];
+            out[at] = all[i];
+        }
 
     n = boardcfg_pipelines(all, BOARD_ACTIONS_MAX);
     for (int i = 0; i < n && k < max; i++)
