@@ -666,6 +666,8 @@ static void test_the_shipped_actions_are_built_in(void)
 
     const struct board_action *name = boardcfg_action("name");
     expect(name && name->on_capture, "naming runs on capture, not on trigger");
+    expect(name && name->prompt && strstr(name->prompt, "at most five words"),
+           "naming keeps the title to five words");
 
     const struct board_action *merge = boardcfg_action("merge");
     expect(merge && merge->where == BOARD_IN_REPO, "merge runs in the checkout");
