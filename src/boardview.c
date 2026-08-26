@@ -1182,10 +1182,12 @@ static int board_loop(const char *cwd)
         int at;
 
         if (grid) {
+            chrome_full(1);
             at = boardgrid_run(title, g.t, g.lane_of, g.name, g.n, g.lanes,
                                tile_of(&g, &cur), hint, ask, BOARD_KEYS,
                                &pressed, board_tick, NULL, &cursor, &part,
                                &card);
+            chrome_full(0);
             if (at == GRID_NARROW) {
                 grid_free(&g);
                 grid = 0;
@@ -1465,8 +1467,5 @@ static int board_loop(const char *cwd)
 
 int boardview_run(const char *cwd)
 {
-    chrome_full(1);
-    int at = board_loop(cwd);
-    chrome_full(0);
-    return at;
+    return board_loop(cwd);
 }
