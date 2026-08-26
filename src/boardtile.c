@@ -101,8 +101,10 @@ static void status_of(const struct board_card *c, int wide, const char *step,
     if (running > 0)
         text_duration(running, ran, sizeof ran);
 
-    if (ran[0])
+    if (ran[0] && tab >= 0)
         snprintf(when, sizeof when, "%s · tab %d", ran, tab + 1);
+    else if (ran[0])
+        snprintf(when, sizeof when, "%s", ran);
     else if (step && tab >= 0)
         snprintf(when, sizeof when, "%s · tab %d", step, tab + 1);
     else if (step)

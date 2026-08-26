@@ -582,7 +582,15 @@ static int board_tick(void *ud)
     if (board_revision() != shown_rev)
         moved = 1;
 
-    if (stamp_due && time(NULL) >= stamp_due)
+    /* the elapsed time on a working card counts seconds */
+    static time_t ticked;
+    time_t        second = time(NULL);
+    if (busy && second != ticked) {
+        ticked = second;
+        moved = 1;
+    }
+
+    if (stamp_due && second >= stamp_due)
         moved = 1;
 
     return moved ? PICK_TICK_REOPEN : 0;
