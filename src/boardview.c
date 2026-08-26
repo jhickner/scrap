@@ -623,11 +623,15 @@ static void do_new(const char *cwd, char *sel_id)
     int         tiers_n = boardcfg_tier_choices(tiers, COUNT(tiers));
 
     char spec[8192] = "";
+    char where[4096];
     char backend[32] = "";
     char tier[8] = "";
 
+    path_home_relative(cwd, where, sizeof where);
+
     struct form_field fields[] = {
         {"spec", FORM_TEXT, spec, sizeof spec, NULL, 0, 0},
+        {"repo", FORM_TEXT, where, sizeof where, NULL, 0, 0},
         {"backend", FORM_CHOICE, backend, sizeof backend, backends, backends_n, 0},
         {"tier", FORM_CHOICE, tier, sizeof tier, tiers, tiers_n, 0},
     };
@@ -639,8 +643,13 @@ static void do_new(const char *cwd, char *sel_id)
     if (!form_run(&f) || !spec[0])
         return;
 
+    char *full = path_expand_home(where);
+    const char *at = full && *full ? full : (where[0] ? where : cwd);
+
     char id[BOARD_ID_MAX] = {0};
-    if (!boardview_capture(spec, cwd, id, sizeof id))
+    int  took = boardview_capture(spec, at, id, sizeof id);
+    free(full);
+    if (!took)
         return;
     snprintf(sel_id, BOARD_ID_MAX, "%s", id);
     if (backend[0] || tier[0])
