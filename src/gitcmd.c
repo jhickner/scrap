@@ -63,12 +63,30 @@ int gitcmd_root(const char *cwd, char *out, size_t size)
     return gitcmd_line(cwd, "rev-parse --show-toplevel", out, size);
 }
 
+/* the branch is new on the first card to take it and already there on a card
+   whose worktree was removed and is being made again */
+static int worktree_take(const char *qroot, const char *qpath,
+                         const char *qbranch)
+{
+    char cmd[9000];
+    snprintf(cmd, sizeof cmd, "git -C %s worktree add %s -b %s >/dev/null 2>&1",
+             qroot, qpath, qbranch);
+    if (system(cmd) == 0)
+        return 1;
+
+    snprintf(cmd, sizeof cmd, "git -C %s worktree add %s %s >/dev/null 2>&1",
+             qroot, qpath, qbranch);
+    return system(cmd) == 0;
+}
+
 int gitcmd_worktree_add(const char *root, const char *path, const char *branch)
 {
     if (!root || !path || !branch || !*root || !*path || !*branch)
         return 0;
 
-    if (inside(path))
+    /* a path that is not there cannot be a worktree, and asking git costs a
+       process the first action on a card waits on */
+    if (dir_exists(path) && inside(path))
         return 1;
 
     char qroot[4200], qpath[4200], qbranch[256];
@@ -77,24 +95,15 @@ int gitcmd_worktree_add(const char *root, const char *path, const char *branch)
         !text_shell_quote(branch, qbranch, sizeof qbranch))
         return 0;
 
-    char cmd[9000];
+    if (worktree_take(qroot, qpath, qbranch))
+        return 1;
+
+    /* a worktree whose directory has gone is still registered, and its path
+       cannot be taken again until that entry goes */
+    char cmd[4300];
     snprintf(cmd, sizeof cmd, "git -C %s worktree prune >/dev/null 2>&1", qroot);
     system(cmd);
 
-    if (inside(path))
-        return 1;
-
-    snprintf(cmd, sizeof cmd,
-             "git -C %s worktree add %s -b %s >/dev/null 2>&1",
-             qroot, qpath, qbranch);
-    if (system(cmd) == 0)
-        return 1;
-
-    snprintf(cmd, sizeof cmd,
-             "git -C %s worktree add %s %s >/dev/null 2>&1",
-             qroot, qpath, qbranch);
-    if (system(cmd) == 0)
-        return 1;
-
-    return inside(path) || dir_exists(path);
+    return worktree_take(qroot, qpath, qbranch) || inside(path) ||
+           dir_exists(path);
 }

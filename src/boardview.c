@@ -703,6 +703,12 @@ static int run_now(const char *id, const char *name, char *why, int size)
 
     n = board_load(&cards);
     c = board_find(cards, n, id);
+
+    /* the first action on a card checks its worktree out, which git takes long
+       enough over that the board would otherwise stand blank for it */
+    if (c && !c->worktree[0] && boardflow_worktree(c))
+        note("making a worktree for card %s", c->id);
+
     int ok = c && boardwork_start(c, why, size);
     board_free(cards, n);
     return ok;
