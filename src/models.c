@@ -15,6 +15,7 @@
 
 struct list {
     char              backend[32];
+    time_t            stamp;
     int               n, cap;
     struct pick_item *items;
     char            (*label)[LABEL_BYTES];
@@ -70,6 +71,29 @@ static char *home_slurp(const char *rest)
     char path[4096];
     snprintf(path, sizeof path, "%s/%s", home, rest);
     return text_slurp(path, 1 << 22, NULL);
+}
+
+static time_t home_stamp(const char *rest)
+{
+    const char *home = getenv("HOME");
+    if (!home || !*home)
+        return 0;
+
+    char path[4096];
+    snprintf(path, sizeof path, "%s/%s", home, rest);
+    struct stat st;
+    return stat(path, &st) ? 0 : st.st_mtime;
+}
+
+/* A backend that reads its models off disk rebuilds its list when the file
+   moves, or an edited config waits for the next mux. */
+static time_t backend_stamp(const char *backend)
+{
+    if (!strcmp(backend, "pi"))
+        return home_stamp(".pi/agent/models.json") + home_stamp(".pi/agent/models-store.json");
+    if (!strcmp(backend, "codex"))
+        return home_stamp(".codex/models_cache.json");
+    return 0;
 }
 
 static const struct pick_item CLAUDE[] = {
@@ -372,15 +396,23 @@ static void fill_pi_configured(struct list *l)
         cJSON_ArrayForEach(m, cJSON_GetObjectItem(provider, "models")) {
             const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(m, "id"));
             const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(m, "name"));
+            if (!id || !*id)
+                continue;
+
+            /* pi takes provider/id, and the provider is what the list is
+               filtered by. */
+            char        label[LABEL_BYTES];
+            const char *at = provider->string ? provider->string : "";
+            size_t      len = strlen(at);
+            if (len && !strncmp(id, at, len) && id[len] == '/')
+                snprintf(label, sizeof label, "%s", id);
+            else
+                snprintf(label, sizeof label, "%s/%s", at, id);
+
             char detail[DETAIL_BYTES];
             describe(detail, sizeof detail, name,
                      cJSON_GetNumberValue(cJSON_GetObjectItem(m, "contextWindow")));
-            if (detail[0])
-                snprintf(detail + strlen(detail), sizeof detail - strlen(detail),
-                         " \xc2\xb7 %s", provider->string);
-            else
-                snprintf(detail, sizeof detail, "%s", provider->string);
-            push(l, id, detail);
+            push(l, label, detail);
         }
     }
     cJSON_Delete(root);
@@ -419,11 +451,17 @@ static void fill_grok(struct list *l)
 
 int models_for(const char *backend, const struct pick_item **out)
 {
+    time_t       stamp = backend_stamp(backend);
     struct list *l = NULL;
     for (size_t i = 0; i < sizeof cache / sizeof *cache; i++) {
         if (!strcmp(cache[i].backend, backend)) {
-            *out = cache[i].items;
-            return cache[i].n;
+            if (cache[i].stamp == stamp) {
+                *out = cache[i].items;
+                return cache[i].n;
+            }
+            l = &cache[i];
+            l->n = 0;
+            break;
         }
         if (!l && !cache[i].backend[0])
             l = &cache[i];
@@ -433,6 +471,7 @@ int models_for(const char *backend, const struct pick_item **out)
         return 0;
     }
     snprintf(l->backend, sizeof l->backend, "%s", backend);
+    l->stamp = stamp;
 
     char detail[DETAIL_BYTES];
     snprintf(detail, sizeof detail, "whatever the %s CLI is configured to use", backend);
