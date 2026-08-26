@@ -598,14 +598,15 @@ static void paint_row(struct grid *v, int row)
         if (line >= 0 && line < v->drawn[at].n) {
             int indent = v->drawn[at].indent[line];
             if (indent && t->spin) {
-                ui_esc(ui_style(UI_SPIN));
+                ui_esc(ui_style(picked ? UI_ACCENT : UI_SPIN));
                 ui_put(spin_glyph(v->frame));
                 ui_esc(ui_style(UI_RESET));
                 used++;
             }
             pad_to(&used, r->col + GRID_INDENT + indent);
             put_fit(v->drawn[at].text[line], text_width(v->g.lane_w) - indent,
-                    (enum ui_role)v->drawn[at].role[line], &used);
+                    picked ? UI_ACCENT : (enum ui_role)v->drawn[at].role[line],
+                    &used);
         }
 
         pad_to(&used, r->col + r->w - 1);
