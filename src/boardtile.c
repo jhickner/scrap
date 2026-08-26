@@ -96,7 +96,14 @@ static void status_of(const struct board_card *c, int wide, const char *step,
     char ts[32], when[64];
     text_ago(c->updated ? c->updated : c->created, c->closed, ts,
              sizeof ts);
-    if (step && tab >= 0)
+    char   ran[32] = "";
+    double running = tab >= 0 ? session_turn_elapsed(workspace_at(tab)) : 0;
+    if (running > 0)
+        text_duration(running, ran, sizeof ran);
+
+    if (ran[0])
+        snprintf(when, sizeof when, "%s · tab %d", ran, tab + 1);
+    else if (step && tab >= 0)
         snprintf(when, sizeof when, "%s · tab %d", step, tab + 1);
     else if (step)
         snprintf(when, sizeof when, "%s…", step);
