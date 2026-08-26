@@ -36,6 +36,10 @@ int livelist_load(struct live_session **out);
 
 int livelist_alive(long pid);
 
+/* Move the terminal to the tmux pane a session runs in. Returns 0 and fills
+   why when there is no pane to go to. */
+int livelist_jump(const struct live_session *v, char *why, int size);
+
 const char *livelist_tmux_window(void);
 const char *livelist_tmux_window_name(void);
 

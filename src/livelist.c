@@ -6,7 +6,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -25,6 +27,46 @@ static char tmux_wname[64];
 static char tmux_pane_index[8];
 
 static const struct session *slots[MAX_SLOTS];
+
+static int tmux_do(const char *verb, const char *target)
+{
+    pid_t pid = fork();
+    if (pid < 0)
+        return 0;
+    if (pid == 0) {
+        int null = open("/dev/null", O_RDWR);
+        if (null >= 0) {
+            dup2(null, STDOUT_FILENO);
+            dup2(null, STDERR_FILENO);
+            if (null > STDERR_FILENO)
+                close(null);
+        }
+        char *argv[] = {"tmux", (char *)verb, "-t", (char *)target, NULL};
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+        ;
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+int livelist_jump(const struct live_session *v, char *why, int size)
+{
+    if (why && size)
+        snprintf(why, (size_t)size, "%s", "");
+    if (!v || !getenv("TMUX") || !v->pane[0]) {
+        if (why && size)
+            snprintf(why, (size_t)size, "that session is not in a tmux pane");
+        return 0;
+    }
+    if (!tmux_do("select-window", v->pane) || !tmux_do("select-pane", v->pane)) {
+        if (why && size)
+            snprintf(why, (size_t)size, "tmux would not switch there");
+        return 0;
+    }
+    return 1;
+}
 
 static int slot_of(const struct session *s)
 {

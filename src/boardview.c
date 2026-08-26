@@ -24,6 +24,7 @@
 #include "chrome.h"
 #include "form.h"
 #include "gitcmd.h"
+#include "livelist.h"
 #include "menu.h"
 #include "pick.h"
 #include "text.h"
@@ -899,6 +900,34 @@ static void do_card(const struct board_card *c)
     board_free(cards, n);
 }
 
+/* The session of a card another mux holds: resuming it here would put a second
+   writer on the same conversation, so the move is to go to the window that has
+   it. Returns 0 when no other mux is on the card. */
+static int held_elsewhere(const struct board_card *c, char *notice, size_t size)
+{
+    struct live_session *live = NULL;
+    int                  n = livelist_load(&live);
+    int                  found = 0;
+
+    for (int i = 0; i < n && !found; i++) {
+        const struct live_session *v = &live[i];
+        if (v->mine)
+            continue;
+        if (strcmp(v->card, c->id) != 0 &&
+            !(c->session[0] && !strcmp(v->id, c->session)))
+            continue;
+
+        found = 1;
+        char why[256];
+        if (!livelist_jump(v, why, sizeof why))
+            snprintf(notice, size, "card %s is open in %s \xc2\xb7 %s", c->id,
+                     v->wname[0] ? v->wname : "another window", why);
+    }
+
+    free(live);
+    return found;
+}
+
 /* the tab the card's worker is on, taking a stopped worker back if need be */
 static int card_tab(const struct board_card *c, char *notice, size_t size)
 {
@@ -908,8 +937,11 @@ static int card_tab(const struct board_card *c, char *notice, size_t size)
     int         tab = boardwork_tab(c->id);
     const char *step = boardtile_step(c->id);
     char        why[256] = "";
-    if (tab < 0 && !step)
+    if (tab < 0 && !step) {
+        if (held_elsewhere(c, notice, size))
+            return -1;
         tab = boardwork_rejoin(c, why, sizeof why);
+    }
     if (tab >= 0)
         return tab;
 

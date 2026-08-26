@@ -232,40 +232,11 @@ static int group_rows(const struct row *in, int n, struct row *out,
     return m;
 }
 
-static int tmux_do(const char *verb, const char *target)
-{
-    pid_t pid = fork();
-    if (pid < 0)
-        return 0;
-    if (pid == 0) {
-        int null = open("/dev/null", O_RDWR);
-        if (null >= 0) {
-            dup2(null, STDOUT_FILENO);
-            dup2(null, STDERR_FILENO);
-            if (null > STDERR_FILENO)
-                close(null);
-        }
-        char *argv[] = {"tmux", (char *)verb, "-t", (char *)target, NULL};
-        execvp(argv[0], argv);
-        _exit(127);
-    }
-    int status = 0;
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
-        ;
-    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
-}
-
 static void jump(const struct live_session *v)
 {
-    if (!getenv("TMUX") || !v->pane[0]) {
-        ui_error("that session is not in a tmux pane");
-        ui_put("\n");
-        ui_flush();
-        return;
-    }
-
-    if (!tmux_do("select-window", v->pane) || !tmux_do("select-pane", v->pane)) {
-        ui_error("tmux would not switch there");
+    char why[256];
+    if (!livelist_jump(v, why, sizeof why)) {
+        ui_error("%s", why);
         ui_put("\n");
         ui_flush();
     }
