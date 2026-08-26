@@ -354,6 +354,38 @@ particular would start nesting rows in everyone's `/sessions` for a relationship
 nobody asked to see. Land the mechanism, use it for `/mux`, leave the rest a
 separate decision.
 
+### Housekeeping — sweep the orphaned board-cards directory
+
+Unrelated to the view. It rides along because this is the tree that is open.
+
+`~/.config/mux/board-cards/<id>.md` held the verbatim CARD.md copies that
+`boardfile.c` kept at the end of every worker turn. That module is gone and
+`boardfile_drop` went with it, so the directory is orphaned: nothing reads it,
+nothing writes it, nothing removes it. Fifty files on this machine.
+
+Do not write a sweeper for it. `drop_stale(leaf)` (`boardcfg.c:142`) already
+does this exact job — list `<config>/<leaf>/*.md`, unlink each, `rmdir` the
+directory — and `read_all()` already calls it for four leaves
+(`boardcfg.c:434`), for the same reason: files the binary used to own and no
+longer does. Add a fifth call:
+
+    drop_stale("board-cards");
+
+`board_md_path()` built those paths as `<config>/board-cards/<id>.md`
+(`board.c:106`), which is the shape `drop_stale` reconstructs from
+`mdcfg_list`, so the names line up with no change to either side.
+
+Traps:
+
+- `STALE_MAX` is 64 and `mdcfg_list` stops there, so a directory holding more
+  than 64 files takes more than one board open to drain and the `rmdir` fails
+  quietly until the last pass. It is self-healing; do not read the first
+  failed `rmdir` as a bug.
+- These files are the last surviving copy of the plan for any card that was
+  closed without merging before CARD.md moved into git. Sweeping is deliberate
+  and irreversible. Anything worth keeping should be copied aside before this
+  ships.
+
 ### Traps
 
 - **Tab indices move.** Any `workspace_close` shifts every later index down.
