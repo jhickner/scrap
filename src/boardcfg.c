@@ -219,6 +219,7 @@ static void read_settings(struct board_cfg *c)
     c->auto_pull = mdcfg_int(&m, "auto pull", c->auto_pull);
     c->auto_pick = mdcfg_int(&m, "auto pick", c->auto_pick);
     c->archive_after = mdcfg_int(&m, "archive after", c->archive_after);
+    c->closed_lane = mdcfg_int(&m, "closed lane", c->closed_lane);
     /* the lane was called done before it was called closed */
     int shown = mdcfg_int(&m, "done shown", c->closed_shown);
     c->closed_shown = mdcfg_int(&m, "closed shown", shown);
@@ -324,21 +325,22 @@ static int write_settings(const struct board_cfg *c)
     if (!board_path(path, sizeof path, BOARD_DIR, "settings"))
         return 0;
 
-    char nums[6][32];
+    char nums[7][32];
     snprintf(nums[0], sizeof nums[0], "%d", c->workers);
     snprintf(nums[1], sizeof nums[1], "%d", c->auto_pull);
     snprintf(nums[2], sizeof nums[2], "%d", c->auto_pick);
     snprintf(nums[3], sizeof nums[3], "%d", c->archive_after);
-    snprintf(nums[4], sizeof nums[4], "%d", c->closed_shown);
-    snprintf(nums[5], sizeof nums[5], "%d", c->open_shown);
+    snprintf(nums[4], sizeof nums[4], "%d", c->closed_lane);
+    snprintf(nums[5], sizeof nums[5], "%d", c->closed_shown);
+    snprintf(nums[6], sizeof nums[6], "%d", c->open_shown);
 
     const char *keys[] = {"serving", "view", "workers", "auto pull",
-                          "auto pick", "archive after",
+                          "auto pick", "archive after", "closed lane",
                           "closed shown", "open shown"};
     const char *vals[] = {c->serving, c->view, nums[0], nums[1], nums[2],
-                          nums[3], nums[4], nums[5]};
+                          nums[3], nums[4], nums[5], nums[6]};
 
-    return mdcfg_write(path, keys, vals, 8,
+    return mdcfg_write(path, keys, vals, 9,
         "serving is the backend every tiered action runs on.\n"
         "view is list or grid: the board as rows, or as tiles in lanes.\n"
         "workers is how many may run at once.\n"
@@ -348,6 +350,8 @@ static int write_settings(const struct board_cfg *c)
         "task completes, switching backends to match the card; 0 to leave it on\n"
         "the card until you take it.\n"
         "archive after is days a closed card stays on the board; zero forever.\n"
+        "closed lane is 1 to list the closed cards on the board, 0 to leave\n"
+        "them off.\n"
         "closed shown and open shown are how many cards those lanes list; zero\n"
         "lists them all.\n"
         "\n"
@@ -682,6 +686,7 @@ int boardcfg_set(const struct board_cfg *c)
     cache.auto_pull = c->auto_pull;
     cache.auto_pick = c->auto_pick;
     cache.archive_after = c->archive_after;
+    cache.closed_lane = c->closed_lane;
     cache.closed_shown = c->closed_shown;
     cache.open_shown = c->open_shown;
 

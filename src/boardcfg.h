@@ -82,6 +82,7 @@ struct board_cfg {
     int auto_pull;
     int auto_pick;
     int archive_after;
+    int closed_lane;
     int closed_shown;
     int open_shown;
 

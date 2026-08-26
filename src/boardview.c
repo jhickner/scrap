@@ -280,7 +280,7 @@ static int board_lanes(const struct board_card *cards, int n, const char *filter
     if (k < max)
         out[k++] = (struct lane){BOARD_REVIEW, NULL};
     k += work_lanes(cards, n, filter, BOARD_IN_REPO, out + k, max - k);
-    if (k < max)
+    if (k < max && boardcfg()->closed_lane)
         out[k++] = (struct lane){BOARD_CLOSED, NULL};
     return k;
 }
