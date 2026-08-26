@@ -9,6 +9,7 @@ int  workspace_begin(struct session *first, int safe_mode);
 void workspace_end(void);
 
 struct session *workspace_current(void);
+struct session *workspace_base(void);
 struct session *workspace_at(int index);
 int  workspace_count(void);
 int  workspace_index(void);
@@ -28,6 +29,7 @@ int  workspace_find_id(const char *id);
 int  workspace_dump(int index, const char *path);
 
 int  workspace_close(int index);
+int  workspace_close_to_base(int index);
 
 int  workspace_send(int index, const char *line, const char *shown);
 int  workspace_queued(int index);

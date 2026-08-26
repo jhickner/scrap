@@ -37,6 +37,7 @@ static struct tab tabs[WORKSPACE_MAX];
 static int        ntabs;
 static int        cur;
 static int        safe;
+static struct session *base;
 static void     (*on_finish)(struct session *s);
 static void     (*on_settled)(struct session *s);
 static void     (*on_turn)(struct session *s);
@@ -86,6 +87,11 @@ struct session *workspace_current(void)
     return ntabs ? tabs[cur].s : NULL;
 }
 
+struct session *workspace_base(void)
+{
+    return base;
+}
+
 struct session *workspace_at(int index)
 {
     return index >= 0 && index < ntabs ? tabs[index].s : NULL;
@@ -104,6 +110,7 @@ int workspace_begin(struct session *first, int safe_mode)
     safe = safe_mode;
     ntabs = 0;
     cur = 0;
+    base = first;
     if (workspace_open(first) != 0)
         return 0;
     follow(first);
@@ -124,6 +131,7 @@ void workspace_end(void)
     }
     memset(tabs, 0, sizeof tabs);
     ntabs = 0;
+    base = NULL;
 }
 
 int workspace_open(struct session *s)
@@ -309,8 +317,10 @@ int workspace_dump(int index, const char *path)
     return ok;
 }
 
-static void drop(int index)
+static void drop(int index, const struct session *fallback)
 {
+    if (tabs[index].s == base)
+        base = NULL;
     tg_forget_session(tabs[index].s);
     cmd_forget_session(tabs[index].s);
 
@@ -338,7 +348,8 @@ static void drop(int index)
     if (index < cur) {
         cur--;
     } else if (index == cur) {
-        cur = index > 0 ? index - 1 : 0;
+        int at = workspace_index_of(fallback);
+        cur = at >= 0 ? at : (index > 0 ? index - 1 : 0);
 
         viewport_adopt(tabs[cur].screen);
         block_forget();
@@ -355,7 +366,15 @@ int workspace_close(int index)
 {
     if (index < 0 || index >= ntabs)
         return ntabs;
-    drop(index);
+    drop(index, NULL);
+    return ntabs;
+}
+
+int workspace_close_to_base(int index)
+{
+    if (index < 0 || index >= ntabs)
+        return ntabs;
+    drop(index, base);
     return ntabs;
 }
 

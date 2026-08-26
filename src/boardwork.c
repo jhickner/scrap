@@ -1182,7 +1182,7 @@ void boardwork_let_go(const char *id)
     int at = workspace_index_of(w->session);
     memset(w, 0, sizeof *w);
     if (at >= 0 && workspace_count() > 1)
-        workspace_close(at);
+        workspace_close_to_base(at);
 }
 
 /* The session stays with the card for every action in its queue, so it is held
@@ -1244,7 +1244,7 @@ static struct session *tree_session(const char *tree)
         return NULL;
     for (int i = 0; i < workspace_count(); i++) {
         struct session *s = workspace_at(i);
-        if (slot_by_session(s))
+        if (s == workspace_base() || slot_by_session(s))
             continue;
         const char *at = session_cwd(s);
         if (at && !strcmp(at, tree))
