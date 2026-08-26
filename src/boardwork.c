@@ -1307,6 +1307,69 @@ static struct session *tree_session(const char *tree)
     return NULL;
 }
 
+static struct session *id_session(const char *id)
+{
+    if (!id || !*id)
+        return NULL;
+    for (int i = 0; i < workspace_count(); i++) {
+        struct session *s = workspace_at(i);
+        if (s == workspace_base() || slot_by_session(s))
+            continue;
+        const char *sid = session_id(s);
+        if (sid && !strcmp(sid, id))
+            return s;
+    }
+    return NULL;
+}
+
+/* the run's start is not kept on the card, so it is read back off the note the
+   board wrote when it started the run rather than restarting the clock */
+static double run_began(const struct board_card *c)
+{
+    for (int i = c->log_n - 1; i >= 0; i--)
+        if (c->log[i].text && !strcmp(c->log[i].text, "started"))
+            return (double)c->log[i].ts;
+    return now_seconds();
+}
+
+static int tree_gone(const struct board_card *c)
+{
+    struct stat st;
+    return c->worktree[0] &&
+           (stat(c->worktree, &st) != 0 || !S_ISDIR(st.st_mode));
+}
+
+void boardwork_reattach(void)
+{
+    struct board_card *cards = NULL;
+    int                n = board_load(&cards);
+
+    for (int i = 0; i < n; i++) {
+        struct board_card *c = &cards[i];
+        if (c->closed || slot_of(c->id) || tree_gone(c))
+            continue;
+
+        struct session *s = id_session(c->session);
+        if (!s)
+            s = tree_session(c->worktree);
+        if (!s)
+            continue;
+
+        const struct board_action *p =
+            board_stands(c) == BOARD_WORKING ? boardflow_action(c) : NULL;
+        if (!hold(c->id, c->cwd, s, p ? p->name : ""))
+            continue;
+
+        struct worker *w = slot_of(c->id);
+        w->began = run_began(c);
+        /* the tab was restored with the rest of them, so it is a person's to
+           close, not the board's */
+        w->attached = 1;
+    }
+
+    board_free(cards, n);
+}
+
 static int strayed(const struct worker *w, const struct board_card *c)
 {
     if (!c->worktree[0])

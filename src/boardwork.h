@@ -37,6 +37,10 @@ void boardwork_keep(const char *id);
 
 int boardwork_poll(void);
 
+/* take back the cards whose workers outlived the process: the tabs restore
+   with their session ids, the worker table does not */
+void boardwork_reattach(void);
+
 void boardwork_discard(const struct board_card *c);
 
 /* how many commits closing the card would throw away with its branch */
