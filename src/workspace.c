@@ -153,6 +153,12 @@ int workspace_open(struct session *s)
 int workspace_spawn(const char *backend, const char *model, const char *effort,
                     const char *cwd, const char *id)
 {
+    return workspace_spawn_ex(backend, model, effort, cwd, id, NULL);
+}
+
+int workspace_spawn_ex(const char *backend, const char *model, const char *effort,
+                       const char *cwd, const char *id, const char *system)
+{
     if (ntabs >= WORKSPACE_MAX)
         return -1;
     if (!model || !strcmp(model, "default"))
@@ -170,6 +176,8 @@ int workspace_spawn(const char *backend, const char *model, const char *effort,
     session_set_permission(s, session_permission_name(
         settings_get_int(SETTING_PERMISSION, session_permission_default())));
     session_adopt_id(s, id);
+    if (system && *system)
+        session_set_system_extra(s, system);
 
     if (!session_start(s)) {
         session_free(s);
