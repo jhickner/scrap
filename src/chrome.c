@@ -13,6 +13,7 @@
 static struct prompt   *bound;
 static chrome_modal_fn  modal;
 static void            *modal_ud;
+static int              kept;
 
 static int budget;
 static int full;
@@ -27,11 +28,18 @@ int chrome_rows_left(void)
     return left > 0 ? left : 0;
 }
 
-void chrome_clear(void)
+static void wipe(void)
 {
     spin_row = -1;
     above_rows = 0;
     block_clear();
+}
+
+void chrome_clear(void)
+{
+    if (chrome_modal_active())
+        return;
+    wipe();
 }
 
 void chrome_keep_above(void)
@@ -55,22 +63,27 @@ int chrome_modal_interrupted(void)
 
 int chrome_modal_active(void)
 {
-    return modal != NULL;
+    return modal != NULL || kept;
 }
 
 void chrome_modal(chrome_modal_fn fn, void *ud)
 {
     modal = fn;
     modal_ud = ud;
+    kept = 0;
+    block_pin(fn != NULL);
     if (!fn)
         viewport_defer();
     chrome_paint();
 }
 
+/* the rows stay on screen and their owner paints them again, so nothing else
+   may paint over them in between */
 void chrome_modal_keep(void)
 {
     modal = NULL;
     modal_ud = NULL;
+    kept = 1;
 }
 
 struct above {
@@ -224,8 +237,11 @@ void chrome_foot_paint(const char *ask, const char *hint, int columns)
 
 void chrome_paint(void)
 {
+    if (kept)
+        return;
+
     if (ui_too_narrow()) {
-        chrome_clear();
+        wipe();
         return;
     }
 
@@ -243,7 +259,7 @@ void chrome_paint(void)
     }
 
     if (!bound) {
-        chrome_clear();
+        wipe();
         return;
     }
 

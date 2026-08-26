@@ -217,6 +217,13 @@ int main(void)
         fail("a full modal starts on the top row");
     if (chrome_modal_rows() != 24)
         fail("a full modal is offered every row");
+
+    chrome_modal_keep();
+    chrome_clear();
+    chrome_paint();
+    pump(&s);
+    if (row_of(&s, "MENU") != 0)
+        fail("a kept modal stays on screen until its owner paints it again");
     chrome_full(0);
 
     chrome_modal(NULL, NULL);

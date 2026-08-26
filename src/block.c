@@ -12,6 +12,7 @@
 static int row_edit = -1;
 static int have;
 static int fill;
+static int pinned;
 
 static int split(char *body, char **line, int max)
 {
@@ -33,6 +34,8 @@ static int split(char *body, char **line, int max)
 }
 
 void block_fill(int on) { fill = on ? 1 : 0; }
+
+void block_pin(int on) { pinned = on ? 1 : 0; }
 
 void block_begin(void)
 {
@@ -108,12 +111,14 @@ void block_keep(int keep)
 void block_forget(void)
 {
     have = 0;
-    viewport_chrome_clear();
+    if (!pinned)
+        viewport_chrome_clear();
 }
 
 void block_cleared(void)
 {
     have = 0;
-    viewport_chrome_clear();
+    if (!pinned)
+        viewport_chrome_clear();
     viewport_clear();
 }

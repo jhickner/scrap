@@ -1,8 +1,10 @@
 #include "viewport.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "text.h"
 #include "tty.h"
@@ -86,9 +88,56 @@ static int sync_frames(void)
     return on;
 }
 
+/* a frame goes out in one write: split over several, the terminal draws the
+   halves as they land, and under tmux there is no synchronized update to hide it */
+static char  *batch;
+static size_t batch_len, batch_cap;
+static int    batching;
+
 static void direct(const char *s, size_t n)
 {
-    fwrite(s, 1, n, stdout);
+    if (!batching) {
+        fwrite(s, 1, n, stdout);
+        return;
+    }
+    if (batch_len + n > batch_cap) {
+        size_t want = batch_cap ? batch_cap : 8192;
+        while (want < batch_len + n)
+            want *= 2;
+        char *grown = realloc(batch, want);
+        if (!grown) {
+            fwrite(batch, 1, batch_len, stdout);
+            batch_len = 0;
+            fwrite(s, 1, n, stdout);
+            return;
+        }
+        batch = grown;
+        batch_cap = want;
+    }
+    memcpy(batch + batch_len, s, n);
+    batch_len += n;
+}
+
+static void batch_begin(void)
+{
+    batch_len = 0;
+    batching = 1;
+}
+
+static void batch_end(void)
+{
+    batching = 0;
+    fflush(stdout);
+    for (size_t at = 0; at < batch_len;) {
+        ssize_t put = write(STDOUT_FILENO, batch + at, batch_len - at);
+        if (put <= 0) {
+            if (errno == EINTR)
+                continue;
+            break;
+        }
+        at += (size_t)put;
+    }
+    batch_len = 0;
 }
 
 static void direct_str(const char *s) { direct(s, strlen(s)); }
@@ -1078,6 +1127,7 @@ void viewport_paint(void)
         shown_cols = W;
     }
 
+    batch_begin();
     if (sync_frames())
         direct_str("\x1b[?2026h");
     direct_str("\x1b[?25l");
@@ -1130,7 +1180,7 @@ void viewport_paint(void)
 
     if (sync_frames())
         direct_str("\x1b[?2026l");
-    fflush(stdout);
+    batch_end();
 
     frame_swap(&shown, &built);
     dirty = 0;
