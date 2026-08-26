@@ -693,7 +693,9 @@ int boardwork_rejoin(const struct board_card *c, char *why, int size)
                                                        : wanted_backend(c);
     const char                *model, *effort;
     const struct board_action *mine = aimed_at(c, backend, &model, &effort);
-    const char                *job = mine ? mine->name : "";
+    const char                *job = mine && board_stands(c) == BOARD_WORKING
+                                         ? mine->name
+                                         : "";
     const char                *cwd = boardflow_cwd(c, mine);
 
     int at = workspace_spawn(backend, model[0] ? model : NULL,
@@ -1199,9 +1201,15 @@ int boardwork_poll(void)
                 changed = 1;
         }
         /* a tab a person rejoined into is theirs: it is let go when they
-           close it, not when the card comes to rest */
-        if (workers[i].attached)
+           close it, not when the card comes to rest. The action it was on is
+           not still running, though, so the slot drops the step. */
+        if (workers[i].attached) {
+            if (c && !holds(c) && workers[i].job[0]) {
+                workers[i].job[0] = '\0';
+                changed = 1;
+            }
             continue;
+        }
         if (c && holds(c)) {
             changed |= reconcile(&workers[i], c);
             continue;
