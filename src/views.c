@@ -23,23 +23,23 @@ static int board(const char *cwd)
 
 void views_board(const char *cwd)
 {
-    for (;;) {
-        int tab = board(cwd);
-        if (tab == BOARDVIEW_SESSIONS) {
-            if (sessions() == SESSIONSWITCH_BOARD)
-                continue;
-            return;
-        }
-        if (tab >= 0)
-            workspace_show(tab);
+    int tab = board(cwd);
+    if (tab == BOARDVIEW_SESSIONS) {
+        sessions();
         return;
     }
+    if (tab >= 0)
+        workspace_show(tab);
 }
 
 void views_sessions(const char *cwd)
 {
-    if (sessions() == SESSIONSWITCH_BOARD)
-        views_board(cwd);
+    if (sessions() != SESSIONSWITCH_BOARD)
+        return;
+
+    int tab = board(cwd);
+    if (tab >= 0)
+        workspace_show(tab);
 }
 
 void views_last(const char *cwd)

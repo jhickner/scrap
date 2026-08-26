@@ -132,13 +132,16 @@ $(BUILD)/boardgridtest: tools/boardgridtest.c src/boardgrid.o src/menu.o src/ove
 $(BUILD)/boardtiletest: tools/boardtiletest.c src/boardtile.o src/text.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
+$(BUILD)/viewstest: tools/viewstest.c src/views.o | $(BUILD)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
+
 $(BUILD)/highlighttest: tools/highlighttest.c src/highlight.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
 CHECKS  := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest reflowtest toolstyletest sessionlisttest claudetest codextest \
            groktest filedifftest pitest agenttabstest statustest transcripttest \
            sessionviewtest highlighttest muxcfgtest telegramtest boardtest modelstest \
-           boardgridtest boardtiletest
+           boardgridtest boardtiletest viewstest
 
 check: $(addprefix $(BUILD)/,$(CHECKS))
 	@for t in $^; do echo "$$t"; ./$$t || exit 1; done
