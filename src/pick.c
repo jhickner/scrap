@@ -8,6 +8,7 @@
 #include "frontend.h"
 #include "menu.h"
 #include "overlay.h"
+#include "paste.h"
 #include "status.h"
 #include "text.h"
 #include "tty.h"
@@ -15,6 +16,8 @@
 #include "viewport.h"
 
 #define HIT_MAX 128
+
+#define KEY_CTRL(c) ((c) - 'A' + 1)
 
 struct view {
     int top;
@@ -479,6 +482,14 @@ static int type_into(struct view *v, const char *s, size_t n)
     return took;
 }
 
+static int paste_into(struct view *v, const char *s, size_t n)
+{
+    if (!type_into(v, s, n))
+        return 0;
+    v->searching = 1;
+    return 1;
+}
+
 static int run(const char *title, const struct pick_item *items, int count,
                int initial, const struct pick_live *live, const char *shortcuts,
                int *pressed, int filter, int slash)
@@ -603,7 +614,7 @@ static int run(const char *title, const struct pick_item *items, int count,
 
         int typing = filter && (!slash || v.searching);
         if (ev.key == TK_TEXT) {
-            int took = typing && type_into(&v, ev.text, ev.text ? strlen(ev.text) : 0);
+            int took = filter && paste_into(&v, ev.text, ev.text ? strlen(ev.text) : 0);
             free(ev.text);
             if (!took)
                 continue;
@@ -695,6 +706,15 @@ static int run(const char *title, const struct pick_item *items, int count,
             }
             if (filter && slash && !v.searching && ev.cp == '/') {
                 v.searching = 1;
+                break;
+            }
+            if (filter && ev.cp == KEY_CTRL('V')) {
+                char *text = paste_text();
+                if (!text)
+                    break;
+                if (paste_into(&v, text, strlen(text)))
+                    refilter(&v);
+                free(text);
                 break;
             }
 
