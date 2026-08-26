@@ -768,11 +768,7 @@ void session_free(struct session *s)
         if (s->wake[i] >= 0)
             close(s->wake[i]);
     free(s->asked);
-    if (s->agent) {
-        s->agent->set_event_cb(s->agent, NULL, NULL);
-        s->agent->set_abort_check(s->agent, NULL);
-        retire(s->agent);
-    }
+    retire(s->agent);
     free(s->backend);
     free(s->cwd);
     free(s->workdir);
@@ -848,6 +844,9 @@ static void retire(Backend *b)
 {
     if (!b)
         return;
+
+    b->set_event_cb(b, NULL, NULL);
+    b->set_abort_check(b, NULL);
 
     pthread_t t;
     if (pthread_create(&t, NULL, retire_thread, b) != 0)
@@ -976,11 +975,24 @@ static void set_id(struct session *s, const char *id)
     agenttabs_forget_hook(id);
 }
 
+/* A child is handed its directory, model, effort and permission mode on its
+   command line, so anything that changes one of them starts a replacement
+   rather than telling the running child and restarting it. The session keeps
+   the old backend until the new one is up, and lets go of it on a thread. */
 static int restart(struct session *s, const char *resume_id)
 {
+    Backend *previous = s->agent;
+    s->agent = NULL;
+
     Backend *b = agent(s);
-    if (!b || !b->start(b, resume_id))
+    if (!b || !b->start(b, resume_id)) {
+        if (b)
+            b->close(b);
+        s->agent = previous;
         return 0;
+    }
+    retire(previous);
+
     if (resume_id && resume_id != s->id)
         set_id(s, resume_id);
 
@@ -1019,8 +1031,7 @@ int session_take_trust_request(struct session *s)
 
 int session_set_model(struct session *s, const char *model)
 {
-    Backend *b = agent(s);
-    if (!b)
+    if (!s)
         return 0;
 
     char *next = dup_model(s->backend, model);
@@ -1028,7 +1039,6 @@ int session_set_model(struct session *s, const char *model)
         return 0;
     char *previous = s->model;
     s->model = next;
-    b->set_model(b, s->model);
     if (restart(s, s->id[0] ? s->id : NULL)) {
         free(previous);
         replace(&s->resolved, NULL);
@@ -1037,14 +1047,13 @@ int session_set_model(struct session *s, const char *model)
     }
     free(s->model);
     s->model = previous;
-    b->set_model(b, s->model);
     return 0;
 }
 
 int session_set_effort(struct session *s, const char *effort)
 {
     Backend *b = agent(s);
-    if (!b || !(b->caps & BACKEND_CAP_EFFORT) || !b->set_effort)
+    if (!b || !(b->caps & BACKEND_CAP_EFFORT))
         return 0;
 
     char *next = effort ? strdup(effort) : NULL;
@@ -1052,20 +1061,13 @@ int session_set_effort(struct session *s, const char *effort)
         return 0;
     char *previous = s->effort;
     s->effort = next;
-    if (!b->set_effort(b, s->effort)) {
-        free(s->effort);
-        s->effort = previous;
-        return 0;
-    }
-    if ((b->caps & BACKEND_CAP_LIVE_EFFORT) ||
-        restart(s, s->id[0] ? s->id : NULL)) {
+    if (restart(s, s->id[0] ? s->id : NULL)) {
         free(previous);
         prefs_remember_choice("effort", s->backend, s->effort);
         return 1;
     }
     free(s->effort);
     s->effort = previous;
-    b->set_effort(b, s->effort);
     return 0;
 }
 
@@ -1118,17 +1120,14 @@ int session_set_permission(struct session *s, const char *mode)
         return 1;
     }
 
-    Backend *b = s->agent;
     char *previous = s->permission;
     s->permission = mode ? strdup(mode) : NULL;
-    b->set_permission(b, s->permission);
     if (restart(s, s->id[0] ? s->id : NULL)) {
         free(previous);
         return 1;
     }
     free(s->permission);
     s->permission = previous;
-    b->set_permission(b, s->permission);
     return 0;
 }
 
@@ -1186,33 +1185,12 @@ int session_set_cwd(struct session *s, const char *path)
     if (s->cwd && strcmp(s->cwd, path) == 0)
         return 1;
 
-    char *next = strdup(path);
-    if (!next)
-        return 0;
-
-    Backend *previous = s->agent;
-    char    *was = s->cwd;
-    s->cwd = next;
-    s->agent = NULL;
-    if (!agent(s) || !s->agent->start(s->agent, NULL)) {
-        if (s->agent)
-            s->agent->close(s->agent);
-        s->agent = previous;
-        free(s->cwd);
-        s->cwd = was;
-        return 0;
-    }
-    retire(previous);
-    free(was);
-
-    started_over(s);
-    return 1;
+    return session_retarget(s, s->model, s->effort, path);
 }
 
 /* Setting a model, an effort and a directory one at a time restarts the child
-   for each, and claude takes its effort as a turn over the stream, which the
-   caller waits out. This asks for all three at once: one replacement, started
-   with what it needs on its command line and answering nothing. */
+   for each. This asks for all three at once: one replacement, started with
+   what it needs on its command line. */
 int session_retarget(struct session *s, const char *model, const char *effort,
                      const char *cwd)
 {
@@ -1243,18 +1221,12 @@ int session_retarget(struct session *s, const char *model, const char *effort,
         return 1;
     }
 
-    Backend *previous = s->agent;
-    char    *was_model = s->model, *was_effort = s->effort, *was_cwd = s->cwd;
+    char *was_model = s->model, *was_effort = s->effort, *was_cwd = s->cwd;
     s->model = next_model;
     s->effort = next_effort;
     s->cwd = next_cwd;
-    s->agent = NULL;
 
-    const char *resume = moved || !s->id[0] ? NULL : s->id;
-    if (!agent(s) || !s->agent->start(s->agent, resume)) {
-        if (s->agent)
-            s->agent->close(s->agent);
-        s->agent = previous;
+    if (!restart(s, moved || !s->id[0] ? NULL : s->id)) {
         free(s->model);
         free(s->effort);
         free(s->cwd);
@@ -1263,7 +1235,6 @@ int session_retarget(struct session *s, const char *model, const char *effort,
         s->cwd = was_cwd;
         return 0;
     }
-    retire(previous);
     free(was_model);
     free(was_effort);
     free(was_cwd);
