@@ -580,17 +580,11 @@ static int switch_once(void)
 
     char title[256];
     snprintf(title, sizeof title, "sessions");
-    char hint[128];
-    snprintf(hint, sizeof hint, "%c ", KEY_ALL);
-    if (show_all)
-        snprintf(hint + 2, sizeof hint - 2, "only this instance");
-    else
-        snprintf(hint + 2, sizeof hint - 2, "all instances");
     struct listing listing = {rows, n, spin, marks, icons, &live, &nlive, 0, 0};
     sync_columns(&listing);
     listing.sig = listing_sig(&listing);
     struct pick_live shown = {.heading = heading, .spin = spin, .mark = marks,
-                              .icon = icons, .hint = hint, .tick = relist, .ud = &listing};
+                              .icon = icons, .tick = relist, .ud = &listing};
     int picked = pick_run_live(title, items, n, initial, &shown, PICK_SEARCH_SLASH,
                                shortcuts, &pressed);
 
