@@ -197,18 +197,23 @@ static void refresh_openrouter(const char *path)
     (void)system(cmd);
 }
 
-static int fill_openrouter_catalog(struct list *l)
+static char *catalog_text(void)
 {
     char path[4096];
     if (!path_config_file(path, sizeof path, "openrouter.json"))
-        return 0;
+        return NULL;
 
     struct stat st;
     if (stat(path, &st) || st.st_size < 1024 ||
         now_seconds() - (double)st.st_mtime > CATALOG_MAX_AGE)
         refresh_openrouter(path);
 
-    char *text = text_slurp(path, 1 << 23, NULL);
+    return text_slurp(path, 1 << 23, NULL);
+}
+
+static int fill_openrouter_catalog(struct list *l)
+{
+    char *text = catalog_text();
     if (!text)
         return 0;
 
@@ -216,6 +221,102 @@ static int fill_openrouter_catalog(struct list *l)
     openrouter_json(l, text, "data");
     free(text);
     return l->n > before;
+}
+
+/* The catalog quotes dollars per token as a string. */
+static double per_million(cJSON *pricing, const char *key)
+{
+    const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(pricing, key));
+    return v ? strtod(v, NULL) * 1e6 : 0;
+}
+
+static int rates_of(cJSON *models, const char *id, struct model_rates *out)
+{
+    cJSON *m;
+    cJSON_ArrayForEach(m, models) {
+        const char *have = cJSON_GetStringValue(cJSON_GetObjectItem(m, "id"));
+        if (!have || strcmp(have, id))
+            continue;
+        cJSON *pricing = cJSON_GetObjectItem(m, "pricing");
+        out->input = per_million(pricing, "prompt");
+        out->output = per_million(pricing, "completion");
+        out->cache_read = per_million(pricing, "input_cache_read");
+        return out->input > 0 || out->output > 0;
+    }
+    return 0;
+}
+
+/* A backend names its model without the vendor the catalog files it under. */
+static const char *catalog_vendor(const char *backend)
+{
+    if (!backend)
+        return "";
+    if (!strcmp(backend, "codex"))
+        return "openai/";
+    if (!strcmp(backend, "claude"))
+        return "anthropic/";
+    if (!strcmp(backend, "grok"))
+        return "x-ai/";
+    return "";
+}
+
+int models_rates(const char *backend, const char *model, struct model_rates *out)
+{
+    if (!out || !model || !*model)
+        return 0;
+    memset(out, 0, sizeof *out);
+
+    char key[256];
+    snprintf(key, sizeof key, "%s/%s", backend ? backend : "", model);
+
+    /* Only a hit is remembered: a miss can be a catalog still downloading in
+       the background, which the next turn should ask about again. */
+    static struct {
+        char               key[256];
+        struct model_rates rates;
+    } known[8];
+    static int n;
+
+    for (int i = 0; i < n; i++)
+        if (!strcmp(known[i].key, key)) {
+            *out = known[i].rates;
+            return 1;
+        }
+
+    char id[160];
+    snprintf(id, sizeof id, "%s", model);
+    if (!strncmp(id, "openrouter/", 11))
+        memmove(id, id + 11, strlen(id + 11) + 1);
+    char *variant = strchr(id, ':');
+    if (variant)
+        *variant = '\0';
+
+    char filed[192];
+    if (strchr(id, '/'))
+        snprintf(filed, sizeof filed, "%s", id);
+    else
+        snprintf(filed, sizeof filed, "%s%s", catalog_vendor(backend), id);
+
+    char *text = catalog_text();
+    if (!text)
+        return 0;
+
+    cJSON *root = cJSON_Parse(text);
+    cJSON *models = root ? cJSON_GetObjectItem(root, "data") : NULL;
+    int ok = models && (rates_of(models, filed, out) || rates_of(models, id, out));
+    cJSON_Delete(root);
+    free(text);
+
+    if (!ok) {
+        memset(out, 0, sizeof *out);
+        return 0;
+    }
+    if (n < (int)(sizeof known / sizeof *known)) {
+        snprintf(known[n].key, sizeof known[n].key, "%s", key);
+        known[n].rates = *out;
+        n++;
+    }
+    return 1;
 }
 
 static void fill_pi_store(struct list *l)

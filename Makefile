@@ -84,6 +84,9 @@ $(BUILD)/sessionlisttest: tools/sessionlisttest.c src/sessionlist.o src/vendor/c
 $(BUILD)/codextest: tools/codextest.c src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
+$(BUILD)/modelstest: tools/modelstest.c src/models.o src/text.o src/vendor/cJSON.o | $(BUILD)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
+
 $(BUILD)/groktest: tools/groktest.c src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
@@ -134,7 +137,7 @@ $(BUILD)/highlighttest: tools/highlighttest.c src/highlight.o | $(BUILD)
 
 CHECKS  := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest reflowtest toolstyletest sessionlisttest claudetest codextest \
            groktest filedifftest pitest agenttabstest statustest transcripttest \
-           sessionviewtest highlighttest muxcfgtest telegramtest boardtest \
+           sessionviewtest highlighttest muxcfgtest telegramtest boardtest modelstest \
            boardgridtest boardtiletest
 
 check: $(addprefix $(BUILD)/,$(CHECKS))

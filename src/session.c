@@ -158,6 +158,7 @@ struct session *session_set_drawing(struct session *s)
 }
 
 static void remember_model(const struct session *s);
+static void charge_turn(struct session *s, const backend_result *m);
 static void retire(Backend *b);
 static int dir_alive(const char *path);
 static int ground_target(const char *gone, char *out, size_t size);
@@ -1603,8 +1604,7 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     free(reply);
 
     s->turns++;
-    if (m.cost_usd > 0)
-        s->cost_usd = m.cost_usd;
+    charge_turn(s, &m);
     s->tokens_in += m.input_tokens + m.cache_read_tokens + m.cache_creation_tokens;
     s->tokens_out += m.output_tokens;
 
@@ -1817,6 +1817,25 @@ const char *session_saved_model(const char *backend)
 const char *session_saved_effort(const char *backend)
 {
     return prefs_saved_choice("effort", backend);
+}
+
+/* A backend that prices its own turns reports the session total; one that
+ * reports only tokens, as codex does, is priced from the model catalog. Cache
+ * writes need no term: codex counts them inside the input it reports. */
+static void charge_turn(struct session *s, const backend_result *m)
+{
+    if (m->cost_usd > 0) {
+        s->cost_usd = m->cost_usd;
+        return;
+    }
+
+    struct model_rates rates;
+    if (!models_rates(s->backend, session_model_label(s), &rates))
+        return;
+
+    s->cost_usd += ((double)m->input_tokens * rates.input +
+                    (double)m->cache_read_tokens * rates.cache_read +
+                    (double)m->output_tokens * rates.output) / 1e6;
 }
 
 static const char *backend_model(const struct session *s)

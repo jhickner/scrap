@@ -1,4 +1,3 @@
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -241,8 +240,7 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "app-server"))
         return mock_server();
 
-    codex_opts opts = { .cli_path = argv[0], .effort = "high", .ephemeral = 1,
-                        .model = "gpt-5-codex" };
+    codex_opts opts = { .cli_path = argv[0], .effort = "high", .ephemeral = 1 };
     long started = milliseconds();
     codex_client *client = codex_start(&opts);
     if (!client) {
@@ -284,8 +282,7 @@ int main(int argc, char **argv)
         meta.context_tokens != 120 || meta.context_window != 1000 ||
         live_tokens != 120 || live_window != 1000 ||
         meta.input_tokens != 60 || meta.cache_read_tokens != 40 ||
-        meta.cache_creation_tokens != 5 || meta.output_tokens != 10 ||
-        fabs(meta.cost_usd - 0.00018) > 1e-9) {
+        meta.cache_creation_tokens != 5 || meta.output_tokens != 10) {
         fprintf(stderr, "codextest: interrupted turn was reported as a failure\n");
         free(reply);
         codex_stop(client);
@@ -308,10 +305,8 @@ int main(int argc, char **argv)
         codex_stop(client);
         return 1;
     }
-    codex_result second = {0};
-    reply = codex_send_ex(client, "continue", &second);
-    if (!reply || strcmp(reply, "done") ||
-        fabs(second.cost_usd - 0.00036) > 1e-9) {
+    reply = codex_send(client, "continue");
+    if (!reply || strcmp(reply, "done")) {
         fprintf(stderr, "codextest: process was not reusable after interrupt\n");
         free(reply);
         codex_stop(client);
