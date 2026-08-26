@@ -48,6 +48,7 @@ char *codex_send(codex_client *c, const char *user_text);
 
 typedef struct {
     int interrupted;   /* the abort predicate ended the turn */
+    double cost_usd;   /* cumulative for the session, priced from the tokens */
     long context_tokens; /* latest model request, including output */
     long context_window;
     long input_tokens;   /* this turn, from the thread totals it moved */
@@ -161,6 +162,7 @@ struct codex_client {
        by, so each send takes a mark before it starts. */
     long total_input, total_output, total_cache_read, total_cache_write;
     long mark_input, mark_output, mark_cache_read, mark_cache_write;
+    double cost_usd;
     codex_rate_limit rate_limit;
     char *buf;
     size_t len, cap;
@@ -838,7 +840,56 @@ void codex_reset(codex_client *c) {
         c->total_cache_read = c->total_cache_write = 0;
         c->mark_input = c->mark_output = 0;
         c->mark_cache_read = c->mark_cache_write = 0;
+        c->cost_usd = 0;
     }
+}
+
+/* app-server reports tokens and never a price, so the cost is ours to compute.
+ * Rates are OpenAI list prices in dollars per million tokens; a model absent
+ * from the table prices at zero, which callers render as tokens instead. */
+typedef struct {
+    const char *model;
+    double in_usd, cached_usd, out_usd;
+} cx_price;
+
+static const cx_price CX_PRICES[] = {
+    {"gpt-5.1-codex-mini", 0.25, 0.025, 2.00},
+    {"gpt-5.1-codex",      1.25, 0.125, 10.00},
+    {"gpt-5.1",            1.25, 0.125, 10.00},
+    {"gpt-5-codex",        1.25, 0.125, 10.00},
+    {"gpt-5-nano",         0.05, 0.005, 0.40},
+    {"gpt-5-mini",         0.25, 0.025, 2.00},
+    {"gpt-5",              1.25, 0.125, 10.00},
+    {"codex-mini",         1.50, 0.375, 6.00},
+    {"o4-mini",            1.10, 0.275, 4.40},
+    {"o3",                 2.00, 0.500, 8.00},
+};
+
+/* Longest matching prefix wins, so gpt-5-mini does not price as gpt-5. */
+static const cx_price *cx_price_for(const char *model) {
+    const cx_price *best = NULL;
+    size_t best_len = 0;
+    if (!model) return NULL;
+    for (size_t i = 0; i < sizeof CX_PRICES / sizeof *CX_PRICES; i++) {
+        size_t n = strlen(CX_PRICES[i].model);
+        if (n > best_len && !strncmp(model, CX_PRICES[i].model, n)) {
+            best = &CX_PRICES[i];
+            best_len = n;
+        }
+    }
+    return best;
+}
+
+/* Cache writes are billed at the input rate and app-server already counts them
+ * inside inputTokens, so they carry no charge of their own here. */
+static double cx_cost(const char *model, long input, long cached, long output) {
+    const cx_price *p = cx_price_for(model);
+    if (!p) return 0;
+    if (input < 0) input = 0;
+    if (cached < 0) cached = 0;
+    if (output < 0) output = 0;
+    return ((double)input * p->in_usd + (double)cached * p->cached_usd +
+            (double)output * p->out_usd) / 1e6;
 }
 
 /* `total` accumulates every request in the thread. `last` is the most recent
@@ -1307,6 +1358,9 @@ char *codex_send_ex(codex_client *c, const char *user_text, codex_result *meta) 
         meta->output_tokens = c->total_output - c->mark_output;
         meta->cache_read_tokens = c->total_cache_read - c->mark_cache_read;
         meta->cache_creation_tokens = c->total_cache_write - c->mark_cache_write;
+        c->cost_usd += cx_cost(codex_model(c), meta->input_tokens,
+                               meta->cache_read_tokens, meta->output_tokens);
+        meta->cost_usd = c->cost_usd;
     }
     return answer ? answer : strdup("");
 }

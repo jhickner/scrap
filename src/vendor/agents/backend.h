@@ -641,6 +641,7 @@ static char *backend_codex_ask_ex(Backend *b, const char *user, backend_result *
         meta->context_tokens = cr.context_tokens;
         meta->context_window = cr.context_window;
         meta->interrupted = cr.interrupted;
+        meta->cost_usd = cr.cost_usd;
         meta->input_tokens = cr.input_tokens;
         meta->output_tokens = cr.output_tokens;
         meta->cache_read_tokens = cr.cache_read_tokens;
