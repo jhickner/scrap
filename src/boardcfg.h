@@ -49,6 +49,9 @@ struct board_action {
     /* the action is asked to commit, so a turn that landed nothing did not do
        what it was asked */
     int           commits;
+    /* the action finishes the card: merge lands the work, so there is nothing
+       left to stand in review over */
+    int           closes;
 
     char fail_marker[64];
 

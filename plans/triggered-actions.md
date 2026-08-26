@@ -230,11 +230,12 @@ checkout today, which is why that was safe. Two cards running an `in: repo`
 action at once is the failure the lock existed for, so it has to come back
 before such an action ships — read this time, not just parsed.
 
-**Still open: what closes a card.** Nothing moves a card to done by itself.
-Closing by hand from review is the assumption, with `a` on the board, `A` for
-every card in review at once, and `/close` from the session holding it. If that
-turns out to be a chore, the alternative is an action declaring itself
-terminal.
+**Settled: what closes a card.** Closing by hand from review, with `a` on the
+board, `A` for every card in review at once, and `/close` from the session
+holding it — and an action may declare itself terminal with `closes: yes`,
+which `merge` does. A terminal action closes the card on the turn it passes,
+but only as the last thing queued: an action asked for behind it has not been
+answered yet.
 
 **Settled: a pipeline does not survive a failure mid-way.** The queue is
 dropped and the card stands in review, waiting to be told what to run next.

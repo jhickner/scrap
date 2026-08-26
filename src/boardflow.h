@@ -21,6 +21,10 @@ int boardflow_offered(const struct board_card *c, const char **out, int max);
 int boardflow_trigger(const struct board_card *c, const char *const *names,
                       int n, char *why, size_t size);
 
+/* Whether this action, passing now, leaves the card finished rather than in
+   review: it says it closes the card and nothing is queued behind it. */
+int boardflow_closes(const struct board_card *c, const struct board_action *p);
+
 int boardflow_waits_on_you(const struct board_card *c);
 
 /* A card gets a worktree when an action it has run or has queued asks to run

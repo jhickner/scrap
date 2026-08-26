@@ -269,6 +269,7 @@ static void read_actions(struct board_cfg *c)
         p->where = in_from_name(mdcfg_get(&m, "in"));
         p->on_capture = !strcmp(mdcfg_get(&m, "on"), "capture");
         p->commits = !strcmp(mdcfg_get(&m, "commits"), "yes");
+        p->closes = !strcmp(mdcfg_get(&m, "closes"), "yes");
         p->needs_n = names_of(mdcfg_get(&m, "needs"), p->needs, BOARD_NEEDS);
 
         p->prompt = dup_or_null(m.body ? m.body : "");

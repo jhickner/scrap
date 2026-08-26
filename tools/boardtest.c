@@ -672,6 +672,7 @@ static void test_the_shipped_actions_are_built_in(void)
            "and is gated on implement");
     expect(merge && !strcmp(merge->fail_marker, "MERGE BLOCKED"),
            "and says so when it cannot land");
+    expect(merge && merge->closes, "and closes the card when it lands");
 
     const char *pipelines[BOARD_PIPELINES_MAX];
     expect(!boardcfg_pipelines(pipelines, BOARD_PIPELINES_MAX),
@@ -1002,6 +1003,48 @@ static void test_a_stopped_card_waits_on_you(void)
     with_actions();
 }
 
+/* an action can say it finishes the card, and closes it on the turn it passes */
+static void test_an_action_closes_the_card(void)
+{
+    defs_clear();
+    action_def("implement", "tier: high\nin: worktree\n", "build it");
+    action_def("merge", "tier: med\nin: repo\nneeds: implement\ncloses: yes\n",
+               "land it");
+    action_def("deploy", "tier: med\nin: repo\nneeds: merge\n", "ship it");
+    defs_use();
+
+    const struct board_action *merge = boardcfg_action("merge");
+    const struct board_action *build_it = boardcfg_action("implement");
+    expect(merge && merge->closes, "the file says merge closes the card");
+    expect(build_it && !build_it->closes, "implement does not");
+
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("work to land", "/tmp/repo", id), "capture");
+    expect(board_took(id, "implement"), "implement passed");
+
+    const char *just_merge[] = {"merge"};
+    expect(board_queued(id, just_merge, 1), "merge is queued on its own");
+
+    struct board_card *v = NULL;
+    int                n = board_load(&v);
+    struct board_card *c = board_find(v, n, id);
+    expect(c && boardflow_closes(c, merge), "so passing it would close the card");
+    expect(c && !boardflow_closes(c, build_it),
+           "an action that does not say so would not");
+    board_free(v, n);
+
+    const char *then_deploy[] = {"merge", "deploy"};
+    expect(board_queued(id, then_deploy, 2), "with deploy queued behind it");
+    n = board_load(&v);
+    c = board_find(v, n, id);
+    expect(c && !boardflow_closes(c, merge),
+           "merge leaves the card open for what was asked after it");
+    board_free(v, n);
+
+    board_remove(id);
+    with_actions();
+}
+
 /* a pipeline is a name for a run of actions, gated action by action */
 static void test_a_pipeline_stands_for_its_actions(void)
 {
@@ -1131,6 +1174,7 @@ int main(void)
     test_an_action_waits_on_what_it_needs();
     test_a_trigger_queues_a_pipeline();
     test_a_stopped_card_waits_on_you();
+    test_an_action_closes_the_card();
     test_a_pipeline_stands_for_its_actions();
     test_a_name_lands_on_the_card();
 

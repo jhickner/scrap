@@ -48,6 +48,7 @@ const struct board_default board_defaults[] = {
      "tier: med\n"
      "in: repo\n"
      "needs: implement\n"
+     "closes: yes\n"
      "fail marker: MERGE BLOCKED\n"
      "---\n"
      "\n"

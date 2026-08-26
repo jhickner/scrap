@@ -737,6 +737,15 @@ int boardwork_rejoin(const struct board_card *c, char *why, int size)
    asked, so the card stays on it rather than counting it as run. An action
    that is not asked to commit -- plan writes a file and nothing else -- passes
    on an empty branch. */
+/* The action that closed the card is done with the session it ran in, as a
+   close from the board is: the worktree the card carried goes with it. */
+static void close_after(struct worker *w)
+{
+    if (!board_close(w->id))
+        board_note(w->id, "board", "the store did not take the close");
+    boardwork_let_go(w->id);
+}
+
 static int nothing_landed(const struct board_card *c,
                           const struct board_action *p)
 {
@@ -797,6 +806,7 @@ void boardwork_finished(struct session *s)
        dropped: the card stands in review and waits to be told what to run
        next, whether or not anything passed before it. */
     int passed = ran && !broke && !empty && (!failed || !*failed);
+    int closes = passed && boardflow_closes(c, p);
 
     int stored = board_update(&edited);
     board_free(cards, n);
@@ -825,6 +835,8 @@ void boardwork_finished(struct session *s)
     }
     if (empty)
         board_note(w->id, "board", "no commit on the branch");
+    else if (closes && stored)
+        close_after(w);
     else if ((!failed || !*failed) && stored)
         pick_after(w);
 

@@ -23,6 +23,14 @@ int boardflow_gated(const struct board_card *c, const char *name)
     return 1;
 }
 
+/* An action may declare that it finishes the card. It only does so as the last
+   thing queued: closing drops the queue, and an action behind it was asked for
+   after this one, so it has not been answered yet. */
+int boardflow_closes(const struct board_card *c, const struct board_action *p)
+{
+    return c && p && p->closes && c->queue_n == 1 && !strcmp(c->queue[0], p->name);
+}
+
 int boardflow_waits_on_you(const struct board_card *c)
 {
     return board_stands(c) == BOARD_REVIEW;
