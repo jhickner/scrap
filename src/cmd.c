@@ -992,6 +992,26 @@ enum cmd_result cmd_dispatch(struct session *s, const char *line)
     return CMD_HANDLED;
 }
 
+enum cmd_result cmd_submit(struct session *s, const char *line)
+{
+    if (!s || !line)
+        return CMD_NOT_A_COMMAND;
+
+    if (session_turn_running(s) && cmd_runs_mid_turn(line)) {
+        cmd_dispatch_live(s, line);
+        return CMD_HANDLED;
+    }
+
+    enum cmd_result r = cmd_dispatch(s, line);
+    if (r != CMD_NOT_A_COMMAND)
+        return r;
+
+    int tab = workspace_index_of(s);
+    if (tab >= 0)
+        workspace_send(tab, line, NULL);
+    return CMD_NOT_A_COMMAND;
+}
+
 static void do_help(struct session *s, const char *arg)
 {
     (void)s;

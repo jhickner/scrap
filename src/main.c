@@ -770,20 +770,11 @@ int main(int argc, char **argv)
             continue;
         }
 
-        if (session_turn_running(session) && cmd_runs_mid_turn(line)) {
-            cmd_dispatch_live(session, line);
-            free(line);
-            prompt_restart_check(prompt);
-            continue;
-        }
-
-        enum cmd_result r = cmd_dispatch(session, line);
+        enum cmd_result r = cmd_submit(session, line);
         if (r == CMD_QUIT) {
             free(line);
             break;
         }
-        if (r == CMD_NOT_A_COMMAND)
-            workspace_send(workspace_index(), line, NULL);
         free(line);
         prompt_restart_check(prompt);
     }

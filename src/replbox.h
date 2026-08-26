@@ -1,0 +1,41 @@
+#ifndef REPLBOX_H
+#define REPLBOX_H
+
+#include "replframe.h"
+#include "tty.h"
+#include "vendor/repl.h"
+
+/* A line editor in a box: a Repl, the replframe it renders into, the width it
+   wraps at and the window of rows a host has room to paint. Every input in mux
+   except the main prompt is one of these. */
+struct replbox {
+    Repl             repl;
+    struct replframe frame;
+    int              cols;   /* wrap width, gutter included */
+    int              rows;   /* rows the frame holds */
+    int              top;    /* first row painted */
+    int              fresh;  /* the frame matches the repl */
+};
+
+void replbox_init(struct replbox *b, const ReplCommand *cmds, int n);
+void replbox_free(struct replbox *b);
+
+void replbox_width(struct replbox *b, int cols);
+int  replbox_wants(const struct replbox *b);
+int  replbox_render(struct replbox *b, int rows);
+void replbox_scroll(struct replbox *b, int room);
+int  replbox_top(const struct replbox *b);
+int  replbox_caret(const struct replbox *b);
+void replbox_paint_row(const struct replbox *b, int y, int gutter, int focused);
+
+/* 0 for a key it did not take, so the host keeps enter, escape and its own
+   bindings. Does not free ev->text. */
+int replbox_key(struct replbox *b, const tty_event *ev);
+
+const char *replbox_line(const struct replbox *b);
+void        replbox_set_text(struct replbox *b, const char *text);
+void        replbox_reset(struct replbox *b);
+Repl       *replbox_repl(struct replbox *b);
+struct replframe *replbox_frame(struct replbox *b);
+
+#endif
