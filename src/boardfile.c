@@ -6,7 +6,6 @@
 #include <unistd.h>
 
 #include "board.h"
-#include "mdcfg.h"
 #include "text.h"
 
 #define CARD_DIR  "board-cards"
@@ -15,14 +14,7 @@
 
 int boardfile_kept(const char *id, char *out, size_t size)
 {
-    char dir[4096];
-    if (!id || !*id || !mdcfg_dir(dir, sizeof dir, CARD_DIR))
-        return 0;
-
-    for (const char *p = id; *p; p++)
-        if (*p == '/' || *p == '.')
-            return 0;
-    return (size_t)snprintf(out, size, "%s/%s.md", dir, id) < size;
+    return board_md_path(CARD_DIR, id, out, size);
 }
 
 static int in_tree(const char *tree, char *out, size_t size)

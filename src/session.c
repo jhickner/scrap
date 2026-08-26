@@ -163,6 +163,25 @@ static void retire(Backend *b);
 static int dir_alive(const char *path);
 static int ground_target(const char *gone, char *out, size_t size);
 
+/* a line cut to fit can end mid-sequence */
+static void clip_utf8(char *s)
+{
+    size_t i = 0, whole = 0;
+    while (s[i]) {
+        unsigned char c = (unsigned char)s[i];
+        size_t len = c < 0x80 ? 1 : (c & 0xe0) == 0xc0 ? 2 :
+                     (c & 0xf0) == 0xe0 ? 3 : (c & 0xf8) == 0xf0 ? 4 : 1;
+        for (size_t j = 1; j < len; j++)
+            if (((unsigned char)s[i + j] & 0xc0) != 0x80) {
+                s[whole] = '\0';
+                return;
+            }
+        i += len;
+        whole = i;
+    }
+    s[whole] = '\0';
+}
+
 static void note_recent(struct session *s, const backend_event *ev)
 {
     char line[SESSION_RECENT_MAX];
@@ -181,6 +200,7 @@ static void note_recent(struct session *s, const backend_event *ev)
     for (char *p = line; *p; p++)
         if (*p == '\n' || *p == '\r' || *p == '\t')
             *p = ' ';
+    clip_utf8(line);
 
     snprintf(s->recent[s->recent_n % SESSION_RECENT], SESSION_RECENT_MAX, "%s", line);
     s->recent_n++;
@@ -858,7 +878,7 @@ static void retire(Backend *b)
 
 int session_switch_backend(struct session *s, const char *backend)
 {
-    if (!s || !backend || !*backend)
+    if (!s || !backend || !*backend || s->running)
         return 0;
     if (strcmp(s->backend, backend) == 0)
         return 1;
@@ -982,13 +1002,19 @@ static void set_id(struct session *s, const char *id)
    the old backend until the new one is up, and lets go of it on a thread. */
 static int restart(struct session *s, const char *resume_id)
 {
+    if (s->running)
+        return 0;
+
     Backend *previous = s->agent;
     s->agent = NULL;
 
     Backend *b = agent(s);
     if (!b || !b->start(b, resume_id)) {
-        if (b)
+        if (b) {
+            b->set_event_cb(b, NULL, NULL);
+            b->set_abort_check(b, NULL);
             b->close(b);
+        }
         s->agent = previous;
         return 0;
     }
@@ -1138,33 +1164,38 @@ void session_adopt_id(struct session *s, const char *id)
         set_id(s, id);
 }
 
+#define RESET_BLOCK   (1 << 0)
+#define RESET_WORKDIR (1 << 1)
+
+/* what a conversation counted, said and was called does not carry into the
+   next one */
+static void reset_turns(struct session *s, int flags)
+{
+    s->turns = 0;
+    s->cost_usd = 0;
+    s->tokens_in = s->tokens_out = 0;
+    s->context_tokens = 0;
+    if (flags & RESET_WORKDIR)
+        replace(&s->workdir, NULL);
+    replace(&s->last_reply, NULL);
+    replace(&s->failed_prompt, NULL);
+    if (flags & RESET_BLOCK)
+        replace(&s->last_block, NULL);
+    transcript_clear(&s->transcript);
+}
+
 int session_resume(struct session *s, const char *id)
 {
     if (!restart(s, id))
         return 0;
-    s->turns = 0;
-    s->cost_usd = 0;
-    s->tokens_in = s->tokens_out = 0;
-    s->context_tokens = 0;
-    replace(&s->last_reply, NULL);
-    replace(&s->failed_prompt, NULL);
-    transcript_clear(&s->transcript);
+    reset_turns(s, 0);
     return 1;
 }
 
-/* A directory change is a conversation of its own: nothing the last one
-   counted, said or was called carries into it. */
+/* A directory change is a conversation of its own. */
 static void started_over(struct session *s)
 {
-    s->turns = 0;
-    s->cost_usd = 0;
-    s->tokens_in = s->tokens_out = 0;
-    s->context_tokens = 0;
-    replace(&s->workdir, NULL);
-    replace(&s->last_reply, NULL);
-    replace(&s->failed_prompt, NULL);
-    replace(&s->last_block, NULL);
-    transcript_clear(&s->transcript);
+    reset_turns(s, RESET_BLOCK | RESET_WORKDIR);
     s->title[0] = '\0';
     s->stale_title[0] = '\0';
     s->announce_title = 0;
@@ -1250,14 +1281,7 @@ int session_clear(struct session *s)
 {
     if (!s->agent || !s->agent->reset(s->agent))
         return 0;
-    s->turns = 0;
-    s->cost_usd = 0;
-    s->tokens_in = s->tokens_out = 0;
-    s->context_tokens = 0;
-    replace(&s->last_reply, NULL);
-    replace(&s->failed_prompt, NULL);
-    replace(&s->last_block, NULL);
-    transcript_clear(&s->transcript);
+    reset_turns(s, RESET_BLOCK);
 
     s->title[0] = '\0';
     s->stale_title[0] = '\0';
@@ -1706,6 +1730,9 @@ int session_turn_begin(struct session *s, const char *text)
 
     if (pthread_create(&s->thread, NULL, turn_thread, s) != 0) {
         s->running = 0;
+        s->idle_busy = 0;
+        replace(&s->failed_prompt, text);
+        publish(s, "errored");
         return 0;
     }
     return 1;

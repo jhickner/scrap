@@ -19,6 +19,7 @@ struct slot {
     size_t len, cap;
     int    done;
     int    ok;
+    int    truncated;
 };
 
 static struct slot slots[CHILD_SLOTS];
@@ -67,6 +68,8 @@ static int spawn(struct slot *s, const char *key, char *const argv[],
     int pipes[2];
     if (pipe(pipes) != 0)
         return 0;
+    fcntl(pipes[0], F_SETFD, FD_CLOEXEC);
+    fcntl(pipes[1], F_SETFD, FD_CLOEXEC);
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -81,6 +84,8 @@ static int spawn(struct slot *s, const char *key, char *const argv[],
         dup2(pipes[1], STDERR_FILENO);
         if (pipes[1] > STDERR_FILENO)
             close(pipes[1]);
+        fcntl(STDOUT_FILENO, F_SETFD, 0);
+        fcntl(STDERR_FILENO, F_SETFD, 0);
         int null = open("/dev/null", O_RDONLY);
         if (null >= 0) {
             dup2(null, STDIN_FILENO);
@@ -120,16 +125,34 @@ int child_shell(const char *key, const char *command, const char *cwd)
     return child_start(key, argv, cwd);
 }
 
+/* Past the cap the output is discarded rather than left in the pipe: a child
+   that keeps writing would otherwise block forever and never be reaped. */
+static int discard(struct slot *s)
+{
+    char    sink[4096];
+    ssize_t k = read(s->fd, sink, sizeof sink);
+    if (k <= 0)
+        return 0;
+    s->truncated = 1;
+    return 1;
+}
+
 static void drain(struct slot *s)
 {
     for (;;) {
         if (s->len + 4096 > s->cap) {
-            if (s->cap >= OUTPUT_MAX)
-                return;
+            if (s->cap >= OUTPUT_MAX) {
+                if (!discard(s))
+                    return;
+                continue;
+            }
             size_t cap = s->cap ? s->cap * 2 : 8192;
             char  *grown = realloc(s->buf, cap);
-            if (!grown)
-                return;
+            if (!grown) {
+                if (!discard(s))
+                    return;
+                continue;
+            }
             s->buf = grown;
             s->cap = cap;
         }
@@ -139,6 +162,21 @@ static void drain(struct slot *s)
         s->len += (size_t)k;
         s->buf[s->len] = '\0';
     }
+}
+
+static void note_truncation(struct slot *s)
+{
+    static const char note[] = "\n[output truncated]\n";
+    if (!s->truncated || !s->buf)
+        return;
+    char *grown = realloc(s->buf, s->len + sizeof note);
+    if (!grown)
+        return;
+    memcpy(grown + s->len, note, sizeof note);
+    s->buf = grown;
+    s->len += sizeof note - 1;
+    s->cap = s->len + 1;
+    s->truncated = 0;
 }
 
 int child_reap(char *key, size_t keysize, char **out, int *ok)
@@ -156,6 +194,7 @@ int child_reap(char *key, size_t keysize, char **out, int *ok)
             continue;
 
         drain(s);
+        note_truncation(s);
         s->done = 1;
         s->ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
 

@@ -117,12 +117,13 @@ static int live_dir(char *out, size_t size)
 static void tmux_where(void)
 {
     static long asked;
-    static int  have;
+    static int  tried;
 
     long now = (long)time(NULL);
-    if (have && now - asked < 5)
+    if (tried && now - asked < 5)
         return;
     asked = now;
+    tried = 1;
 
     const char *pane = getenv("TMUX_PANE");
     if (!getenv("TMUX") || !pane || !*pane)
@@ -160,7 +161,6 @@ static void tmux_where(void)
     snprintf(tmux_window, sizeof tmux_window, "%s", line);
     snprintf(tmux_wname, sizeof tmux_wname, "%s", name);
     snprintf(tmux_pane_index, sizeof tmux_pane_index, "%s", index ? index : "");
-    have = 1;
 }
 
 const char *livelist_tmux_window(void)

@@ -34,6 +34,7 @@
 #include "restart.h"
 #include "session.h"
 #include "sessionlist.h"
+#include "sessionview.h"
 #include "status.h"
 #include "text.h"
 #include "tty.h"
@@ -58,6 +59,7 @@ static volatile int    poller_stop;
 static pthread_t       poller;
 static int             wake[2] = {-1, -1};
 static char            label[96];
+static char            attach_dir[64];
 static whisper_config  voice;
 static int             voice_set;
 static int             poll_seconds = 30;
@@ -151,14 +153,22 @@ static char *state_read(const char *name)
 
 static void state_write(const char *name, const char *value)
 {
-    char path[4200];
+    char path[4200], tmp[4300];
     if (!state_path(name, path, sizeof path))
         return;
-    FILE *f = fopen(path, "w");
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "w");
     if (!f)
         return;
     fprintf(f, "%s\n", value ? value : "");
+    if (fflush(f) != 0 || fsync(fileno(f)) != 0) {
+        fclose(f);
+        remove(tmp);
+        return;
+    }
     fclose(f);
+    if (rename(tmp, path) != 0)
+        remove(tmp);
 }
 
 struct inbox_item {
@@ -211,6 +221,14 @@ static int inbox_push_kind(char *text, int quiet, int tap)
 static int inbox_push(char *text, int quiet)
 {
     return inbox_push_kind(text, quiet, 0);
+}
+
+static int inbox_room(void)
+{
+    pthread_mutex_lock(&inbox_lock);
+    int room = inbox_count < INBOX_MAX;
+    pthread_mutex_unlock(&inbox_lock);
+    return room;
 }
 
 static char *inbox_take(int *quiet, int *tap)
@@ -309,23 +327,151 @@ static void one_line(char *dst, size_t size, const char *src)
             dst[i] = ' ';
 }
 
+/* Every send on the tx client runs on the sender thread: a mirrored turn is
+   one HTTPS round trip per tool call, and those used to land on the thread that
+   also reads the keyboard and drains the session ptys. */
+enum tx_kind { TX_TEXT, TX_MD, TX_PHOTO, TX_ACTION };
+
+struct txmsg {
+    enum tx_kind  kind;
+    char         *text;
+    struct txmsg *next;
+};
+
+#define TXQ_MAX 512
+
+static pthread_mutex_t tx_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  tx_cv = PTHREAD_COND_INITIALIZER;
+static struct txmsg   *tx_head, *tx_tail;
+static int             tx_count, tx_inflight;
+static int             tx_draining, tx_abort, tx_done;
+static pthread_t       sender;
+static int             sender_live;
+
+static void tx_call(enum tx_kind kind, const char *text)
+{
+    switch (kind) {
+    case TX_TEXT:   tg_send_message(tx, chat_id, text); break;
+    case TX_MD:     tg_send_message_md(tx, chat_id, text); break;
+    case TX_PHOTO:  tg_send_photo(tx, chat_id, text, NULL); break;
+    case TX_ACTION: tg_send_chat_action(tx, chat_id, text); break;
+    }
+}
+
+static void txmsg_free(struct txmsg *m)
+{
+    free(m->text);
+    free(m);
+}
+
+static void *sender_thread(void *ud)
+{
+    (void)ud;
+    pthread_mutex_lock(&tx_lock);
+    for (;;) {
+        while (!tx_head && !tx_draining)
+            pthread_cond_wait(&tx_cv, &tx_lock);
+        if (!tx_head || tx_abort)
+            break;
+
+        struct txmsg *m = tx_head;
+        tx_head = m->next;
+        if (!tx_head)
+            tx_tail = NULL;
+        tx_count--;
+        tx_inflight = 1;
+        pthread_mutex_unlock(&tx_lock);
+
+        tx_call(m->kind, m->text);
+        txmsg_free(m);
+
+        pthread_mutex_lock(&tx_lock);
+        tx_inflight = 0;
+        pthread_cond_broadcast(&tx_cv);
+    }
+    while (tx_head) {
+        struct txmsg *m = tx_head;
+        tx_head = m->next;
+        tx_count--;
+        txmsg_free(m);
+    }
+    tx_tail = NULL;
+    tx_done = 1;
+    pthread_cond_broadcast(&tx_cv);
+    pthread_mutex_unlock(&tx_lock);
+    return NULL;
+}
+
+static void tx_push(enum tx_kind kind, const char *text)
+{
+    if (!tx || !chat_id || !text || !*text)
+        return;
+    if (!sender_live) {
+        tx_call(kind, text);
+        return;
+    }
+
+    struct txmsg *m = malloc(sizeof *m);
+    char         *copy = strdup(text);
+    if (!m || !copy) {
+        free(m);
+        free(copy);
+        return;
+    }
+    m->kind = kind;
+    m->text = copy;
+    m->next = NULL;
+
+    pthread_mutex_lock(&tx_lock);
+    if (tx_count >= TXQ_MAX) {
+        pthread_mutex_unlock(&tx_lock);
+        txmsg_free(m);
+        return;
+    }
+    if (tx_tail)
+        tx_tail->next = m;
+    else
+        tx_head = m;
+    tx_tail = m;
+    tx_count++;
+    pthread_cond_broadcast(&tx_cv);
+    pthread_mutex_unlock(&tx_lock);
+}
+
+/* The keyboard and edit calls need the reply, so they run on the caller's
+   thread with the queue drained and the lock held to keep the sender out. */
+static void tx_sync_begin(void)
+{
+    if (!sender_live)
+        return;
+    pthread_mutex_lock(&tx_lock);
+    while (tx_head || tx_inflight)
+        pthread_cond_wait(&tx_cv, &tx_lock);
+}
+
+static void tx_sync_end(void)
+{
+    if (sender_live)
+        pthread_mutex_unlock(&tx_lock);
+}
+
 static void send_markdown(const char *text)
 {
     if (!tx || !chat_id)
         return;
     if (!text || !*text) {
-        tg_send_message(tx, chat_id, "(done)");
+        tx_push(TX_TEXT, "(done)");
         return;
     }
     size_t n = 0;
     char **msgs = mdv2_messages(text, TG_LIMIT, &n);
     if (!msgs) {
-        tg_send_message(tx, chat_id, text);
+        tx_push(TX_TEXT, text);
         return;
     }
     for (size_t i = 0; i < n; i++) {
         if (msgs[i] && *msgs[i])
-            tg_send_message_md(tx, chat_id, msgs[i]);
+            tx_push(TX_MD, msgs[i]);
         free(msgs[i]);
     }
     free(msgs);
@@ -344,7 +490,7 @@ static void send_pre(const char *text)
     mdv2_esc_code(&b, text, strlen(text));
     mdv2_puts(&b, "\n```");
     if (b.p && b.n < TG_LIMIT)
-        tg_send_message_md(tx, chat_id, b.p);
+        tx_push(TX_MD, b.p);
     else
         send_markdown(text);
     free(b.p);
@@ -359,7 +505,7 @@ static void send_note(const char *text)
     mdv2_esc(&b, text, strlen(text));
     mdv2_putc(&b, '_');
     if (b.p)
-        tg_send_message_md(tx, chat_id, b.p);
+        tx_push(TX_MD, b.p);
     free(b.p);
 }
 
@@ -422,7 +568,9 @@ static void menu_send(const char *title, int per_row)
         buttons[i].data = data[i];
     }
 
+    tx_sync_begin();
     long id = tg_send_keyboard(tx, chat_id, title, 0, buttons, menu.count, per_row);
+    tx_sync_end();
     if (id < 0) {
         menu.serial = 0;
         send_note("could not show the menu");
@@ -466,7 +614,9 @@ static void menu_flush(void)
         return;
     long id = receipt.message_id;
     receipt.message_id = 0;
+    tx_sync_begin();
     tg_edit_message(tx, chat_id, id, receipt.label, 0, NULL, 0, 0);
+    tx_sync_end();
 }
 
 static void send_images(const char *text)
@@ -483,7 +633,7 @@ static void send_images(const char *text)
         char path[1024];
         snprintf(path, sizeof path, "%.*s", (int)(close - open), open);
         if (access(path, R_OK) == 0)
-            tg_send_photo(tx, chat_id, path, NULL);
+            tx_push(TX_PHOTO, path);
         p = close;
     }
 }
@@ -515,16 +665,7 @@ static void tool_label(char *dst, size_t size, const char *name)
 
 static const char *tool_arg(cJSON *in)
 {
-    static const char *const keys[] = {
-        "file_path", "notebook_path", "command", "pattern", "query", "url",
-        "skill", "description", "prompt", "path", "message", NULL
-    };
-    for (int i = 0; keys[i]; i++) {
-        const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(in, keys[i]));
-        if (v && *v)
-            return v;
-    }
-    return NULL;
+    return view_tool_arg_value(in);
 }
 
 static void tool_line(char *label, size_t ln, char *arg, size_t an,
@@ -591,7 +732,7 @@ static int send_edit_diff(const char *label, const char *path, cJSON *in)
     mdv2_puts(&b, "```");
     int ok = b.p && b.n < TG_LIMIT;
     if (ok)
-        tg_send_message_md(tx, chat_id, b.p);
+        tx_push(TX_MD, b.p);
     free(b.p);
     return ok;
 }
@@ -606,7 +747,7 @@ static void send_tool_line(const backend_event *ev)
         mdv2_esc_code(&b, raw, strlen(raw));
         mdv2_puts(&b, "\n```");
         if (b.p)
-            tg_send_message_md(tx, chat_id, b.p);
+            tx_push(TX_MD, b.p);
         free(b.p);
         return;
     }
@@ -631,7 +772,7 @@ static void send_tool_line(const backend_event *ev)
         mdv2_putc(&b, '`');
     }
     if (b.p)
-        tg_send_message_md(tx, chat_id, b.p);
+        tx_push(TX_MD, b.p);
     free(b.p);
 }
 
@@ -840,7 +981,7 @@ static void typing(void)
     if (now - last < 4)
         return;
     last = now;
-    tg_send_chat_action(tx, chat_id, "typing");
+    tx_push(TX_ACTION, "typing");
 }
 
 static void on_event(void *ud, const backend_event *ev)
@@ -1028,6 +1169,8 @@ static void artifacts_init(void)
     artifacts_token(token, sizeof token);
 
     server = httpd_start(art_dir, bind, port, token);
+    if (server)
+        fcntl(server->fd, F_SETFD, FD_CLOEXEC);
     if (!server) {
         note_up("no artifact server on %s:%d (port taken?)", bind, port);
         return;
@@ -1166,6 +1309,11 @@ static void fire_due_reminders(void)
 {
     for (int guard = 0; guard < 64; guard++) {
         char rem[2048];
+
+        /* popping rewrites the store, so a reminder the inbox would refuse has
+           to stay where it is until there is room for it */
+        if (!inbox_room())
+            break;
         if (!reminders_pop_due(time(NULL), rem, sizeof rem))
             break;
 
@@ -1188,7 +1336,12 @@ static void fire_due_reminders(void)
     }
 }
 
-static int poller_aborting(void) { return poller_stop; }
+static int poller_aborting(void)
+{
+    if (sender_live && pthread_equal(pthread_self(), sender))
+        return tx_abort;
+    return poller_stop;
+}
 
 static const char *ext_for(const tg_update *u)
 {
@@ -1218,10 +1371,10 @@ struct incoming {
 
 static void take_file(const tg_update *u, struct incoming *in)
 {
-    if (in->nfiles >= MAX_ATTACH)
+    if (in->nfiles >= MAX_ATTACH || !attach_dir[0])
         return;
     char path[600];
-    snprintf(path, sizeof path, "/tmp/" APP_NAME "_tg_%ld.%s", u->update_id, ext_for(u));
+    snprintf(path, sizeof path, "%s/%ld.%s", attach_dir, u->update_id, ext_for(u));
     if (tg_download_file(rx, u->file_id, path) != 0)
         return;
 
@@ -1421,6 +1574,18 @@ static int tab_from_payload(const char *payload)
         return at >= 0 && at < workspace_count() ? at : -1;
     }
     return workspace_find_id(payload);
+}
+
+static int bash_watch_fds(void *ud, int *out, int max)
+{
+    (void)ud;
+    return workspace_fds(out, max);
+}
+
+static void bash_watch_ready(void *ud)
+{
+    (void)ud;
+    workspace_drain();
 }
 
 static void send_here(void)
@@ -1742,7 +1907,9 @@ static void run_line(char *line, int quiet)
     }
 
     if (bash_is_command(line)) {
+        tty_watch(bash_watch_fds, bash_watch_ready, NULL);
         bash_run(line);
+        tty_watch(NULL, NULL, NULL);
         gitinfo_forget();
         char *context = bash_take_context();
         if (context) {
@@ -1838,6 +2005,14 @@ int tg_start(struct session *s)
     }
     fcntl(wake[0], F_SETFL, O_NONBLOCK);
     fcntl(wake[1], F_SETFL, O_NONBLOCK);
+    fcntl(wake[0], F_SETFD, FD_CLOEXEC);
+    fcntl(wake[1], F_SETFD, FD_CLOEXEC);
+
+    /* a private 0700 directory, so an attachment path cannot be pre-created as
+       a symlink by another user on the host */
+    snprintf(attach_dir, sizeof attach_dir, "/tmp/" APP_NAME "_tg_XXXXXX");
+    if (!mkdtemp(attach_dir))
+        attach_dir[0] = '\0';
 
     sess = s;
     artifacts_init();
@@ -1851,6 +2026,7 @@ int tg_start(struct session *s)
     restart_flag("--telegram");
     signal(SIGPIPE, SIG_IGN);
     running = 1;
+    sender_live = pthread_create(&sender, NULL, sender_thread, NULL) == 0;
     if (pthread_create(&poller, NULL, poller_thread, NULL) != 0) {
         fprintf(stderr, APP_NAME ": can't start the telegram poller\n");
         running = 0;
@@ -1878,6 +2054,32 @@ const char *tg_label(void)
     return running ? label : NULL;
 }
 
+#define TX_FLUSH_SECONDS 3
+
+static void sender_stop(void)
+{
+    if (!sender_live)
+        return;
+
+    struct timespec until;
+    clock_gettime(CLOCK_REALTIME, &until);
+    until.tv_sec += TX_FLUSH_SECONDS;
+
+    pthread_mutex_lock(&tx_lock);
+    tx_draining = 1;
+    pthread_cond_broadcast(&tx_cv);
+    while (!tx_done) {
+        if (pthread_cond_timedwait(&tx_cv, &tx_lock, &until) == ETIMEDOUT) {
+            tx_abort = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&tx_lock);
+
+    pthread_join(sender, NULL);
+    sender_live = 0;
+}
+
 void tg_stop(void)
 {
     if (!running)
@@ -1885,9 +2087,18 @@ void tg_stop(void)
     running = 0;
     poller_stop = 1;
     wake_up();
-    pthread_detach(poller);
+    pthread_join(poller, NULL);
+    sender_stop();
+
     httpd_close(server);
     server = NULL;
+    if (wake[0] >= 0)
+        close(wake[0]);
+    if (wake[1] >= 0)
+        close(wake[1]);
+    wake[0] = wake[1] = -1;
+    tg_free(rx);
+    tg_free(tx);
     rx = tx = NULL;
     free(last_said);
     last_said = NULL;

@@ -137,12 +137,6 @@ static const char *json_start(const char *reply)
     return brace ? brace : reply;
 }
 
-static void field(char *out, size_t cap, const cJSON *row, const char *key)
-{
-    const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(row, key));
-    snprintf(out, cap, "%s", v ? v : "");
-}
-
 static void keep_known_effort(struct mux_spec *m)
 {
     if (!*m->effort)
@@ -177,10 +171,10 @@ static int install_reply(const char *reply)
         if (n >= MUX_MAX)
             break;
         struct mux_spec m = {0};
-        field(m.backend, sizeof m.backend, row, "backend");
-        field(m.model, sizeof m.model, row, "model");
-        field(m.effort, sizeof m.effort, row, "effort");
-        field(m.prompt, sizeof m.prompt, row, "prompt");
+        muxcfg_field(m.backend, sizeof m.backend, row, "backend");
+        muxcfg_field(m.model, sizeof m.model, row, "model");
+        muxcfg_field(m.effort, sizeof m.effort, row, "effort");
+        muxcfg_field(m.prompt, sizeof m.prompt, row, "prompt");
         if (!strcmp(m.model, "default"))
             m.model[0] = '\0';
         keep_known_effort(&m);

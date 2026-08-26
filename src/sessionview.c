@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "app.h"
 #include "filediff.h"
 #include "highlight.h"
 #include "scrollback.h"
@@ -13,8 +14,6 @@
 #include "vendor/cJSON.h"
 
 #define TOOL_INDENT 2
-
-#define COUNT(a) (sizeof (a) / sizeof *(a))
 
 /* KEEP_CLUSTER is only ever loaded: it is the pre-merge form of a row of
    calls, kept so a scrollback written before the merge moved into the render
@@ -369,16 +368,29 @@ void view_collapse(int on)
     viewport_paint();
 }
 
+/* One order for every front end: the command is the whole of a shell call, so
+   it wins over a path a wrapper carries alongside it; paths come next, and the
+   free-text keys are the last resort. */
 static const struct {
     const char *key;
     int         is_path;
 } TOOL_ARG_KEYS[] = {
-    {"command", 0},          {"file_path", 1}, {"target_file", 1},
-    {"path", 1},             {"target_directory", 0},
-    {"pattern", 0},          {"url", 0},       {"query", 0},
-    {"prompt", 0},           {"description", 0},
-    {"notebook_path", 1},
+    {"command", 0},       {"file_path", 1},        {"target_file", 1},
+    {"notebook_path", 1}, {"path", 1},             {"target_directory", 0},
+    {"pattern", 0},       {"url", 0},              {"query", 0},
+    {"skill", 0},         {"prompt", 0},           {"description", 0},
+    {"message", 0},
 };
+
+const char *view_tool_arg_value(const cJSON *input)
+{
+    for (int i = 0; i < COUNT(TOOL_ARG_KEYS); i++) {
+        const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(input, TOOL_ARG_KEYS[i].key));
+        if (v && *v)
+            return v;
+    }
+    return NULL;
+}
 
 static const char *shorten_path(const char *cwd, const char *value, char *scratch,
                                 size_t size)
@@ -408,15 +420,10 @@ void view_tool_argument(const backend_event *ev, const char *cwd, char *out, siz
     if (ev->input_json) {
         cJSON *input = cJSON_Parse(ev->input_json);
         if (input) {
-            for (size_t i = 0; i < COUNT(TOOL_ARG_KEYS); i++) {
-                const char *v =
-                    cJSON_GetStringValue(cJSON_GetObjectItem(input, TOOL_ARG_KEYS[i].key));
-                if (v && *v) {
-                    char scratch[1024];
-                    text_block(shorten_path(cwd, v, scratch, sizeof scratch), arg,
-                               sizeof arg);
-                    break;
-                }
+            const char *v = view_tool_arg_value(input);
+            if (v) {
+                char scratch[1024];
+                text_block(shorten_path(cwd, v, scratch, sizeof scratch), arg, sizeof arg);
             }
             cJSON_Delete(input);
         }
@@ -436,7 +443,7 @@ int view_tool_path(const char *input_json, const char *cwd, char *out, size_t si
         return 0;
 
     const char *found = NULL;
-    for (size_t i = 0; i < COUNT(TOOL_ARG_KEYS) && !found; i++) {
+    for (int i = 0; i < COUNT(TOOL_ARG_KEYS) && !found; i++) {
         if (!TOOL_ARG_KEYS[i].is_path)
             continue;
         const char *v =

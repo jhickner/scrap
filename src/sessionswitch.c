@@ -476,11 +476,7 @@ static int relist(void *ud)
                 break;
             }
         if (r->at >= 0) {
-            char label[sizeof r->label];
-            snprintf(label, sizeof label, "%s", r->label);
             fill_live(r, &fresh[r->at]);
-
-            snprintf(r->label, sizeof r->label, "%s", label);
         } else {
             r->spin = 0;
             r->mark[0] = '\0';

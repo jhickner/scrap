@@ -120,10 +120,17 @@ const struct board_pipeline *boardcfg_pipeline(const char *name);
 
 int boardcfg_pipelines(const char **out, int max);
 
-/* the action, with the model and effort the backend and tier ask for */
-const struct board_action *boardcfg_for_backend(const char *name,
-                                                const char *backend,
-                                                const char *tier);
+/* the action, with the model and effort the backend and tier ask for, into
+   storage the caller owns */
+int boardcfg_for_backend(const char *name, const char *backend,
+                         const char *tier, struct board_action *out);
+
+/* the models the backend's tiers run on, as one line */
+void boardcfg_levels_line(const struct board_backend *b, char *out, size_t size);
+
+/* the picker over the backends, standing on the one serving now. It is UI, so
+   it lives in boardcfgui.c. */
+int boardcfg_pick_serving(const struct board_cfg *c, char *out, size_t size);
 
 #define BOARDCFG_ARGV_MAX 9
 

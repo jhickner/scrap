@@ -79,6 +79,9 @@ int board_cmp(const struct board_card *a, const struct board_card *b);
 
 const char *board_path(void);
 
+/* the file a card keeps under a directory of its own, named by its id */
+int board_md_path(const char *dir, const char *id, char *out, size_t size);
+
 int  board_load(struct board_card **out);
 
 unsigned long board_revision(void);
@@ -95,6 +98,9 @@ void board_title_of(const char *text, char *out, size_t size);
 void board_branch(const char *id, char *out, size_t size);
 
 int board_update(const struct board_card *card);
+
+/* the session id the card's worker reports, without touching the rest */
+int board_set_session(const char *id, const char *session);
 
 int board_pin(const char *id, const char *backend, const char *tier);
 

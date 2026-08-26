@@ -15,6 +15,9 @@ struct turnview {
 
 void view_tool_argument(const backend_event *ev, const char *cwd, char *out, size_t size);
 
+/* the one argument that stands for a tool call, by the key order above */
+const char *view_tool_arg_value(const cJSON *input);
+
 int  view_tool_path(const char *input_json, const char *cwd, char *out, size_t size);
 
 void view_activity(const char *marker, const char *text, enum ui_role role);

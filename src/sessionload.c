@@ -20,12 +20,6 @@
 #define TURNS_MAX  400
 #define LINE_MAX   (4 << 20)
 
-int sessionload_available(const char *backend)
-{
-    return backend && (!strcmp(backend, "claude") || !strcmp(backend, "grok") ||
-                       !strcmp(backend, "pi"));
-}
-
 static int is_file(const char *path)
 {
     struct stat st;
@@ -57,7 +51,7 @@ int sessionload_path(const char *backend, const char *cwd, const char *id,
                      char *out, size_t size)
 {
     char dir[2048];
-    if (!id || !*id || strchr(id, '/') || !sessionload_available(backend))
+    if (!id || !*id || strchr(id, '/') || !sessionlist_available(backend))
         return 0;
     if (!sessionlist_dir(backend, cwd, dir, sizeof dir))
         return 0;
@@ -214,30 +208,33 @@ static int draw_message(enum role role, const cJSON *content, const char *cwd,
     return drew;
 }
 
-static int count_turns(const char *path)
+/* counts the turns in the file and reports where the last TURNS_MAX of them
+   start, so the replay reads the tail rather than the whole file again */
+static int count_turns(FILE *f, long *from)
 {
-    FILE *f = fopen(path, "r");
-    if (!f)
-        return 0;
-
     char   *line = NULL;
     size_t  cap = 0;
     ssize_t n;
     int     turns = 0;
+    long    at[TURNS_MAX];
+    long    here = ftell(f);
 
     while ((n = getline(&line, &cap, f)) > 0) {
-        if (n > LINE_MAX)
-            continue;
-        cJSON *ev = cJSON_ParseWithLength(line, (size_t)n);
-        if (!ev)
-            continue;
-        const cJSON *content = NULL;
-        if (line_message(ev, &content) != ROLE_NONE)
-            turns++;
-        cJSON_Delete(ev);
+        long next = ftell(f);
+        if (n <= LINE_MAX) {
+            cJSON *ev = cJSON_ParseWithLength(line, (size_t)n);
+            if (ev) {
+                const cJSON *content = NULL;
+                if (line_message(ev, &content) != ROLE_NONE)
+                    at[turns++ % TURNS_MAX] = here;
+                cJSON_Delete(ev);
+            }
+        }
+        here = next;
     }
     free(line);
-    fclose(f);
+
+    *from = turns > TURNS_MAX ? at[(turns - TURNS_MAX) % TURNS_MAX] : 0;
     return turns;
 }
 
@@ -257,12 +254,17 @@ int sessionload_replay(const char *backend, const char *cwd, const char *id,
     if (!sessionload_path(backend, cwd, id, path, sizeof path))
         return 0;
 
-    int turns = count_turns(path);
-    int skip = turns > TURNS_MAX ? turns - TURNS_MAX : 0;
-
     FILE *f = fopen(path, "r");
     if (!f)
         return 0;
+
+    long from = 0;
+    int  turns = count_turns(f, &from);
+    int  skip = turns > TURNS_MAX ? turns - TURNS_MAX : 0;
+    if (fseek(f, from, SEEK_SET) != 0) {
+        fclose(f);
+        return 0;
+    }
 
     if (skip) {
         viewport_item_begin(VIEWPORT_ROWS(1, 1));
@@ -273,7 +275,7 @@ int sessionload_replay(const char *backend, const char *cwd, const char *id,
     char   *line = NULL;
     size_t  cap = 0;
     ssize_t n;
-    int     seen = 0, drawn = 0;
+    int     drawn = 0;
 
     while ((n = getline(&line, &cap, f)) > 0) {
         if (n > LINE_MAX)
@@ -284,7 +286,7 @@ int sessionload_replay(const char *backend, const char *cwd, const char *id,
 
         const cJSON *content = NULL;
         enum role role = line_message(ev, &content);
-        if (role != ROLE_NONE && seen++ >= skip)
+        if (role != ROLE_NONE)
             drawn += draw_message(role, content, cwd, thinking);
         cJSON_Delete(ev);
     }

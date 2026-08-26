@@ -55,6 +55,10 @@
 
 #define BOARD_RECENT_INDENT 6
 
+/* the archive sweep reads the whole store under an exclusive lock, so it runs
+   on entry and then at this interval, not on every tick */
+#define BOARD_ARCHIVE_EVERY 300.0
+
 
 struct vrow {
     char          id[BOARD_ID_MAX];
@@ -658,34 +662,10 @@ static void do_new(const char *cwd, char *sel_id)
 
 static void do_serve(char *notice, size_t size)
 {
-    const struct board_cfg *cfg = boardcfg();
-
-    struct pick_item items[BOARD_BACKENDS_MAX];
-    char             details[BOARD_BACKENDS_MAX][160];
-    int              at = 0;
-
-    for (int i = 0; i < cfg->backends_n; i++) {
-        const struct board_backend *b = &cfg->backends[i];
-        size_t                      used = 0;
-        details[i][0] = '\0';
-        for (int t = 0; t < BOARD_TIERS; t++)
-            used += (size_t)snprintf(details[i] + used, sizeof details[i] - used,
-                                     "%s%s", t ? " · " : "",
-                                     b->level[t].model[0] ? b->level[t].model
-                                                          : "default");
-        items[i] = (struct pick_item){b->name, details[i]};
-        if (!strcmp(b->name, boardcfg_serving()))
-            at = i;
-    }
-    if (!cfg->backends_n)
-        return;
-
-    int chosen = pick_run("serving the board", items, cfg->backends_n, at);
-    if (chosen < 0)
-        return;
-
     char name[32];
-    snprintf(name, sizeof name, "%s", cfg->backends[chosen].name);
+    if (!boardcfg_pick_serving(boardcfg(), name, sizeof name))
+        return;
+
     if (!boardcfg_set_serving(name)) {
         snprintf(notice, size, "could not switch to %s", name);
         return;
@@ -694,13 +674,14 @@ static void do_serve(char *notice, size_t size)
     int waiting = 0;
     int moved = boardwork_serve(&waiting);
 
-    size_t used = (size_t)snprintf(notice, size, "serving %s", name);
+    size_t used = 0;
+    text_appendf(notice, size, &used, "serving %s", name);
     if (moved)
-        used += (size_t)snprintf(notice + used, size - used,
-                                 " · %d worker%s switched", moved,
-                                 moved == 1 ? "" : "s");
+        text_appendf(notice, size, &used, " · %d worker%s switched", moved,
+                     moved == 1 ? "" : "s");
     if (waiting)
-        snprintf(notice + used, size - used, " · %d after their current card", waiting);
+        text_appendf(notice, size, &used, " · %d after their current card",
+                     waiting);
 }
 
 enum { ASK_NONE, ASK_CLOSE, ASK_CLOSE_ALL, ASK_DELETE };
@@ -1047,28 +1028,6 @@ int boardview_close(const char *id, char *why, int size)
     return ok;
 }
 
-/* "implement, merge" -> the actions it names, in order. Eats its argument. */
-static int names_of(char *spec, const char **out, int max)
-{
-    int n = 0;
-    for (char *at = spec; *at && n < max;) {
-        while (*at == ' ' || *at == ',')
-            at++;
-        char *start = at;
-        while (*at && *at != ',')
-            at++;
-        char *end = at;
-        if (*at)
-            at++;
-        while (end > start && end[-1] == ' ')
-            end--;
-        *end = '\0';
-        if (*start)
-            out[n++] = start;
-    }
-    return n;
-}
-
 static void offered_of(const struct board_card *c, char *out, size_t size)
 {
     const char *offered[BOARD_ACTIONS_MAX];
@@ -1078,10 +1037,10 @@ static void offered_of(const struct board_card *c, char *out, size_t size)
         return;
     }
 
-    size_t at = (size_t)snprintf(out, size, "run one of:");
-    for (int i = 0; i < n && at < size; i++)
-        at += (size_t)snprintf(out + at, size - at, "%s %s", i ? "," : "",
-                               offered[i]);
+    size_t at = 0;
+    text_appendf(out, size, &at, "run one of:");
+    for (int i = 0; i < n; i++)
+        text_appendf(out, size, &at, "%s %s", i ? "," : "", offered[i]);
 }
 
 int boardview_trigger(const char *id, const char *spec, char *why, int size)
@@ -1096,11 +1055,15 @@ int boardview_trigger(const char *id, const char *spec, char *why, int size)
     } else if (!spec || !*spec) {
         offered_of(c, why, (size_t)size);
     } else {
-        char        copy[256];
-        const char *names[BOARD_QUEUE];
-        snprintf(copy, sizeof copy, "%s", spec);
-        int k = names_of(copy, names, BOARD_QUEUE);
-        ok = boardflow_trigger(c, names, k, why, (size_t)size);
+        char *copy = strdup(spec);
+        if (!copy) {
+            snprintf(why, (size_t)size, "out of memory");
+        } else {
+            const char *names[BOARD_QUEUE];
+            int         k = text_split_commas(copy, names, BOARD_QUEUE);
+            ok = boardflow_trigger(c, names, k, why, (size_t)size);
+            free(copy);
+        }
     }
 
     board_free(cards, n);
@@ -1152,6 +1115,7 @@ static int board_loop(const char *cwd)
     char                 ask[280] = {0};
     int                  asking = ASK_NONE;
     static int           been_here;
+    static double        archived_at;
 
     if (!been_here) {
         snprintf(filter, sizeof filter, "%s", here);
@@ -1162,9 +1126,13 @@ static int board_loop(const char *cwd)
         struct board_card *cards = NULL;
         int                n = board_load(&cards);
 
-        if (board_archive(boardcfg()->archive_after)) {
-            board_free(cards, n);
-            n = board_load(&cards);
+        double when = now_seconds();
+        if (when - archived_at >= BOARD_ARCHIVE_EVERY) {
+            archived_at = when;
+            if (board_archive(boardcfg()->archive_after)) {
+                board_free(cards, n);
+                n = board_load(&cards);
+            }
         }
 
         shown_rev = board_revision();

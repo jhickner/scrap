@@ -106,16 +106,16 @@ static void build_stages(const struct board_card *c, struct notes *notes)
     size_t at = 0;
     line[0] = '\0';
 
-    for (int i = 0; i < c->done_n && at < sizeof line; i++)
-        at += (size_t)snprintf(line + at, sizeof line - at,
-                               at ? "  **\xe2\x9c\x93 %s**" : "**\xe2\x9c\x93 %s**",
-                               c->done[i]);
+    for (int i = 0; i < c->done_n; i++)
+        text_appendf(line, sizeof line, &at,
+                     at ? "  **\xe2\x9c\x93 %s**" : "**\xe2\x9c\x93 %s**",
+                     c->done[i]);
 
-    for (int i = 0; i < c->queue_n && at < sizeof line; i++)
-        at += (size_t)snprintf(line + at, sizeof line - at,
-                               i ? (at ? "  \xe2\x97\x8b %s" : "\xe2\x97\x8b %s")
-                                 : (at ? "  **\xe2\x96\xb8 %s**" : "**\xe2\x96\xb8 %s**"),
-                               c->queue[i]);
+    for (int i = 0; i < c->queue_n; i++)
+        text_appendf(line, sizeof line, &at,
+                     i ? (at ? "  \xe2\x97\x8b %s" : "\xe2\x97\x8b %s")
+                       : (at ? "  **\xe2\x96\xb8 %s**" : "**\xe2\x96\xb8 %s**"),
+                     c->queue[i]);
 
     if (at)
         note_labelled(notes, "flow", text_dsprintf("%s", line));

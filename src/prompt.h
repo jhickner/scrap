@@ -41,7 +41,6 @@ void prompt_paint_queued(struct prompt *p, int room);
 void prompt_set_queued_source(struct prompt *p, int (*count)(void *ud),
                               const char *(*at)(void *ud, int i),
                               char *(*take_last)(void *ud), void *ud);
-int  prompt_busy(struct prompt *p);
 
 void prompt_set_replay(struct prompt *p, void (*fn)(void *ud), void *ud);
 
@@ -52,7 +51,6 @@ void prompt_set_live_command(struct prompt *p, prompt_live_fn fn, void *ud);
 
 void prompt_set_echo_filter(struct prompt *p, int (*fn)(void *ud, const char *line),
                             void *ud);
-int  prompt_echoes(struct prompt *p, const char *line);
 
 void prompt_set_takeover(struct prompt *p, int (*pending)(void *ud), void (*run)(void *ud),
                          void *ud);

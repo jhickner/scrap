@@ -11,11 +11,25 @@
 #include "boardfile.h"
 #include "boardlog.h"
 #include "gitcmd.h"
+#include "mdcfg.h"
 #include "text.h"
 #include "vendor/cJSON.h"
 
 #define BOARD_MAX_BYTES (1u << 24)
 #define BOARD_PATH_MAX  4300
+
+/* the alphabet a card id is minted from */
+static const char ID_ALPHABET[] = "0123456789abcdefghijkmnpqrstuvwxyz";
+
+static int id_ok(const char *id)
+{
+    if (!id || !*id)
+        return 0;
+    for (const char *p = id; *p; p++)
+        if (!strchr(ID_ALPHABET, *p))
+            return 0;
+    return 1;
+}
 
 static void set_str(char *dst, size_t n, const char *src)
 {
@@ -87,6 +101,14 @@ const char *board_path(void)
     if (!path[0] && !path_config_file(path, sizeof path, "board.jsonl"))
         snprintf(path, sizeof path, "/tmp/board.jsonl");
     return path;
+}
+
+int board_md_path(const char *dir, const char *id, char *out, size_t size)
+{
+    char at[4096];
+    if (!id_ok(id) || !mdcfg_dir(at, sizeof at, dir))
+        return 0;
+    return (size_t)snprintf(out, size, "%s/%s.md", at, id) < size;
 }
 
 static int sidecar_path(char *out, size_t n, const char *suffix)
@@ -235,7 +257,9 @@ static int card_from_json(const cJSON *o, struct board_card *c)
 {
     memset(c, 0, sizeof *c);
     set_str(c->id, sizeof c->id, json_str(o, "id"));
-    if (!c->id[0])
+    /* an id reaches git and the shell: it is what the board minted, or the
+       line is not a card */
+    if (!id_ok(c->id))
         return 0;
 
     c->closed = closed_from_json(o);
@@ -456,7 +480,6 @@ int board_load(struct board_card **out)
 
 static void mint_id(const struct board_card *v, int n, char out[BOARD_ID_MAX])
 {
-    static const char ALPHABET[] = "0123456789abcdefghijkmnpqrstuvwxyz";
     static unsigned long minted;
     unsigned long        seed = (unsigned long)time(NULL) * 1099511628211UL ^
                                 (unsigned long)getpid() ^
@@ -466,8 +489,8 @@ static void mint_id(const struct board_card *v, int n, char out[BOARD_ID_MAX])
         seed = seed * 6364136223846793005UL + 1442695040888963407UL;
         unsigned long x = seed >> 17;
         for (int i = 0; i < 4; i++) {
-            out[i] = ALPHABET[x % (sizeof ALPHABET - 1)];
-            x /= (sizeof ALPHABET - 1);
+            out[i] = ID_ALPHABET[x % (sizeof ID_ALPHABET - 1)];
+            x /= (sizeof ID_ALPHABET - 1);
         }
         out[4] = '\0';
 
@@ -512,6 +535,8 @@ int board_add(const char *text, const char *cwd, char id_out[BOARD_ID_MAX])
         set_str(where, sizeof where, from);
 
     int lock = store_lock(LOCK_EX);
+    if (lock < 0)
+        return 0;
 
     struct board_card *v = NULL;
     int                n = load_locked(&v);
@@ -550,6 +575,8 @@ static int with_card(const char *id, int (*fn)(struct board_card *c, void *ud), 
         return 0;
 
     int lock = store_lock(LOCK_EX);
+    if (lock < 0)
+        return 0;
 
     struct board_card *v = NULL;
     int                n = load_locked(&v);
@@ -576,6 +603,25 @@ int board_update(const struct board_card *card)
     if (!card)
         return 0;
     return with_card(card->id, apply_update, (void *)card);
+}
+
+struct session_args {
+    const char *session;
+};
+
+static int apply_session(struct board_card *c, void *ud)
+{
+    const struct session_args *a = ud;
+    if (!strcmp(c->session, a->session))
+        return 0;
+    set_str(c->session, sizeof c->session, a->session);
+    return 1;
+}
+
+int board_set_session(const char *id, const char *session)
+{
+    struct session_args a = {session ? session : ""};
+    return with_card(id, apply_session, &a);
 }
 
 struct pin_args {
@@ -678,10 +724,10 @@ int board_queued(const char *id, const char *const *actions, int n)
         return 0;
 
     char said[512];
-    size_t at = (size_t)snprintf(said, sizeof said, "queued");
-    for (int i = 0; i < n && at < sizeof said; i++)
-        at += (size_t)snprintf(said + at, sizeof said - at, "%s %s",
-                               i ? "," : "", actions[i]);
+    size_t at = 0;
+    text_appendf(said, sizeof said, &at, "queued");
+    for (int i = 0; i < n; i++)
+        text_appendf(said, sizeof said, &at, "%s %s", i ? "," : "", actions[i]);
     boardlog_note(id, "you", n ? said : "queue cleared");
     return 1;
 }
@@ -744,56 +790,98 @@ static const char *archive_path(void)
     return p;
 }
 
+/* The closed cards go into the archive as one file: a run that fails part way
+   through leaves both the archive and the store as they were. */
+static int archive_write(struct board_card *const *moved, int n)
+{
+    char tmp[BOARD_PATH_MAX];
+    if ((size_t)snprintf(tmp, sizeof tmp, "%s.tmp", archive_path()) >= sizeof tmp)
+        return 0;
+
+    FILE *out = fopen(tmp, "wb");
+    if (!out)
+        return 0;
+
+    int ok = 1;
+
+    FILE *have = fopen(archive_path(), "rb");
+    if (have) {
+        char   buf[8192];
+        size_t k;
+        while (ok && (k = fread(buf, 1, sizeof buf, have)) > 0)
+            ok = fwrite(buf, 1, k, out) == k;
+        if (ferror(have))
+            ok = 0;
+        fclose(have);
+    }
+
+    for (int i = 0; i < n && ok; i++) {
+        cJSON *o = card_to_json(moved[i]);
+        char  *text = o ? cJSON_PrintUnformatted(o) : NULL;
+        cJSON_Delete(o);
+        ok = text && fprintf(out, "%s\n", text) > 0;
+        free(text);
+    }
+
+    if (fclose(out) != 0)
+        ok = 0;
+    if (ok)
+        ok = rename(tmp, archive_path()) == 0;
+    if (!ok)
+        unlink(tmp);
+    return ok;
+}
+
 int board_archive(int days)
 {
     if (days <= 0)
         return 0;
 
     int lock = store_lock(LOCK_EX);
+    if (lock < 0)
+        return 0;
 
     struct board_card *v = NULL;
     int                n = load_locked(&v);
 
     time_t cutoff = time(NULL) - (time_t)days * 24 * 3600;
-    int    moved = 0;
 
-    FILE *out = NULL;
-    for (int i = 0; i < n; i++) {
-        if (!v[i].closed)
-            continue;
-        time_t when = stamped(&v[i]);
-        if (when > cutoff)
-            continue;
+    struct board_card **old = n > 0 ? calloc((size_t)n, sizeof *old) : NULL;
+    char(*ids)[BOARD_ID_MAX] = n > 0 ? calloc((size_t)n, BOARD_ID_MAX) : NULL;
+    int moved = 0;
 
-        if (!out && !(out = fopen(archive_path(), "ab")))
-            break;
+    if (old && ids)
+        for (int i = 0; i < n; i++) {
+            if (!v[i].closed || stamped(&v[i]) > cutoff)
+                continue;
+            set_str(ids[moved], BOARD_ID_MAX, v[i].id);
+            old[moved++] = &v[i];
+        }
 
-        cJSON *o = card_to_json(&v[i]);
-        char  *text = o ? cJSON_PrintUnformatted(o) : NULL;
-        cJSON_Delete(o);
-        if (!text)
-            continue;
-        int wrote = fprintf(out, "%s\n", text) > 0;
-        free(text);
-        if (!wrote)
-            break;
-
-        boardfile_drop(v[i].id);
-        card_wipe(&v[i]);
-        memmove(&v[i], &v[i + 1], (size_t)(n - i - 1) * sizeof *v);
-        n--;
-        i--;
-        moved++;
+    int done = 0;
+    if (moved && archive_write(old, moved)) {
+        int w = 0;
+        for (int i = 0, k = 0; i < n; i++) {
+            if (k < moved && old[k] == &v[i]) {
+                card_wipe(&v[i]);
+                k++;
+                continue;
+            }
+            v[w++] = v[i];
+        }
+        n = w;
+        done = save_locked(v, n) ? moved : 0;
     }
 
-    if (out && fclose(out) != 0)
-        moved = 0;
-    if (moved)
-        moved = save_locked(v, n) ? moved : 0;
+    /* the card's file goes only once the store no longer names the card */
+    for (int i = 0; i < done; i++)
+        boardfile_drop(ids[i]);
 
+    free(old);
+    free(ids);
     board_free(v, n);
     store_unlock(lock);
-    return moved;
+    return done;
 }
 
 int board_remove(const char *id)
@@ -804,6 +892,8 @@ int board_remove(const char *id)
     boardlog_remove(id);
 
     int lock = store_lock(LOCK_EX);
+    if (lock < 0)
+        return 0;
 
     struct board_card *v = NULL;
     int                n = load_locked(&v);

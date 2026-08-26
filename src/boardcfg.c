@@ -191,25 +191,17 @@ static const char *default_name(const char *path, const char *leaf, char *out,
 /* "implement, merge" -> the names it lists, trimmed */
 static int names_of(const char *list, char out[][BOARD_STEP_NAME], int max)
 {
-    char copy[256];
-    snprintf(copy, sizeof copy, "%s", list ? list : "");
+    char *copy = strdup(list ? list : "");
+    if (!copy)
+        return 0;
 
-    int n = 0;
-    for (char *p = copy; *p && n < max;) {
-        while (*p == ' ' || *p == ',')
-            p++;
-        char *start = p;
-        while (*p && *p != ',')
-            p++;
-        char *end = p;
-        while (end > start && end[-1] == ' ')
-            end--;
-        char kept = *end;
-        *end = '\0';
-        if (*start)
-            snprintf(out[n++], BOARD_STEP_NAME, "%s", start);
-        *end = kept;
-    }
+    const char *parts[BOARD_PIPELINE_LONG];
+    int         cap = (int)(sizeof parts / sizeof *parts);
+    int         n = text_split_commas(copy, parts, max < cap ? max : cap);
+    for (int i = 0; i < n; i++)
+        snprintf(out[i], BOARD_STEP_NAME, "%s", parts[i]);
+
+    free(copy);
     return n;
 }
 
@@ -486,10 +478,10 @@ int boardcfg_missing(char *out, size_t size)
 
     char   who[128] = "";
     size_t at = 0;
-    for (int i = 0; i < cache.actions_n && at < sizeof who - 1; i++)
+    for (int i = 0; i < cache.actions_n; i++)
         if (!cache.actions[i].prompt || !*cache.actions[i].prompt)
-            at += (size_t)snprintf(who + at, sizeof who - at, "%s%s",
-                                   at ? ", " : "", cache.actions[i].name);
+            text_appendf(who, sizeof who, &at, "%s%s", at ? ", " : "",
+                         cache.actions[i].name);
     if (at) {
         snprintf(out, size, "nothing to run: %s", who);
         return 1;
@@ -557,35 +549,44 @@ int boardcfg_pipelines(const char **out, int max)
     return n;
 }
 
-const struct board_action *boardcfg_for_backend(const char *name_of,
-                                                const char *backend,
-                                                const char *tier)
+int boardcfg_for_backend(const char *name_of, const char *backend,
+                         const char *tier, struct board_action *out)
 {
-    static struct board_action out;
-
     const struct board_action *p = boardcfg_action(name_of);
-    if (!p)
-        return NULL;
+    if (!p || !out)
+        return 0;
+
+    *out = *p;
 
     int named = backend && *backend && strcmp(backend, cache.serving);
     int levelled = tier && *tier && strcmp(tier, p->tier);
     if (!named && !levelled)
-        return p;
+        return 1;
 
     const char *name = named ? backend
                              : (cache.serving[0] ? cache.serving : "claude");
     const struct board_backend *b = backend_of(&cache, name);
     if (!b)
-        return p;
+        return 1;
 
     enum board_tier at = tier_or_med(levelled ? tier : p->tier);
 
-    out = *p;
-    snprintf(out.backend, sizeof out.backend, "%s", name);
-    snprintf(out.tier, sizeof out.tier, "%s", boardcfg_tier_name(at));
-    snprintf(out.model, sizeof out.model, "%s", b->level[at].model);
-    snprintf(out.effort, sizeof out.effort, "%s", b->level[at].effort);
-    return &out;
+    snprintf(out->backend, sizeof out->backend, "%s", name);
+    snprintf(out->tier, sizeof out->tier, "%s", boardcfg_tier_name(at));
+    snprintf(out->model, sizeof out->model, "%s", b->level[at].model);
+    snprintf(out->effort, sizeof out->effort, "%s", b->level[at].effort);
+    return 1;
+}
+
+void boardcfg_levels_line(const struct board_backend *b, char *out, size_t size)
+{
+    size_t at = 0;
+    if (!size)
+        return;
+    out[0] = '\0';
+    for (int t = 0; t < BOARD_TIERS; t++)
+        text_appendf(out, size, &at, "%s%s", t ? " \xc2\xb7 " : "",
+                     b->level[t].model[0] ? b->level[t].model : "default");
 }
 
 static int argv_pair(char **out, int n, int max, const char *flag, const char *value)

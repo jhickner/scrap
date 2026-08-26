@@ -100,6 +100,9 @@ int paste_image(char *out, size_t size)
 
 #define CHUNK 4096
 
+/* the same ceiling tty.c holds a bracketed paste to */
+#define PASTE_MAX (8u << 20)
+
 char *paste_text(void)
 {
 #ifndef __APPLE__
@@ -111,9 +114,12 @@ char *paste_text(void)
 
     char  *buf = NULL;
     size_t len = 0, cap = 0;
-    for (;;) {
-        if (len + CHUNK + 1 > cap) {
+    while (len < PASTE_MAX) {
+        size_t room = PASTE_MAX - len < CHUNK ? PASTE_MAX - len : CHUNK;
+        if (len + room + 1 > cap) {
             size_t want = cap ? cap * 2 : CHUNK * 2 + 1;
+            if (want > PASTE_MAX + 1)
+                want = PASTE_MAX + 1;
             char  *grown = realloc(buf, want);
             if (!grown) {
                 free(buf);
@@ -123,9 +129,9 @@ char *paste_text(void)
             buf = grown;
             cap = want;
         }
-        size_t n = fread(buf + len, 1, CHUNK, f);
+        size_t n = fread(buf + len, 1, room, f);
         len += n;
-        if (n < CHUNK)
+        if (n < room)
             break;
     }
     pclose(f);

@@ -153,6 +153,13 @@ void title_request(const char *id, const char *backend, const char *model,
                 if (null > STDERR_FILENO)
                     close(null);
             }
+
+            /* the helper never execs, so without this it would hold the whole
+               inherited fd table -- listening socket, session pipes, pty
+               masters -- for the length of an LLM call */
+            for (int fd = getdtablesize() - 1; fd > STDERR_FILENO; fd--)
+                close(fd);
+
             ask_and_cache(id, backend, model, cwd, prompt, reply);
         }
         _exit(0);

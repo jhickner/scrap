@@ -1,8 +1,8 @@
-
 #ifndef EDIT_H
 #define EDIT_H
 
-char *edit_run(const char *initial, const char *suffix);
+/* the ceiling on an $EDITOR round trip */
+#define EDIT_MAX_BYTES (1u << 22)
 
 int edit_open(const char *path);
 

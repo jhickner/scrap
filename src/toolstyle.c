@@ -125,6 +125,8 @@ static int has_disqualifier(const char *command)
     return 0;
 }
 
+/* 0 at the end of the segment, 1 for a word, -1 for a word too long for out:
+   a partial token cannot be classified, so every caller has to fail closed. */
 static int take_word(const char **cursor, const char *end, char *out, size_t size)
 {
     const char *p = *cursor;
@@ -136,6 +138,7 @@ static int take_word(const char **cursor, const char *end, char *out, size_t siz
     }
 
     size_t n = 0;
+    int    cut = 0;
     char   quote = 0;
     for (; p < end; p++) {
         char c = *p;
@@ -155,18 +158,23 @@ static int take_word(const char **cursor, const char *end, char *out, size_t siz
         }
         if (n + 1 < size)
             out[n++] = c;
+        else
+            cut = 1;
     }
     out[n] = '\0';
     *cursor = p;
-    return 1;
+    return cut ? -1 : 1;
 }
 
+/* -1 when a word was truncated: the count cannot be trusted. */
 static int count_operands(const char *values, const char *cursor, const char *end)
 {
     char word[512];
-    int  operands = 0, want_value = 0;
+    int  operands = 0, want_value = 0, got;
 
-    while (take_word(&cursor, end, word, sizeof word)) {
+    while ((got = take_word(&cursor, end, word, sizeof word)) != 0) {
+        if (got < 0)
+            return -1;
         if (want_value) {
             want_value = 0;
             continue;
@@ -219,7 +227,10 @@ static int command_writes(const char *name, const char *cursor, const char *end)
         return 0;
 
     char word[512];
-    while (take_word(&cursor, end, word, sizeof word)) {
+    int  got;
+    while ((got = take_word(&cursor, end, word, sizeof word)) != 0) {
+        if (got < 0)
+            return 1;
         if (search && is_mutating_search_option(word))
             return 1;
         if ((sed || awk) && strchr(word, '>'))
@@ -247,20 +258,23 @@ static enum segment_class classify_segment(const char *segment, const char *end)
 {
     char        word[512];
     const char *cursor = segment;
-    if (!take_word(&cursor, end, word, sizeof word))
+    int         got = take_word(&cursor, end, word, sizeof word);
+    if (got < 0)
+        return SEGMENT_UNKNOWN;
+    if (!got)
         return SEGMENT_STAGE;
 
     if (same_word(word, "git")) {
         char sub[512];
         for (;;) {
-            if (!take_word(&cursor, end, sub, sizeof sub))
+            if (take_word(&cursor, end, sub, sizeof sub) <= 0)
                 return SEGMENT_UNKNOWN;
             if (sub[0] != '-')
                 break;
 
             if (!strcmp(sub, "-C") || !strcmp(sub, "-c") || !strcmp(sub, "--git-dir") ||
                 !strcmp(sub, "--work-tree") || !strcmp(sub, "--namespace"))
-                if (!take_word(&cursor, end, sub, sizeof sub))
+                if (take_word(&cursor, end, sub, sizeof sub) <= 0)
                     return SEGMENT_UNKNOWN;
         }
         return in_list(GIT_READERS, COUNT(GIT_READERS), sub) ? SEGMENT_READER : SEGMENT_UNKNOWN;
@@ -275,10 +289,12 @@ static enum segment_class classify_segment(const char *segment, const char *end)
     for (int i = 0; i < COUNT(FILTERS); i++) {
         if (!same_word(FILTERS[i].name, word))
             continue;
-        if (FILTERS[i].operands > 0 &&
-            count_operands(FILTERS[i].values, cursor, end) >= FILTERS[i].operands)
-            return SEGMENT_READER;
-        return SEGMENT_STAGE;
+        if (FILTERS[i].operands <= 0)
+            return SEGMENT_STAGE;
+        int operands = count_operands(FILTERS[i].values, cursor, end);
+        if (operands < 0)
+            return SEGMENT_UNKNOWN;
+        return operands >= FILTERS[i].operands ? SEGMENT_READER : SEGMENT_STAGE;
     }
     return SEGMENT_UNKNOWN;
 }

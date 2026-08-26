@@ -11,6 +11,7 @@
 #include "bash.h"
 #include "chrome.h"
 #include "block.h"
+#include "edit.h"
 #include "files.h"
 #include "scrollback.h"
 #include "settings.h"
@@ -77,6 +78,8 @@ struct prompt {
     int          stopped;
     int          frame_ok;
 };
+
+static int prompt_echoes(struct prompt *p, const char *line);
 
 static void history_append(struct prompt *p, const char *line)
 {
@@ -160,11 +163,6 @@ static void paint_bars(const char *text, size_t budget, enum ui_role role, int c
 {
     struct ui_wrap w = bar_wrap(budget, role, cap, mark);
     ui_wrap_paint(text, &w);
-}
-
-int prompt_busy(struct prompt *p)
-{
-    return p && p->idle_busy && p->idle_busy(p->idle_ud);
 }
 
 void prompt_set_queued_source(struct prompt *p, int (*count)(void *ud),
@@ -484,7 +482,7 @@ static int editor_temp(char *out, size_t size)
 static char *read_whole(const char *path)
 {
     size_t got = 0;
-    char *buf = text_slurp(path, 0, &got);
+    char *buf = text_slurp(path, EDIT_MAX_BYTES, &got);
     if (!buf)
         return NULL;
 
@@ -1136,7 +1134,7 @@ void prompt_set_echo_filter(struct prompt *p, int (*fn)(void *ud, const char *li
     p->echo_ud = ud;
 }
 
-int prompt_echoes(struct prompt *p, const char *line)
+static int prompt_echoes(struct prompt *p, const char *line)
 {
     return !p || !p->echo_filter || p->echo_filter(p->echo_ud, line);
 }

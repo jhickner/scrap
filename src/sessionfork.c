@@ -10,6 +10,7 @@
 
 #include "app.h"
 #include "session.h"
+#include "text.h"
 #include "ui.h"
 #include "viewport.h"
 
@@ -168,15 +169,25 @@ void sessionfork_exit_note(const struct session *s)
     const char *dir = session_cwd(s);
     char        cmd[9000];
     size_t      n = 0;
-    if (dir && *dir && !(getcwd(here, sizeof here) && !strcmp(here, dir)))
-        n = (size_t)snprintf(cmd, sizeof cmd, "cd %s && ", dir);
-    n += (size_t)snprintf(cmd + n, sizeof cmd - n, "%s", APP_NAME);
+    if (dir && *dir && !(getcwd(here, sizeof here) && !strcmp(here, dir))) {
+        char quoted[4200];
+        if (!text_shell_quote(dir, quoted, sizeof quoted))
+            return;
+        int wrote = snprintf(cmd, sizeof cmd, "cd %s && ", quoted);
+        if (wrote < 0 || (size_t)wrote >= sizeof cmd)
+            return;
+        n = (size_t)wrote;
+    }
+    int wrote = snprintf(cmd + n, sizeof cmd - n, "%s", APP_NAME);
+    if (wrote < 0 || (size_t)wrote >= sizeof cmd - n)
+        return;
+    n += (size_t)wrote;
 
     char *args[SESSION_ARGV_MAX];
     int   count = session_argv(s, args, COUNT(args),
                                SESSION_ARGV_RESUME | SESSION_ARGV_SAFE);
     for (int i = 0; i < count; i++) {
-        int wrote = snprintf(cmd + n, sizeof cmd - n, " %s", args[i]);
+        wrote = snprintf(cmd + n, sizeof cmd - n, " %s", args[i]);
         if (wrote < 0 || (size_t)wrote >= sizeof cmd - n)
             break;
         n += (size_t)wrote;

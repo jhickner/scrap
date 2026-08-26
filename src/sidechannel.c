@@ -232,6 +232,10 @@ static int spawn(struct side *c, const struct session *s, const char *prompt)
         close(out_pipe[1]);
         return 0;
     }
+    fcntl(out_pipe[0], F_SETFD, FD_CLOEXEC);
+    fcntl(out_pipe[1], F_SETFD, FD_CLOEXEC);
+    fcntl(err_pipe[0], F_SETFD, FD_CLOEXEC);
+    fcntl(err_pipe[1], F_SETFD, FD_CLOEXEC);
 
     char *argv[24];
     int n = 0;
@@ -276,6 +280,8 @@ static int spawn(struct side *c, const struct session *s, const char *prompt)
             close(out_pipe[1]);
         if (err_pipe[1] != STDERR_FILENO)
             close(err_pipe[1]);
+        fcntl(STDOUT_FILENO, F_SETFD, 0);
+        fcntl(STDERR_FILENO, F_SETFD, 0);
         int null = open("/dev/null", O_RDONLY);
         if (null >= 0) {
             dup2(null, STDIN_FILENO);
@@ -491,9 +497,10 @@ void sidechannel_poll(void)
         if (live)
             continue;
 
-        int status = 0;
-        while (waitpid(c->pid, &status, 0) < 0 && errno == EINTR)
-            ;
+        int   status = 0;
+        pid_t went = waitpid(c->pid, &status, WNOHANG);
+        if (went == 0 || (went < 0 && errno == EINTR))
+            continue;
 
         struct side done = *c;
         slot_init(c);

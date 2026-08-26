@@ -1,6 +1,5 @@
 #include "overlay.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -8,62 +7,73 @@
 
 #define SGR_MAX 64
 
-/* the colour a row was left in where the box ends, so the tail resumes in it */
-static void carry_sgr(const char *line, size_t n, char *out, size_t size)
+struct edge {
+    size_t at;    /* byte offset */
+    size_t cells; /* visible cells consumed up to it */
+    size_t sgr;   /* offset of the last SGR at or before it */
+    size_t sgr_n;
+};
+
+/* one forward walk records where the box starts, where it ends, and the colour
+   the row was left in there, so the tail resumes in it */
+static void measure(const char *line, size_t n, size_t col, size_t over,
+                    struct edge *head, struct edge *cut, struct edge *wide)
 {
-    out[0] = '\0';
+    struct edge at = {0, 0, 0, 0};
+
+    *head = *cut = *wide = at;
     for (size_t i = 0; i < n;) {
         enum ui_esc_kind kind;
         size_t           end = ui_esc_span(line, n, i, &kind);
         if (end <= i)
             break;
-        if (kind == UI_ESC_SGR && end - i < size)
-            snprintf(out, size, "%.*s", (int)(end - i), line + i);
+        if (kind == UI_ESC_SGR && end - i < SGR_MAX) {
+            at.sgr = i;
+            at.sgr_n = end - i;
+        }
+        size_t cells = at.cells + (kind == UI_ESC_TEXT ? ui_cells_n(line + i, end - i) : 0);
+        if (cells > over + 1)
+            break;
+        at.at = end;
+        at.cells = cells;
+        if (cells <= col)
+            *head = at;
+        if (cells <= over)
+            *cut = at;
+        *wide = at;
         i = end;
     }
 }
 
-static char *row_text(const struct overlay *o, int at)
-{
-    ui_sink_begin();
-    o->paint_row(o->ud, at, o->w);
-    return ui_sink_end();
-}
-
 static void put_over(const char *line, size_t n, const struct overlay *o, int at)
 {
-    char *box = row_text(o, at);
+    size_t col = (size_t)o->col;
+    size_t over = col + (size_t)o->w;
 
-    size_t head = ui_fit_visible(line, n, (size_t)o->col);
-    size_t worn = ui_cells_visible(line, head);
-    ui_putn(line, head);
-    if (worn < (size_t)o->col)
-        ui_pad(o->col - (int)worn);
+    struct edge head, cut, wide;
+    measure(line, n, col, over, &head, &cut, &wide);
 
-    ui_put(box ? box : "");
-    free(box);
+    ui_putn(line, head.at);
+    if (head.cells < col)
+        ui_pad((int)(col - head.cells));
 
-    size_t over = (size_t)(o->col + o->w);
-    size_t cut = ui_fit_visible(line, n, over);
-    size_t cells = ui_cells_visible(line, cut);
+    o->paint_row(o->ud, at, o->w);
+
     /* a wide glyph straddling the right edge of the box goes under it */
-    if (cells < over) {
-        size_t wide = ui_fit_visible(line, n, over + 1);
-        if (wide > cut) {
-            cut = wide;
-            cells = ui_cells_visible(line, cut);
-        }
-    }
-    if (cells > over)
-        ui_pad((int)(cells - over));
+    struct edge tail = cut.cells < over && wide.at > cut.at ? wide : cut;
+    if (tail.cells > over)
+        ui_pad((int)(tail.cells - over));
 
-    if (cut >= n)
+    if (tail.at >= n)
         return;
 
-    char sgr[SGR_MAX];
-    carry_sgr(line, cut, sgr, sizeof sgr);
-    ui_esc(sgr);
-    ui_putn(line + cut, n - cut);
+    if (tail.sgr_n) {
+        char sgr[SGR_MAX];
+        memcpy(sgr, line + tail.sgr, tail.sgr_n);
+        sgr[tail.sgr_n] = '\0';
+        ui_esc(sgr);
+    }
+    ui_putn(line + tail.at, n - tail.at);
 }
 
 void overlay_put(const char *under, const struct overlay *o)
@@ -98,10 +108,8 @@ void overlay_put(const char *under, const struct overlay *o)
 
     /* the block ran out from under the box */
     for (int line = at - o->row; line >= 0 && line < o->rows; line++) {
-        char *box = row_text(o, line);
         ui_pad(o->col);
-        ui_put(box ? box : "");
-        free(box);
+        o->paint_row(o->ud, line, o->w);
         ui_put("\n");
         at++;
     }

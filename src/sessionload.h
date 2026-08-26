@@ -3,8 +3,6 @@
 
 #include <stddef.h>
 
-int sessionload_available(const char *backend);
-
 int sessionload_path(const char *backend, const char *cwd, const char *id,
                      char *out, size_t size);
 

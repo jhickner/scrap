@@ -79,6 +79,15 @@ int main(void)
     acts("sed 's/a/b/'");
     acts("awk '{print $1}'");
 
+    /* a token longer than the word buffer is unknown, not read-only: the write
+       directive of a long sed script sits past the cutoff */
+    char script[900];
+    int  at = snprintf(script, sizeof script, "cat f | sed '");
+    for (int i = 0; i < 700; i++)
+        script[at++] = 'y';
+    snprintf(script + at, sizeof script - (size_t)at, "; w /tmp/out'");
+    expect(toolstyle_shell_reads(script), 0, "long sed script with a w directive");
+
     expect(toolstyle_collapses("Read", "{\"file_path\":\"/tmp/a\"}", NULL), 1, "Read");
     expect(toolstyle_collapses("web", "{\"query\":\"COLMAP\"}", NULL), 1, "web");
     expect(toolstyle_collapses("web_fetch", "{\"url\":\"https://example.com\"}", NULL), 1,

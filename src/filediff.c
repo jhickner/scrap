@@ -89,26 +89,31 @@ struct op {
     size_t      n;
 };
 
-static void op_push(struct op **ops, int *count, int *cap, char sign, const char *p, size_t n)
+static int op_push(struct op **ops, int *count, int *cap, char sign, const char *p, size_t n)
 {
     if (*count == *cap) {
         int want = *cap ? *cap * 2 : 64;
         struct op *grown = realloc(*ops, (size_t)want * sizeof **ops);
         if (!grown)
-            return;
+            return 0;
         *ops = grown;
         *cap = want;
     }
     (*ops)[(*count)++] = (struct op){sign, p, n};
+    return 1;
 }
 
-static void op_block(struct op **ops, int *count, int *cap, char sign, const struct linevec *v,
-                     int from, int to)
+static int op_block(struct op **ops, int *count, int *cap, char sign, const struct linevec *v,
+                    int from, int to)
 {
     for (int i = from; i < to; i++)
-        op_push(ops, count, cap, sign, v->p[i], v->n[i]);
+        if (!op_push(ops, count, cap, sign, v->p[i], v->n[i]))
+            return 0;
+    return 1;
 }
 
+/* 1 written, 0 the table would not fit so the caller falls back to whole
+   blocks, -1 the op list ran out of memory and the diff has to be dropped */
 static int lcs_script(struct op **ops, int *count, int *cap, const struct linevec *a,
                       const struct linevec *b, int pre, int ra, int rb)
 {
@@ -129,25 +134,25 @@ static int lcs_script(struct op **ops, int *count, int *cap, const struct lineve
         }
     }
 
-    int i = 0, j = 0;
-    while (i < ra && j < rb) {
+    int i = 0, j = 0, ok = 1;
+    while (ok && i < ra && j < rb) {
         if (line_eq(a, pre + i, b, pre + j)) {
-            op_push(ops, count, cap, ' ', a->p[pre + i], a->n[pre + i]);
+            ok = op_push(ops, count, cap, ' ', a->p[pre + i], a->n[pre + i]);
             i++;
             j++;
         } else if (dp[(i + 1) * stride + j] >= dp[i * stride + (j + 1)]) {
-            op_push(ops, count, cap, '-', a->p[pre + i], a->n[pre + i]);
+            ok = op_push(ops, count, cap, '-', a->p[pre + i], a->n[pre + i]);
             i++;
         } else {
-            op_push(ops, count, cap, '+', b->p[pre + j], b->n[pre + j]);
+            ok = op_push(ops, count, cap, '+', b->p[pre + j], b->n[pre + j]);
             j++;
         }
     }
-    op_block(ops, count, cap, '-', a, pre + i, pre + ra);
-    op_block(ops, count, cap, '+', b, pre + j, pre + rb);
+    ok = ok && op_block(ops, count, cap, '-', a, pre + i, pre + ra);
+    ok = ok && op_block(ops, count, cap, '+', b, pre + j, pre + rb);
 
     free(dp);
-    return 1;
+    return ok ? 1 : -1;
 }
 
 static void diff_text(const char *in, size_t n, char *out, size_t max)
@@ -296,17 +301,25 @@ static char *patch_diff(const char *a_text, size_t a_len, const char *b_text, si
     struct op *ops = NULL;
     int nops = 0, cap = 0;
 
-    op_block(&ops, &nops, &cap, ' ', &a, pre - CONTEXT < 0 ? 0 : pre - CONTEXT, pre);
+    int ok = op_block(&ops, &nops, &cap, ' ', &a, pre - CONTEXT < 0 ? 0 : pre - CONTEXT, pre);
 
-    if ((long)ra * (long)rb > LCS_BUDGET || !lcs_script(&ops, &nops, &cap, &a, &b, pre, ra, rb)) {
-        op_block(&ops, &nops, &cap, '-', &a, pre, pre + ra);
-        op_block(&ops, &nops, &cap, '+', &b, pre, pre + rb);
+    if (ok) {
+        int script = (long)ra * (long)rb > LCS_BUDGET
+                         ? 0
+                         : lcs_script(&ops, &nops, &cap, &a, &b, pre, ra, rb);
+        if (script < 0)
+            ok = 0;
+        else if (!script)
+            ok = op_block(&ops, &nops, &cap, '-', &a, pre, pre + ra) &&
+                 op_block(&ops, &nops, &cap, '+', &b, pre, pre + rb);
     }
 
     int tail = a.count - post;
-    op_block(&ops, &nops, &cap, ' ', &a, tail, tail + CONTEXT < a.count ? tail + CONTEXT : a.count);
+    if (ok)
+        ok = op_block(&ops, &nops, &cap, ' ', &a, tail,
+                      tail + CONTEXT < a.count ? tail + CONTEXT : a.count);
 
-    char *patch = nops > 0 ? patch_of_ops(ops, nops, path) : NULL;
+    char *patch = ok && nops > 0 ? patch_of_ops(ops, nops, path) : NULL;
 
     free(ops);
     lines_free(&a);

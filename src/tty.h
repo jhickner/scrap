@@ -57,7 +57,13 @@ void tty_wake(void);
 void tty_watch(int (*fds)(void *ud, int *out, int max), void (*ready)(void *ud),
                void *ud);
 
+int  tty_watch_fds(int *out, int max);
+
+void tty_watch_ready(void);
+
 int  tty_is_raw(void);
+
+int  tty_quit_requested(void);
 
 int tty_cooked_termios(struct termios *out);
 

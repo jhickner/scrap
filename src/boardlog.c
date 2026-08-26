@@ -6,7 +6,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "mdcfg.h"
+#include "board.h"
 #include "text.h"
 
 #define LOG_DIR "board-log"
@@ -14,14 +14,7 @@
 
 int boardlog_path(const char *id, char *out, size_t size)
 {
-    char dir[4096];
-    if (!id || !*id || !mdcfg_dir(dir, sizeof dir, LOG_DIR))
-        return 0;
-
-    for (const char *p = id; *p; p++)
-        if (*p == '/' || *p == '.')
-            return 0;
-    return (size_t)snprintf(out, size, "%s/%s.md", dir, id) < size;
+    return board_md_path(LOG_DIR, id, out, size);
 }
 
 static FILE *open_for(const char *id, const char **stamp_out)

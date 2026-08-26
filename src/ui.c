@@ -244,6 +244,7 @@ struct sink {
     FILE  *f;
     char  *buf;
     size_t len;
+    int    rows;
     int    tee;
 };
 
@@ -261,11 +262,19 @@ static void out(const char *s, size_t n)
 {
     if (sink_depth > SINK_MAX)
         return;
-    for (int i = sink_depth - 1; i >= 0; i--) {
-        if (sinks[i].f)
-            fwrite(s, 1, n, sinks[i].f);
-        if (!sinks[i].tee)
-            return;
+    if (sink_depth > 0) {
+        int lines = 0;
+        for (const char *p = memchr(s, '\n', n); p;
+             p = memchr(p + 1, '\n', n - (size_t)(p + 1 - s)))
+            lines++;
+        for (int i = sink_depth - 1; i >= 0; i--) {
+            if (sinks[i].f) {
+                fwrite(s, 1, n, sinks[i].f);
+                sinks[i].rows += lines;
+            }
+            if (!sinks[i].tee)
+                return;
+        }
     }
     if (viewport_active()) {
         viewport_write(s, n);
@@ -279,6 +288,7 @@ void ui_sink_begin(void)
     if (sink_depth < SINK_MAX) {
         struct sink *s = &sinks[sink_depth];
         s->tee = 0;
+        s->rows = 0;
         s->len = 0;
         free(s->buf);
         s->buf = NULL;
@@ -297,14 +307,7 @@ void ui_sink_begin_tee(void)
 int ui_sink_rows(void)
 {
     struct sink *s = sink_top();
-    if (!s || !s->f)
-        return 0;
-    fflush(s->f);
-    int rows = 0;
-    for (size_t i = 0; i < s->len; i++)
-        if (s->buf[i] == '\n')
-            rows++;
-    return rows;
+    return s && s->f ? s->rows : 0;
 }
 
 char *ui_sink_end(void)
@@ -323,6 +326,7 @@ char *ui_sink_end(void)
     char *taken = s->buf;
     s->buf = NULL;
     s->len = 0;
+    s->rows = 0;
     s->tee = 0;
     return taken ? taken : strdup("");
 }
@@ -462,8 +466,14 @@ void ui_esc(const char *s)
 
 void ui_pad(int cells)
 {
-    for (int i = 0; i < cells; i++)
-        ui_putn(" ", 1);
+    static const char SPACES[] = "                                ";
+    const int         chunk = (int)(sizeof SPACES - 1);
+
+    while (cells > 0) {
+        int n = cells < chunk ? cells : chunk;
+        ui_putn(SPACES, (size_t)n);
+        cells -= n;
+    }
 }
 
 void ui_sync_begin(void) { out("\x1b[?2026h", 8); }
@@ -753,17 +763,7 @@ size_t ui_fit_visible(const char *s, size_t n, size_t budget)
 
 size_t ui_fit_bytes(const char *s, size_t budget)
 {
-    if (!s)
-        return 0;
-    size_t n = strlen(s), i = 0, cells = 0, fit = 0;
-    while (i < n) {
-        size_t w = (size_t)cell_width(decode(s, n, &i));
-        if (cells + w > budget)
-            break;
-        cells += w;
-        fit = i;
-    }
-    return fit;
+    return s ? ui_fit_visible(s, strlen(s), budget) : 0;
 }
 
 void ui_put_spans(const char *s, size_t n, const unsigned char *roles, enum ui_role base)
@@ -830,6 +830,7 @@ int ui_wrap_paint(const char *text, const struct ui_wrap *w)
     size_t n = text ? strlen(text) : 0;
     size_t budget = w->budget ? w->budget : 1;
     int mark_cells = w->mark ? (int)ui_cells(w->mark) : 0;
+    int wide_gutter = w->gutter ? (int)ui_cells(w->gutter) : 0;
     int rows = 0;
     int reflowed = 0;
     int first = 1;
@@ -839,9 +840,11 @@ int ui_wrap_paint(const char *text, const struct ui_wrap *w)
         size_t row = n ? ui_wrap_row(p, n, budget, &skip, &row_cells) : 0;
         int indent = first ? w->first_indent : w->indent;
         const char *gutter = w->gutter;
-        if (w->gutters && rows < w->gutters_n && w->gutters[rows])
+        int gutter_cells = wide_gutter;
+        if (w->gutters && rows < w->gutters_n && w->gutters[rows]) {
             gutter = w->gutters[rows];
-        int gutter_cells = gutter ? (int)ui_cells(gutter) : 0;
+            gutter_cells = (int)ui_cells(gutter);
+        }
         int width = gutter_cells + (first ? mark_cells : 0) + (int)row_cells;
 
         if (!w->measure) {

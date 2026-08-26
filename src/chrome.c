@@ -155,7 +155,7 @@ void chrome_title_paint(const char *title)
 {
     int    columns = ui_columns();
     size_t budget = columns > 3 ? (size_t)(columns - 3) : 1;
-    size_t fit = ui_fit_bytes(title, budget);
+    size_t fit = ui_fit_visible(title, strlen(title), budget);
 
     ui_esc(ui_style(UI_CHROME));
     ui_put(UI_BAR);

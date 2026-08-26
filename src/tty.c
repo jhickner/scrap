@@ -1,6 +1,7 @@
 #include "tty.h"
 
 #include <errno.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,6 +9,7 @@
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "viewport.h"
@@ -37,6 +39,8 @@ static volatile sig_atomic_t winch_count;
 
 static void on_winch(int sig) { (void)sig; got_winch = 1; winch_count++; }
 
+static volatile sig_atomic_t quit_signal;
+
 static void on_fatal(int sig)
 {
     if (in_raw) {
@@ -47,6 +51,19 @@ static void on_fatal(int sig)
     signal(sig, SIG_DFL);
     raise(sig);
 }
+
+/* The first one asks the main loop to shut down cleanly; a second one means
+   the loop is not getting there, so fall back to restore-and-die. */
+static void on_quit(int sig)
+{
+    if (quit_signal) {
+        on_fatal(sig);
+        return;
+    }
+    quit_signal = sig;
+}
+
+int tty_quit_requested(void) { return quit_signal != 0; }
 
 int tty_is_raw(void) { return in_raw; }
 
@@ -208,12 +225,19 @@ int tty_raw_begin(void)
     sa.sa_flags = SA_RESTART;
     sigaction(SIGWINCH, &sa, NULL);
 
-    static const int FATAL[] = {SIGHUP, SIGINT, SIGTERM, SIGQUIT, SIGSEGV, SIGBUS, SIGABRT};
+    static const int FAULT[] = {SIGSEGV, SIGBUS, SIGABRT};
     struct sigaction fs = {0};
     fs.sa_handler = on_fatal;
     sigemptyset(&fs.sa_mask);
-    for (size_t i = 0; i < sizeof FATAL / sizeof *FATAL; i++)
-        sigaction(FATAL[i], &fs, NULL);
+    for (size_t i = 0; i < sizeof FAULT / sizeof *FAULT; i++)
+        sigaction(FAULT[i], &fs, NULL);
+
+    static const int QUIT[] = {SIGHUP, SIGINT, SIGTERM, SIGQUIT};
+    struct sigaction qs = {0};
+    qs.sa_handler = on_quit;
+    sigemptyset(&qs.sa_mask);
+    for (size_t i = 0; i < sizeof QUIT / sizeof *QUIT; i++)
+        sigaction(QUIT[i], &qs, NULL);
 
     signal(SIGPIPE, SIG_IGN);
 
@@ -244,50 +268,86 @@ void tty_watch(int (*fds)(void *ud, int *out, int max), void (*ready)(void *ud),
     watch_ud = ud;
 }
 
+int tty_watch_fds(int *out, int max)
+{
+    int n = watch_fds ? watch_fds(watch_ud, out, max) : 0;
+    return n < 0 ? 0 : n;
+}
+
+void tty_watch_ready(void)
+{
+    if (watch_ready)
+        watch_ready(watch_ud);
+}
+
 static int woken;
 
 void tty_wake(void) { woken = 1; }
 
+/* Depth of a partly-read escape sequence or paste: a wake must not cut one
+   short, so it stays latched until the next top-level read. */
+static int seq_depth;
+
+static long clock_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
 static int wait_readable(int timeout_ms)
 {
+    long deadline = timeout_ms < 0 ? 0 : clock_ms() + timeout_ms;
+
     for (;;) {
         int extra[TTY_WATCH_MAX];
         int count = watch_fds ? watch_fds(watch_ud, extra, TTY_WATCH_MAX) : 0;
         if (count < 0)
             count = 0;
 
-        fd_set fds;
-        FD_ZERO(&fds);
-        FD_SET(STDIN_FILENO, &fds);
-        int last = STDIN_FILENO;
+        struct pollfd pfd[TTY_WATCH_MAX + 1];
+        int           n = 0;
+        pfd[n].fd = STDIN_FILENO;
+        pfd[n].events = POLLIN;
+        pfd[n++].revents = 0;
         for (int i = 0; i < count; i++) {
-            if (extra[i] < 0 || extra[i] >= FD_SETSIZE)
+            if (extra[i] < 0)
                 continue;
-            FD_SET(extra[i], &fds);
-            if (extra[i] > last)
-                last = extra[i];
+            pfd[n].fd = extra[i];
+            pfd[n].events = POLLIN;
+            pfd[n++].revents = 0;
         }
-        struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
-        int r = select(last + 1, &fds, NULL, NULL, timeout_ms < 0 ? NULL : &tv);
-        if (r < 0)
-            return errno == EINTR ? 0 : -1;
+
+        int left = -1;
+        if (timeout_ms >= 0) {
+            long ms = deadline - clock_ms();
+            left = ms <= 0 ? 0 : (int)ms;
+        }
+        int r = poll(pfd, (nfds_t)n, left);
+        if (r < 0) {
+            if (errno != EINTR)
+                return -1;
+            if (!seq_depth && (got_winch || quit_signal))
+                return 0;
+            continue;
+        }
         if (r == 0)
             return 0;
-        if (FD_ISSET(STDIN_FILENO, &fds))
+        if (pfd[0].revents)
             return 1;
 
         int woke = 0;
-        for (int i = 0; i < count && !woke; i++)
-            woke = extra[i] >= 0 && extra[i] < FD_SETSIZE && FD_ISSET(extra[i], &fds);
+        for (int i = 1; i < n && !woke; i++)
+            woke = pfd[i].revents != 0;
         if (!woke)
             return 0;
         watch_ready(watch_ud);
 
-        if (woken) {
+        if (woken && !seq_depth) {
             woken = 0;
             return 0;
         }
-        if (timeout_ms >= 0)
+        if (timeout_ms >= 0 && clock_ms() >= deadline)
             return 0;
     }
 }
@@ -604,7 +664,9 @@ int tty_read(tty_event *ev, int timeout_ms)
     int b = pending[pending_pos++];
     switch (b) {
     case 0x1b:
+        seq_depth++;
         decode_escape(ev);
+        seq_depth--;
 
         return ev->key == TK_NONE ? 0 : 1;
     case '\r': emit(ev, TK_ENTER); return 1;
@@ -617,6 +679,12 @@ int tty_read(tty_event *ev, int timeout_ms)
 
     ev->key = TK_CHAR;
     ev->text = NULL;
-    ev->cp = (b < 0x80) ? (uint32_t)b : decode_utf8(b);
+    if (b < 0x80) {
+        ev->cp = (uint32_t)b;
+    } else {
+        seq_depth++;
+        ev->cp = decode_utf8(b);
+        seq_depth--;
+    }
     return 1;
 }

@@ -120,8 +120,7 @@ int workspace_begin(struct session *first, int safe_mode)
 void workspace_end(void)
 {
     for (int i = 0; i < ntabs; i++) {
-        if (i != cur)
-            viewport_state_free(tabs[i].screen);
+        viewport_state_free(tabs[i].screen);
         session_free(tabs[i].s);
         for (int j = 0; j < tabs[i].npending; j++) {
             free(tabs[i].pending[j].line);
@@ -325,7 +324,7 @@ static void drop(int index, const struct session *fallback)
     cmd_forget_session(tabs[index].s);
 
     if (index == cur)
-        viewport_clear();
+        viewport_stash(tabs[index].screen);
     viewport_state_free(tabs[index].screen);
 
     session_free(tabs[index].s);
@@ -406,7 +405,7 @@ static void settle_finished(int index, int hold)
     send_next(index, hold);
 }
 
-static int pump(int hold)
+static int pump(int hold, int screen)
 {
     int busy = 0;
 
@@ -427,12 +426,16 @@ static int pump(int hold)
             if (on_settled)
                 on_settled(s);
 
-            /* the callback may close the tab it was handed -- a card whose
-               last action finished lets go of its session -- which frees the
-               session and shifts every tab after it down a slot */
+            /* the callback may close a tab -- a card whose last action
+               finished lets go of its session -- which frees that session and
+               shifts every tab after it down a slot */
             if (i >= ntabs || tabs[i].s != s) {
-                i--;
-                continue;
+                int at = workspace_index_of(s);
+                if (at < 0) {
+                    i--;
+                    continue;
+                }
+                i = at;
             }
 
             if (i != cur)
@@ -441,25 +444,34 @@ static int pump(int hold)
         settle_finished(i, hold);
     }
 
-    if (ntabs) {
-        status_set_note(session_title(tabs[cur].s));
-        status_sticky_busy(session_busy(tabs[cur].s));
+    /* the status row and the spinner both write to the terminal, so a caller
+       that has handed the screen to a child asks for the drain alone */
+    if (screen) {
+        if (ntabs) {
+            status_set_note(session_title(tabs[cur].s));
+            status_sticky_busy(session_busy(tabs[cur].s));
+        }
+        spin_follow();
     }
-    spin_follow();
     return busy;
 }
 
 int workspace_pump(void)
 {
-    return pump(0);
+    return pump(0, 1);
 }
 
 int workspace_pump_quiet(void)
 {
-    int busy = pump(1);
+    int busy = pump(1, 1);
 
     chrome_paint();
     return busy;
+}
+
+int workspace_drain(void)
+{
+    return pump(1, 0);
 }
 
 void workspace_settle(struct session *s)

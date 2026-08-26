@@ -90,6 +90,7 @@ struct worker {
     struct rowbuf rows;
     int           rows_width;
     int           laid;
+    unsigned      rows_gen;
 };
 
 struct board {
@@ -211,12 +212,20 @@ static void fan_event(void *ud, const backend_event *ev)
     pthread_mutex_unlock(&board_lock);
 }
 
+/* Bumped whenever a painted buffer is replaced, so the row cache — which holds
+   pointers into those buffers — knows to relay. */
+static unsigned paint_gen;
+
 static const char *entry_painted(struct entry *e, int width)
 {
     if (e->painted && e->painted_width == width)
         return e->painted;
 
-    free(e->painted);
+    if (e->painted) {
+        free(e->painted);
+        e->painted = NULL;
+        paint_gen++;
+    }
     ui_capture_begin(width);
     if (e->gap)
         ui_put("\n");
@@ -284,7 +293,7 @@ static void rowbuf_split(struct rowbuf *rb, const char *painted, int width)
 
 static void cell_lay(struct worker *w, int width)
 {
-    if (w->rows_width != width) {
+    if (w->rows_width != width || w->rows_gen != paint_gen) {
         w->rows_width = width;
         w->rows.n = 0;
         w->laid = 0;
@@ -294,6 +303,7 @@ static void cell_lay(struct worker *w, int width)
 
     for (; w->laid < count; w->laid++)
         rowbuf_split(&w->rows, entry_painted(&w->log[w->laid], width), width);
+    w->rows_gen = paint_gen;
 }
 
 static void head_lay(struct board *b, int width)

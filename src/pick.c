@@ -1,5 +1,6 @@
 #include "pick.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +32,7 @@ struct view {
     int n;
     int *order;
     int *score;
+    long long *rank;
     int count;
     int sel;
     int filter;
@@ -170,6 +172,28 @@ static int visible_cap(const struct view *v)
     return rows < 5 ? 5 : rows;
 }
 
+static int cmp_rank(const void *a, const void *b)
+{
+    long long x = *(const long long *)a, y = *(const long long *)b;
+    return x < y ? -1 : x > y;
+}
+
+/* score descending, ties in list order. The rank packs the two into one key so
+   the parallel arrays sort together. */
+static void sort_by_score(struct view *v)
+{
+    if (v->heading || v->count < 2)
+        return;
+
+    for (int k = 0; k < v->count; k++)
+        v->rank[k] = ((long long)(INT_MAX - v->score[k]) << 32) | (unsigned)v->order[k];
+    qsort(v->rank, (size_t)v->count, sizeof *v->rank, cmp_rank);
+    for (int k = 0; k < v->count; k++) {
+        v->order[k] = (int)(v->rank[k] & 0xffffffff);
+        v->score[k] = INT_MAX - (int)(v->rank[k] >> 32);
+    }
+}
+
 static void refilter(struct view *v)
 {
     int keep = (v->count && v->sel < v->count) ? v->order[v->sel] : -1;
@@ -201,15 +225,11 @@ static void refilter(struct view *v)
         if (s < 0 && !under)
             continue;
         int at = v->count++;
-
-        while (!v->heading && at > 0 && v->score[at - 1] < s) {
-            v->order[at] = v->order[at - 1];
-            v->score[at] = v->score[at - 1];
-            at--;
-        }
         v->order[at] = i;
         v->score[at] = s < 0 ? 0 : s;
     }
+
+    sort_by_score(v);
 
     v->sel = 0;
     for (int i = 0; i < v->count; i++)
@@ -466,18 +486,43 @@ int pick_run_keys(const char *title, const struct pick_item *items, int count,
     return run(title, items, count, initial, NULL, shortcuts, pressed, 0, 0);
 }
 
+/* the length with any partial sequence at the end dropped: the query is
+   formatted into the title, so it cannot end mid-character */
+static size_t whole_chars(const char *s, size_t len)
+{
+    size_t at = len;
+    while (at > 0 && ((unsigned char)s[at - 1] & 0xc0) == 0x80)
+        at--;
+    if (at == 0)
+        return len;
+
+    unsigned char lead = (unsigned char)s[at - 1];
+    size_t        need = lead < 0x80              ? 1
+                         : (lead & 0xe0) == 0xc0  ? 2
+                         : (lead & 0xf0) == 0xe0  ? 3
+                         : (lead & 0xf8) == 0xf0  ? 4
+                                                  : 1;
+    return at - 1 + need <= len ? len : at - 1;
+}
+
 static int type_into(struct view *v, const char *s, size_t n)
 {
     size_t len = strlen(v->query);
-    int    took = 0;
+    int    took = 0, full = 0;
 
     for (size_t i = 0; i < n; i++) {
         unsigned char c = (unsigned char)s[i];
-        if (c < 0x20 || c == 0x7f || len + 1 >= sizeof v->query)
+        if (c < 0x20 || c == 0x7f)
             continue;
+        if (len + 1 >= sizeof v->query) {
+            full = 1;
+            break;
+        }
         v->query[len++] = (char)c;
         took = 1;
     }
+    if (full)
+        len = whole_chars(v->query, len);
     v->query[len] = '\0';
     return took;
 }
@@ -512,9 +557,11 @@ static int run(const char *title, const struct pick_item *items, int count,
     v.slash = slash;
     v.order = calloc((size_t)count, sizeof *v.order);
     v.score = calloc((size_t)count, sizeof *v.score);
-    if (!v.order || !v.score) {
+    v.rank = calloc((size_t)count, sizeof *v.rank);
+    if (!v.order || !v.score || !v.rank) {
         free(v.order);
         free(v.score);
+        free(v.rank);
         return -1;
     }
     refilter(&v);
@@ -770,5 +817,6 @@ done:
         chrome_modal(NULL, NULL);
     free(v.order);
     free(v.score);
+    free(v.rank);
     return result;
 }

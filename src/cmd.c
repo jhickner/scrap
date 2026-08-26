@@ -331,24 +331,27 @@ static void do_permission(struct session *s, const char *arg)
         return;
     }
 
-    int count = session_permission_count();
-    struct pick_item choices[16];
-    if (count > (int)COUNT(choices))
-        count = (int)COUNT(choices);
-    for (int i = 0; i < count; i++) {
-        choices[i].label = session_permission_name(i);
-        choices[i].detail = session_permission_desc(i);
-    }
-
     const char *chosen = arg;
     if (!chosen || !*chosen) {
         if (!can_pick("/permission <mode>"))
             return;
+
+        int               count = session_permission_count();
+        struct pick_item *choices = calloc((size_t)count, sizeof *choices);
+        if (!choices)
+            return;
+        for (int i = 0; i < count; i++) {
+            choices[i].label = session_permission_name(i);
+            choices[i].detail = session_permission_desc(i);
+        }
+
         int initial = session_permission_index(session_permission(s));
         int index = pick_run("gate tool calls", choices, count, initial < 0 ? 0 : initial);
-        if (index < 0)
+        /* the labels are the names of a static table, so they outlive the array */
+        chosen = index >= 0 ? choices[index].label : NULL;
+        free(choices);
+        if (!chosen)
             return;
-        chosen = choices[index].label;
     }
 
     int index = session_permission_index(chosen);
@@ -889,13 +892,6 @@ int cmd_is_command(const char *line)
 {
     const char *arg;
     return cmd_for_line(line, &arg) != NULL;
-}
-
-int cmd_is_quit(const char *line)
-{
-    const char *arg;
-    const struct cmd *c = cmd_for_line(line, &arg);
-    return c && (c->flags & CMD_QUITS);
 }
 
 int cmd_self_echoes(const char *line)

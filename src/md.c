@@ -136,19 +136,35 @@ static int is_url_start(const char *p)
     return strncmp(p, "http://", 7) == 0 || strncmp(p, "https://", 8) == 0;
 }
 
-static const char *find_close(const char *p, const char *delim, size_t dlen)
+/* the span a delimiter was already scanned over without a closer; a later
+   scan starting inside it on the same line cannot find one either */
+struct nomatch {
+    const char *from, *to;
+};
+
+enum { NM_CODE, NM_STRONG, NM_EM, NM_BRACKET, NM_PAREN, NM_COUNT };
+
+static const char *find_close(const char *p, const char *delim, size_t dlen,
+                              struct nomatch *seen)
 {
-    for (const char *q = p; *q && *q != '\n'; q++)
+    if (seen->from && p >= seen->from && p <= seen->to)
+        return NULL;
+
+    const char *q = p;
+    for (; *q && *q != '\n'; q++)
         if (strncmp(q, delim, dlen) == 0)
             return q > p ? q : NULL;
+    seen->from = p;
+    seen->to = q;
     return NULL;
 }
 
 static void inline_scan(const char *p, struct styled *out)
 {
+    struct nomatch seen[NM_COUNT] = {{0}};
     while (*p) {
         if (*p == '`') {
-            const char *end = find_close(p + 1, "`", 1);
+            const char *end = find_close(p + 1, "`", 1, &seen[NM_CODE]);
             if (end) {
                 styled_push(out, p + 1, (size_t)(end - p - 1), UI_CODE + 1);
                 p = end + 1;
@@ -156,7 +172,7 @@ static void inline_scan(const char *p, struct styled *out)
             }
         }
         if (p[0] == '*' && p[1] == '*') {
-            const char *end = find_close(p + 2, "**", 2);
+            const char *end = find_close(p + 2, "**", 2, &seen[NM_STRONG]);
             if (end) {
                 styled_push(out, p + 2, (size_t)(end - p - 2), UI_BOLD + 1);
                 p = end + 2;
@@ -164,7 +180,7 @@ static void inline_scan(const char *p, struct styled *out)
             }
         }
         if (p[0] == '*' && p[1] != ' ') {
-            const char *end = find_close(p + 1, "*", 1);
+            const char *end = find_close(p + 1, "*", 1, &seen[NM_EM]);
             if (end) {
                 styled_push(out, p + 1, (size_t)(end - p - 1), UI_ITALIC + 1);
                 p = end + 1;
@@ -173,9 +189,9 @@ static void inline_scan(const char *p, struct styled *out)
         }
 
         if (*p == '[') {
-            const char *close = find_close(p + 1, "]", 1);
+            const char *close = find_close(p + 1, "]", 1, &seen[NM_BRACKET]);
             if (close && close[1] == '(') {
-                const char *paren = find_close(close + 2, ")", 1);
+                const char *paren = find_close(close + 2, ")", 1, &seen[NM_PAREN]);
                 if (paren) {
                     out->cur_link = styled_link(out, close + 2, (size_t)(paren - close - 2));
                     styled_push(out, p + 1, (size_t)(close - p - 1), UI_LINK + 1);

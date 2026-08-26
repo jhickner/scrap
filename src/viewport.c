@@ -24,6 +24,9 @@ struct item {
     int    pad;
     int    hidden;
     int    nopad;
+    int    borrowed;
+    int    hcols;
+    int    hrows;
     unsigned id;
     const char        *kind;
     viewport_encode_fn encode;
@@ -76,6 +79,12 @@ static int painted_cols;
 
 static unsigned anchor_id;
 static int      anchor_skip;
+
+/* every input to window_geometry bumps this; the cached geometry carries the
+   epoch it was measured at */
+static unsigned layout_epoch = 1;
+
+static void layout_changed(void) { layout_epoch++; }
 
 #define MOUSE_ON  "\x1b[?1000h\x1b[?1006h"
 #define MOUSE_OFF "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"
@@ -151,7 +160,7 @@ static void cup(int row, int col)
 
 int viewport_active(void) { return active && !suspended; }
 
-void viewport_touch(void) { dirty = 1; }
+void viewport_touch(void) { dirty = 1; layout_changed(); }
 
 int viewport_scrolled(void) { return scrolled; }
 
@@ -210,6 +219,7 @@ void viewport_item_hide(unsigned mark, int on)
         return;
     it->hidden = !!on;
     dirty = 1;
+    layout_changed();
 }
 
 void viewport_item_pad(unsigned mark, int on)
@@ -219,6 +229,7 @@ void viewport_item_pad(unsigned mark, int on)
         return;
     it->nopad = !on;
     dirty = 1;
+    layout_changed();
 }
 
 void viewport_item_stale(unsigned mark)
@@ -228,6 +239,7 @@ void viewport_item_stale(unsigned mark)
         return;
     it->cols = -1;
     dirty = 1;
+    layout_changed();
 }
 
 void viewport_on_width(viewport_width_fn fn)
@@ -255,6 +267,7 @@ void viewport_repad(void)
             hide = items[i].hidden || items[i].nopad;
     }
     dirty = 1;
+    layout_changed();
 }
 
 void viewport_item_update(unsigned mark)
@@ -266,16 +279,22 @@ void viewport_item_update(unsigned mark)
         return;
     it->cols = -1;
     dirty = 1;
+    layout_changed();
     viewport_paint();
 }
 
 static void rows_free(struct item *it)
 {
-    for (int i = 0; i < it->nrows; i++)
-        free(it->rows[i]);
-    free(it->rows);
+    if (!it->borrowed) {
+        for (int i = 0; i < it->nrows; i++)
+            free(it->rows[i]);
+        free(it->rows);
+    }
     it->rows = NULL;
     it->nrows = 0;
+    it->borrowed = 0;
+    it->hcols = 0;
+    layout_changed();
 }
 
 static void item_free(struct item *it)
@@ -349,6 +368,7 @@ static struct item *items_push(void)
         nitems -= drop;
         it = &items[nitems - 1];
     }
+    layout_changed();
     return it;
 }
 
@@ -367,6 +387,7 @@ static void open_append(const char *s, size_t n)
     memcpy(open_buf + open_len, s, n);
     open_len += n;
     open_buf[open_len] = '\0';
+    layout_changed();
 }
 
 static int row_is_blank(const char *s, size_t n);
@@ -402,6 +423,8 @@ static void pad_seam(int before, int own)
     if (!nitems)
         return;
     int want = before > tail_pad ? before : tail_pad;
+    if (want <= own)
+        return;
     want -= trailing_blanks() + own;
     for (int i = 0; i < want; i++)
         blank_push();
@@ -426,6 +449,16 @@ static void loose_row(const char *body, size_t n)
     fclose(f);
 }
 
+/* the buffer is read back as a C string, so the length reset has to move the
+   terminator with it -- an item that renders nothing would otherwise inherit
+   the bytes of the one before it */
+static void open_reset(void)
+{
+    open_len = 0;
+    if (open_buf)
+        open_buf[0] = '\0';
+}
+
 static void open_close(int cols)
 {
     if (!open_paid) {
@@ -436,7 +469,8 @@ static void open_close(int cols)
 
     struct item *it = items_push();
     if (!it) {
-        open_len = 0;
+        open_reset();
+        layout_changed();
         return;
     }
     it->render = open_render;
@@ -445,7 +479,8 @@ static void open_close(int cols)
     it->reflow = open_reflow;
     rows_set(it, open_buf ? open_buf : "", cols);
 
-    open_len = 0;
+    open_reset();
+    layout_changed();
     open_render = NULL;
     open_ud = NULL;
     open_free = NULL;
@@ -545,7 +580,8 @@ void viewport_write(const char *s, size_t n)
             start = i + 1;
         } else if (s[i] == '\r') {
             open_append(s + start, i - start);
-            open_len = 0;
+            open_reset();
+            layout_changed();
             start = i + 1;
         }
     }
@@ -674,6 +710,7 @@ void viewport_stash(struct viewport_state *st)
     anchor_id = 0;
     anchor_skip = 0;
     dirty = 1;
+    layout_changed();
 }
 
 void viewport_adopt(struct viewport_state *st)
@@ -698,6 +735,7 @@ void viewport_adopt(struct viewport_state *st)
     anchor_skip = st->anchor_skip;
     memset(st, 0, sizeof *st);
     dirty = 1;
+    layout_changed();
 }
 
 void viewport_clear(void)
@@ -705,26 +743,51 @@ void viewport_clear(void)
     for (int i = 0; i < nitems; i++)
         item_free(&items[i]);
     nitems = 0;
-    open_len = 0;
+    open_reset();
     tail_pad = 0;
     scrolled = 0;
     anchor_id = 0;
     anchor_skip = 0;
     dirty = 1;
+    layout_changed();
 }
 
 struct style {
-    char buf[512];
-    size_t len;
+    char  *buf;
+    size_t len, cap;
 };
 
 static void style_add(struct style *st, const char *s, size_t n)
 {
-    if (st->len + n >= sizeof st->buf)
-        return;
+    if (st->len + n + 1 > st->cap) {
+        size_t cap = st->cap ? st->cap : 512;
+        while (cap < st->len + n + 1)
+            cap *= 2;
+        char *grown = realloc(st->buf, cap);
+        if (!grown)
+            return;
+        st->buf = grown;
+        st->cap = cap;
+    }
     memcpy(st->buf + st->len, s, n);
     st->len += n;
     st->buf[st->len] = '\0';
+}
+
+static void style_reset(struct style *st)
+{
+    st->len = 0;
+    if (st->buf)
+        st->buf[0] = '\0';
+}
+
+static void style_copy(struct style *dst, const struct style *src)
+{
+    dst->len = 0;
+    if (src->len)
+        style_add(dst, src->buf, src->len);
+    else
+        style_reset(dst);
 }
 
 static int sgr_is_reset(const char *s, size_t n)
@@ -752,8 +815,7 @@ static size_t step(const char *s, size_t n, size_t i, size_t *cells, struct styl
     case UI_ESC_SGR:
         if (st) {
             if (sgr_is_reset(s + i, end - i)) {
-                st->len = 0;
-                st->buf[0] = '\0';
+                style_reset(st);
             } else {
                 style_add(st, s + i, end - i);
             }
@@ -811,11 +873,21 @@ static int item_height(int r, struct item *pending, int W)
         return 0;
     item_rows(item_at(r, pending), W);
     struct item *it = item_at(r, pending);
-    if (it->nrows == 0)
-        return it->render ? 0 : 1;
-    int used = 0;
-    for (int i = 0; i < it->nrows; i++)
-        used += wrap_count(it->rows[i], W);
+    if (it->hcols == W)
+        return it->hrows;
+
+    int used;
+    if (it->nrows == 0) {
+        used = it->render ? 0 : 1;
+    } else {
+        used = 0;
+        for (int i = 0; i < it->nrows; i++)
+            used += wrap_count(it->rows[i], W);
+    }
+    if (W > 0) {
+        it->hcols = W;
+        it->hrows = used;
+    }
     return used;
 }
 
@@ -827,6 +899,7 @@ struct frame {
 
 static struct frame shown;
 static struct frame built;
+static struct frame all;
 static int shown_rows, shown_cols;
 
 static unsigned long long row_hash(const char *s)
@@ -846,10 +919,8 @@ static void frame_reset(struct frame *f)
     f->n = 0;
 }
 
-static void frame_push(struct frame *f, char *s)
+static void frame_add(struct frame *f, char *s, unsigned long long h)
 {
-    if (!s)
-        return;
     if (f->n == f->cap) {
         int cap = f->cap ? f->cap * 2 : 64;
         char **r = realloc(f->row, (size_t)cap * sizeof *r);
@@ -864,8 +935,15 @@ static void frame_push(struct frame *f, char *s)
         }
         f->cap = cap;
     }
-    f->hash[f->n] = row_hash(s);
+    f->hash[f->n] = h;
     f->row[f->n++] = s;
+}
+
+static void frame_push(struct frame *f, char *s)
+{
+    if (!s)
+        return;
+    frame_add(f, s, row_hash(s));
 }
 
 static void frame_swap(struct frame *a, struct frame *b)
@@ -877,14 +955,15 @@ static void frame_swap(struct frame *a, struct frame *b)
 
 static void row_into_frame(struct frame *f, const char *s, int W)
 {
+    static struct style st, at_start;
     size_t n = strlen(s);
-    struct style st = {{0}, 0};
     size_t i = 0, start = 0;
 
+    style_reset(&st);
     for (;;) {
         size_t cells = 0;
         size_t line_start = start;
-        struct style at_start = st;
+        style_copy(&at_start, &st);
         while (i < n) {
             size_t was = cells;
             size_t next = step(s, n, i, &cells, &st);
@@ -897,7 +976,8 @@ static void row_into_frame(struct frame *f, const char *s, int W)
         char  *out = malloc(at_start.len + body + 1);
         if (!out)
             return;
-        memcpy(out, at_start.buf, at_start.len);
+        if (at_start.len)
+            memcpy(out, at_start.buf, at_start.len);
         memcpy(out + at_start.len, s + line_start, body);
         out[at_start.len + body] = '\0';
         frame_push(f, out);
@@ -915,6 +995,7 @@ static int window_pending(struct item *pending)
     if (open_len && !open_wrapped) {
         pending->rows = &open_buf;
         pending->nrows = 1;
+        pending->borrowed = 1;
         return 1;
     }
     return 0;
@@ -943,8 +1024,17 @@ struct window {
     int scrolled;
 };
 
+static struct window geom_cache;
+static unsigned      geom_epoch;
+static int           geom_W, geom_H, geom_valid;
+
 static struct window window_geometry(int W, int H, struct item *pending)
 {
+    if (geom_valid && geom_epoch == layout_epoch && geom_W == W && geom_H == H) {
+        window_pending(pending);
+        return geom_cache;
+    }
+
     struct window g = {0};
 
     int ch = chrome_n;
@@ -988,6 +1078,12 @@ static struct window window_geometry(int W, int H, struct item *pending)
     g.skip = have - body - scroll;
     if (g.skip < 0)
         g.skip = 0;
+
+    geom_cache = g;
+    geom_W = W;
+    geom_H = H;
+    geom_epoch = layout_epoch;
+    geom_valid = 1;
     return g;
 }
 
@@ -1015,17 +1111,44 @@ static int shift_score(int body, int k)
     return score;
 }
 
+/* prefix counts of the built rows a shift can score on: no shift k can beat a
+   score the rows in its overlap cannot reach */
+static int *shift_reach(int body)
+{
+    static int *reach;
+    static int  reach_cap;
+
+    if (body + 1 > reach_cap) {
+        int *grown = realloc(reach, (size_t)(body + 1) * sizeof *grown);
+        if (!grown)
+            return NULL;
+        reach = grown;
+        reach_cap = body + 1;
+    }
+    reach[0] = 0;
+    for (int i = 0; i < body; i++)
+        reach[i + 1] = reach[i] + (built.row[i][0] ? 1 : 0);
+    return reach;
+}
+
 static int frame_shift(int body, int *score_out)
 {
     *score_out = 0;
     if (shown.n < body)
         return 0;
 
-    int best = shift_score(body, 0);
-    int best_k = 0;
+    int  best = shift_score(body, 0);
+    int  best_k = 0;
+    int *reach = shift_reach(body);
     for (int k = -(body - 1); k < body; k++) {
         if (k == 0)
             continue;
+        if (reach) {
+            int lo = k > 0 ? 0 : -k;
+            int hi = k > 0 ? body - k : body;
+            if (reach[hi] - reach[lo] <= best)
+                continue;
+        }
         int score = shift_score(body, k);
         if (score > best) {
             best = score;
@@ -1073,13 +1196,17 @@ void viewport_paint(void)
 
     struct item pending = {0};
     struct window g = window_geometry(W, H, &pending);
-    scrolled = g.scrolled;
-    if (scrolled > 0) {
-        anchor_id = g.first < nitems ? items[g.first].id : next_id;
-        anchor_skip = g.skip;
-    } else {
-        anchor_id = 0;
-        anchor_skip = 0;
+    unsigned want_anchor = 0;
+    int      want_skip = 0;
+    if (g.scrolled > 0) {
+        want_anchor = g.first < nitems ? items[g.first].id : next_id;
+        want_skip = g.skip;
+    }
+    if (scrolled != g.scrolled || anchor_id != want_anchor || anchor_skip != want_skip) {
+        scrolled = g.scrolled;
+        anchor_id = want_anchor;
+        anchor_skip = want_skip;
+        layout_changed();
     }
 
     int chrome_shown = g.chrome_shown;
@@ -1088,7 +1215,7 @@ void viewport_paint(void)
 
     chrome_top = chrome_shown > 0 ? body : -1;
 
-    struct frame all = {0};
+    frame_reset(&all);
     for (int r = g.first; r < g.total && r <= nitems; r++) {
         if (item_at(r, &pending)->hidden)
             continue;
@@ -1111,12 +1238,11 @@ void viewport_paint(void)
         content = body;
     for (int i = content; i < body; i++)
         frame_push(&built, blank_row());
-    for (int i = 0; i < content; i++)
-        frame_push(&built, strdup(all.row[skip + i]));
-
+    for (int i = 0; i < content; i++) {
+        frame_add(&built, all.row[skip + i], all.hash[skip + i]);
+        all.row[skip + i] = NULL;
+    }
     frame_reset(&all);
-    free(all.row);
-    free(all.hash);
 
     for (int i = 0; i < chrome_shown; i++)
         frame_push(&built, strdup(chrome_rows[i]));
@@ -1189,6 +1315,7 @@ void viewport_paint(void)
 
 void viewport_chrome(char **rows_in, int n, int caret_row, int caret_col)
 {
+    int was = chrome_n;
     for (int i = 0; i < chrome_n; i++)
         free(chrome_rows[i]);
     chrome_n = 0;
@@ -1208,6 +1335,8 @@ void viewport_chrome(char **rows_in, int n, int caret_row, int caret_col)
     }
     chrome_caret_row = caret_row;
     chrome_caret_col = caret_col;
+    if (chrome_n != was)
+        layout_changed();
     dirty = 1;
 }
 
@@ -1244,6 +1373,7 @@ void viewport_chrome_keep(int keep)
     chrome_n = 0;
     chrome_caret_col = -1;
     dirty = 1;
+    layout_changed();
 }
 
 void viewport_chrome_clear(void)
@@ -1254,6 +1384,7 @@ void viewport_chrome_clear(void)
     chrome_n = 0;
     chrome_caret_col = -1;
     dirty = 1;
+    layout_changed();
 }
 
 void viewport_scroll(int delta)
@@ -1263,6 +1394,7 @@ void viewport_scroll(int delta)
     if (scrolled < 0)
         scrolled = 0;
     dirty = 1;
+    layout_changed();
     viewport_paint();
 }
 
@@ -1271,6 +1403,7 @@ void viewport_scroll_end(void)
     anchor_id = 0;
     scrolled = 0;
     dirty = 1;
+    layout_changed();
     viewport_paint();
 }
 

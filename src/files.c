@@ -113,9 +113,12 @@ static int index_from_git(struct index *ix, const char *root)
     if (!text_shell_quote(root, quoted, sizeof quoted))
         return 0;
 
+    /* -z with quotePath off: a path with non-ASCII in it comes back whole,
+       rather than C-quoted and unusable. */
     char cmd[4300];
     if (snprintf(cmd, sizeof cmd,
-                 "git -C %s ls-files --cached --others --exclude-standard 2>/dev/null",
+                 "git -c core.quotePath=false -C %s ls-files -z --cached --others "
+                 "--exclude-standard 2>/dev/null",
                  quoted) >= (int)sizeof cmd)
         return 0;
 
@@ -126,11 +129,11 @@ static int index_from_git(struct index *ix, const char *root)
     char *line = NULL;
     size_t cap = 0;
     ssize_t n;
-    while ((n = getline(&line, &cap, f)) > 0) {
-        if (line[n - 1] == '\n')
-            line[--n] = '\0';
+    while ((n = getdelim(&line, &cap, '\0', f)) > 0) {
+        if (line[n - 1] == '\0')
+            n--;
 
-        if (n > 0 && line[0] != '"')
+        if (n > 0)
             index_add_with_parents(ix, line);
     }
     free(line);

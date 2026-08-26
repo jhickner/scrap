@@ -9,6 +9,7 @@
 #include "app.h"
 #include "board.h"
 #include "boardcfg.h"
+#include "boardname.h"
 #include "boardview.h"
 #include "child.h"
 #include "boardwork.h"
@@ -161,6 +162,32 @@ static int idle_fds(void *ud, int *out, int max)
     return n + tg_fds(out + n, max - n);
 }
 
+static int bash_fds(void *ud, int *out, int max)
+{
+    (void)ud;
+    return workspace_fds(out, max);
+}
+
+static void bash_ready(void *ud)
+{
+    (void)ud;
+    workspace_drain();
+}
+
+static void reap_children(void)
+{
+    char key[CHILD_KEY_MAX];
+    for (;;) {
+        char *out = NULL;
+        int   ok = 0;
+        if (!child_reap(key, sizeof key, &out, &ok))
+            break;
+        (void)ok;
+        boardname_take(key, out);
+        free(out);
+    }
+}
+
 static void offer_project_trust(struct session *s)
 {
     if (!session_take_trust_request(s))
@@ -178,6 +205,7 @@ static int idle_render(void *ud)
     (void)ud;
     sidechannel_poll();
     sidechannel_tick();
+    reap_children();
 
     if (tg_pending())
         tty_wake();
@@ -197,6 +225,7 @@ static void side_tick(void *ud)
     (void)ud;
     sidechannel_poll();
     sidechannel_tick();
+    reap_children();
     image_poll();
     workspace_pump();
     status_tick();
@@ -275,11 +304,17 @@ static void splitter(void *ud, int quiet)
 static int takeover_pending(void *ud)
 {
     (void)ud;
+    if (tty_quit_requested())
+        return 1;
     return restart_wanted() && handoff_wanted();
 }
 
 static void takeover_run(void *ud)
 {
+    if (tty_quit_requested()) {
+        prompt_stop(ud);
+        return;
+    }
     sessionswitch_serve_request();
     restart_clear();
     if (sessionswitch_gave_last())
@@ -693,6 +728,10 @@ int main(int argc, char **argv)
         } else {
             line = prompt_read(prompt);
 
+            if (tty_quit_requested()) {
+                free(line);
+                break;
+            }
             if (!line && workspace_count() > 1) {
                 workspace_close(workspace_index());
                 continue;
@@ -708,7 +747,9 @@ int main(int argc, char **argv)
         }
 
         if (bash_is_command(line)) {
+            tty_watch(bash_fds, bash_ready, NULL);
             bash_run(line);
+            tty_watch(NULL, NULL, NULL);
             gitinfo_forget();
             char *text = bash_take_context();
             if (text) {

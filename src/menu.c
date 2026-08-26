@@ -96,9 +96,9 @@ static int put_item(const struct menu *m, int at, int picked, size_t budget)
         snprintf(shown, sizeof shown, "%s \xc2\xb7 %s", m->item[at], m->suffix);
         s = shown;
     }
-    size_t fit = ui_fit_bytes(s, budget);
+    size_t fit = ui_fit_visible(s, strlen(s), budget);
     ui_putn(s, fit);
-    return (int)ui_cells_n(s, fit);
+    return (int)ui_cells_visible(s, fit);
 }
 
 int menu_width(const struct menu *m)

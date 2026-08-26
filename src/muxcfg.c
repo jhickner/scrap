@@ -1,39 +1,24 @@
 #include "muxcfg.h"
 
-#include "muxmake.h"
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "app.h"
-#include "ask.h"
-#include "cmd.h"
 #include "models.h"
-#include "pick.h"
 #include "session.h"
 #include "settings.h"
 #include "text.h"
-#include "ui.h"
 #include "vendor/agents/backend.h"
-#include "vendor/cJSON.h"
 
 #define MUX_FILE    "matrix.json"
 #define MUX_DEFAULT "claude,codex,grok"
 
-struct set {
-    char            name[MUX_NAME];
-    int             n;
-    struct mux_spec row[MUX_MAX];
-};
-
-static struct set sets[MUX_SETS];
-static int        nsets;
-static int        active;
-static int        loaded;
-
-static int name_taken(const char *name, int except);
+static struct mux_set sets[MUX_SETS];
+static int            nsets;
+static int            active;
+static int            loaded;
 
 static int known_backend(const char *name)
 {
@@ -48,7 +33,7 @@ static int store_path(char *out, size_t size)
     return path_config_file(out, size, MUX_FILE);
 }
 
-static void seed_from_settings(struct set *s)
+static void seed_from_settings(struct mux_set *s)
 {
     const char *p = settings_get_str(SETTING_MUX_BACKENDS, MUX_DEFAULT);
 
@@ -93,7 +78,7 @@ static void seed_from_settings(struct set *s)
     }
 }
 
-static void put_field(char *out, size_t cap, const cJSON *obj, const char *key)
+void muxcfg_field(char *out, size_t cap, const cJSON *obj, const char *key)
 {
     const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(obj, key));
     snprintf(out, cap, "%s", v ? v : "");
@@ -121,7 +106,7 @@ static void load_file(void)
     cJSON_ArrayForEach(config, configs) {
         if (nsets >= MUX_SETS || !config->string)
             break;
-        struct set *s = &sets[nsets++];
+        struct mux_set *s = &sets[nsets++];
         snprintf(s->name, sizeof s->name, "%s", config->string);
 
         cJSON *row;
@@ -129,10 +114,10 @@ static void load_file(void)
             if (s->n >= MUX_MAX)
                 break;
             struct mux_spec m = {0};
-            put_field(m.backend, sizeof m.backend, row, "backend");
-            put_field(m.model, sizeof m.model, row, "model");
-            put_field(m.effort, sizeof m.effort, row, "effort");
-            put_field(m.prompt, sizeof m.prompt, row, "prompt");
+            muxcfg_field(m.backend, sizeof m.backend, row, "backend");
+            muxcfg_field(m.model, sizeof m.model, row, "model");
+            muxcfg_field(m.effort, sizeof m.effort, row, "effort");
+            muxcfg_field(m.prompt, sizeof m.prompt, row, "prompt");
             if (*m.backend && known_backend(m.backend))
                 s->row[s->n++] = m;
         }
@@ -187,7 +172,7 @@ static void ensure_loaded(void)
 
     load_file();
     if (!nsets) {
-        struct set *s = &sets[nsets++];
+        struct mux_set *s = &sets[nsets++];
         snprintf(s->name, sizeof s->name, "default");
         seed_from_settings(s);
     }
@@ -212,16 +197,18 @@ int muxcfg_load(struct mux_spec *out, int max)
 
 static void unique_name(const char *want, char *out, size_t cap)
 {
-    snprintf(out, cap, "%s", want && *want ? want : "matrix");
-    for (int i = 2; name_taken(out, -1) && i < 100; i++)
-        snprintf(out, cap, "%.*s %d", (int)cap - 5, want, i);
+    const char *base = want && *want ? want : "matrix";
+
+    snprintf(out, cap, "%s", base);
+    for (int i = 2; muxcfg_name_taken(out, -1) && i < 100; i++)
+        snprintf(out, cap, "%.*s %d", (int)cap - 5, base, i);
 }
 
 int muxcfg_install(const char *name, const struct mux_spec *v, int n)
 {
     ensure_loaded();
 
-    struct set *s;
+    struct mux_set *s;
     if (nsets < MUX_SETS) {
         s = &sets[nsets++];
     } else {
@@ -257,352 +244,70 @@ void muxcfg_label(const struct mux_spec *m, char *out, size_t cap)
         snprintf(out, cap, "%s \xc2\xb7 %s", m->backend, short_model(m));
 }
 
-static int pick_field(const char *title, const struct pick_item *items, int count,
-                      char *out, size_t cap, int filter)
+int muxcfg_count(void)
 {
-    int initial = 0;
-    for (int i = 0; i < count; i++)
-        if (!strcmp(items[i].label, *out ? out : "default"))
-            initial = i;
-
-    int index = filter ? pick_run_filter(title, items, count, initial)
-                       : pick_run(title, items, count, initial);
-    if (index < 0)
-        return 0;
-    snprintf(out, cap, "%s", strcmp(items[index].label, "default") ? items[index].label : "");
-    return 1;
+    ensure_loaded();
+    return nsets;
 }
 
-static int pick_model(struct mux_spec *m)
+int muxcfg_index(void)
 {
-    int                     count = 0;
-    const struct pick_item *items = cmd_model_choices(m->backend, &count);
-    return pick_field("model", items, count, m->model, sizeof m->model, 1);
+    ensure_loaded();
+    return active;
 }
 
-static int pick_effort(struct mux_spec *m)
+struct mux_set *muxcfg_at(int i)
 {
-    int                     count = 0;
-    const struct pick_item *items = cmd_effort_choices(m->backend, &count);
-    return pick_field("effort", items, count, m->effort, sizeof m->effort, 0);
+    ensure_loaded();
+    return i >= 0 && i < nsets ? &sets[i] : NULL;
 }
 
-static int pick_backend(char *out, size_t cap, const char *current)
+void muxcfg_select(int i)
 {
-    struct pick_item items[16];
-    int              count = 0;
-
-    for (const char *const *p = backend_names(); *p && count < (int)COUNT(items); p++)
-        items[count++] = (struct pick_item){*p, NULL};
-    if (!count)
-        return 0;
-
-    int initial = 0;
-    for (int i = 0; i < count; i++)
-        if (current && !strcmp(items[i].label, current))
-            initial = i;
-
-    int index = pick_run("backend", items, count, initial);
-    if (index < 0)
-        return 0;
-    snprintf(out, cap, "%s", items[index].label);
-    return 1;
+    ensure_loaded();
+    if (i >= 0 && i < nsets)
+        active = i;
 }
 
-static void row_prompt(struct mux_spec *m)
+int muxcfg_name_taken(const char *name, int except)
 {
-    char title[160];
-    char label[80];
-    muxcfg_label(m, label, sizeof label);
-    snprintf(title, sizeof title, "%s \xc2\xb7 always tell it", label);
-
-    char *text = ask_run(title, m->prompt);
-    if (!text)
-        return;
-    snprintf(m->prompt, sizeof m->prompt, "%s", text);
-    free(text);
-}
-
-static void row_backend(struct mux_spec *m)
-{
-    char was[32];
-    snprintf(was, sizeof was, "%s", m->backend);
-
-    if (!pick_backend(m->backend, sizeof m->backend, was) || !strcmp(was, m->backend))
-        return;
-    m->model[0] = m->effort[0] = '\0';
-    pick_model(m);
-    pick_effort(m);
-}
-
-static int add_row(struct mux_spec *v, int n)
-{
-    if (n >= MUX_MAX)
-        return n;
-
-    struct mux_spec m = {0};
-    if (!pick_backend(m.backend, sizeof m.backend, NULL))
-        return n;
-    if (!pick_model(&m))
-        return n;
-    pick_effort(&m);
-    v[n++] = m;
-    return n;
-}
-
-static int row_duplicate(struct mux_spec *v, int n, int at)
-{
-    if (n >= MUX_MAX)
-        return n;
-    memmove(&v[at + 2], &v[at + 1], (size_t)(n - at - 1) * sizeof *v);
-    v[at + 1] = v[at];
-    return n + 1;
-}
-
-static int row_remove(struct mux_spec *v, int n, int at)
-{
-    memmove(&v[at], &v[at + 1], (size_t)(n - at - 1) * sizeof *v);
-    return n - 1;
-}
-
-static int edit_row(struct mux_spec *v, int n, int at)
-{
-    static const struct pick_item ACTIONS[] = {
-        {"backend", "answer from another CLI"},
-        {"model", "answer with another model"},
-        {"effort", "reasoning effort"},
-        {"prompt", "standing instructions for this row"},
-        {"duplicate", "another row on the same backend"},
-        {"remove", "drop this row from the matrix"},
-    };
-
-    char title[160];
-    muxcfg_label(&v[at], title, sizeof title);
-
-    switch (pick_run(title, ACTIONS, (int)COUNT(ACTIONS), 0)) {
-    case 0:
-        row_backend(&v[at]);
-        break;
-    case 1:
-        pick_model(&v[at]);
-        break;
-    case 2:
-        pick_effort(&v[at]);
-        break;
-    case 3:
-        row_prompt(&v[at]);
-        break;
-    case 4:
-        n = row_duplicate(v, n, at);
-        break;
-    case 5:
-        n = row_remove(v, n, at);
-        break;
-    }
-    return n;
-}
-
-static int name_taken(const char *name, int except)
-{
+    ensure_loaded();
     for (int i = 0; i < nsets; i++)
         if (i != except && !strcmp(sets[i].name, name))
             return 1;
     return 0;
 }
 
-static int name_config(const char *title, char *out, size_t cap, int except)
+int muxcfg_new(const char *name)
 {
-    char *text = ask_run(title, except >= 0 ? sets[except].name : NULL);
-    if (!text)
+    ensure_loaded();
+    if (nsets >= MUX_SETS)
+        return -1;
+
+    struct mux_set *s = &sets[nsets];
+    memset(s, 0, sizeof *s);
+    snprintf(s->name, sizeof s->name, "%s", name);
+    active = nsets++;
+    return active;
+}
+
+int muxcfg_drop(int i)
+{
+    ensure_loaded();
+    if (nsets < 2 || i < 0 || i >= nsets)
         return 0;
 
-    text_chomp(text);
-    if (!*text || name_taken(text, except)) {
-        free(text);
-        return 0;
-    }
-    snprintf(out, cap, "%s", text);
-    free(text);
+    memmove(&sets[i], &sets[i + 1], (size_t)(nsets - i - 1) * sizeof *sets);
+    nsets--;
+    if (active >= nsets)
+        active = nsets - 1;
+    else if (active > i)
+        active--;
     return 1;
 }
 
-static void configs_menu(void)
-{
-    for (;;) {
-        char             labels[MUX_SETS][MUX_NAME + 8];
-        char             details[MUX_SETS][32];
-        struct pick_item items[MUX_SETS + 2];
-        int              count = 0;
-
-        for (int i = 0; i < nsets; i++) {
-            snprintf(labels[i], sizeof labels[i], "%s%s",
-                     i == active ? "\xe2\x97\x8f " : "  ", sets[i].name);
-            snprintf(details[i], sizeof details[i], "%d row%s", sets[i].n,
-                     sets[i].n == 1 ? "" : "s");
-            items[count++] = (struct pick_item){labels[i], details[i]};
-        }
-        if (nsets < MUX_SETS) {
-            items[count++] = (struct pick_item){"new config", "an empty matrix"};
-            items[count++] = (struct pick_item){"describe one",
-                                                "say what should be in it"};
-        }
-        items[count++] = (struct pick_item){"back", NULL};
-
-        int pressed = 0;
-        int index = pick_run_keys("configs \xc2\xb7 n new, s describe, r rename, "
-                                  "x remove",
-                                  items, count, active, "nsrx", &pressed);
-        if (index < 0)
-            break;
-
-        if (pressed == 's' || (!pressed && index == nsets + 1 && nsets < MUX_SETS)) {
-            char *what = ask_run("what should be in it", NULL);
-            if (what) {
-                muxmake_run(what);
-                free(what);
-            }
-            continue;
-        }
-        if (pressed == 'n' || (!pressed && index == nsets && nsets < MUX_SETS)) {
-            char name[MUX_NAME];
-            if (nsets < MUX_SETS && name_config("name it", name, sizeof name, -1)) {
-                snprintf(sets[nsets].name, sizeof sets[nsets].name, "%s", name);
-                sets[nsets].n = 0;
-                active = nsets++;
-                save_file();
-            }
-            continue;
-        }
-        if (index >= nsets) {
-            if (!pressed)
-                break;
-            continue;
-        }
-
-        switch (pressed) {
-        case 'r':
-            if (name_config("rename it", sets[index].name, sizeof sets[index].name, index))
-                save_file();
-            break;
-        case 'x':
-            if (nsets < 2)
-                break;
-            memmove(&sets[index], &sets[index + 1],
-                    (size_t)(nsets - index - 1) * sizeof *sets);
-            nsets--;
-            if (active >= nsets)
-                active = nsets - 1;
-            else if (active > index)
-                active--;
-            save_file();
-            break;
-        default:
-            active = index;
-            save_file();
-            return;
-        }
-    }
-}
-
-void muxcfg_run(void)
+void muxcfg_save(void)
 {
     ensure_loaded();
-
-    struct set *s = &sets[active];
-    int         sel = 0;
-
-    for (;;) {
-        char             labels[MUX_MAX][160];
-        char             details[MUX_MAX][MUX_PROMPT];
-        char             config[MUX_NAME + 16];
-        struct pick_item items[MUX_MAX + 3];
-        int              count = 0;
-
-        s = &sets[active];
-        for (int i = 0; i < s->n; i++) {
-            muxcfg_label(&s->row[i], labels[i], sizeof labels[i]);
-            snprintf(details[i], sizeof details[i], "%s", s->row[i].prompt);
-            items[count++] = (struct pick_item){labels[i], details[i]};
-        }
-        if (s->n < MUX_MAX)
-            items[count++] = (struct pick_item){"add a row", "another backend and model"};
-        snprintf(config, sizeof config, "config: %s", s->name);
-        items[count++] = (struct pick_item){config, "switch, rename, or start another"};
-        items[count++] = (struct pick_item){"done", NULL};
-
-        if (sel >= count)
-            sel = count - 1;
-
-        int pressed = 0;
-        int index = pick_run_keys("mux matrix \xc2\xb7 a add, d duplicate, b backend, "
-                                  "m model, e effort, p prompt, x remove, c configs",
-                                  items, count, sel, "admbepxc", &pressed);
-        if (index < 0)
-            break;
-        sel = index;
-
-        if (pressed == 'c') {
-            configs_menu();
-            sel = 0;
-            continue;
-        }
-        if (pressed == 'a') {
-            s->n = add_row(s->row, s->n);
-            sel = s->n > 0 ? s->n - 1 : 0;
-        } else if (index >= s->n) {
-            if (pressed)
-                continue;
-            if (index == count - 1)
-                break;
-            if (index == count - 2) {
-                configs_menu();
-                sel = 0;
-                continue;
-            }
-            s->n = add_row(s->row, s->n);
-        } else {
-            switch (pressed) {
-            case 'd':
-                s->n = row_duplicate(s->row, s->n, index);
-                break;
-            case 'b':
-                row_backend(&s->row[index]);
-                break;
-            case 'm':
-                pick_model(&s->row[index]);
-                break;
-            case 'e':
-                pick_effort(&s->row[index]);
-                break;
-            case 'p':
-                row_prompt(&s->row[index]);
-                break;
-            case 'x':
-                s->n = row_remove(s->row, s->n, index);
-                if (sel >= s->n)
-                    sel = s->n > 0 ? s->n - 1 : 0;
-                break;
-            default:
-                s->n = edit_row(s->row, s->n, index);
-                break;
-            }
-        }
-        save_file();
-    }
-
     save_file();
-
-    s = &sets[active];
-    ui_note("mux matrix \xc2\xb7 %s", s->name);
-    ui_put("\n");
-    for (int i = 0; i < s->n; i++) {
-        char label[160];
-        muxcfg_label(&s->row[i], label, sizeof label);
-        if (*s->row[i].prompt)
-            ui_note("%s \xe2\x80\x94 %s", label, s->row[i].prompt);
-        else
-            ui_note("%s", label);
-        ui_put("\n");
-    }
-    ui_flush();
 }

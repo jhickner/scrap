@@ -1,6 +1,7 @@
 #include "bash.h"
 
 #include <errno.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -414,12 +415,34 @@ void bash_run(const char *line)
         int      stdin_open = 1;
         double   shown = 0;
         for (;;) {
-            fd_set fds;
-            FD_ZERO(&fds);
-            FD_SET(master, &fds);
-            if (stdin_open)
-                FD_SET(STDIN_FILENO, &fds);
-            int r = select(master + 1, &fds, NULL, NULL, NULL);
+            struct pollfd pfd[TTY_WATCH_MAX + 2];
+            int           watch[TTY_WATCH_MAX];
+            int           nfd = 0;
+
+            pfd[nfd].fd = master;
+            pfd[nfd].events = POLLIN;
+            pfd[nfd++].revents = 0;
+            int at_stdin = -1;
+            if (stdin_open) {
+                at_stdin = nfd;
+                pfd[nfd].fd = STDIN_FILENO;
+                pfd[nfd].events = POLLIN;
+                pfd[nfd++].revents = 0;
+            }
+
+            /* the agent sessions still have to be drained, or a turn that keeps
+               streaming fills its pty buffer and stalls for the whole command */
+            int at_watch = nfd;
+            int nwatch = tty_watch_fds(watch, TTY_WATCH_MAX);
+            for (int i = 0; i < nwatch; i++) {
+                if (watch[i] < 0)
+                    continue;
+                pfd[nfd].fd = watch[i];
+                pfd[nfd].events = POLLIN;
+                pfd[nfd++].revents = 0;
+            }
+
+            int r = poll(pfd, (nfds_t)nfd, -1);
             if (r < 0) {
                 if (errno == EINTR) {
                     if (tty_resize_epoch() != epoch) {
@@ -430,7 +453,13 @@ void bash_run(const char *line)
                 }
                 break;
             }
-            if (FD_ISSET(master, &fds)) {
+            int woke = 0;
+            for (int i = at_watch; i < nfd && !woke; i++)
+                woke = pfd[i].revents != 0;
+            if (woke)
+                tty_watch_ready();
+
+            if (pfd[0].revents) {
                 ssize_t got = read(master, chunk, sizeof chunk);
                 if (got <= 0) {
                     if (got < 0 && errno == EINTR)
@@ -454,7 +483,7 @@ void bash_run(const char *line)
                     }
                 }
             }
-            if (stdin_open && FD_ISSET(STDIN_FILENO, &fds)) {
+            if (at_stdin >= 0 && pfd[at_stdin].revents) {
                 ssize_t got = read(STDIN_FILENO, chunk, sizeof chunk);
                 if (got > 0)
                     write_all(master, chunk, (size_t)got);

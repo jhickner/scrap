@@ -25,7 +25,6 @@ int cmd_runs_mid_turn(const char *line);
 int cmd_runs_live(const char *line);
 
 int cmd_is_command(const char *line);
-int cmd_is_quit(const char *line);
 
 int cmd_self_echoes(const char *line);
 

@@ -115,15 +115,9 @@ static void value_of(const struct row *r, const struct board_cfg *c,
     case ROW_SERVING:
         snprintf(out, size, "%s", c->serving);
         break;
-    case ROW_BACKEND: {
-        const struct board_backend *b = &c->backends[r->backend_at];
-        size_t                      at = 0;
-        out[0] = '\0';
-        for (int t = 0; t < BOARD_TIERS && at < size; t++)
-            at += (size_t)snprintf(out + at, size - at, "%s%s", t ? " · " : "",
-                                   b->level[t].model[0] ? b->level[t].model : "default");
+    case ROW_BACKEND:
+        boardcfg_levels_line(&c->backends[r->backend_at], out, size);
         break;
-    }
     case ROW_VIEW:
         snprintf(out, size, "%s", c->view[0] ? c->view : "list");
         break;
@@ -145,8 +139,11 @@ static void edit_count(struct row *r)
         return;
     char *end = NULL;
     long  want = strtol(said, &end, 10);
+    while (*end == ' ')
+        end++;
+    int read = end != said && !*end;
     free(said);
-    if (end == NULL || want < r->low || want > r->high)
+    if (!read || want < r->low || want > r->high)
         return;
     *r->count = (int)want;
 }
@@ -155,22 +152,34 @@ static const char *const EFFORTS[] = {
     "", "low", "medium", "high", "xhigh", "max",
 };
 
-static void edit_serving(struct board_cfg *c)
+int boardcfg_pick_serving(const struct board_cfg *c, char *out, size_t size)
 {
-    if (!c->backends_n)
-        return;
+    if (!c || !c->backends_n)
+        return 0;
 
     struct pick_item items[BOARD_BACKENDS_MAX];
+    char             details[BOARD_BACKENDS_MAX][160];
     int              at = 0;
+
     for (int i = 0; i < c->backends_n; i++) {
-        items[i] = (struct pick_item){c->backends[i].name, NULL};
+        boardcfg_levels_line(&c->backends[i], details[i], sizeof details[i]);
+        items[i] = (struct pick_item){c->backends[i].name, details[i]};
         if (!strcmp(c->backends[i].name, c->serving))
             at = i;
     }
 
     int chosen = pick_run("serving the board", items, c->backends_n, at);
-    if (chosen >= 0)
-        snprintf(c->serving, sizeof c->serving, "%s", c->backends[chosen].name);
+    if (chosen < 0)
+        return 0;
+    snprintf(out, size, "%s", c->backends[chosen].name);
+    return 1;
+}
+
+static void edit_serving(struct board_cfg *c)
+{
+    char name[32];
+    if (boardcfg_pick_serving(c, name, sizeof name))
+        snprintf(c->serving, sizeof c->serving, "%s", name);
 }
 
 static void edit_backend(struct board_cfg *c, int at)

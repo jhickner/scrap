@@ -2,8 +2,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #include "block.h"
@@ -12,8 +10,6 @@
 #include "tty.h"
 #include "ui.h"
 #include "viewport.h"
-
-#define EDIT_MAX_BYTES (1u << 22)
 
 static const char *editor_command(void)
 {
@@ -25,30 +21,6 @@ static const char *editor_command(void)
     return editor;
 }
 
-static int temp_path(char *out, size_t size, const char *suffix)
-{
-    const char *dir = getenv("TMPDIR");
-    if (!dir || !*dir)
-        dir = "/tmp";
-
-    int n = snprintf(out, size, "%s/mux-edit-XXXXXX", dir);
-    if (n <= 0 || (size_t)n >= size)
-        return 0;
-
-    int fd = mkstemp(out);
-    if (fd < 0)
-        return 0;
-    close(fd);
-
-    if (suffix && *suffix) {
-        char named[4200];
-        if ((size_t)snprintf(named, sizeof named, "%s%s", out, suffix) < sizeof named &&
-            rename(out, named) == 0)
-            snprintf(out, size, "%s", named);
-    }
-    return 1;
-}
-
 static int run_editor(const char *path)
 {
     char quoted[4200];
@@ -56,7 +28,9 @@ static int run_editor(const char *path)
         return -1;
 
     char cmd[8500];
-    snprintf(cmd, sizeof cmd, "%s %s", editor_command(), quoted);
+    int  n = snprintf(cmd, sizeof cmd, "%s %s", editor_command(), quoted);
+    if (n < 0 || (size_t)n >= sizeof cmd)
+        return -1;
 
     chrome_clear();
     viewport_suspend();
@@ -81,41 +55,4 @@ int edit_open(const char *path)
     if (!path || !*path || access(path, R_OK))
         return 0;
     return run_editor(path) != -1;
-}
-
-char *edit_run(const char *initial, const char *suffix)
-{
-    char path[4100];
-    if (!temp_path(path, sizeof path, suffix))
-        return NULL;
-
-    FILE *f = fopen(path, "w");
-    if (!f) {
-        unlink(path);
-        return NULL;
-    }
-    if (initial && *initial)
-        fputs(initial, f);
-
-    size_t len = initial ? strlen(initial) : 0;
-    if (!len || initial[len - 1] != '\n')
-        fputc('\n', f);
-    if (fclose(f) != 0) {
-        unlink(path);
-        return NULL;
-    }
-
-    int status = run_editor(path);
-    if (status == -1) {
-        unlink(path);
-        return NULL;
-    }
-    char *text = NULL;
-    if (status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0)
-        text = text_slurp(path, EDIT_MAX_BYTES, NULL);
-    unlink(path);
-
-    if (text)
-        text_chomp(text);
-    return text;
 }

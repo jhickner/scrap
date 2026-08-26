@@ -260,6 +260,16 @@ static const char *catalog_vendor(const char *backend)
     return "";
 }
 
+/* 0 when the catalog is not there yet */
+static time_t catalog_stamp(void)
+{
+    char        path[4096];
+    struct stat st;
+    if (!path_config_file(path, sizeof path, "openrouter.json") || stat(path, &st))
+        return 0;
+    return st.st_mtime;
+}
+
 int models_rates(const char *backend, const char *model, struct model_rates *out)
 {
     if (!out || !model || !*model)
@@ -269,16 +279,27 @@ int models_rates(const char *backend, const char *model, struct model_rates *out
     char key[256];
     snprintf(key, sizeof key, "%s/%s", backend ? backend : "", model);
 
-    /* Only a hit is remembered: a miss can be a catalog still downloading in
-       the background, which the next turn should ask about again. */
+    /* Misses are remembered too, or a model the catalog does not carry reparses
+       the whole file every turn. A catalog that lands, or is refreshed, moves
+       the mtime and drops the table. */
     static struct {
         char               key[256];
         struct model_rates rates;
-    } known[8];
-    static int n;
+        int                hit;
+    } known[16];
+    static int    n, at;
+    static time_t stamp;
+
+    time_t now = catalog_stamp();
+    if (now != stamp) {
+        stamp = now;
+        n = at = 0;
+    }
 
     for (int i = 0; i < n; i++)
         if (!strcmp(known[i].key, key)) {
+            if (!known[i].hit)
+                return 0;
             *out = known[i].rates;
             return 1;
         }
@@ -307,16 +328,17 @@ int models_rates(const char *backend, const char *model, struct model_rates *out
     cJSON_Delete(root);
     free(text);
 
-    if (!ok) {
+    if (!ok)
         memset(out, 0, sizeof *out);
-        return 0;
-    }
-    if (n < (int)(sizeof known / sizeof *known)) {
-        snprintf(known[n].key, sizeof known[n].key, "%s", key);
-        known[n].rates = *out;
+
+    snprintf(known[at].key, sizeof known[at].key, "%s", key);
+    known[at].rates = *out;
+    known[at].hit = ok;
+    at = (at + 1) % (int)(sizeof known / sizeof *known);
+    if (n < (int)(sizeof known / sizeof *known))
         n++;
-    }
-    return 1;
+
+    return ok;
 }
 
 static void fill_pi_store(struct list *l)

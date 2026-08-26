@@ -6,21 +6,23 @@
 static const char *opener(const char *text, const char *close)
 {
     int depth = 0;
-    for (const char *p = close; p >= text; p--) {
-        if (*p == '"') {
+    for (size_t i = (size_t)(close - text) + 1; i-- > 0;) {
+        if (text[i] == '"') {
             int escaped;
             do {
-                p--;
+                if (i == 0)
+                    break;
+                i--;
                 escaped = 0;
-                for (const char *b = p - 1; b >= text && *b == '\\'; b--)
+                for (size_t b = i; b > 0 && text[b - 1] == '\\'; b--)
                     escaped = !escaped;
-            } while (p > text && (*p != '"' || escaped));
+            } while (i > 0 && (text[i] != '"' || escaped));
             continue;
         }
-        if (*p == '}')
+        if (text[i] == '}')
             depth++;
-        else if (*p == '{' && --depth == 0)
-            return p;
+        else if (text[i] == '{' && --depth == 0)
+            return text + i;
     }
     return NULL;
 }
