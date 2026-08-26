@@ -119,15 +119,15 @@ int main(void)
                            .created = time(NULL),
                            .updated = time(NULL)};
 
-    expect_status(&c, "12.3k in · 678 out · just now", "$");
+    expect_status(&c, "12.3k/678 · just now", "$");
 
     c.cost_usd = 0.42;
-    expect_status(&c, "$0.42 · just now", "12.3k in");
+    expect_status(&c, "$0.42 · just now", "12.3k/");
 
     c.closed = 0;
     c.done_n = 1;
     c.cost_usd = 0;
-    expect_status(&c, "just now", "12.3k in");
+    expect_status(&c, "just now", "12.3k/");
 
     return 0;
 }

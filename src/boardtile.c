@@ -152,8 +152,7 @@ static void status_of(const struct board_card *c, int wide, const char *step,
         text_humanize(c->tokens_out, out_tokens, sizeof out_tokens);
         if (where[0])
             snprintf(head, sizeof head, "%s · ", where);
-        snprintf(out, size, "%s%s in · %s out · %s", head, in,
-                 out_tokens, when);
+        snprintf(out, size, "%s%s/%s · %s", head, in, out_tokens, when);
     } else if (where[0])
         snprintf(out, size, "%s · %s", where, when);
     else
