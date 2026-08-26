@@ -11,7 +11,6 @@
 #include "gitcmd.h"
 #include "boardcfg.h"
 #include "boarddiff.h"
-#include "boardfile.h"
 #include "boardstep.h"
 #include "child.h"
 #include "boardflow.h"
@@ -262,38 +261,53 @@ static void base_of(const char *root, const char *path, const char *kept,
         gitcmd_line(root, "rev-parse --short HEAD", out, size);
 }
 
-static void ignore_card_file(const char *path)
+/* the board used to add CARD.md to the shared git dir's info/exclude, which is
+   repo-wide and permanent and blocks the first `git add CARD.md` */
+static void unignore_card_file(const char *path)
 {
     char common[4200];
     if (!gitcmd_line(path, "rev-parse --path-format=absolute --git-common-dir",
                   common, sizeof common))
         return;
 
-    char info[4300];
-    snprintf(info, sizeof info, "%s/info", common);
-    mkdir(info, 0700);
-
     char exclude[4400];
-    snprintf(exclude, sizeof exclude, "%s/exclude", info);
+    snprintf(exclude, sizeof exclude, "%s/info/exclude", common);
 
     FILE *f = fopen(exclude, "r");
-    if (f) {
-        char line[256];
-        while (fgets(line, sizeof line, f)) {
-            text_chomp(line);
-            if (!strcmp(line, "CARD.md")) {
-                fclose(f);
-                return;
-            }
-        }
-        fclose(f);
-    }
-
-    f = fopen(exclude, "a");
     if (!f)
         return;
-    fprintf(f, "CARD.md\n");
+
+    char  *kept = NULL;
+    size_t len = 0;
+    FILE  *out = open_memstream(&kept, &len);
+    if (!out) {
+        fclose(f);
+        return;
+    }
+
+    int dropped = 0;
+    char line[512];
+    while (fgets(line, sizeof line, f)) {
+        char bare[512];
+        snprintf(bare, sizeof bare, "%s", line);
+        text_chomp(bare);
+        if (!strcmp(bare, "CARD.md")) {
+            dropped = 1;
+            continue;
+        }
+        fputs(line, out);
+    }
     fclose(f);
+    fclose(out);
+
+    if (dropped) {
+        f = fopen(exclude, "w");
+        if (f) {
+            fwrite(kept, 1, len, f);
+            fclose(f);
+        }
+    }
+    free(kept);
 }
 
 /* a short card is its own title, and writing both prints the same line twice */
@@ -330,18 +344,31 @@ static void card_write(FILE *f, const struct board_card *c)
     }
 }
 
-static void write_card_file(const char *path, const struct board_card *c)
+/* CARD.md lives on the card's branch, so the plan has a history and travels
+   with a clone. The board writes it once and commits it; the worker owns it
+   from then on. */
+static int commit_card_file(const char *tree, const char *why)
 {
-    if (boardfile_put(path, c))
-        return;
+    char quoted[256];
+    if (!text_shell_quote(why, quoted, sizeof quoted))
+        return 0;
 
+    char args[512];
+    snprintf(args, sizeof args, "commit --quiet -m %s -- CARD.md", quoted);
+    return gitcmd_run(tree, "add -- CARD.md") && gitcmd_run(tree, args);
+}
+
+static int write_card_file(const char *path, const struct board_card *c)
+{
     char file[4300];
     snprintf(file, sizeof file, "%s/CARD.md", path);
     FILE *f = fopen(file, "w");
     if (!f)
-        return;
+        return 0;
     card_write(f, c);
     fclose(f);
+
+    return commit_card_file(path, "card: the card as the board wrote it");
 }
 
 struct card_show {
@@ -461,9 +488,9 @@ static char *first_turn(const struct board_card *c)
     if (tree[0])
         fprintf(out, "\n\n%s", tree);
     if (boardflow_worktree(c))
-        fputs("\n\nThe card is below in full, and the same text is in CARD.md "
-              "here to write back to and to pick up again later. Do not open "
-              "it to start: it holds nothing you have not been given.",
+        fputs("\n\nCARD.md here is the card on the branch. Read it first: it "
+              "is tracked, it carries whatever earlier turns wrote back to it, "
+              "and its `## Plan` section supersedes the card body below.",
               out);
     fputs("\n\n", out);
     card_write(out, c);
@@ -614,13 +641,16 @@ static int card_tree(const struct board_card *c, char *path, size_t path_size,
         return 0;
 
     base_of(root, path, c->base, base, base_size);
-    ignore_card_file(path);
+    unignore_card_file(path);
 
     struct board_card file = *c;
     snprintf(file.worktree, sizeof file.worktree, "%s", path);
     if (base && base[0])
         snprintf(file.base, sizeof file.base, "%s", base);
-    write_card_file(path, &file);
+    /* the board's own commit is where the card's work starts from, so a turn
+       that commits nothing still reads as nothing landed */
+    if (write_card_file(path, &file))
+        gitcmd_line(path, "rev-parse --short HEAD", base, base_size);
     return 1;
 }
 
@@ -876,7 +906,6 @@ void boardwork_finished(struct session *s)
     charge(w, s, &edited);
 
     boardlog_turn(w->id, w->job, NULL, failed && *failed ? failed : reply);
-    boardfile_keep(c);
 
     /* an interrupt cancels the turn, not the action: the card keeps its queue
        and its session, and the action stands where it was */
@@ -1128,7 +1157,9 @@ static void *tidy_thread(void *ud)
    commands go on a thread of their own. */
 static int drop_worktree(const struct board_card *c)
 {
-    boardfile_keep(c);
+    /* tidy_step is remove --force then branch -D, so an uncommitted CARD.md
+       would go with no way back */
+    commit_card_file(c->worktree, "card: CARD.md as the worktree goes");
 
     char root[4096], branch[128], step[TIDY_MAX];
     if (!gitcmd_root(c->cwd, root, sizeof root))
@@ -1423,7 +1454,6 @@ void boardwork_discard(const struct board_card *c)
     halt(c->id);
     if (c->worktree[0])
         drop_worktree(c);
-    boardfile_drop(c->id);
 }
 
 int boardwork_stop(const struct board_card *c, const char *why)

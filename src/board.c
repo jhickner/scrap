@@ -8,7 +8,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "boardfile.h"
 #include "boardlog.h"
 #include "gitcmd.h"
 #include "mdcfg.h"
@@ -847,14 +846,12 @@ int board_archive(int days)
     time_t cutoff = time(NULL) - (time_t)days * 24 * 3600;
 
     struct board_card **old = n > 0 ? calloc((size_t)n, sizeof *old) : NULL;
-    char(*ids)[BOARD_ID_MAX] = n > 0 ? calloc((size_t)n, BOARD_ID_MAX) : NULL;
     int moved = 0;
 
-    if (old && ids)
+    if (old)
         for (int i = 0; i < n; i++) {
             if (!v[i].closed || stamped(&v[i]) > cutoff)
                 continue;
-            set_str(ids[moved], BOARD_ID_MAX, v[i].id);
             old[moved++] = &v[i];
         }
 
@@ -873,12 +870,7 @@ int board_archive(int days)
         done = save_locked(v, n) ? moved : 0;
     }
 
-    /* the card's file goes only once the store no longer names the card */
-    for (int i = 0; i < done; i++)
-        boardfile_drop(ids[i]);
-
     free(old);
-    free(ids);
     board_free(v, n);
     store_unlock(lock);
     return done;

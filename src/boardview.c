@@ -1019,8 +1019,8 @@ int boardview_close(const char *id, char *why, int size)
         if (left)
             snprintf(why, (size_t)size,
                      "%d commit%s %s not merged, and the branch goes with the "
-                     "card", left, left == 1 ? "" : "s",
-                     left == 1 ? "was" : "were");
+                     "card, CARD.md and the plan in it included", left,
+                     left == 1 ? "" : "s", left == 1 ? "was" : "were");
         ok = 1;
     }
 
@@ -1361,8 +1361,9 @@ static int board_loop(const char *cwd)
             if (left) {
                 snprintf(ask, sizeof ask,
                          "%d commit%s on this card %s not merged, and close "
-                         "deletes the branch; close it?", left,
-                         left == 1 ? "" : "s", left == 1 ? "is" : "are");
+                         "deletes the branch and the plan in CARD.md with it; "
+                         "close it?", left, left == 1 ? "" : "s",
+                         left == 1 ? "is" : "are");
                 asking = ASK_CLOSE;
                 break;
             }
