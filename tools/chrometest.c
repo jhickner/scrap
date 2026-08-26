@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "block.h"
 #include "chrome.h"
 #include "prompt.h"
 #include "tty.h"
@@ -66,6 +67,14 @@ static void repaint(struct screen *s)
 }
 
 static int row_of(const struct screen *s, const char *needle) { return row_with(s, needle); }
+
+static void repaint_rows(struct screen *s)
+{
+    screen_init(s, 24, 80);
+    viewport_forget();
+    viewport_paint();
+    pump(s);
+}
 
 static void paint_menu(void *ud)
 {
@@ -224,6 +233,16 @@ int main(void)
     pump(&s);
     if (row_of(&s, "MENU") != 0)
         fail("a kept modal stays on screen until its owner paints it again");
+
+    block_forget();
+    repaint_rows(&s);
+    if (row_of(&s, "MENU") != 0)
+        fail("a kept modal survives the block_forget of a tab swap");
+
+    block_cleared();
+    repaint_rows(&s);
+    if (row_of(&s, "MENU") != 0)
+        fail("a kept modal survives the block_cleared of a tab swap");
     chrome_full(0);
 
     chrome_modal(NULL, NULL);
