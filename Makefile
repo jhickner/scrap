@@ -72,6 +72,9 @@ $(BUILD)/viewporttest: tools/viewporttest.c src/viewport.o src/ui.o src/tty.o sr
 $(BUILD)/ttytest: tools/ttytest.c src/tty.o src/viewport.o src/ui.o src/settings.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
+$(BUILD)/gitinfotest: tools/gitinfotest.c src/gitinfo.o src/text.o | $(BUILD)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
+
 $(BUILD)/imagefittest: tools/imagefittest.c src/image.o src/ui.o src/viewport.o src/block.o src/settings.o src/tty.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
@@ -147,7 +150,7 @@ $(BUILD)/replboxtest: tools/replboxtest.c src/replbox.o src/replframe.o src/repl
 CHECKS  := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest reflowtest toolstyletest sessionlisttest claudetest codextest \
            groktest filedifftest pitest agenttabstest statustest transcripttest \
            sessionviewtest highlighttest muxcfgtest telegramtest boardtest modelstest \
-           boardgridtest boardtiletest viewstest replboxtest ttytest
+           boardgridtest boardtiletest viewstest replboxtest ttytest gitinfotest
 
 check: $(addprefix $(BUILD)/,$(CHECKS))
 	@for t in $^; do echo "$$t"; ./$$t || exit 1; done
