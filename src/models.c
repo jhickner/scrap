@@ -426,29 +426,6 @@ static void fill_pi(struct list *l)
         fill_pi_store(l);
 }
 
-static void fill_grok(struct list *l)
-{
-    FILE *f = popen("grok models 2>/dev/null", "r");
-    if (!f)
-        return;
-
-    char line[256];
-    while (fgets(line, sizeof line, f)) {
-        char *p = line + strspn(line, " \t");
-        if (*p != '*' && *p != '-')
-            continue;
-        p += strspn(p + 1, " \t") + 1;
-
-        size_t n = strcspn(p, " \t\r\n");
-        if (!n || n >= LABEL_BYTES)
-            continue;
-        int fallback = strstr(p + n, "default") != NULL;
-        p[n] = '\0';
-        push(l, p, fallback ? "the CLI default" : NULL);
-    }
-    pclose(f);
-}
-
 int models_for(const char *backend, const struct pick_item **out)
 {
     time_t       stamp = backend_stamp(backend);
@@ -484,10 +461,7 @@ int models_for(const char *backend, const struct pick_item **out)
     } else if (!strcmp(backend, "pi")) {
         fill_pi(l);
     } else if (!strcmp(backend, "grok")) {
-        int before = l->n;
-        fill_grok(l);
-        if (l->n == before)
-            fill_static(l, GROK, (int)(sizeof GROK / sizeof *GROK));
+        fill_static(l, GROK, (int)(sizeof GROK / sizeof *GROK));
     }
 
     *out = l->items;
