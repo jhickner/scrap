@@ -331,21 +331,22 @@ static void waiting(int waited_ms, void *ud)
     if (waited_ms < 1000 || *said)
         return;
     *said = 1;
-    ui_bar(ui_style(UI_DIM), "it has not answered yet \xc2\xb7 waiting\xe2\x80\xa6");
+    ui_bar(ui_style(UI_DIM), "no reply yet \xc2\xb7 waiting\xe2\x80\xa6");
     ui_put("\n");
     ui_flush();
 }
 
 static void yank(const struct live_session *v)
 {
-    ui_bar(ui_style(UI_DIM), "asking %s for it\xe2\x80\xa6", v->pane[0] ? v->pane : "the other window");
+    ui_bar(ui_style(UI_DIM), "asking %s for the session\xe2\x80\xa6",
+           v->pane[0] ? v->pane : "the other window");
     ui_put("\n");
     ui_flush();
 
     char screen[4400];
     int said = 0;
     if (!handoff_ask(v->pid, v->id, screen, sizeof screen, waiting, &said)) {
-        ui_error("that window would not release it");
+        ui_error("could not take the session");
         ui_put("\n");
         ui_flush();
         return;
@@ -354,7 +355,7 @@ static void yank(const struct live_session *v)
     int at = workspace_spawn(v->backend, v->model, v->effort, v->cwd, v->id);
     if (at < 0) {
         unlink(screen);
-        ui_error("could not open it here");
+        ui_error("could not open the session");
         ui_put("\n");
         ui_flush();
         return;
@@ -366,7 +367,8 @@ static void yank(const struct live_session *v)
     else
         sessionload_into(workspace_current());
     unlink(screen);
-    ui_bar(ui_style(UI_DIM), "brought here \xc2\xb7 %s", v->title[0] ? v->title : v->backend);
+    ui_bar(ui_style(UI_DIM), "session is here \xc2\xb7 %s",
+           v->title[0] ? v->title : v->backend);
     ui_put("\n");
     ui_flush();
 }
