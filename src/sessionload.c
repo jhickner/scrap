@@ -47,11 +47,73 @@ static int pi_find(const char *dir, const char *id, char *out, size_t size)
     return found;
 }
 
+static int codex_find(const char *dir, const char *id, int depth, char *out,
+                      size_t size)
+{
+    DIR *d = opendir(dir);
+    if (!d)
+        return 0;
+
+    int found = 0;
+    struct dirent *e;
+    while (!found && (e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
+            continue;
+
+        char path[4096];
+        if ((size_t)snprintf(path, sizeof path, "%s/%s", dir, e->d_name) >=
+            sizeof path)
+            continue;
+
+        struct stat st;
+        if (stat(path, &st) != 0)
+            continue;
+        if (S_ISDIR(st.st_mode) && depth > 0) {
+            found = codex_find(path, id, depth - 1, out, size);
+            continue;
+        }
+        if (!S_ISREG(st.st_mode))
+            continue;
+
+        size_t name_n = strlen(e->d_name), id_n = strlen(id);
+        if (name_n < id_n + 6 || strcmp(e->d_name + name_n - 6, ".jsonl") ||
+            strncmp(e->d_name + name_n - 6 - id_n, id, id_n))
+            continue;
+        if ((size_t)snprintf(out, size, "%s", path) < size)
+            found = 1;
+    }
+    closedir(d);
+    return found;
+}
+
+static int codex_path(const char *id, char *out, size_t size)
+{
+    const char *root = getenv("CODEX_HOME");
+    char        home[2048];
+    if (!root || !*root) {
+        root = getenv("HOME");
+        if (!root ||
+            (size_t)snprintf(home, sizeof home, "%s/.codex", root) >= sizeof home)
+            return 0;
+        root = home;
+    }
+
+    char sessions[2304];
+    if ((size_t)snprintf(sessions, sizeof sessions, "%s/sessions", root) >=
+        sizeof sessions)
+        return 0;
+    return codex_find(sessions, id, 3, out, size);
+}
+
 int sessionload_path(const char *backend, const char *cwd, const char *id,
                      char *out, size_t size)
 {
     char dir[2048];
-    if (!id || !*id || strchr(id, '/') || !sessionlist_available(backend))
+    if (!id || !*id || strchr(id, '/'))
+        return 0;
+    if (backend && !strcmp(backend, "codex"))
+        return codex_path(id, out, size);
+    if (!sessionlist_available(backend))
         return 0;
     if (!sessionlist_dir(backend, cwd, dir, sizeof dir))
         return 0;
@@ -91,8 +153,15 @@ static enum role line_message(const cJSON *ev, const cJSON **content)
         cJSON_IsTrue(cJSON_GetObjectItem(ev, "isSidechain")))
         return ROLE_NONE;
 
-    const cJSON *message = cJSON_GetObjectItem(ev, "message");
-    const cJSON *body = message ? message : ev;
+    const cJSON *body = ev;
+    const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "type"));
+    if (type && !strcmp(type, "response_item"))
+        body = cJSON_GetObjectItem(ev, "payload");
+    const cJSON *message = body ? cJSON_GetObjectItem(body, "message") : NULL;
+    if (message)
+        body = message;
+    if (!body)
+        return ROLE_NONE;
     const char  *role = cJSON_GetStringValue(cJSON_GetObjectItem(body, "role"));
     if (!role)
         role = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "type"));
@@ -182,7 +251,8 @@ static int draw_message(enum role role, const cJSON *content, const char *cwd,
         if (!kind)
             continue;
 
-        if (!strcmp(kind, "text") && body) {
+        if ((!strcmp(kind, "text") || !strcmp(kind, "input_text") ||
+             !strcmp(kind, "output_text")) && body) {
             if (role == ROLE_USER) {
                 if (user_text(body, text, sizeof text)) {
                     prompt_echo_message(text);
@@ -206,6 +276,34 @@ static int draw_message(enum role role, const cJSON *content, const char *cwd,
         }
     }
     return drew;
+}
+
+static int draw_codex_tool(const cJSON *ev, const char *cwd)
+{
+    const char *outer = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "type"));
+    if (!outer || strcmp(outer, "response_item"))
+        return 0;
+
+    const cJSON *item = cJSON_GetObjectItem(ev, "payload");
+    const char *type = item
+        ? cJSON_GetStringValue(cJSON_GetObjectItem(item, "type"))
+        : NULL;
+    if (!type || (strcmp(type, "custom_tool_call") &&
+                  strcmp(type, "function_call")))
+        return 0;
+
+    const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(item, "name"));
+    const char *input = cJSON_GetStringValue(cJSON_GetObjectItem(item, "input"));
+    if (!input)
+        input = cJSON_GetStringValue(cJSON_GetObjectItem(item, "arguments"));
+
+    backend_event tool = {.kind = BACKEND_EV_TOOL,
+                          .name = name ? name : "tool",
+                          .arg = input ? input : ""};
+    char arg[4096];
+    view_tool_argument(&tool, cwd, arg, sizeof arg);
+    view_keep_tool_call(tool.name, arg, toolstyle_collapses(tool.name, NULL, arg));
+    return 1;
 }
 
 /* counts the turns in the file and reports where the last TURNS_MAX of them
@@ -288,6 +386,8 @@ int sessionload_replay(const char *backend, const char *cwd, const char *id,
         enum role role = line_message(ev, &content);
         if (role != ROLE_NONE)
             drawn += draw_message(role, content, cwd, thinking);
+        else
+            drawn += draw_codex_tool(ev, cwd);
         cJSON_Delete(ev);
     }
     free(line);
