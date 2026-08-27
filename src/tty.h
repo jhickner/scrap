@@ -50,6 +50,8 @@ int  tty_raw_begin(void);
 
 void tty_raw_end(void);
 
+void tty_keyboard_on(void);
+
 int  tty_read(tty_event *ev, int timeout_ms);
 
 #define TTY_WATCH_MAX 32

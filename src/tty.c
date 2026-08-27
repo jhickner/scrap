@@ -16,9 +16,10 @@
 
 #define BRACKETED_PASTE_ON  "\x1b[?2004h"
 
-/* otherwise ctrl-tab is a tab */
-#define KEYBOARD_ON  "\x1b[>1u\x1b[>4;1m"
-#define KEYBOARD_OFF "\x1b[>4;0m\x1b[<u"
+/* disambiguate + report-all, else the terminal keeps ctrl-tab for itself */
+#define KEYBOARD_PUSH "\x1b[>9u\x1b[>4;2m"
+#define KEYBOARD_SET  "\x1b[=9u\x1b[>4;2m"
+#define KEYBOARD_OFF  "\x1b[>4;0m\x1b[<u"
 
 #define CRASH_RESTORE \
     "\x1b[?2026l" \
@@ -285,9 +286,16 @@ int tty_raw_begin(void)
 
     signal(SIGPIPE, SIG_IGN);
 
-    fputs(BRACKETED_PASTE_ON KEYBOARD_ON, stdout);
+    fputs(BRACKETED_PASTE_ON KEYBOARD_PUSH, stdout);
     fflush(stdout);
+    if (getenv("TMUX"))
+        (void)system("tmux set-option -p extended-keys on >/dev/null 2>&1");
     return 0;
+}
+
+void tty_keyboard_on(void)
+{
+    fputs(KEYBOARD_SET, stdout);
 }
 
 void tty_raw_end(void)
@@ -530,8 +538,13 @@ static void emit_modified_tab(tty_event *ev, int mods)
         emit(ev, TK_TAB);
 }
 
-static void decode_csi(tty_event *ev, const int *params, int nparams, int final)
+static void decode_csi(tty_event *ev, const int *params, int nparams, int final,
+                       int event)
 {
+    if (event == 3) {
+        emit(ev, TK_NONE);
+        return;
+    }
     int mods = nparams >= 2 ? params[1] : 1;
     int ctrl_or_alt = (mods == 5 || mods == 3 || mods == 7 || mods == 9);
 
@@ -542,6 +555,7 @@ static void decode_csi(tty_event *ev, const int *params, int nparams, int final)
     case 'D': emit(ev, ctrl_or_alt ? TK_WORD_LEFT : TK_LEFT); return;
     case 'H': emit(ev, TK_HOME); return;
     case 'F': emit(ev, TK_END); return;
+    case 'Z': emit(ev, TK_PREV_TAB); return;
     case 'u':
 
         if (nparams >= 1 && params[0] == 13) {
@@ -552,9 +566,27 @@ static void decode_csi(tty_event *ev, const int *params, int nparams, int final)
             emit_modified_tab(ev, mods);
             return;
         }
+        if (nparams >= 1 && (params[0] == 8 || params[0] == 127)) {
+            emit(ev, TK_BACKSPACE);
+            return;
+        }
+        if (nparams >= 1 && params[0] == 27) {
+            emit(ev, TK_ESCAPE);
+            return;
+        }
         if (nparams >= 1 && params[0] >= 32) {
+            uint32_t cp = (uint32_t)params[0];
+            int bits = mods > 1 ? mods - 1 : 0;
+            if ((bits & 4) && cp >= 'A' && cp <= 'Z')
+                cp = cp - 'A' + 'a';
+            if ((bits & 4) && cp >= 'a' && cp <= 'z') {
+                ev->key = TK_CHAR;
+                ev->cp = cp - 'a' + 1;
+                ev->text = NULL;
+                return;
+            }
             ev->key = TK_CHAR;
-            ev->cp = (uint32_t)params[0];
+            ev->cp = cp;
             ev->text = NULL;
             return;
         }
@@ -621,6 +653,7 @@ static void decode_escape(tty_event *ev)
         pending_pos++;
         int params[8] = {0};
         int nparams = 0, have_digits = 0, private = 0;
+        int event = 1, in_event = 0;
         for (;;) {
             int c = take_byte(50);
             if (c < 0) {
@@ -628,16 +661,31 @@ static void decode_escape(tty_event *ev)
                 return;
             }
             if (c >= '0' && c <= '9') {
-                if (nparams < 8) {
+                if (in_event)
+                    event = event * 10 + (c - '0');
+                else if (nparams < 8) {
                     params[nparams] = params[nparams] * 10 + (c - '0');
                     have_digits = 1;
                 }
                 continue;
             }
-            if (c == ';' || c == ':') {
+            if (c == ':') {
+                if (nparams == 1) {
+                    in_event = 1;
+                    event = 0;
+                    have_digits = 1;
+                    continue;
+                }
                 if (nparams < 7)
                     nparams++;
                 have_digits = 1;
+                continue;
+            }
+            if (c == ';') {
+                if (nparams < 7)
+                    nparams++;
+                have_digits = 1;
+                in_event = 0;
                 continue;
             }
             if (c == '?' || c == '<' || c == '>' || c == '=') {
@@ -661,7 +709,7 @@ static void decode_escape(tty_event *ev)
                 read_paste(ev);
                 return;
             }
-            decode_csi(ev, params, nparams, c);
+            decode_csi(ev, params, nparams, c, event);
             return;
         }
     }

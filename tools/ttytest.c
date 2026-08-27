@@ -70,6 +70,17 @@ static void expect_key(int wfd, const char *bytes, size_t n, tty_key want,
         free(ev.text);
 }
 
+static void expect_none(int wfd, const char *bytes, size_t n, const char *what)
+{
+    tty_event ev;
+    if (send(wfd, bytes, n, &ev)) {
+        fprintf(stderr, "FAIL %s: key %d want none\n", what, (int)ev.key);
+        failures++;
+        if (ev.text)
+            free(ev.text);
+    }
+}
+
 static void expect_ctrl(int wfd, const char *bytes, size_t n, uint32_t cp,
                         const char *what)
 {
@@ -159,11 +170,17 @@ static void keys_from_pipe(void)
     expect_key(w, "\t", 1, TK_TAB, "tab");
     expect_key(w, "\x1b[9u", 4, TK_TAB, "csi-u tab");
     expect_key(w, "\x1b[9;5u", 6, TK_NEXT_TAB, "csi-u ctrl-tab");
+    expect_key(w, "\x1b[9;5:1u", 8, TK_NEXT_TAB, "csi-u ctrl-tab press");
+    expect_none(w, "\x1b[9;5:3u", 8, "csi-u ctrl-tab release");
     expect_key(w, "\x1b[9;6u", 6, TK_PREV_TAB, "csi-u ctrl-shift-tab");
+    expect_key(w, "\x1b[Z", 3, TK_PREV_TAB, "csi backtab");
     expect_key(w, "\x1b[27;5;9~", 9, TK_NEXT_TAB, "xterm ctrl-tab");
     expect_key(w, "\x1b[27;6;9~", 9, TK_PREV_TAB, "xterm ctrl-shift-tab");
+    expect_key(w, "\x1b[127u", 6, TK_BACKSPACE, "csi-u backspace");
+    expect_key(w, "\x1b[27u", 5, TK_ESCAPE, "csi-u escape");
     expect_ctrl(w, "\x03", 1, 3, "ctrl-c");
     expect_ctrl(w, "\x1b[27;5;99~", 10, 3, "xterm ctrl-c");
+    expect_ctrl(w, "\x1b[97;5u", 7, 1, "csi-u ctrl-a");
 
     close(w);
 }

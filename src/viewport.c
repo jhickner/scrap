@@ -1414,6 +1414,7 @@ void viewport_begin(void)
     active = 1;
     direct_str("\x1b[?1049h");
     direct_str(MOUSE_ON);
+    tty_keyboard_on();
     fflush(stdout);
     viewport_paint();
 }
@@ -1521,6 +1522,7 @@ void viewport_resume(void)
     suspended = 0;
     direct_str("\x1b[?1049h");
     direct_str(MOUSE_ON);
+    tty_keyboard_on();
     fflush(stdout);
     viewport_forget();
     viewport_paint();
