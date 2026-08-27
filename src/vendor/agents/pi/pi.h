@@ -75,6 +75,9 @@ int pi_reset(pi_client *c);
  * resume later with --session. Absent when the process was started ephemeral. */
 const char *pi_session_id(pi_client *c);
 
+/* The provider/model selected by pi, or NULL until get_state has answered. */
+const char *pi_model(pi_client *c);
+
 /* When on, pi_send writes a compact event trace to stderr. */
 void pi_set_verbose(pi_client *c, int on);
 
@@ -153,7 +156,7 @@ struct pi_client {
     char *sys, *default_effort;
     char *buf;
     size_t len, cap;
-    char session_id[128];
+    char session_id[128], model[160];
     /* pi prices each assistant message on its own, so the running total is
      * ours to keep. A reset starts it over, the way a new session should. */
     double cost_usd;
@@ -383,18 +386,32 @@ static int pi_wait_response_string(pi_client *c, int id, const char *key,
     }
 }
 
-/* Pull sessionId out of a get_state response. The object is the full event. */
-static void pi_take_id(pi_client *c, cJSON *ev) {
+/* Pull the stable identity out of a get_state response. The object is the full
+ * event. Pi's model id is provider-relative, while its CLI takes provider/id. */
+static void pi_take_state(pi_client *c, cJSON *ev) {
     cJSON *data = cJSON_GetObjectItemCaseSensitive(ev, "data");
     const char *id = data ? cJSON_GetStringValue(
         cJSON_GetObjectItemCaseSensitive(data, "sessionId")) : NULL;
     if (id && *id)
         snprintf(c->session_id, sizeof c->session_id, "%s", id);
+
+    cJSON *model = data ? cJSON_GetObjectItemCaseSensitive(data, "model") : NULL;
+    const char *provider = model ? cJSON_GetStringValue(
+        cJSON_GetObjectItemCaseSensitive(model, "provider")) : NULL;
+    const char *model_id = model ? cJSON_GetStringValue(
+        cJSON_GetObjectItemCaseSensitive(model, "id")) : NULL;
+    if (provider && *provider && model_id && *model_id) {
+        size_t n = strlen(provider), id_n = strlen(model_id);
+        if (id_n > n && !strncmp(model_id, provider, n) && model_id[n] == '/')
+            snprintf(c->model, sizeof c->model, "%s", model_id);
+        else
+            snprintf(c->model, sizeof c->model, "%s/%s", provider, model_id);
+    }
 }
 
-/* Ask for the current session id. Safe between turns; not while a prompt is
- * in flight, because pi_read would steal that turn's events. */
-static void pi_refresh_id(pi_client *c) {
+/* Ask for the current session and model. Safe between turns; not while a
+ * prompt is in flight, because pi_read would steal that turn's events. */
+static void pi_refresh_state(pi_client *c) {
     int id = pi_command(c, "get_state", NULL);
     if (!id) return;
     for (;;) {
@@ -402,7 +419,7 @@ static void pi_refresh_id(pi_client *c) {
         int r = pi_read(c, &ev, 0);
         if (r != 1) return;
         int response = pi_response(ev, id);
-        if (response == 1) pi_take_id(c, ev);
+        if (response == 1) pi_take_state(c, ev);
         cJSON_Delete(ev);
         if (response >= 0) return;
     }
@@ -468,6 +485,10 @@ const char *pi_session_id(pi_client *c) {
     return (c && c->session_id[0]) ? c->session_id : NULL;
 }
 
+const char *pi_model(pi_client *c) {
+    return (c && c->model[0]) ? c->model : NULL;
+}
+
 int pi_abort(pi_client *c) { return c ? pi_command(c, "abort", NULL) != 0 : 0; }
 
 int pi_set_effort(pi_client *c, const char *effort) {
@@ -523,7 +544,7 @@ char *pi_send_ex(pi_client *c, const char *user_text, pi_result *meta) {
         cJSON_Delete(ev);
     }
     if (!accepted) { free(answer); return NULL; }
-    if (!c->session_id[0]) pi_refresh_id(c);
+    if (!c->session_id[0] || !c->model[0]) pi_refresh_state(c);
     if (meta) {
         meta->cost_usd = c->cost_usd;
         meta->context_tokens = c->context_tokens;
@@ -548,7 +569,7 @@ int pi_reset(pi_client *c) {
     c->input_tokens = c->output_tokens = 0;
     c->cache_read_tokens = c->cache_creation_tokens = 0;
     c->session_id[0] = '\0';
-    pi_refresh_id(c);
+    pi_refresh_state(c);
     return 1;
 }
 
@@ -691,6 +712,10 @@ static const char *pi_backend_session_id(Backend *b) {
     pi_backend_ctx *cx = b->ctx;
     return cx->c ? pi_session_id(cx->c) : NULL;
 }
+static const char *pi_backend_model(Backend *b) {
+    pi_backend_ctx *cx = b->ctx;
+    return cx->c ? pi_model(cx->c) : NULL;
+}
 static void pi_backend_close(Backend *b) {
     pi_backend_ctx *cx = b->ctx;
     if (cx->c) pi_stop(cx->c);
@@ -716,7 +741,7 @@ Backend *pi_backend_open(const backend_opts *opts) {
     b->set_event_cb = pi_backend_set_event_cb;
     b->set_abort_check = pi_backend_set_abort;
     b->session_id = pi_backend_session_id;
-    b->model = backend_none;
+    b->model = pi_backend_model;
     b->effort = backend_stored_effort;
     b->auth_source = backend_none;
     b->last_error = backend_none;

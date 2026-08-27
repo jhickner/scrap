@@ -63,7 +63,10 @@ static int mock_server(int argc, char **argv)
         if (id && type && !strcmp(type, "get_state")) {
             printf("{\"id\":\"%s\",\"type\":\"response\","
                    "\"command\":\"get_state\",\"success\":true,"
-                   "\"data\":{\"thinkingLevel\":\"medium\"}}\n", id);
+                   "\"data\":{\"thinkingLevel\":\"medium\","
+                   "\"sessionId\":\"pi-session\",\"model\":{"
+                   "\"provider\":\"openrouter\","
+                   "\"id\":\"openai/gpt-5.6-sol\"}}}\n", id);
             fflush(stdout);
         } else if (id && type && !strcmp(type, "set_thinking_level")) {
             const char *level = cJSON_GetStringValue(
@@ -142,6 +145,13 @@ int main(int argc, char **argv)
         return 1;
     }
     free(reply);
+    if (!pi_session_id(client) || strcmp(pi_session_id(client), "pi-session") ||
+        !pi_model(client) || strcmp(pi_model(client),
+                                    "openrouter/openai/gpt-5.6-sol")) {
+        fprintf(stderr, "pitest: get_state model selection was not retained\n");
+        pi_stop(client);
+        return 1;
+    }
 
     abort_turn = 0;
     memset(&meta, 0, sizeof meta);

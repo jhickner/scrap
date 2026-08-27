@@ -1905,6 +1905,12 @@ static void remember_model(const struct session *s)
 {
     const char *id = s->resolved && *s->resolved ? s->resolved : backend_model(s);
     prefs_remember_resolved_model(s->backend, s->model, id);
+
+    /* Pi otherwise consults its own mutable setting on every new process. Once
+       mux has observed the model pi selected, make that explicit for later mux
+       sessions until the user chooses another model here. */
+    if (!strcmp(s->backend, "pi") && (!s->model || !*s->model) && id && *id)
+        prefs_remember_choice("model", s->backend, id);
 }
 
 const char *session_model_label(const struct session *s)
