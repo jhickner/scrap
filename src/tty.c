@@ -28,7 +28,6 @@
     "\x1b[?25h" \
     "\x1b[?7h" \
     "\x1b[?1049l" \
-    "\x1b[r" \
     "\x1b[0m" \
     "\x1b]112\x07"
 
@@ -295,12 +294,14 @@ void tty_raw_end(void)
 {
     if (!in_raw && !have_entry)
         return;
-    fputs(CRASH_RESTORE, stdout);
-    fflush(stdout);
+    if (in_raw) {
+        fputs(CRASH_RESTORE, stdout);
+        fflush(stdout);
+        tcflush(STDIN_FILENO, TCIFLUSH);
+        in_raw = 0;
+    }
     if (have_entry)
         apply_mode(&entry_mode, TCSANOW);
-    tcflush(STDIN_FILENO, TCIFLUSH);
-    in_raw = 0;
 }
 
 static int  (*watch_fds)(void *ud, int *out, int max);
