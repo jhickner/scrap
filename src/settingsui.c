@@ -6,6 +6,7 @@
 
 #include "app.h"
 #include "ask.h"
+#include "cmd.h"
 #include "image.h"
 #include "muxcfg.h"
 #include "pick.h"
@@ -15,7 +16,7 @@
 #include "text.h"
 #include "ui.h"
 
-enum kind { S_FLAG, S_PERMISSION, S_ROWS, S_COLOR, S_MATRIX };
+enum kind { S_FLAG, S_PERMISSION, S_ROWS, S_COLOR, S_MATRIX, S_BACKEND };
 
 struct entry {
     const char *name;
@@ -58,6 +59,8 @@ static const struct entry ENTRIES[] = {
      .group = UI_GROUP_EMPHASIS},
     {.name = "mux matrix", .kind = S_MATRIX,
      .about = "the backends /mux fans out over"},
+    {.name = "backend", .kind = S_BACKEND,
+     .about = "the CLI mux starts on"},
 };
 
 static int flag_of(const struct session *s, int at)
@@ -134,6 +137,9 @@ static void value_of(const struct session *s, int at, char *out, size_t cap)
     case S_MATRIX:
         snprintf(out, cap, "%s", muxcfg_active());
         break;
+    case S_BACKEND:
+        snprintf(out, cap, "%s", cmd_default_backend());
+        break;
     }
 }
 
@@ -207,6 +213,21 @@ static void edit_color(const struct entry *e)
         ui_swatch_set(e->group, names[index]);
 }
 
+static void edit_backend(void)
+{
+    int count = 0, initial = 0;
+    const struct pick_item *items = cmd_backend_choices(&count);
+    const char *now = cmd_default_backend();
+    for (int i = 0; i < count; i++)
+        if (!strcmp(items[i].label, now))
+            initial = i;
+
+    int index = pick_run("default backend", items, count, initial);
+    if (index < 0 || !strcmp(items[index].label, now))
+        return;
+    settings_set_str(SETTING_BACKEND, items[index].label);
+}
+
 static void edit(struct session *s, int at)
 {
     const struct entry *e = &ENTRIES[at];
@@ -226,6 +247,9 @@ static void edit(struct session *s, int at)
         break;
     case S_MATRIX:
         muxcfg_run();
+        break;
+    case S_BACKEND:
+        edit_backend();
         break;
     }
 }

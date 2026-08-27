@@ -82,6 +82,14 @@ static int is_claude(const struct session *s)
     return strcmp(session_backend(s), "claude") == 0;
 }
 
+static int known_backend(const char *name)
+{
+    for (const char *const *p = backend_names(); name && *p; p++)
+        if (strcmp(name, *p) == 0)
+            return 1;
+    return 0;
+}
+
 const struct pick_item *cmd_model_choices(const char *backend, int *count)
 {
     const struct pick_item *v = NULL;
@@ -116,6 +124,25 @@ const struct pick_item *cmd_effort_choices(const char *backend, int *count)
     return DEFAULT_EFFORT;
 }
 
+const struct pick_item *cmd_backend_choices(int *count)
+{
+    static struct pick_item items[8];
+    static int              n;
+
+    if (!n) {
+        for (const char *const *p = backend_names(); *p && n < COUNT(items); p++)
+            items[n++] = (struct pick_item){*p, NULL};
+    }
+    *count = n;
+    return items;
+}
+
+const char *cmd_default_backend(void)
+{
+    const char *name = settings_get_str(SETTING_BACKEND, "claude");
+    return known_backend(name) ? name : "claude";
+}
+
 static const struct pick_item *effort_choices(const struct session *s, int *count)
 {
     const struct pick_item *v = cmd_effort_choices(session_backend(s), count);
@@ -144,14 +171,6 @@ static void reply(int error, const char *fmt, ...)
 
 #define reply_note(...)  reply(0, __VA_ARGS__)
 #define reply_error(...) reply(1, __VA_ARGS__)
-
-static int known_backend(const char *name)
-{
-    for (const char *const *p = backend_names(); name && *p; p++)
-        if (strcmp(name, *p) == 0)
-            return 1;
-    return 0;
-}
 
 static void help_row(const char *label, const char *text)
 {
@@ -322,6 +341,38 @@ static void do_backend(struct session *s, const char *arg)
         session_turn(s, retry);
         free(retry);
     }
+}
+
+static void do_default(struct session *s, const char *arg)
+{
+    (void)s;
+
+    const char *chosen = arg;
+    if (!chosen || !*chosen) {
+        if (!frontend_has_keyboard()) {
+            reply_note("default backend is %s \xe2\x80\x94 /default <name> to change it",
+                       cmd_default_backend());
+            return;
+        }
+        if (!can_pick("/default <name>"))
+            return;
+        int count = 0, initial = 0;
+        const struct pick_item *choices = cmd_backend_choices(&count);
+        const char *current = cmd_default_backend();
+        for (int i = 0; i < count; i++)
+            if (!strcmp(choices[i].label, current))
+                initial = i;
+        int index = pick_run("default backend", choices, count, initial);
+        if (index < 0)
+            return;
+        chosen = choices[index].label;
+    }
+    if (!known_backend(chosen)) {
+        reply_error("unknown backend '%s'", chosen);
+        return;
+    }
+    settings_set_str(SETTING_BACKEND, chosen);
+    reply_note("default backend is %s", chosen);
 }
 
 static void do_permission(struct session *s, const char *arg)
@@ -817,6 +868,7 @@ static const struct cmd COMMANDS[] = {
     {"/model", "switch model", "[name]", 0, do_model},
     {"/effort", "set reasoning/thinking effort", "[level]", 0, do_effort},
     {"/backend", "continue with another backend", "<name>", 0, do_backend},
+    {"/default", "set the default backend", "[name]", CMD_LIVE, do_default},
     {"/cd", "work in another directory, starting fresh there", "<path>", 0, do_cd},
     {"/mux", "ask the whole matrix the same thing", "<prompt>|config|make <what>",
      0, do_mux},

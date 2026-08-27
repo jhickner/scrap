@@ -133,7 +133,7 @@ static void usage(void)
     fprintf(stderr,
             "usage: " APP_NAME " [-b backend] [-m model] [-e effort] [-C dir] [-s] [-r] [prompt...]\n"
             "\n"
-            "  -b name    agent CLI to drive: %s (default: claude)\n"
+            "  -b name    agent CLI to drive: %s (default: the last /default pick, else claude)\n"
             "  -m model   model to run (default: the last /model pick, else the CLI's own)\n"
             "  -e effort  reasoning/thinking effort (default: the last /effort pick, else the CLI's own)\n"
             "  -C dir     working directory for the agent's tools\n"
@@ -565,6 +565,9 @@ int main(int argc, char **argv)
         snprintf(path, sizeof path, "%s/settings", config);
         settings_open(path);
     }
+
+    if (!pin_backend)
+        backend = cmd_default_backend();
 
     if (!model)
         model = session_saved_model(backend);

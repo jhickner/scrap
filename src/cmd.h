@@ -9,6 +9,8 @@ struct pick_item;
 
 const struct pick_item *cmd_model_choices(const char *backend, int *count);
 const struct pick_item *cmd_effort_choices(const char *backend, int *count);
+const struct pick_item *cmd_backend_choices(int *count);
+const char             *cmd_default_backend(void);
 
 const ReplCommand *cmd_completions(int *count);
 

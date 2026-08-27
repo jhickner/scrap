@@ -375,14 +375,15 @@ static void yank(const struct live_session *v)
 
 static int open_new(void)
 {
-    const char *const *names = backend_names();
-    struct pick_item choices[8];
-    int count = 0;
-    for (const char *const *p = names; *p && count < 8; p++)
-        choices[count++] = (struct pick_item){*p, NULL};
+    int count = 0, initial = 0;
+    const struct pick_item *choices = cmd_backend_choices(&count);
+    const char *want = cmd_default_backend();
+    for (int i = 0; i < count; i++)
+        if (!strcmp(choices[i].label, want))
+            initial = i;
 
     for (;;) {
-        int which = pick_run("a new session in which backend", choices, count, 0);
+        int which = pick_run("a new session in which backend", choices, count, initial);
         if (which < 0)
             return 1;
         const char *backend = choices[which].label;
