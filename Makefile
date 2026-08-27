@@ -87,6 +87,9 @@ $(BUILD)/reflowtest: tools/reflowtest.c src/ui.o src/viewport.o src/block.o src/
 $(BUILD)/sidechannelviewtest: tools/sidechannelviewtest.c src/sidechannelview.o src/ui.o src/viewport.o src/settings.o src/tty.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
+$(BUILD)/sidechannelcmdtest: tools/sidechannelcmdtest.c src/sidechannelcmd.o | $(BUILD)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
+
 $(BUILD)/toolstyletest: tools/toolstyletest.c src/toolstyle.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
@@ -160,7 +163,7 @@ CHECKS  := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest 
            groktest filedifftest pitest agenttabstest statustest transcripttest \
            sessionviewtest sessionloadtest highlighttest muxcfgtest telegramtest boardtest modelstest \
            boardgridtest boardtiletest viewstest replboxtest ttytest gitinfotest \
-           sidechannelviewtest
+           sidechannelviewtest sidechannelcmdtest
 
 check: $(addprefix $(BUILD)/,$(CHECKS))
 	@for t in $^; do echo "$$t"; ./$$t || exit 1; done

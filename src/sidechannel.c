@@ -12,8 +12,8 @@
 #include "chrome.h"
 #include "md.h"
 #include "scrollback.h"
-#include "session.h"
 #include "sessionfork.h"
+#include "sidechannelcmd.h"
 #include "sidechannelview.h"
 #include "status.h"
 #include "ui.h"
@@ -222,30 +222,13 @@ static int spawn(struct side *c, const struct session *s, const char *prompt)
     fcntl(err_pipe[1], F_SETFD, FD_CLOEXEC);
 
     char *argv[24];
-    int n = 0;
-    argv[n++] = (char *)sessionfork_program();
-    argv[n++] = "-b";
-    argv[n++] = (char *)session_backend(s);
-    const char *cwd = session_cwd(s);
-    if (cwd && *cwd) {
-        argv[n++] = "-C";
-        argv[n++] = (char *)cwd;
+    if (!sidechannel_argv(s, prompt, argv, 24)) {
+        close(out_pipe[0]);
+        close(out_pipe[1]);
+        close(err_pipe[0]);
+        close(err_pipe[1]);
+        return 0;
     }
-    argv[n++] = "--session";
-    argv[n++] = (char *)session_id(s);
-    argv[n++] = "--fork";
-    const char *model = session_model(s);
-    if (model && strcmp(model, "default") != 0) {
-        argv[n++] = "-m";
-        argv[n++] = (char *)model;
-    }
-    const char *effort = session_effort(s);
-    if (effort && strcmp(effort, "default") != 0) {
-        argv[n++] = "-e";
-        argv[n++] = (char *)effort;
-    }
-    argv[n++] = (char *)prompt;
-    argv[n] = NULL;
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -292,19 +275,6 @@ int sidechannel_start(const struct session *s, const char *prompt, const char *l
         return 0;
     if (!label || !*label)
         label = prompt;
-
-    if (!session_can_resume(s)) {
-        ui_error("%s cannot fork a conversation, so /btw has nothing to run in",
-                 session_backend(s));
-        ui_put("\n");
-        return 0;
-    }
-    const char *id = session_id(s);
-    if (!id || !*id) {
-        ui_error("nothing to fork yet — send a message first");
-        ui_put("\n");
-        return 0;
-    }
 
     struct side *c = free_slot();
     if (!c) {
