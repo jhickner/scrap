@@ -69,6 +69,9 @@ $(BUILD)/overlaytest: tools/overlaytest.c src/overlay.o src/menu.o src/ui.o src/
 $(BUILD)/viewporttest: tools/viewporttest.c src/viewport.o src/ui.o src/tty.o src/settings.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
+$(BUILD)/ttytest: tools/ttytest.c src/tty.o src/viewport.o src/ui.o src/settings.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
+
 $(BUILD)/imagefittest: tools/imagefittest.c src/image.o src/ui.o src/viewport.o src/block.o src/settings.o src/tty.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
@@ -144,7 +147,7 @@ $(BUILD)/replboxtest: tools/replboxtest.c src/replbox.o src/replframe.o src/repl
 CHECKS  := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest reflowtest toolstyletest sessionlisttest claudetest codextest \
            groktest filedifftest pitest agenttabstest statustest transcripttest \
            sessionviewtest highlighttest muxcfgtest telegramtest boardtest modelstest \
-           boardgridtest boardtiletest viewstest replboxtest
+           boardgridtest boardtiletest viewstest replboxtest ttytest
 
 check: $(addprefix $(BUILD)/,$(CHECKS))
 	@for t in $^; do echo "$$t"; ./$$t || exit 1; done

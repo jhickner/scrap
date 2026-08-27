@@ -15,7 +15,6 @@
 #include "viewport.h"
 
 #define BRACKETED_PASTE_ON  "\x1b[?2004h"
-#define BRACKETED_PASTE_OFF "\x1b[?2004l"
 
 #define CRASH_RESTORE \
     "\x1b[?2026l" \
@@ -24,11 +23,14 @@
     "\x1b[?25h" \
     "\x1b[?7h" \
     "\x1b[?1049l" \
+    "\x1b[r" \
+    "\x1b[0m" \
     "\x1b]112\x07"
 
 #define ESC_GRACE_MS 30
 
 static struct termios entry_mode;
+static int have_entry;
 static int in_raw;
 static volatile sig_atomic_t got_winch;
 
@@ -41,11 +43,46 @@ static void on_winch(int sig) { (void)sig; got_winch = 1; winch_count++; }
 
 static volatile sig_atomic_t quit_signal;
 
+static int apply_mode(const struct termios *t, int when)
+{
+    int rc;
+    do {
+        rc = tcsetattr(STDIN_FILENO, when, t);
+    } while (rc != 0 && errno == EINTR);
+    if (rc == 0 || when == TCSANOW)
+        return rc;
+    do {
+        rc = tcsetattr(STDIN_FILENO, TCSANOW, t);
+    } while (rc != 0 && errno == EINTR);
+    return rc;
+}
+
+static void cooked_sane(struct termios *t)
+{
+    t->c_iflag |= ICRNL;
+    t->c_oflag |= OPOST;
+#ifdef ONLCR
+    t->c_oflag |= ONLCR;
+#endif
+    t->c_lflag |= ECHO | ICANON | ISIG | IEXTEN;
+}
+
+static void snapshot_entry(const struct termios *now)
+{
+    if (have_entry)
+        return;
+    entry_mode = *now;
+    if (!(entry_mode.c_lflag & ECHO) || !(entry_mode.c_lflag & ICANON))
+        cooked_sane(&entry_mode);
+    have_entry = 1;
+}
+
 static void on_fatal(int sig)
 {
-    if (in_raw) {
+    if (in_raw || have_entry) {
         (void)!write(STDOUT_FILENO, CRASH_RESTORE, sizeof CRASH_RESTORE - 1);
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &entry_mode);
+        if (have_entry)
+            apply_mode(&entry_mode, TCSANOW);
         in_raw = 0;
     }
     signal(sig, SIG_DFL);
@@ -205,17 +242,20 @@ int tty_raw_begin(void)
         return 0;
     if (!isatty(STDIN_FILENO))
         return -1;
-    if (tcgetattr(STDIN_FILENO, &entry_mode) != 0)
-        return -1;
 
-    struct termios raw = entry_mode;
+    struct termios now;
+    if (tcgetattr(STDIN_FILENO, &now) != 0)
+        return -1;
+    snapshot_entry(&now);
+
+    struct termios raw = now;
     raw.c_iflag &= ~(unsigned long)(IXON | ICRNL | BRKINT | INPCK | ISTRIP);
     raw.c_oflag &= ~(unsigned long)(OPOST);
     raw.c_lflag &= ~(unsigned long)(ECHO | ICANON | IEXTEN | ISIG);
     raw.c_cc[VMIN] = 1;
     raw.c_cc[VTIME] = 0;
 
-    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0)
+    if (apply_mode(&raw, TCSANOW) != 0)
         return -1;
 
     in_raw = 1;
@@ -248,11 +288,13 @@ int tty_raw_begin(void)
 
 void tty_raw_end(void)
 {
-    if (!in_raw)
+    if (!in_raw && !have_entry)
         return;
-    fputs(BRACKETED_PASTE_OFF "\x1b[?25h", stdout);
+    fputs(CRASH_RESTORE, stdout);
     fflush(stdout);
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &entry_mode);
+    if (have_entry)
+        apply_mode(&entry_mode, TCSANOW);
+    tcflush(STDIN_FILENO, TCIFLUSH);
     in_raw = 0;
 }
 
