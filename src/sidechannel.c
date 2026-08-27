@@ -14,8 +14,8 @@
 #include "scrollback.h"
 #include "session.h"
 #include "sessionfork.h"
+#include "sidechannelview.h"
 #include "status.h"
-#include "text.h"
 #include "ui.h"
 #include "viewport.h"
 #include "vendor/cJSON.h"
@@ -164,7 +164,7 @@ int sidechannel_rows(void)
     int n = 0;
     for (int i = 0; i < SIDE_MAX; i++)
         if (slots[i].pid && slots[i].question)
-            n++;
+            n += sidechannel_question_paint(slots[i].question, NULL, ui_columns(), 0, 1);
     return n;
 }
 
@@ -174,26 +174,10 @@ void sidechannel_paint(int budget)
         if (!slots[i].pid || !slots[i].question)
             continue;
 
-        char flat[2048];
-        text_one_line(slots[i].question, flat, sizeof flat);
-
-        int room = ui_columns() - 6;
-        if (room < 8)
-            room = 8;
-        size_t fit = ui_fit_visible(flat, strlen(flat), (size_t)room);
-
-        ui_esc(ui_style(UI_SIDE));
-        ui_esc(UI_ERASE_EOL);
-        ui_put(UI_BAR);
-        ui_put(" ");
-        ui_put(spin_glyph(spin_frame));
-        ui_put(" ");
-        ui_putn(flat, fit);
-        if (flat[fit])
-            ui_put("\u2026");
-        ui_esc(ui_style(UI_RESET));
-        ui_put("\n");
-        budget--;
+        char mark[16];
+        snprintf(mark, sizeof mark, "%s ", spin_glyph(spin_frame));
+        budget -= sidechannel_question_paint(slots[i].question, mark, ui_columns(),
+                                             budget, 0);
     }
 }
 
