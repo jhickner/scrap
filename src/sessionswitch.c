@@ -373,7 +373,7 @@ static void yank(const struct live_session *v)
     ui_flush();
 }
 
-static void open_new(void)
+static int open_new(void)
 {
     const char *const *names = backend_names();
     struct pick_item choices[8];
@@ -381,30 +381,33 @@ static void open_new(void)
     for (const char *const *p = names; *p && count < 8; p++)
         choices[count++] = (struct pick_item){*p, NULL};
 
-    int which = pick_run("a new session in which backend", choices, count, 0);
-    if (which < 0)
-        return;
-    const char *backend = choices[which].label;
+    for (;;) {
+        int which = pick_run("a new session in which backend", choices, count, 0);
+        if (which < 0)
+            return 1;
+        const char *backend = choices[which].label;
 
-    int models = 0;
-    const struct pick_item *list = cmd_model_choices(backend, &models);
-    const char *model = NULL;
-    if (models > 1) {
-        int pickedm = pick_run_filter("which model", list, models, 0);
-        if (pickedm < 0)
-            return;
-        model = list[pickedm].label;
-    }
+        int models = 0;
+        const struct pick_item *list = cmd_model_choices(backend, &models);
+        const char *model = NULL;
+        if (models > 1) {
+            int pickedm = pick_run_filter("which model", list, models, 0);
+            if (pickedm < 0)
+                continue;
+            model = list[pickedm].label;
+        }
 
-    struct session *here = workspace_current();
-    if (workspace_spawn(backend, model, NULL, here ? session_cwd(here) : NULL, NULL) < 0) {
-        ui_error("could not start the %s CLI", backend);
-        ui_put("\n");
+        struct session *here = workspace_current();
+        if (workspace_spawn(backend, model, NULL, here ? session_cwd(here) : NULL, NULL) < 0) {
+            ui_error("could not start the %s CLI", backend);
+            ui_put("\n");
+            ui_flush();
+            return 0;
+        }
+        hud_print(workspace_current());
         ui_flush();
-        return;
+        return 0;
     }
-    hud_print(workspace_current());
-    ui_flush();
 }
 
 static void ask_new(const struct row *r, const struct live_session *live)
@@ -714,9 +717,10 @@ static int switch_once(void)
     }
 
     if (pressed == KEY_NEW) {
+        int again = open_new();
+        resume_row = picked;
         free(live);
-        open_new();
-        return 0;
+        return again;
     }
 
     if (pressed == KEY_ASK) {
@@ -735,9 +739,10 @@ static int switch_once(void)
             free(live);
             return 1;
         } else if (chosen.kind == ROW_NEW) {
+            int again = open_new();
+            resume_row = picked;
             free(live);
-            open_new();
-            return 0;
+            return again;
         }
         free(live);
         return 0;
@@ -766,9 +771,12 @@ static int switch_once(void)
         yank(&live[chosen.at]);
         break;
     case ROW_NEW:
-        free(live);
-        open_new();
-        return 0;
+        {
+            int again = open_new();
+            resume_row = picked;
+            free(live);
+            return again;
+        }
     case ROW_ASK:
         ask_new(&chosen, live);
         free(live);

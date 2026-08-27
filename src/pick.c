@@ -632,9 +632,17 @@ static int run(const char *title, const struct pick_item *items, int count,
                 chrome_paint();
                 continue;
             }
-            if (ev.key == TK_LEFT || ev.key == TK_RIGHT) {
-                if (menu_steer(m, ev.key == TK_LEFT ? -1 : 1))
+            if (ev.key == TK_RIGHT) {
+                if (menu_steer(m, 1))
                     chrome_paint();
+                continue;
+            }
+            if (ev.key == TK_LEFT) {
+                if (!menu_steer(m, -1)) {
+                    m->open = 0;
+                    refilter(&v);
+                }
+                chrome_paint();
                 continue;
             }
             if (ev.key == TK_ENTER) {
@@ -700,6 +708,8 @@ static int run(const char *title, const struct pick_item *items, int count,
             refilter(&v);
             break;
         }
+        case TK_LEFT:
+            goto done;
         case TK_RIGHT:
 
             if (!v.count || row_heading(&v, v.sel))
