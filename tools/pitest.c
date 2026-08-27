@@ -82,11 +82,12 @@ static int mock_server(int argc, char **argv)
         } else if (id && type && !strcmp(type, "prompt")) {
             turns++;
             respond(id, "prompt");
-            printf("{\"type\":\"message_update\","
-                   "\"assistantMessageEvent\":{\"type\":\"text_delta\","
-                   "\"delta\":\"%s\"}}\n",
-                   turns == 1 ? "partial" : "done");
-            if (turns > 1) {
+            if (turns < 3)
+                printf("{\"type\":\"message_update\","
+                       "\"assistantMessageEvent\":{\"type\":\"text_delta\","
+                       "\"delta\":\"%s\"}}\n",
+                       turns == 1 ? "partial" : "done");
+            if (turns == 2) {
                 printf("{\"type\":\"tool_execution_start\","
                        "\"toolCallId\":\"tool-1\",\"toolName\":\"edit\","
                        "\"args\":{\"path\":\"src/session.c\","
@@ -100,6 +101,13 @@ static int mock_server(int argc, char **argv)
                        "\"role\":\"assistant\",\"usage\":{\"input\":31,"
                        "\"output\":7,\"cacheRead\":120,\"cacheWrite\":9,"
                        "\"totalTokens\":167,\"cost\":{\"total\":0.25}}}}\n");
+                printf("{\"type\":\"agent_settled\"}\n");
+            } else if (turns == 3) {
+                printf("{\"type\":\"message_end\",\"message\":{"
+                       "\"role\":\"assistant\",\"content\":[],"
+                       "\"stopReason\":\"error\","
+                       "\"errorMessage\":\"404: no tool-capable endpoint\","
+                       "\"usage\":{}}}\n");
                 printf("{\"type\":\"agent_settled\"}\n");
             }
             fflush(stdout);
@@ -183,6 +191,16 @@ int main(int argc, char **argv)
         pi_stop(client);
         return 1;
     }
+    memset(&meta, 0, sizeof meta);
+    reply = pi_send_ex(client, "fail", &meta);
+    if (!reply || *reply || !meta.is_error || !pi_last_error(client) ||
+        strcmp(pi_last_error(client), "404: no tool-capable endpoint")) {
+        fprintf(stderr, "pitest: turn error was not surfaced\n");
+        free(reply);
+        pi_stop(client);
+        return 1;
+    }
+    free(reply);
     pi_stop(client);
     puts("pitest: ok");
     return 0;

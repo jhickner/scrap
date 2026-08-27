@@ -1634,6 +1634,15 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
                     : m.is_error      ? "the turn ended in an error"
                                       : why);
         }
+    } else if (!*reply && m.is_error) {
+        const char *detail = s->agent->last_error(s->agent);
+        viewport_item_begin(VIEWPORT_ROWS(1, 1));
+        if (detail && *detail)
+            ui_error("%s: %s", s->backend, detail);
+        else
+            ui_error("the %s turn ended in an error", s->backend);
+        viewport_item_end();
+        ui_flush();
     } else if (*reply && !shown) {
         md_render_kept(reply, 0);
     }

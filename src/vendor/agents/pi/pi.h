@@ -56,6 +56,7 @@ char *pi_send(pi_client *c, const char *user_text);
 
 typedef struct {
     int interrupted;    /* the abort predicate ended the operation            */
+    int is_error;       /* pi ended the turn with stopReason "error"          */
     double cost_usd;    /* cumulative for the session, summed over the turns  */
     long context_tokens;/* the newest request, as pi counted it               */
     long input_tokens;  /* this turn, summed over its assistant messages      */
@@ -77,6 +78,9 @@ const char *pi_session_id(pi_client *c);
 
 /* The provider/model selected by pi, or NULL until get_state has answered. */
 const char *pi_model(pi_client *c);
+
+/* The most recent turn error reported by pi, or NULL. */
+const char *pi_last_error(pi_client *c);
 
 /* When on, pi_send writes a compact event trace to stderr. */
 void pi_set_verbose(pi_client *c, int on);
@@ -149,11 +153,11 @@ Backend *pi_backend_open(const backend_opts *opts);
 struct pi_client {
     pid_t pid;
     int in_fd, out_fd;
-    int next_id, verbose;
+    int next_id, verbose, turn_error;
     int (*abort)(void);
     void (*on_event)(void *ud, const pi_event *ev);
     void *on_event_ud;
-    char *sys, *default_effort;
+    char *sys, *default_effort, *last_error;
     char *buf;
     size_t len, cap;
     char session_id[128], model[160];
@@ -262,6 +266,12 @@ static void pi_append(char **dst, const char *s) {
     *dst = n;
 }
 
+static void pi_replace(char **dst, const char *s) {
+    char *next = s && *s ? strdup(s) : NULL;
+    free(*dst);
+    *dst = next;
+}
+
 static const char *pi_text(cJSON *result) {
     cJSON *content = result ? cJSON_GetObjectItemCaseSensitive(result, "content") : NULL;
     if (!cJSON_IsArray(content)) return NULL;
@@ -303,6 +313,13 @@ static void pi_consume_event(pi_client *c, cJSON *ev, char **acc, int *settled) 
         /* Only assistant messages are billed; tool results and the echoed
          * prompt carry no usage. */
         cJSON *msg = cJSON_GetObjectItemCaseSensitive(ev, "message");
+        const char *stop = cJSON_GetStringValue(
+            cJSON_GetObjectItemCaseSensitive(msg, "stopReason"));
+        if (stop && !strcmp(stop, "error")) {
+            c->turn_error = 1;
+            pi_replace(&c->last_error, cJSON_GetStringValue(
+                cJSON_GetObjectItemCaseSensitive(msg, "errorMessage")));
+        }
         const char *role = cJSON_GetStringValue(
             cJSON_GetObjectItemCaseSensitive(msg, "role"));
         cJSON *usage = (role && !strcmp(role, "assistant"))
@@ -489,6 +506,10 @@ const char *pi_model(pi_client *c) {
     return (c && c->model[0]) ? c->model : NULL;
 }
 
+const char *pi_last_error(pi_client *c) {
+    return c ? c->last_error : NULL;
+}
+
 int pi_abort(pi_client *c) { return c ? pi_command(c, "abort", NULL) != 0 : 0; }
 
 int pi_set_effort(pi_client *c, const char *effort) {
@@ -509,6 +530,8 @@ int pi_set_effort(pi_client *c, const char *effort) {
 char *pi_send_ex(pi_client *c, const char *user_text, pi_result *meta) {
     if (meta) memset(meta, 0, sizeof *meta);
     if (!c || !user_text) return NULL;
+    c->turn_error = 0;
+    pi_replace(&c->last_error, NULL);
     char *full = NULL;
     if (c->sys) {
         size_t n = strlen(c->sys) + strlen(user_text) + 8;
@@ -546,6 +569,7 @@ char *pi_send_ex(pi_client *c, const char *user_text, pi_result *meta) {
     if (!accepted) { free(answer); return NULL; }
     if (!c->session_id[0] || !c->model[0]) pi_refresh_state(c);
     if (meta) {
+        meta->is_error = c->turn_error;
         meta->cost_usd = c->cost_usd;
         meta->context_tokens = c->context_tokens;
         meta->input_tokens = c->input_tokens;
@@ -597,7 +621,8 @@ void pi_stop(pi_client *c) {
         }
     }
     if (c->out_fd >= 0) close(c->out_fd);
-    free(c->sys); free(c->default_effort); free(c->buf); free(c);
+    free(c->sys); free(c->default_effort); free(c->last_error);
+    free(c->buf); free(c);
 }
 
 #endif /* PI_IMPLEMENTATION */
@@ -671,6 +696,7 @@ static char *pi_backend_ask_ex(Backend *b, const char *user, backend_result *met
     backend_flush(&cx->st);
     if (meta) {
         meta->interrupted = pr.interrupted;
+        meta->is_error = pr.is_error;
         meta->cost_usd = pr.cost_usd;
         meta->context_tokens = pr.context_tokens;
         meta->input_tokens = pr.input_tokens;
@@ -716,6 +742,10 @@ static const char *pi_backend_model(Backend *b) {
     pi_backend_ctx *cx = b->ctx;
     return cx->c ? pi_model(cx->c) : NULL;
 }
+static const char *pi_backend_error(Backend *b) {
+    pi_backend_ctx *cx = b->ctx;
+    return cx->c ? pi_last_error(cx->c) : NULL;
+}
 static void pi_backend_close(Backend *b) {
     pi_backend_ctx *cx = b->ctx;
     if (cx->c) pi_stop(cx->c);
@@ -744,7 +774,7 @@ Backend *pi_backend_open(const backend_opts *opts) {
     b->model = pi_backend_model;
     b->effort = backend_stored_effort;
     b->auth_source = backend_none;
-    b->last_error = backend_none;
+    b->last_error = pi_backend_error;
     return b;
 }
 #endif /* PI_BACKEND_IMPLEMENTATION */
