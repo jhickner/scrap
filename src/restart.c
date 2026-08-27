@@ -24,6 +24,7 @@ static void on_signal(int sig)
 {
     (void)sig;
     wanted = 1;
+    tty_wake();
 }
 
 void restart_arm(void)

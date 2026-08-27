@@ -336,13 +336,21 @@ void tty_watch_ready(void)
         watch_ready(watch_ud);
 }
 
-static int woken;
-
-void tty_wake(void) { woken = 1; }
+static volatile sig_atomic_t woken;
 
 /* Depth of a partly-read escape sequence or paste: a wake must not cut one
    short, so it stays latched until the next top-level read. */
 static int seq_depth;
+
+void tty_wake(void) { woken = 1; }
+
+static int wake_latched(void)
+{
+    if (seq_depth || !(got_winch || quit_signal || woken))
+        return 0;
+    woken = 0;
+    return 1;
+}
 
 static long clock_ms(void)
 {
@@ -356,6 +364,9 @@ static int wait_readable(int timeout_ms)
     long deadline = timeout_ms < 0 ? 0 : clock_ms() + timeout_ms;
 
     for (;;) {
+        if (wake_latched())
+            return 0;
+
         int extra[TTY_WATCH_MAX];
         int count = watch_fds ? watch_fds(watch_ud, extra, TTY_WATCH_MAX) : 0;
         if (count < 0)
@@ -383,8 +394,6 @@ static int wait_readable(int timeout_ms)
         if (r < 0) {
             if (errno != EINTR)
                 return -1;
-            if (!seq_depth && (got_winch || quit_signal))
-                return 0;
             continue;
         }
         if (r == 0)
@@ -398,11 +407,6 @@ static int wait_readable(int timeout_ms)
         if (!woke)
             return 0;
         watch_ready(watch_ud);
-
-        if (woken && !seq_depth) {
-            woken = 0;
-            return 0;
-        }
         if (timeout_ms >= 0 && clock_ms() >= deadline)
             return 0;
     }

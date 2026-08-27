@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -153,6 +154,77 @@ static int restore_from_raw_pty(void)
     return 0;
 }
 
+static volatile sig_atomic_t alarm_hit;
+
+static void on_usr1(int sig)
+{
+    (void)sig;
+    tty_wake();
+}
+
+static void on_alrm(int sig)
+{
+    (void)sig;
+    alarm_hit = 1;
+    tty_wake();
+}
+
+static void wake_unblocks_read(void)
+{
+    int sp[2];
+    if (pipe(sp) != 0) {
+        fail("wake pipe");
+        return;
+    }
+    int oldin = dup(STDIN_FILENO);
+    if (oldin < 0 || dup2(sp[0], STDIN_FILENO) < 0) {
+        fail("wake dup2");
+        close(sp[0]);
+        close(sp[1]);
+        return;
+    }
+    close(sp[0]);
+
+    tty_event ev;
+    tty_wake();
+    if (tty_read(&ev, -1))
+        fail("latched tty_wake still blocked");
+
+    struct sigaction sa = {0}, oldusr, oldalrm;
+    sa.sa_handler = on_usr1;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGUSR1, &sa, &oldusr);
+    sa.sa_handler = on_alrm;
+    sigaction(SIGALRM, &sa, &oldalrm);
+
+    alarm_hit = 0;
+    pid_t child = fork();
+    if (child < 0) {
+        fail("wake fork");
+    } else if (child == 0) {
+        usleep(50 * 1000);
+        kill(getppid(), SIGUSR1);
+        _exit(0);
+    } else {
+        alarm(2);
+        int r = tty_read(&ev, -1);
+        alarm(0);
+        if (alarm_hit)
+            fail("signal tty_wake did not unblock");
+        else if (r)
+            fail("signal tty_wake returned an event");
+        int st;
+        while (waitpid(child, &st, 0) < 0 && errno == EINTR)
+            ;
+    }
+
+    sigaction(SIGUSR1, &oldusr, NULL);
+    sigaction(SIGALRM, &oldalrm, NULL);
+    dup2(oldin, STDIN_FILENO);
+    close(oldin);
+    close(sp[1]);
+}
+
 static void keys_from_pipe(void)
 {
     int sp[2];
@@ -189,6 +261,7 @@ int main(void)
 {
     if (restore_from_raw_pty() != 0)
         return 1;
+    wake_unblocks_read();
     keys_from_pipe();
     if (failures)
         return 1;
