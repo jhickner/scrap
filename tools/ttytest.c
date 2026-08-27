@@ -52,6 +52,52 @@ static int send(int wfd, const char *bytes, size_t n, tty_event *ev)
     return tty_read(ev, 200);
 }
 
+static void handoff_keeps_alt_screen(void)
+{
+    int master, slave;
+    if (openpty(&master, &slave, NULL, NULL, NULL) < 0) {
+        fail("handoff openpty");
+        return;
+    }
+
+    int oldin = dup(STDIN_FILENO), oldout = dup(STDOUT_FILENO);
+    if (oldin < 0 || oldout < 0 || dup2(slave, STDIN_FILENO) < 0 ||
+        dup2(slave, STDOUT_FILENO) < 0) {
+        fail("handoff dup2");
+        close(master);
+        close(slave);
+        return;
+    }
+
+    if (tty_raw_begin() != 0)
+        fail("handoff raw begin");
+    tty_raw_handoff();
+    if (!echo_on())
+        fail("handoff restores cooked input");
+
+    dup2(oldin, STDIN_FILENO);
+    dup2(oldout, STDOUT_FILENO);
+    close(oldin);
+    close(oldout);
+    close(slave);
+
+    char output[4096];
+    size_t n = 0;
+    for (;;) {
+        ssize_t got = read(master, output + n, sizeof output - n - 1);
+        if (got <= 0)
+            break;
+        n += (size_t)got;
+        if (n == sizeof output - 1)
+            break;
+    }
+    output[n] = '\0';
+    close(master);
+
+    if (strstr(output, "\x1b[?1049l"))
+        fail("handoff left the alternate screen");
+}
+
 static void expect_key(int wfd, const char *bytes, size_t n, tty_key want,
                        const char *what)
 {
@@ -259,6 +305,7 @@ static void keys_from_pipe(void)
 
 int main(void)
 {
+    handoff_keeps_alt_screen();
     if (restore_from_raw_pty() != 0)
         return 1;
     wake_unblocks_read();

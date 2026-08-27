@@ -21,16 +21,17 @@
 #define KEYBOARD_SET  "\x1b[=9u\x1b[>4;2m"
 #define KEYBOARD_OFF  "\x1b[>4;0m\x1b[<u"
 
-#define CRASH_RESTORE \
+#define MODE_RESTORE \
     "\x1b[?2026l" \
     "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" \
     "\x1b[?2004l" \
     KEYBOARD_OFF \
     "\x1b[?25h" \
     "\x1b[?7h" \
-    "\x1b[?1049l" \
     "\x1b[0m" \
     "\x1b]112\x07"
+
+#define CRASH_RESTORE MODE_RESTORE "\x1b[?1049l"
 
 #define ESC_GRACE_MS 30
 
@@ -298,18 +299,28 @@ void tty_keyboard_on(void)
     fputs(KEYBOARD_SET, stdout);
 }
 
-void tty_raw_end(void)
+static void raw_end(const char *restore)
 {
     if (!in_raw && !have_entry)
         return;
     if (in_raw) {
-        fputs(CRASH_RESTORE, stdout);
+        fputs(restore, stdout);
         fflush(stdout);
         tcflush(STDIN_FILENO, TCIFLUSH);
         in_raw = 0;
     }
     if (have_entry)
         apply_mode(&entry_mode, TCSANOW);
+}
+
+void tty_raw_end(void)
+{
+    raw_end(CRASH_RESTORE);
+}
+
+void tty_raw_handoff(void)
+{
+    raw_end(MODE_RESTORE);
 }
 
 static int  (*watch_fds)(void *ud, int *out, int max);

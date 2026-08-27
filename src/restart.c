@@ -235,7 +235,7 @@ int restart_exec(struct session *s)
     else
         viewport_end();
     ui_raw(0);
-    tty_raw_end();
+    tty_raw_handoff();
 
     execvp(argv[0], argv);
 
