@@ -595,6 +595,10 @@ static void decode_csi(tty_event *ev, const int *params, int nparams, int final,
             if ((bits & 4) && cp >= 'A' && cp <= 'Z')
                 cp = cp - 'A' + 'a';
             if ((bits & 4) && cp >= 'a' && cp <= 'z') {
+                if (cp == 'j') {
+                    emit(ev, TK_NEWLINE);
+                    return;
+                }
                 ev->key = TK_CHAR;
                 ev->cp = cp - 'a' + 1;
                 ev->text = NULL;
@@ -622,6 +626,10 @@ static void decode_csi(tty_event *ev, const int *params, int nparams, int final,
             if ((bits & 4) && key >= 'A' && key <= 'Z')
                 key = key - 'A' + 'a';
             if ((bits & 4) && key >= 'a' && key <= 'z') {
+                if (key == 'j') {
+                    emit(ev, TK_NEWLINE);
+                    return;
+                }
                 ev->key = TK_CHAR;
                 ev->cp = (uint32_t)(key - 'a' + 1);
                 ev->text = NULL;
