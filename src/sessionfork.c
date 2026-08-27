@@ -159,11 +159,11 @@ int sessionfork_shell(const struct session *s, enum fork_where where, int quiet)
     return 1;
 }
 
-void sessionfork_exit_note(const struct session *s)
+char *sessionfork_exit_note(const struct session *s)
 {
     const char *id = session_id(s);
     if (!id || !*id || !session_can_resume(s))
-        return;
+        return NULL;
 
     char        here[4096];
     const char *dir = session_cwd(s);
@@ -172,15 +172,15 @@ void sessionfork_exit_note(const struct session *s)
     if (dir && *dir && !(getcwd(here, sizeof here) && !strcmp(here, dir))) {
         char quoted[4200];
         if (!text_shell_quote(dir, quoted, sizeof quoted))
-            return;
+            return NULL;
         int wrote = snprintf(cmd, sizeof cmd, "cd %s && ", quoted);
         if (wrote < 0 || (size_t)wrote >= sizeof cmd)
-            return;
+            return NULL;
         n = (size_t)wrote;
     }
     int wrote = snprintf(cmd + n, sizeof cmd - n, "%s", APP_NAME);
     if (wrote < 0 || (size_t)wrote >= sizeof cmd - n)
-        return;
+        return NULL;
     n += (size_t)wrote;
 
     char *args[SESSION_ARGV_MAX];
@@ -193,9 +193,17 @@ void sessionfork_exit_note(const struct session *s)
         n += (size_t)wrote;
     }
 
-    viewport_item_begin(VIEWPORT_ROWS(1, 1));
-    ui_bar(ui_style(UI_DIM), "resume this conversation:");
-    ui_printf("%s%s%s\n", ui_style(UI_DIM), cmd, ui_style(UI_RESET));
-    viewport_item_end();
-    ui_flush();
+    const char *dim = ui_style(UI_DIM);
+    const char *reset = ui_style(UI_RESET);
+    const char *brand = ui_style(UI_BRAND);
+    const char *label = "resume this conversation:";
+    size_t need = strlen(brand) + strlen(UI_BAR) + strlen(reset) + 1 +
+                  strlen(dim) + strlen(label) + strlen(reset) + 1 +
+                  strlen(dim) + strlen(cmd) + strlen(reset) + 2;
+    char *out = malloc(need);
+    if (!out)
+        return NULL;
+    snprintf(out, need, "%s%s%s %s%s%s\n%s%s%s\n", brand, UI_BAR, reset, dim,
+             label, reset, dim, cmd, reset);
+    return out;
 }

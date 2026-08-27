@@ -792,11 +792,25 @@ int main(int argc, char **argv)
     session_set_typeahead(NULL, NULL);
     chrome_bind(NULL);
     prompt_free(prompt);
-    viewport_end();
-    for (int i = 0; i < workspace_count(); i++)
-        sessionfork_exit_note(workspace_at(i));
+
+    char *notes[WORKSPACE_MAX];
+    int   nnotes = 0;
+    for (int i = 0; i < workspace_count(); i++) {
+        char *note = sessionfork_exit_note(workspace_at(i));
+        if (note && nnotes < WORKSPACE_MAX)
+            notes[nnotes++] = note;
+        else
+            free(note);
+    }
     workspace_end();
+    viewport_end();
     ui_raw(0);
     tty_raw_end();
+    for (int i = 0; i < nnotes; i++) {
+        fputs(notes[i], stdout);
+        free(notes[i]);
+    }
+    if (nnotes)
+        fflush(stdout);
     return 0;
 }

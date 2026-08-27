@@ -18,6 +18,6 @@ int sessionfork_run(const struct session *s, enum fork_where where);
 
 int sessionfork_shell(const struct session *s, enum fork_where where, int quiet);
 
-void sessionfork_exit_note(const struct session *s);
+char *sessionfork_exit_note(const struct session *s);
 
 #endif
