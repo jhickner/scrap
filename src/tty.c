@@ -611,6 +611,10 @@ static void decode_csi(tty_event *ev, const int *params, int nparams, int final,
         if (nparams >= 3 && params[0] == 27) {
             int key = params[2];
             int bits = params[1] > 1 ? params[1] - 1 : 0;
+            if (key == 13) {
+                emit(ev, params[1] > 1 ? TK_NEWLINE : TK_ENTER);
+                return;
+            }
             if (key == 9) {
                 emit_modified_tab(ev, params[1]);
                 return;

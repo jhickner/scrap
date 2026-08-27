@@ -296,6 +296,8 @@ static void keys_from_pipe(void)
     expect_key(w, "\x1b[27;6;9~", 9, TK_PREV_TAB, "xterm ctrl-shift-tab");
     expect_key(w, "\x1b[127u", 6, TK_BACKSPACE, "csi-u backspace");
     expect_key(w, "\x1b[27u", 5, TK_ESCAPE, "csi-u escape");
+    expect_key(w, "\x1b[13;2u", 7, TK_NEWLINE, "csi-u shift-enter");
+    expect_key(w, "\x1b[27;2;13~", 10, TK_NEWLINE, "xterm shift-enter");
     expect_ctrl(w, "\x03", 1, 3, "ctrl-c");
     expect_ctrl(w, "\x1b[27;5;99~", 10, 3, "xterm ctrl-c");
     expect_ctrl(w, "\x1b[97;5u", 7, 1, "csi-u ctrl-a");
