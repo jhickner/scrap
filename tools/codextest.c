@@ -142,6 +142,16 @@ static int mock_server(void)
                 continue;
             }
             respond(id, "{\"thread\":{\"id\":\"thread-1\"}}");
+        } else if (method && !strcmp(method, "thread/fork")) {
+            cJSON *params = cJSON_GetObjectItemCaseSensitive(msg, "params");
+            const char *thread = params ? cJSON_GetStringValue(
+                cJSON_GetObjectItemCaseSensitive(params, "threadId")) : NULL;
+            if (!thread || strcmp(thread, "thread-parent"))
+                respond_error(id);
+            else
+                respond(id, "{\"thread\":{\"id\":\"thread-fork\"}}");
+        } else if (method && !strcmp(method, "thread/resume")) {
+            respond_error(id);
         } else if (method && !strcmp(method, "turn/start")) {
             turns++;
             cJSON *params = cJSON_GetObjectItemCaseSensitive(msg, "params");
@@ -313,6 +323,23 @@ int main(int argc, char **argv)
         return 1;
     }
     free(reply);
+
+    codex_opts fork_opts = { .cli_path = argv[0],
+                             .resume_session = "thread-parent",
+                             .fork_session = 1 };
+    codex_client *forked = codex_start(&fork_opts);
+    if (forked)
+        codex_trust_project(forked, "/project.with.dot");
+    const char *fork_id = codex_session_id(forked);
+    if (!forked || !fork_id || strcmp(fork_id, "thread-fork")) {
+        fprintf(stderr, "codextest: resumed thread was not forked (%s)\n",
+                forked && codex_last_error(forked)
+                    ? codex_last_error(forked) : "no backend error");
+        codex_stop(forked);
+        codex_stop(client);
+        return 1;
+    }
+    codex_stop(forked);
 
     codex_get_rate_limit(client, &rate);
     if (!rate.available || rate.used_percent != 29 ||

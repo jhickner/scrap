@@ -29,6 +29,7 @@ typedef struct {
     const char *sandbox;        /* read-only|workspace-write|danger-full-access;
                                    NULL -> "workspace-write"                  */
     const char *resume_session; /* resume this thread instead of starting one */
+    int fork_session;           /* fork the resumed thread into a new thread */
     const char *append_system;  /* thread developer instructions; NULL -> none */
     int bypass_approvals;       /* danger-full-access, only if externally sandboxed */
     int skip_git_repo_check;    /* retained for source compatibility; unused  */
@@ -151,7 +152,7 @@ struct codex_client {
     void (*on_event)(void *ud, const codex_event *ev);
     void *on_event_ud;
     char *model, *effort, *sandbox, *sys, *resume, *project, *cli;
-    int effort_changed, ephemeral;
+    int effort_changed, ephemeral, fork_session;
     char session_id[128];
     char resolved[32];         /* config or stream effort when none was set */
     char resolved_model[64];   /* the model id the app-server picked          */
@@ -606,7 +607,10 @@ static int cx_open_thread(codex_client *c, const char *resume) {
         if (c->sys) cJSON_AddStringToObject(p, "developerInstructions", c->sys);
         if (c->ephemeral) cJSON_AddBoolToObject(p, "ephemeral", 1);
     }
-    int id = cx_request(c, resume && *resume ? "thread/resume" : "thread/start", p);
+    const char *method = resume && *resume
+        ? c->fork_session ? "thread/fork" : "thread/resume"
+        : "thread/start";
+    int id = cx_request(c, method, p);
     cJSON *r = id ? cx_wait_response(c, id, 1) : NULL;
     if (!r) return 0;
     cJSON *result = cJSON_GetObjectItemCaseSensitive(r, "result");
@@ -657,6 +661,7 @@ codex_client *codex_start(const codex_opts *opts) {
     c->warning_mu_ready = 1;
     c->model = cx_dup(o.model); c->effort = cx_dup(o.effort);
     c->ephemeral = o.ephemeral;
+    c->fork_session = o.fork_session;
     c->sys = cx_dup(o.append_system);
     cx_seed_effort(c, o.cwd);
     c->resume = cx_dup(o.resume_session);

@@ -31,8 +31,7 @@ typedef struct {
     const char *system;         /* applied to every turn; NULL -> none                */
     const char *cwd;            /* where the agent runs its tools; NULL -> inherit    */
     const char *resume_session; /* continue a prior session (claude, codex, grok, pi) */
-    int fork_session;           /* claude: copy the resumed context into a new session
-                                   id instead of writing back to the original       */
+    int fork_session;           /* copy resumed context into a new session id        */
     const char *permission_mode;/* claude: --permission-mode; NULL -> bypassPermissions*/
     const char *session_name;   /* optional display name; currently used by claude     */
     int ephemeral;              /* do not persist this helper conversation             */
@@ -620,6 +619,7 @@ static int backend_codex_start(Backend *b, const char *resume) {
     o.bypass_approvals = 1;
     o.resume_session = resume;
     o.ephemeral = x->st.ephemeral;
+    o.fork_session = x->st.fork_session;
     codex_client *c = codex_start(&o);
     if (!c) return 0;
     codex_set_event_cb(c, backend_codex_event, b);
