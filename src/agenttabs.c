@@ -15,6 +15,7 @@
 struct slot {
     const void *key;
     char        agent[32];
+    char        provider[32];
     char        status[16];
     int         usage_percent; /* -1 until a reading lands */
     long        usage_resets_at;
@@ -84,6 +85,8 @@ static int write_json(FILE *f, void *ud)
     const char *pane = getenv("TMUX_PANE");
     fprintf(f, "{\"agent\":\"%s\",\"pid\":%ld,\"status\":\"%s\",\"ts\":%ld",
             s->agent, (long)getpid(), s->status, (long)time(NULL));
+    if (s->provider[0])
+        fprintf(f, ",\"provider\":\"%s\"", s->provider);
     if (pane_id(pane))
         fprintf(f, ",\"tmux_pane\":\"%s\"", pane);
     if (s->usage_percent >= 0) {
@@ -158,7 +161,8 @@ void agenttabs_begin(void)
     atexit(drop_all);
 }
 
-void agenttabs_publish(const void *key, const char *backend, const char *status)
+void agenttabs_publish(const void *key, const char *backend, const char *status,
+                       const char *provider)
 {
     if (!agents_dir[0] || !key || !status || !*status || !agent_name(backend))
         return;
@@ -175,6 +179,10 @@ void agenttabs_publish(const void *key, const char *backend, const char *status)
         slots[at].usage_resets_at = 0;
         slots[at].usage_window_minutes = 0;
     }
+    if (provider && *provider && agent_name(provider))
+        snprintf(slots[at].provider, sizeof slots[at].provider, "%s", provider);
+    else
+        slots[at].provider[0] = '\0';
     snprintf(slots[at].status, sizeof slots[at].status, "%s", status);
     write_record(at);
 }

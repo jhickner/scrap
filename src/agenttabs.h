@@ -7,7 +7,8 @@
 
 void agenttabs_begin(void);
 
-void agenttabs_publish(const void *key, const char *backend, const char *status);
+void agenttabs_publish(const void *key, const char *backend, const char *status,
+                       const char *provider);
 
 void agenttabs_usage(const void *key, int percent, long resets_at, long window_minutes);
 

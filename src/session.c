@@ -441,9 +441,24 @@ int session_idle_fd(const struct session *s)
     return s->agent->idle_fd(s->agent);
 }
 
+static const char *tabs_provider(const struct session *s)
+{
+    const char *model = NULL;
+
+    if (!s || !s->backend || strcmp(s->backend, "pi") != 0)
+        return NULL;
+    if (s->resolved && *s->resolved)
+        model = s->resolved;
+    else if (s->model && *s->model)
+        model = s->model;
+    if (model && !strncmp(model, "openrouter/", 11))
+        return "openrouter";
+    return NULL;
+}
+
 static void publish(const struct session *s, const char *status)
 {
-    agenttabs_publish(s, session_backend(s), status);
+    agenttabs_publish(s, session_backend(s), status, tabs_provider(s));
     livelist_publish(s, status);
 }
 
@@ -1081,6 +1096,7 @@ int session_set_model(struct session *s, const char *model)
         free(previous);
         replace(&s->resolved, NULL);
         prefs_remember_choice("model", s->backend, s->model);
+        publish(s, s->idle_busy ? "working" : "finished");
         return 1;
     }
     free(s->model);
@@ -1285,6 +1301,7 @@ int session_retarget(struct session *s, const char *model, const char *effort,
     replace(&s->resolved, NULL);
     if (moved)
         started_over(s);
+    publish(s, s->idle_busy ? "working" : "finished");
     return 1;
 }
 
