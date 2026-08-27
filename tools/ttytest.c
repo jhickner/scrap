@@ -44,7 +44,46 @@ static void set_echo(int on)
     tcsetattr(STDIN_FILENO, TCSANOW, &t);
 }
 
-int main(void)
+static int send(int wfd, const char *bytes, size_t n, tty_event *ev)
+{
+    if (write(wfd, bytes, n) != (ssize_t)n)
+        return 0;
+    return tty_read(ev, 200);
+}
+
+static void expect_key(int wfd, const char *bytes, size_t n, tty_key want,
+                       const char *what)
+{
+    tty_event ev;
+    if (!send(wfd, bytes, n, &ev)) {
+        fail(what);
+        return;
+    }
+    if (ev.key != want) {
+        fprintf(stderr, "FAIL %s: key %d want %d\n", what, (int)ev.key, (int)want);
+        failures++;
+        if (ev.text)
+            free(ev.text);
+        return;
+    }
+    if (ev.text)
+        free(ev.text);
+}
+
+static void expect_ctrl(int wfd, const char *bytes, size_t n, uint32_t cp,
+                        const char *what)
+{
+    tty_event ev;
+    if (!send(wfd, bytes, n, &ev) || ev.key != TK_CHAR || ev.cp != cp) {
+        fprintf(stderr, "FAIL %s: key %d cp %u\n", what, (int)ev.key, ev.cp);
+        failures++;
+        if (ev.text)
+            free(ev.text);
+        return;
+    }
+}
+
+static int restore_from_raw_pty(void)
 {
     int master, slave;
     if (openpty(&master, &slave, NULL, NULL, NULL) < 0) {
@@ -100,5 +139,42 @@ int main(void)
     close(master);
     while (waitpid(drain, NULL, 0) < 0 && errno == EINTR)
         ;
-    return failures ? 1 : 0;
+    return 0;
+}
+
+static void keys_from_pipe(void)
+{
+    int sp[2];
+    if (pipe(sp) != 0) {
+        fail("pipe");
+        return;
+    }
+    if (dup2(sp[0], STDIN_FILENO) < 0) {
+        fail("dup2 stdin");
+        return;
+    }
+    close(sp[0]);
+    int w = sp[1];
+
+    expect_key(w, "\t", 1, TK_TAB, "tab");
+    expect_key(w, "\x1b[9u", 4, TK_TAB, "csi-u tab");
+    expect_key(w, "\x1b[9;5u", 6, TK_NEXT_TAB, "csi-u ctrl-tab");
+    expect_key(w, "\x1b[9;6u", 6, TK_PREV_TAB, "csi-u ctrl-shift-tab");
+    expect_key(w, "\x1b[27;5;9~", 9, TK_NEXT_TAB, "xterm ctrl-tab");
+    expect_key(w, "\x1b[27;6;9~", 9, TK_PREV_TAB, "xterm ctrl-shift-tab");
+    expect_ctrl(w, "\x03", 1, 3, "ctrl-c");
+    expect_ctrl(w, "\x1b[27;5;99~", 10, 3, "xterm ctrl-c");
+
+    close(w);
+}
+
+int main(void)
+{
+    if (restore_from_raw_pty() != 0)
+        return 1;
+    keys_from_pipe();
+    if (failures)
+        return 1;
+    puts("ttytest: ok");
+    return 0;
 }

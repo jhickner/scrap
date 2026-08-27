@@ -16,6 +16,8 @@ typedef enum {
     TK_BACKSPACE,
     TK_DELETE,
     TK_TAB,
+    TK_NEXT_TAB,
+    TK_PREV_TAB,
     TK_ESCAPE,
     TK_LEFT,
     TK_RIGHT,

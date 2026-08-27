@@ -249,6 +249,12 @@ static void board(void *ud)
     views_board(session_cwd(here));
 }
 
+static void cycle_session(void *ud, int delta)
+{
+    (void)ud;
+    workspace_cycle(delta);
+}
+
 static void another(void *ud)
 {
     (void)ud;
@@ -688,6 +694,7 @@ int main(int argc, char **argv)
     prompt_set_switcher(prompt, switcher, NULL);
     prompt_set_split(prompt, splitter, NULL);
     prompt_set_another(prompt, another, NULL);
+    prompt_set_cycle(prompt, cycle_session, NULL);
     prompt_set_collapse(prompt, collapse_tools, NULL);
     view_collapse(session_compact(session));
     prompt_set_board(prompt, board, NULL);

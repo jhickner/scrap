@@ -221,6 +221,16 @@ void workspace_show(int index)
     tg_refocus();
 }
 
+void workspace_cycle(int delta)
+{
+    if (ntabs <= 1 || !delta)
+        return;
+    int at = (cur + delta) % ntabs;
+    if (at < 0)
+        at += ntabs;
+    workspace_show(at);
+}
+
 static void sticky_set(int index, const char *line)
 {
     free(tabs[index].sticky);

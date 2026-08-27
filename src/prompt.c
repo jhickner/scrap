@@ -71,6 +71,8 @@ struct prompt {
     void        *split_ud;
     void       (*another)(void *ud);
     void        *another_ud;
+    void       (*cycle)(void *ud, int delta);
+    void        *cycle_ud;
     void       (*collapse)(void *ud);
     void        *collapse_ud;
     int        (*cancel)(void *ud);
@@ -647,6 +649,7 @@ static const struct prompt_key SHORTCUTS[] = {
     {"ctrl-c", "clear the prompt line, or interrupt a running turn"},
     {"ctrl-d (empty)", "close the session (quit on the last one)"},
     {"left (empty)", "open the list of every session"},
+    {"ctrl-tab / ctrl-shift-tab", "cycle to the next / previous session"},
     {"ctrl-t", "open a shell split in this directory"},
     {"ctrl-b", "open another session like this one, or reuse the idle one"},
     {"ctrl-n / ctrl-o", "cycle the colours of your input / of reply highlights"},
@@ -749,6 +752,19 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             return KEY_OK;
         }
         return edit_key(p, ev);
+
+    case TK_NEXT_TAB:
+    case TK_PREV_TAB:
+        if (p->cycle) {
+            if (live)
+                status_pause();
+            viewport_defer();
+            chrome_clear();
+            p->cycle(p->cycle_ud, ev->key == TK_NEXT_TAB ? 1 : -1);
+            if (live)
+                status_resume();
+        }
+        return KEY_OK;
 
     case TK_TAB:
 
@@ -922,6 +938,12 @@ void prompt_set_another(struct prompt *p, void (*fn)(void *ud), void *ud)
 {
     p->another = fn;
     p->another_ud = ud;
+}
+
+void prompt_set_cycle(struct prompt *p, void (*fn)(void *ud, int delta), void *ud)
+{
+    p->cycle = fn;
+    p->cycle_ud = ud;
 }
 
 void prompt_set_collapse(struct prompt *p, void (*fn)(void *ud), void *ud)

@@ -63,6 +63,8 @@ void prompt_set_board(struct prompt *p, void (*fn)(void *ud), void *ud);
 
 void prompt_set_another(struct prompt *p, void (*fn)(void *ud), void *ud);
 
+void prompt_set_cycle(struct prompt *p, void (*fn)(void *ud, int delta), void *ud);
+
 void prompt_set_collapse(struct prompt *p, void (*fn)(void *ud), void *ud);
 
 void prompt_set_split(struct prompt *p, void (*fn)(void *ud, int quiet), void *ud);

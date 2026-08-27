@@ -16,10 +16,15 @@
 
 #define BRACKETED_PASTE_ON  "\x1b[?2004h"
 
+/* otherwise ctrl-tab is a tab */
+#define KEYBOARD_ON  "\x1b[>1u\x1b[>4;1m"
+#define KEYBOARD_OFF "\x1b[>4;0m\x1b[<u"
+
 #define CRASH_RESTORE \
     "\x1b[?2026l" \
     "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" \
     "\x1b[?2004l" \
+    KEYBOARD_OFF \
     "\x1b[?25h" \
     "\x1b[?7h" \
     "\x1b[?1049l" \
@@ -281,7 +286,7 @@ int tty_raw_begin(void)
 
     signal(SIGPIPE, SIG_IGN);
 
-    fputs(BRACKETED_PASTE_ON, stdout);
+    fputs(BRACKETED_PASTE_ON KEYBOARD_ON, stdout);
     fflush(stdout);
     return 0;
 }
@@ -515,6 +520,15 @@ static void decode_mouse(tty_event *ev, const int *params, int nparams, int fina
     }
 }
 
+static void emit_modified_tab(tty_event *ev, int mods)
+{
+    int bits = mods > 1 ? mods - 1 : 0;
+    if (bits & 4)
+        emit(ev, (bits & 1) ? TK_PREV_TAB : TK_NEXT_TAB);
+    else
+        emit(ev, TK_TAB);
+}
+
 static void decode_csi(tty_event *ev, const int *params, int nparams, int final)
 {
     int mods = nparams >= 2 ? params[1] : 1;
@@ -533,6 +547,10 @@ static void decode_csi(tty_event *ev, const int *params, int nparams, int final)
             emit(ev, mods > 1 ? TK_NEWLINE : TK_ENTER);
             return;
         }
+        if (nparams >= 1 && params[0] == 9) {
+            emit_modified_tab(ev, mods);
+            return;
+        }
         if (nparams >= 1 && params[0] >= 32) {
             ev->key = TK_CHAR;
             ev->cp = (uint32_t)params[0];
@@ -542,6 +560,22 @@ static void decode_csi(tty_event *ev, const int *params, int nparams, int final)
         emit(ev, TK_NONE);
         return;
     case '~':
+        if (nparams >= 3 && params[0] == 27) {
+            int key = params[2];
+            int bits = params[1] > 1 ? params[1] - 1 : 0;
+            if (key == 9) {
+                emit_modified_tab(ev, params[1]);
+                return;
+            }
+            if ((bits & 4) && key >= 'A' && key <= 'Z')
+                key = key - 'A' + 'a';
+            if ((bits & 4) && key >= 'a' && key <= 'z') {
+                ev->key = TK_CHAR;
+                ev->cp = (uint32_t)(key - 'a' + 1);
+                ev->text = NULL;
+                return;
+            }
+        }
         switch (nparams >= 1 ? params[0] : 0) {
         case 1: case 7: emit(ev, TK_HOME); return;
         case 3:         emit(ev, TK_DELETE); return;

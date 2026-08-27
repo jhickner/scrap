@@ -27,6 +27,8 @@ int  workspace_open(struct session *s);
 
 void workspace_show(int index);
 
+void workspace_cycle(int delta);
+
 void workspace_render(int index, void (*fn)(struct session *s, void *ud), void *ud);
 
 int  workspace_find_id(const char *id);
