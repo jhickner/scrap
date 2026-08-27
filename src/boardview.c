@@ -22,6 +22,7 @@
 #include "boardwork.h"
 #include "child.h"
 #include "chrome.h"
+#include "cmd.h"
 #include "form.h"
 #include "gitcmd.h"
 #include "livelist.h"
@@ -953,10 +954,7 @@ static const char *menu_backend(const struct board_card *c)
 {
     if (c->backend_pin[0])
         return c->backend_pin;
-    if (c->backend[0])
-        return c->backend;
-    const char *serving = boardcfg_serving();
-    return serving && serving[0] ? serving : "claude";
+    return cmd_default_backend();
 }
 
 static struct card_menu_rows card_menu(const struct board_card *c,
