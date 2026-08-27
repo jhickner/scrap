@@ -188,7 +188,7 @@ int boardwork_serve(int *waiting)
 static int hold(const char *id, const char *repo, struct session *s,
                 const char *job)
 {
-    if (!id || !*id || !s || slot_of(id))
+    if (!id || !*id || !s || slot_of(id) || slot_by_session(s))
         return 0;
 
     for (int i = 0; i < WORKSPACE_MAX; i++) {
@@ -684,8 +684,10 @@ static int retarget(struct session *s, const char *backend, const char *model,
 static void take_slot(struct worker *w, const struct board_card *c,
                       const char *job)
 {
-    if (strcmp(w->id, c->id))
+    if (strcmp(w->id, c->id)) {
         w->began = now_seconds();
+        board_set_session(w->id, "");
+    }
     snprintf(w->id, sizeof w->id, "%s", c->id);
     snprintf(w->job, sizeof w->job, "%s", job);
     snprintf(w->repo, sizeof w->repo, "%s", c->cwd);
@@ -778,7 +780,11 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
         }
         workspace_show(front);
         s = workspace_at(at);
-        hold(c->id, c->cwd, s, job);
+        if (!hold(c->id, c->cwd, s, job)) {
+            workspace_close(at);
+            snprintf(why, (size_t)size, "no worker slot left");
+            return 0;
+        }
     }
 
     struct board_card edited = *c;
@@ -1379,18 +1385,14 @@ void boardwork_reattach(void)
     board_free(cards, n);
 }
 
-static int strayed(const struct worker *w, const struct board_card *c)
-{
-    if (!c->worktree[0])
-        return 0;
-    const char *at = session_cwd(w->session);
-    return !at || strcmp(at, c->worktree) != 0;
-}
-
 static int rebind(struct worker *w, const struct board_card *c)
 {
-    struct session *s = tree_session(c->worktree);
+    struct session *s = c->session[0] ? id_session(c->session)
+                                      : tree_session(c->worktree);
     if (!s)
+        return 0;
+    struct worker *held = slot_by_session(s);
+    if (held && held != w)
         return 0;
 
     w->session = s;
@@ -1456,8 +1458,6 @@ int boardwork_poll(void)
         if (!workers[i].session)
             continue;
         struct board_card *c = board_find(cards, n, workers[i].id);
-        if (c && strayed(&workers[i], c) && rebind(&workers[i], c))
-            changed = 1;
 
         /* the card learns its session as soon as the backend reports one, so
            a tab that goes away mid-turn can still be picked back up */
