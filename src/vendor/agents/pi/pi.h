@@ -419,6 +419,9 @@ pi_client *pi_start(const pi_opts *opts) {
     if (pid < 0) { close(in[0]); close(in[1]); close(out[0]); close(out[1]); return NULL; }
     if (pid == 0) {
         if (dup2(in[0], STDIN_FILENO) < 0 || dup2(out[1], STDOUT_FILENO) < 0) _exit(126);
+        int nullfd = open("/dev/null", O_RDWR);
+        if (nullfd < 0 || dup2(nullfd, STDERR_FILENO) < 0) _exit(126);
+        if (nullfd > STDERR_FILENO) close(nullfd);
         if (in[0] != STDIN_FILENO) close(in[0]); if (in[1] != STDIN_FILENO) close(in[1]);
         if (out[0] != STDOUT_FILENO) close(out[0]); if (out[1] != STDOUT_FILENO) close(out[1]);
         if (o.cwd && *o.cwd && chdir(o.cwd)) _exit(126);
