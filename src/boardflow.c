@@ -74,6 +74,14 @@ static int will_have_run(const struct board_card *c, const char *const *ahead,
     return 0;
 }
 
+static int queued(const struct board_card *c, const char *name)
+{
+    for (int i = 0; i < c->queue_n; i++)
+        if (!strcmp(c->queue[i], name))
+            return 1;
+    return 0;
+}
+
 static int gates_met(const struct board_card *c, const char **flat, int n,
                      char *why, size_t size)
 {
@@ -101,6 +109,9 @@ static int takeable(const struct board_card *c, const char *name)
     char        why[128];
 
     int n = flatten(&name, 1, flat, BOARD_QUEUE);
+    for (int i = 0; i < n; i++)
+        if (queued(c, flat[i]))
+            return 0;
     return n > 0 && gates_met(c, flat, n, why, sizeof why);
 }
 
@@ -128,7 +139,7 @@ int boardflow_offered(const struct board_card *c, const char **out, int max)
 
     int n = boardcfg_actions(all, BOARD_ACTIONS_MAX);
     for (int i = 0; i < n && k < max; i++)
-        if (boardflow_gated(c, all[i])) {
+        if (boardflow_gated(c, all[i]) && !queued(c, all[i])) {
             int at = k++;
             int deep = depth(all[i], BOARD_ACTIONS_MAX);
             for (; at > 0 && depth(out[at - 1], BOARD_ACTIONS_MAX) < deep; at--)
@@ -157,6 +168,11 @@ int boardflow_trigger(const struct board_card *c, const char *const *names,
         snprintf(why, size, "the queue on this card is full");
         return 0;
     }
+    for (int i = 0; i < k; i++)
+        if (queued(c, flat[i])) {
+            snprintf(why, size, "%s is already queued", flat[i]);
+            return 0;
+        }
     if (!gates_met(c, flat, k, why, size))
         return 0;
 

@@ -875,6 +875,19 @@ static void test_a_trigger_queues_a_pipeline(void)
     expect(c && c->queue_n == 2 && !strcmp(c->queue[1], "merge"),
            "both land on the queue, in order");
 
+    const char *again[] = {"merge"};
+    expect(c && !boardflow_trigger(c, again, 1, why, sizeof why),
+           "an action already waiting is not queued again");
+    expect(strstr(why, "already queued") != NULL,
+           "and says that it is already waiting");
+
+    const char *offered[BOARD_ACTIONS_MAX];
+    int         offered_n = boardflow_offered(c, offered, BOARD_ACTIONS_MAX);
+    int         offers_merge = 0;
+    for (int i = 0; i < offered_n; i++)
+        offers_merge |= !strcmp(offered[i], "merge");
+    expect(!offers_merge, "and the waiting action is no longer offered");
+
     const char *after[] = {"deploy"};
     expect(c && boardflow_trigger(c, after, 1, why, sizeof why),
            "an action gated on one already queued may follow it");
