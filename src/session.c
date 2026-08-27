@@ -875,9 +875,9 @@ static void *retire_thread(void *arg)
     return NULL;
 }
 
-/* Closing a backend stops its child and waits on the reader thread it owns,
-   which the caller would feel as a stall. Nothing reaches the replaced backend
-   any more, so it can go on a thread of its own. */
+/* Closing a backend stops its child. Do that on another thread in case close
+   joins a reader that would deadlock here, then join so quit reaps the CLI
+   before the process exits and closes its stdout pipe. */
 static void retire(Backend *b)
 {
     if (!b)
@@ -890,7 +890,7 @@ static void retire(Backend *b)
     if (pthread_create(&t, NULL, retire_thread, b) != 0)
         b->close(b);
     else
-        pthread_detach(t);
+        pthread_join(t, NULL);
 }
 
 int session_switch_backend(struct session *s, const char *backend)
