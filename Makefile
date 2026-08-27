@@ -72,6 +72,9 @@ $(BUILD)/viewporttest: tools/viewporttest.c src/viewport.o src/ui.o src/tty.o sr
 $(BUILD)/ttytest: tools/ttytest.c src/tty.o src/viewport.o src/ui.o src/settings.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
+$(BUILD)/keydump: tools/keydump.c src/tty.o src/viewport.o src/ui.o src/settings.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
+
 $(BUILD)/gitinfotest: tools/gitinfotest.c src/gitinfo.o src/text.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
