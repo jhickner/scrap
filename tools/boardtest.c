@@ -668,6 +668,8 @@ static void test_the_shipped_actions_are_built_in(void)
 
     const struct board_action *build_it = boardcfg_action("implement");
     expect(build_it && build_it->commits, "implement is asked to commit");
+    expect(build_it && build_it->prompt && strstr(build_it->prompt, "invoke the `test` skill"),
+           "implement invokes the verification and fix skill");
 
     const struct board_action *name = boardcfg_action("name");
     expect(name && name->on_capture, "naming runs on capture, not on trigger");

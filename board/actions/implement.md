@@ -21,9 +21,14 @@ You are in a worktree of your own, on a branch of its own. Do not merge, do not
 switch branches, do not touch the main branch, and do not start work the plan
 does not ask for.
 
-Reach a state someone else can test, commit it to the branch you are already
-on, and then stop and say how to test it. Commit even when the work is
-unfinished: uncommitted work does not exist to anything downstream. CARD.md is
+When the implementation is ready, invoke the `test` skill. Use it to verify the
+card's fix or feature, add or improve tests, fix any card-related issues it
+finds, and rerun the relevant checks. Do not claim the card is resolved while
+one of those checks is failing or unverified.
+
+Commit the verified result to the branch you are already on, and then stop and
+say how to test it. Commit even when the work is unfinished or verification is
+blocked: uncommitted work does not exist to anything downstream. CARD.md is
 tracked on the branch too — commit it with the rest if you wrote to it.
 
 The CLAUDE.md files in scope are binding, not advisory. Two rules they state
