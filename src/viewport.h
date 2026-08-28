@@ -36,6 +36,9 @@ void viewport_resume(void);
 
 void viewport_paint(void);
 
+/* synchronized paints preserve Kitty placeholder combining marks in tmux */
+void viewport_sync_placeholders(int on);
+
 void viewport_defer(void);
 void viewport_flush(void);
 

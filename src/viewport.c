@@ -73,6 +73,7 @@ static int scrolled;
 static int dirty;
 static int deferred;
 static int painting;
+static int sync_placeholders;
 
 static viewport_width_fn on_width;
 static int painted_cols;
@@ -95,6 +96,11 @@ static int sync_frames(void)
     if (on < 0)
         on = getenv("TMUX") == NULL;
     return on;
+}
+
+void viewport_sync_placeholders(int on)
+{
+    sync_placeholders = !!on;
 }
 
 /* a frame goes out in one write: split over several, the terminal draws the
@@ -902,6 +908,24 @@ static struct frame built;
 static struct frame all;
 static int shown_rows, shown_cols;
 
+static int placeholder_row(const char *s)
+{
+    static const char placeholder[] = "\xf4\x8e\xbb\xae"; /* U+10EEEE */
+    return strstr(s, placeholder) != NULL;
+}
+
+static int placeholders_changed(void)
+{
+    if (!sync_placeholders)
+        return 0;
+    for (int i = 0; i < built.n; i++)
+        if (placeholder_row(built.row[i]) &&
+            (i >= shown.n || shown.hash[i] != built.hash[i] ||
+             strcmp(shown.row[i], built.row[i]) != 0))
+            return 1;
+    return 0;
+}
+
 static unsigned long long row_hash(const char *s)
 {
     unsigned long long h = 1469598103934665603ULL;
@@ -1253,8 +1277,10 @@ void viewport_paint(void)
         shown_cols = W;
     }
 
+    int sync = sync_frames() || placeholders_changed();
+
     batch_begin();
-    if (sync_frames())
+    if (sync)
         direct_str("\x1b[?2026h");
     direct_str("\x1b[?25l");
     direct_str("\x1b[?7l");
@@ -1304,7 +1330,7 @@ void viewport_paint(void)
         direct_str("\x1b[?25h");
     }
 
-    if (sync_frames())
+    if (sync)
         direct_str("\x1b[?2026l");
     batch_end();
 

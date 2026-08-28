@@ -63,6 +63,7 @@ void image_init(void)
     if (!isatty(STDOUT_FILENO) || !kg_supported())
         return;
     kg_init();
+    viewport_sync_placeholders(kg_placeholder_redraw_active());
     if (kg_passthrough())
         kg_tmux_allow_passthrough();
     image_ok = 1;

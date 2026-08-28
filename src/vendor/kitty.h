@@ -98,6 +98,11 @@ bool kg_passthrough(void);
 void kg_placeholder_redraw_begin(void);
 void kg_placeholder_redraw_end(void);
 
+// True when the tmux placeholder workaround above is needed. Cell-buffered
+// callers can use this to bracket the later screen paint rather than the call
+// that merely stores placeholder cells.
+bool kg_placeholder_redraw_active(void);
+
 // Close a graphics escape that was abandoned part-way through.
 //
 // A frame given up on mid-transmit - a quit, a failed write - leaves the
@@ -386,6 +391,8 @@ void kg_placeholder_redraw_begin(void) {
 void kg_placeholder_redraw_end(void) {
     if (kg_redraw) term_write_n("\x1b[?2026l", 8);
 }
+
+bool kg_placeholder_redraw_active(void) { return kg_redraw; }
 
 bool kg_tmux_allow_passthrough(void) {
     if (!getenv("TMUX")) return true;

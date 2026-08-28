@@ -12,14 +12,23 @@
 
 static int failures;
 static int tap_read = -1;
+static int sync_begin;
+static int sync_end;
 
 static void pump(struct screen *s)
 {
     fflush(stdout);
     char    buf[1 << 20];
     ssize_t n;
-    while ((n = read(tap_read, buf, sizeof buf)) > 0)
+    while ((n = read(tap_read, buf, sizeof buf)) > 0) {
+        for (ssize_t i = 0; i + 8 <= n; i++) {
+            if (!memcmp(buf + i, "\x1b[?2026h", 8))
+                sync_begin++;
+            if (!memcmp(buf + i, "\x1b[?2026l", 8))
+                sync_end++;
+        }
         feed(s, buf, (size_t)n);
+    }
 }
 
 static void set_size(int cols, int rows)
@@ -126,6 +135,7 @@ int main(void)
     screen_init(&s, 30, 80);
 
     viewport_clear();
+    viewport_sync_placeholders(1);
     say("before");
     place_image(1404, 1872);
     say("between");
@@ -133,6 +143,11 @@ int main(void)
     say("after");
     viewport_paint();
     pump(&s);
+    if (sync_begin != 1 || sync_end != 1) {
+        fprintf(stderr, "FAIL image repaint sync: begin=%d end=%d\n",
+                sync_begin, sync_end);
+        failures++;
+    }
     check_uniform(&s, "first paint");
     report(&s, "first paint");
 
