@@ -468,6 +468,135 @@ static int load_pi(const char *cwd, const char *skip_id, struct past_session **o
     return scan_dir(dir, skip_id, pi_fill, &pi, out);
 }
 
+static int codex_sessions_dir(const char *cwd, char *out, size_t size)
+{
+    const char *root = getenv("CODEX_HOME");
+    char home[1024];
+    if (!cwd)
+        return 0;
+    if (!root || !*root) {
+        const char *h = getenv("HOME");
+        if (!h || (size_t)snprintf(home, sizeof home, "%s/.codex", h) >= sizeof home)
+            return 0;
+        root = home;
+    }
+    return (size_t)snprintf(out, size, "%s/sessions", root) < size;
+}
+
+static int codex_rollout(const char *path, const char *cwd, char *id, size_t id_size,
+                         char *label, size_t label_size)
+{
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return 0;
+
+    char needle[4096];
+    int  prefilter = !strpbrk(cwd, "\"\\");
+    snprintf(needle, sizeof needle, "\"cwd\":\"%s\"", cwd);
+
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t n;
+    int scanned = 0, header = 0, spoke = 0;
+    id[0] = '\0';
+    label[0] = '\0';
+
+    while (!spoke && scanned++ < SCAN_LINES && (n = getline(&line, &cap, f)) > 0) {
+        if (!header) {
+            if (!strstr(line, "\"session_meta\"") || (prefilter && !strstr(line, needle)))
+                break;
+            cJSON *ev = cJSON_ParseWithLength(line, (size_t)n);
+            cJSON *payload = ev ? cJSON_GetObjectItem(ev, "payload") : NULL;
+            const char *sid = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "session_id"));
+            const char *scwd = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "cwd"));
+            if (!sid)
+                sid = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "id"));
+            if (sid && *sid && strlen(sid) < id_size && scwd && strcmp(scwd, cwd) == 0)
+                snprintf(id, id_size, "%s", sid);
+            cJSON_Delete(ev);
+            if (!id[0])
+                break;
+            header = 1;
+            continue;
+        }
+        if (!strstr(line, "\"user_message\""))
+            continue;
+        cJSON *ev = cJSON_ParseWithLength(line, (size_t)n);
+        cJSON *payload = ev ? cJSON_GetObjectItem(ev, "payload") : NULL;
+        const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "type"));
+        const char *text = type && strcmp(type, "user_message") == 0
+            ? cJSON_GetStringValue(cJSON_GetObjectItem(payload, "message"))
+            : NULL;
+        if (usable_label(text)) {
+            text_one_line(text, label, label_size);
+            spoke = label[0] != '\0';
+        }
+        cJSON_Delete(ev);
+    }
+    free(line);
+    fclose(f);
+    return id[0] && label[0];
+}
+
+struct codex_scan {
+    const char          *cwd;
+    const char          *skip_id;
+    struct past_session *list;
+    int                  count;
+};
+
+static void codex_walk(const char *dir, int depth, struct codex_scan *scan)
+{
+    DIR *d = opendir(dir);
+    if (!d)
+        return;
+
+    struct dirent *entry;
+    while ((entry = readdir(d))) {
+        if (entry->d_name[0] == '.')
+            continue;
+        char path[3072];
+        if (snprintf(path, sizeof path, "%s/%s", dir, entry->d_name) >= (int)sizeof path)
+            continue;
+        struct stat st;
+        if (stat(path, &st) != 0)
+            continue;
+        if (S_ISDIR(st.st_mode)) {
+            if (depth > 0)
+                codex_walk(path, depth - 1, scan);
+            continue;
+        }
+        size_t len = strlen(entry->d_name);
+        if (!S_ISREG(st.st_mode) || st.st_size == 0 || len < 7 ||
+            strcmp(entry->d_name + len - 6, ".jsonl") != 0)
+            continue;
+
+        struct past_session c = {0};
+        if (!codex_rollout(path, scan->cwd, c.id, sizeof c.id, c.label, sizeof c.label))
+            continue;
+        if (scan->skip_id && strcmp(c.id, scan->skip_id) == 0)
+            continue;
+        title_lookup(c.id, c.label, sizeof c.label);
+        c.modified = st.st_mtime;
+        text_ago(c.modified, 1, c.when, sizeof c.when);
+        keep_recent(scan->list, &scan->count, &c);
+    }
+    closedir(d);
+}
+
+static int load_codex(const char *cwd, const char *skip_id, struct past_session **out)
+{
+    char dir[2048];
+    if (!codex_sessions_dir(cwd, dir, sizeof dir))
+        return 0;
+    struct past_session *list = calloc(MAX_SESSIONS, sizeof *list);
+    if (!list)
+        return 0;
+    struct codex_scan scan = {cwd, skip_id, list, 0};
+    codex_walk(dir, 3, &scan);
+    return finish_list(list, scan.count, out);
+}
+
 static int claude_dir(const char *cwd, char *out, size_t size)
 {
     const char *home = getenv("HOME");
@@ -482,6 +611,8 @@ int sessionlist_dir(const char *backend, const char *cwd, char *out, size_t size
 {
     if (!backend || !strcmp(backend, "claude"))
         return claude_dir(cwd, out, size);
+    if (!strcmp(backend, "codex"))
+        return codex_sessions_dir(cwd, out, size);
     if (!strcmp(backend, "grok"))
         return grok_group_dir(cwd, out, size);
     if (!strcmp(backend, "pi")) {
@@ -493,8 +624,8 @@ int sessionlist_dir(const char *backend, const char *cwd, char *out, size_t size
 
 int sessionlist_available(const char *backend)
 {
-    return backend && (!strcmp(backend, "claude") || !strcmp(backend, "grok") ||
-                       !strcmp(backend, "pi"));
+    return backend && (!strcmp(backend, "claude") || !strcmp(backend, "codex") ||
+                       !strcmp(backend, "grok") || !strcmp(backend, "pi"));
 }
 
 int sessionlist_load(const char *backend, const char *cwd, const char *skip_id,
@@ -503,6 +634,8 @@ int sessionlist_load(const char *backend, const char *cwd, const char *skip_id,
     *out = NULL;
     if (!backend || !strcmp(backend, "claude"))
         return load_claude(cwd, skip_id, out);
+    if (!strcmp(backend, "codex"))
+        return load_codex(cwd, skip_id, out);
     if (!strcmp(backend, "grok"))
         return load_grok(cwd, skip_id, out);
     if (!strcmp(backend, "pi"))
