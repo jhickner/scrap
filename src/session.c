@@ -41,6 +41,12 @@
 #include "text.h"
 #include "vendor/cJSON.h"
 
+/* How many task lines may wait out a tool call, and how long they wait before
+   being drawn where they happened: the wait is only worth it while the call's
+   output is imminent. */
+#define TASK_HOLD_MAX     4
+#define TASK_HOLD_SECONDS 3.0
+
 struct session {
     Backend *agent;
     char    *backend;
@@ -91,7 +97,12 @@ struct session {
     struct tasktab     tasks;
     const struct task *task_change;
     int      task_repeat;
+    char     task_hold[TASK_HOLD_MAX][240];
+    int      task_held;  /* task lines waiting for the open call to finish */
+    double   task_held_at;
+    int      call_open;  /* a tool call has been drawn, its output has not */
     unsigned long spoke; /* events other than task reports, for stall_watch */
+    double   work_at;    /* when the outstanding background work started */
     double   stall_at;   /* when the last outstanding task went quiet */
     int      stall_seen; /* work was outstanding at the previous pump */
     int      stall_told;
@@ -216,6 +227,51 @@ static void note_recent(struct session *s, const backend_event *ev)
     s->recent_n++;
 }
 
+static void paint_note(const char *line)
+{
+    viewport_item_begin(VIEWPORT_ROWS(1, 1));
+    ui_note("%s", line);
+    viewport_item_end();
+}
+
+/* The CLI reports a backgrounded command twice: as the tool call, and as a task
+   of its own. Its life cycle therefore arrives while the call is still waiting
+   for its output, where a line of its own would split the pair -- so it waits
+   for the output instead. Nonzero when the line was taken. */
+static int task_hold(struct session *s, const char *line)
+{
+    if (!s->call_open || s->task_held >= TASK_HOLD_MAX)
+        return 0;
+    if (!s->task_held)
+        s->task_held_at = now_seconds();
+    snprintf(s->task_hold[s->task_held], sizeof s->task_hold[0], "%s", line);
+    s->task_held++;
+    return 1;
+}
+
+static int task_unhold(struct session *s)
+{
+    int held = s->task_held;
+    for (int i = 0; i < held; i++)
+        paint_note(s->task_hold[i]);
+    s->task_held = 0;
+    return held;
+}
+
+/* Draw what is held, whether or not the call it is waiting on ever answered.
+   Only for the session being drawn: this paints. */
+static void task_hold_expire(struct session *s)
+{
+    if (!s->task_held || s->quiet || s->silent)
+        return;
+    if (s->call_open && now_seconds() - s->task_held_at < TASK_HOLD_SECONDS)
+        return;
+    status_pause();
+    task_unhold(s);
+    status_resume();
+    ui_flush();
+}
+
 static void render_event(struct session *s, const backend_event *ev)
 {
     /* Anything but a task report is the backend talking, which is what tells a
@@ -256,6 +312,13 @@ static void render_event(struct session *s, const backend_event *ev)
 
     int paused = 0;
 
+    /* a call that ended without output leaves its lines to the next event */
+    if (s->task_held && !s->call_open) {
+        status_pause();
+        paused = 1;
+        task_unhold(s);
+    }
+
     switch (ev->kind) {
     case BACKEND_EV_INIT:
     case BACKEND_EV_CWD:
@@ -264,17 +327,20 @@ static void render_event(struct session *s, const backend_event *ev)
 
     /* Work that outlives the turn is the one thing a finished turn does not
        account for, so each life-cycle change gets a line of its own. */
-    case BACKEND_EV_TASK:
-        if (s->task_change) {
-            char line[240];
-            tasks_line(s->task_change, line, sizeof line);
-            status_pause();
-            paused = 1;
-            viewport_item_begin(VIEWPORT_ROWS(1, 1));
-            ui_note("%s", line);
-            viewport_item_end();
-        }
+    case BACKEND_EV_TASK: {
+        char line[240];
+        /* a task that opens while a call is on screen is that call, under the
+           name the CLI gave it: the end is the part the call does not report */
+        if (!s->task_change || (s->call_open && !tasks_done(s->task_change)))
+            break;
+        tasks_line(s->task_change, line, sizeof line);
+        if (task_hold(s, line))
+            break;
+        status_pause();
+        paused = 1;
+        paint_note(line);
         break;
+    }
 
     case BACKEND_EV_WARNING:
         if (ev->text && *ev->text) {
@@ -316,6 +382,7 @@ static void render_event(struct session *s, const backend_event *ev)
 
         status_pause();
         paused = 1;
+        s->call_open = 1;
         view_keep_tool_call(name, arg, collapses);
 
         char path[4096];
@@ -367,6 +434,15 @@ static void render_event(struct session *s, const backend_event *ev)
             }
         }
         break;
+    }
+
+    if (ev->kind == BACKEND_EV_TOOL_RESULT) {
+        s->call_open = 0;
+        if (s->task_held) {
+            status_pause();
+            paused = 1;
+            task_unhold(s);
+        }
     }
 
     if (paused)
@@ -503,6 +579,22 @@ static void tab_busy(struct session *s, int busy)
 
 static void name_poll(struct session *s);
 
+/* Background work outstanding with no turn in flight, and how long it has been
+   there. A backend that counts its own is the authority: the table can be left
+   holding a task whose end was never reported, which is the thing being watched
+   for. */
+int session_work_count(const struct session *s)
+{
+    if (!s || !s->agent)
+        return 0;
+    return s->agent->busy ? session_idle_busy(s) : tasks_pending(&s->tasks);
+}
+
+double session_work_elapsed(const struct session *s)
+{
+    return s && s->work_at ? now_seconds() - s->work_at : 0;
+}
+
 /* Work that outlives its turn is only over when the backend says so: the task
    ends, its result wakes the model, and that turn is the answer. A task torn
    down without one leaves the session at a prompt indistinguishable from an
@@ -510,16 +602,16 @@ static void name_poll(struct session *s);
    goes quiet so session_stalled() can time it. */
 static void stall_watch(struct session *s, int awake)
 {
-    /* A backend that counts its own outstanding work is the authority on it:
-       the table can be left holding a task whose end was never reported, which
-       is the very thing being watched for. */
-    int work = s->agent->busy ? session_idle_busy(s) : tasks_pending(&s->tasks);
+    int work = session_work_count(s);
 
     if (work) {
+        if (!s->work_at)
+            s->work_at = now_seconds();
         s->stall_seen = 1;
         s->stall_at = 0;
         return;
     }
+    s->work_at = 0;
     if (awake) {
         /* the turn the work woke: its answer is what resumes the session */
         s->stall_seen = 0;
@@ -591,6 +683,7 @@ int session_idle_pump(struct session *s)
     image_poll();
     unsigned long before = s->spoke;
     int busy = s->agent->idle_pump(s->agent) ? 1 : 0;
+    task_hold_expire(s);
     session_set_drawing(was);
 
     /* a turn still open, or one that opened and closed inside this pump */
@@ -1671,6 +1764,7 @@ static void turn_prepare(struct session *s, const char *text)
     s->started = now_seconds();
     s->heard_at = s->started;
     s->tool_open = 0;
+    s->call_open = 0;
     s->idle_busy = 1;
     s->stall_told = 0;
     s->stall_at = 0;
@@ -1685,6 +1779,7 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     const backend_result m = *meta;
     const char *text = s->prompt ? s->prompt : "";
     s->heard_at = 0;
+    s->call_open = 0; /* a call the turn ended in the middle of holds nothing */
     const char *id = s->agent->session_id(s->agent);
     if (id)
         set_id(s, id);
@@ -1927,6 +2022,7 @@ static void drain_events(struct session *s)
         render_event(s, &e->ev);
         evcopy_free(e);
     }
+    task_hold_expire(s);
     session_set_drawing(was);
 }
 
@@ -2193,6 +2289,18 @@ void session_spin_word(const struct session *s)
         return;
     set_spin_word(s);
     set_spin_alert(s);
+}
+
+/* The word for work with no turn behind it: the count is all there is to say,
+   and it is the whole point of showing the row. */
+void session_work_word(const struct session *s)
+{
+    char text[32];
+    int  n = session_work_count(s);
+
+    snprintf(text, sizeof text, "%d task%s", n, n == 1 ? "" : "s");
+    status_set_word(text);
+    status_set_alert(NULL);
 }
 
 void session_report(const struct session *s)

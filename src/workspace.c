@@ -59,13 +59,25 @@ void workspace_on_turn(void (*fn)(struct session *s))
     on_turn = fn;
 }
 
+/* The spinner follows the tab on screen: its turn, or -- with no turn in flight
+   -- the background work it is still waiting on, which is otherwise invisible
+   at a prompt that looks answered. */
 static void spin_follow(void)
 {
     static const struct session *spinning;
-    const struct session *want = ntabs && session_turn_running(tabs[cur].s)
-                                 ? tabs[cur].s : NULL;
-    if (want == spinning) {
-        if (want)
+    static int                   spinning_work;
+
+    struct session *s = ntabs ? tabs[cur].s : NULL;
+    int turn = s && session_turn_running(s);
+    int work = s && !turn && session_work_count(s) > 0;
+    const struct session *want = turn || work ? s : NULL;
+
+    if (want == spinning && work == spinning_work) {
+        if (!want)
+            return;
+        if (work)
+            session_work_word(want);
+        else
             session_spin_word(want);
         return;
     }
@@ -73,7 +85,13 @@ static void spin_follow(void)
     if (spinning)
         status_end();
     spinning = want;
-    if (want) {
+    spinning_work = work;
+    if (!want)
+        return;
+    if (work) {
+        status_begin_at(session_work_elapsed(want));
+        session_work_word(want);
+    } else {
         status_begin_at(session_turn_elapsed(want));
         session_spin_word(want);
     }
@@ -540,10 +558,10 @@ void workspace_settle(struct session *s)
     spin_follow();
 }
 
-int workspace_stalling(void)
+int workspace_polling(void)
 {
     for (int i = 0; i < ntabs; i++)
-        if (session_stall_armed(tabs[i].s))
+        if (session_stall_armed(tabs[i].s) || session_work_count(tabs[i].s) > 0)
             return 1;
     return 0;
 }

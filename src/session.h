@@ -92,6 +92,13 @@ const struct tasktab *session_tasks(const struct session *s);
 const struct task    *session_task_change(const struct session *s);
 int  session_task_repeat(const struct session *s);
 
+/* Background work the agent has running with no turn in flight, and how long
+   it has been running: an idle prompt with work outstanding is not a finished
+   one, and nothing else on screen says so. */
+int    session_work_count(const struct session *s);
+double session_work_elapsed(const struct session *s);
+void   session_work_word(const struct session *s);
+
 /* The session's background work ended without waking the agent, and nothing is
    left to resume it. Nonzero once per stall, for a caller that can nudge. */
 int  session_stalled(struct session *s);

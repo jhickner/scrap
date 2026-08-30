@@ -209,7 +209,9 @@ static int idle_render(void *ud)
 
     if (tg_pending())
         tty_wake();
-    return workspace_pump();
+    int busy = workspace_pump();
+    status_tick();
+    return busy;
 }
 
 static char *chat_line(void *ud)
@@ -230,7 +232,7 @@ static void side_tick(void *ud)
     workspace_pump();
     status_tick();
 }
-static int idle_poll(void *ud)   { (void)ud; return workspace_stalling(); }
+static int idle_poll(void *ud)   { (void)ud; return workspace_polling(); }
 static void replay(void *ud)      { (void)ud; session_replay(workspace_current()); }
 static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
 static void switcher(void *ud)
