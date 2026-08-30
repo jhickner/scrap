@@ -468,7 +468,6 @@ pi_client *pi_start(const pi_opts *opts) {
         }
         if (o.no_tools) argv[n++] = "--no-tools";
         argv[n++] = "--no-extensions";
-        argv[n++] = "--no-skills";
         argv[n++] = "--no-prompt-templates";
         argv[n++] = "--no-themes";
         argv[n++] = "--no-context-files";
