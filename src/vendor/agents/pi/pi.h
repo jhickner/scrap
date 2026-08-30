@@ -141,6 +141,7 @@ Backend *pi_backend_open(const backend_opts *opts);
 #include <signal.h>
 #include <poll.h>
 #include <fcntl.h>
+#include <ctype.h>
 #include <sys/wait.h>
 #include "cJSON.h"
 
@@ -272,6 +273,37 @@ static void pi_replace(char **dst, const char *s) {
     *dst = next;
 }
 
+static int pi_has_ci(const char *hay, const char *needle) {
+    size_t n = strlen(needle);
+    for (; *hay; hay++)
+        if (!strncasecmp(hay, needle, n)) return 1;
+    return 0;
+}
+
+/* pi reports a rejected key as the bare transport failure ("401 status code
+ * (no body)"), which reads as a mux fault. Name the provider and the variable
+ * its key comes from instead; a stale key in the process environment is the
+ * usual cause. */
+static void pi_set_error(pi_client *c, const char *msg) {
+    if (!msg || !*msg) { pi_replace(&c->last_error, msg); return; }
+    int auth = strstr(msg, "401") || strstr(msg, "403") ||
+               pi_has_ci(msg, "unauthorized") || pi_has_ci(msg, "invalid api key");
+    const char *slash = strchr(c->model, '/');
+    size_t n = slash ? (size_t)(slash - c->model) : 0;
+    if (!auth || !n || n >= 64) { pi_replace(&c->last_error, msg); return; }
+
+    char provider[64], var[80];
+    memcpy(provider, c->model, n); provider[n] = 0;
+    for (size_t i = 0; i < n; i++)
+        var[i] = (char)toupper((unsigned char)provider[i]);
+    snprintf(var + n, sizeof var - n, "_API_KEY");
+
+    char out[256];
+    snprintf(out, sizeof out, "%s rejected the API key (%s); check $%s",
+             provider, strstr(msg, "403") ? "403" : "401", var);
+    pi_replace(&c->last_error, out);
+}
+
 static const char *pi_text(cJSON *result) {
     cJSON *content = result ? cJSON_GetObjectItemCaseSensitive(result, "content") : NULL;
     if (!cJSON_IsArray(content)) return NULL;
@@ -317,7 +349,7 @@ static void pi_consume_event(pi_client *c, cJSON *ev, char **acc, int *settled) 
             cJSON_GetObjectItemCaseSensitive(msg, "stopReason"));
         if (stop && !strcmp(stop, "error")) {
             c->turn_error = 1;
-            pi_replace(&c->last_error, cJSON_GetStringValue(
+            pi_set_error(c, cJSON_GetStringValue(
                 cJSON_GetObjectItemCaseSensitive(msg, "errorMessage")));
         }
         const char *role = cJSON_GetStringValue(
