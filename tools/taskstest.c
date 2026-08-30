@@ -28,6 +28,48 @@ static const struct task *life(struct tasktab *t, const char *id, const char *st
     return tasks_note(t, &ev, repeat);
 }
 
+static void spawned(struct tasktab *t, const char *id, const char *tool_use, const char *desc)
+{
+    backend_event ev = {.kind = BACKEND_EV_TASK, .id = id, .name = "running",
+                        .text = desc, .parent = tool_use};
+    tasks_note(t, &ev, NULL);
+}
+
+static void labels(const char *desc, const char *want)
+{
+    struct tasktab t;
+    char           got[32];
+
+    tasks_reset(&t, "claude");
+    spawned(&t, "x", "toolu_x", desc);
+    tasks_label(tasks_by_parent(&t, "toolu_x"), got, sizeof got);
+    expect_text(got, want, desc);
+}
+
+/* The work a subagent does comes up the same stream as the session's own, told
+   apart only by the call that started it. */
+static void by_parent(void)
+{
+    struct tasktab t;
+    tasks_reset(&t, "claude");
+
+    spawned(&t, "a", "toolu_A", "Read the battery state");
+    spawned(&t, "b", "toolu_B", "Watch the network come back");
+
+    expect(tasks_by_parent(&t, "toolu_A") == tasks_at(&t, 0), 1, "first call's task");
+    expect(tasks_by_parent(&t, "toolu_B") == tasks_at(&t, 1), 1, "second call's task");
+    expect(tasks_by_parent(&t, "toolu_Z") == NULL, 1, "a call that started none");
+    expect(tasks_by_parent(&t, "") == NULL, 1, "no id is not a match");
+
+    /* filler words carry nothing; a word goes in whole or not at all */
+    labels("Read the battery state", "read battery");
+    labels("Watch the network come back", "watch network");
+    labels("Run echo command and report output", "run echo");
+    labels("Investigate", "investigate");
+    /* nothing to trim to but the limit when the first word alone overruns it */
+    labels("Extraordinarily long single word here", "extraordinaril");
+}
+
 static const struct task *tool(struct tasktab *t, const char *name, const char *input)
 {
     backend_event ev = {.kind = BACKEND_EV_TOOL, .name = name, .input_json = input};
@@ -121,6 +163,7 @@ int main(void)
     lifecycle();
     inferred();
     eviction();
+    by_parent();
 
     if (failures)
         printf("%d failure(s)\n", failures);

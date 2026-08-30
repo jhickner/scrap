@@ -1,5 +1,6 @@
 #include "tasks.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -46,6 +47,74 @@ int tasks_count(const struct tasktab *t)
 const struct task *tasks_at(const struct tasktab *t, int i)
 {
     return t && i >= 0 && i < t->n ? &t->v[i] : NULL;
+}
+
+const struct task *tasks_by_parent(const struct tasktab *t, const char *tool_use_id)
+{
+    if (!t || !tool_use_id || !*tool_use_id)
+        return NULL;
+    for (int i = 0; i < t->n; i++)
+        if (!strcmp(t->v[i].parent, tool_use_id))
+            return &t->v[i];
+    return NULL;
+}
+
+#define TASK_LABEL_CELLS 14
+
+static int label_filler(const char *word, size_t n)
+{
+    static const char *const skip[] = {
+        "the", "a", "an", "of", "to", "and", "for", "in", "on", "its", "it",
+        "then", "that", "this", "with", "from", "into", "back", "up", NULL
+    };
+    for (int i = 0; skip[i]; i++)
+        if (strlen(skip[i]) == n && !strncmp(skip[i], word, n))
+            return 1;
+    return 0;
+}
+
+/* The words of the description that carry it, as many as fit: "Read the battery
+   state" labels as "read battery", which tells two agents apart where the first
+   few characters of each would not. */
+void tasks_label(const struct task *a, char *out, size_t size)
+{
+    const char *from = a ? (a->desc[0] ? a->desc : (a->type[0] ? a->type : a->id)) : "";
+    char        flat[160];
+    size_t      at = 0;
+
+    if (!size)
+        return;
+    text_one_line(from, flat, sizeof flat);
+    for (char *p = flat; *p; p++)
+        *p = (char)tolower((unsigned char)*p);
+
+    for (const char *p = flat; *p && at + 1 < size && at < TASK_LABEL_CELLS;) {
+        size_t n = strcspn(p, " ");
+        if (!label_filler(p, n)) {
+            size_t want = n + (at ? 1 : 0);
+            /* a word goes in whole or not at all: a cut word reads as a typo */
+            if (n && at + want <= TASK_LABEL_CELLS && at + want < size) {
+                if (at)
+                    out[at++] = ' ';
+                memcpy(out + at, p, n);
+                at += n;
+            } else if (at) {
+                break;
+            } else {
+                n = n < TASK_LABEL_CELLS ? n : TASK_LABEL_CELLS;
+                if (n >= size)
+                    n = size - 1;
+                memcpy(out, p, n);
+                at = n;
+            }
+        }
+        p += n;
+        while (*p == ' ')
+            p++;
+    }
+    while (at && out[at - 1] == ' ')
+        at--;
+    out[at] = '\0';
 }
 
 static struct task *find(struct tasktab *t, const char *id)
@@ -95,6 +164,8 @@ static const struct task *note_lifecycle(struct tasktab *t, const backend_event 
     }
     if (ev->arg && *ev->arg)
         snprintf(a->type, sizeof a->type, "%s", ev->arg);
+    if (ev->parent && *ev->parent && !a->parent[0])
+        snprintf(a->parent, sizeof a->parent, "%s", ev->parent);
     if (ev->text && *ev->text) {
         if (!a->desc[0])
             text_trunc(a->desc, sizeof a->desc, ev->text);

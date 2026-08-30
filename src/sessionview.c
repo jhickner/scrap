@@ -15,6 +15,43 @@
 
 #define TOOL_INDENT 2
 
+/* A subagent's work is drawn one step in from the session's own, under a mark
+   naming which agent it came from, so a call it made is not read as a call the
+   session made, nor as another agent's. */
+#define NEST_MARK "\xe2\x86\xb3"
+
+static int         nest;
+static const char *nest_label;
+static int         nest_said; /* the mark is drawn once, then padded to */
+
+static int nest_width(const char *label)
+{
+    int n = (int)ui_cells(NEST_MARK) + 1;
+    if (label && *label)
+        n += (int)ui_cells(label) + 1;
+    return n;
+}
+
+static void nest_pad(int base)
+{
+    ui_pad(base);
+    if (!nest)
+        return;
+    if (nest_said) {
+        ui_pad(nest);
+        return;
+    }
+    nest_said = 1;
+    ui_esc(ui_style(UI_CHROME));
+    ui_put(NEST_MARK);
+    if (nest_label && *nest_label) {
+        ui_put(" ");
+        ui_put(nest_label);
+    }
+    ui_esc(ui_style(UI_RESET));
+    ui_put(" ");
+}
+
 /* KEEP_CLUSTER is only ever loaded: it is the pre-merge form of a row of
    calls, kept so a scrollback written before the merge moved into the render
    pass still draws */
@@ -28,6 +65,8 @@ struct keep {
     enum ui_role   role;
     int            error;
     int            collapses; /* the tool style shows this call as one row in any mode */
+    int            nested;    /* a subagent's work, not the session's own */
+    char          *label;     /* which agent, for a nested one */
     char          *row;
 };
 
@@ -37,6 +76,7 @@ static void keep_free(void *ud)
     free(k->a);
     free(k->b);
     free(k->spans);
+    free(k->label);
     free(k->row);
     free(k);
 }
@@ -107,10 +147,19 @@ static void keep_render(void *ud, int cols)
     const struct keep *k = ud;
     (void)cols;
 
-    if (collapsed && keep_drops(k))
+    /* Each item names its agent on its first row and pads to the mark after, so
+       an item drawn on its own -- a reflow redraws only what moved -- says whose
+       it is without depending on what was drawn before it. */
+    nest_label = k->nested ? k->label : NULL;
+    nest = k->nested ? nest_width(nest_label) : 0;
+    nest_said = 0;
+    if (collapsed && keep_drops(k)) {
+        nest = 0;
         return;
+    }
     if (k->kind == KEEP_CALL && (collapsed || k->collapses)) {
         call_collapsed(k);
+        nest = 0;
         return;
     }
 
@@ -126,6 +175,7 @@ static void keep_render(void *ud, int cols)
     case KEEP_DIFF:     filediff_render_patch(k->a);                     break;
     case KEEP_CLUSTER:  cluster_paint(k->a, k->spans);                   break;
     }
+    nest = 0;
 }
 
 static const char HEX[] = "0123456789abcdef";
@@ -173,6 +223,11 @@ static char *keep_encode(void *ud)
     cJSON_AddNumberToObject(o, "role", k->role);
     cJSON_AddNumberToObject(o, "error", k->error);
     cJSON_AddNumberToObject(o, "collapses", k->collapses);
+    if (k->nested) {
+        cJSON_AddNumberToObject(o, "nested", k->nested);
+        if (k->label)
+            cJSON_AddStringToObject(o, "label", k->label);
+    }
     if (k->spans && k->a) {
         char *hex = spans_hex(k->spans, strlen(k->a));
         if (hex) {
@@ -204,11 +259,25 @@ static unsigned keep(struct keep *k)
     return mark;
 }
 
+static int   nesting;
+static char *nesting_label;
+
+/* Everything kept until this is turned off belongs to the named subagent. */
+void view_keep_nest(int on, const char *label)
+{
+    nesting = on ? 1 : 0;
+    free(nesting_label);
+    nesting_label = on && label && *label ? strdup(label) : NULL;
+}
+
 static struct keep *keep_new(enum keep_kind kind)
 {
     struct keep *k = calloc(1, sizeof *k);
-    if (k)
+    if (k) {
         k->kind = kind;
+        k->nested = nesting;
+        k->label = nesting_label ? strdup(nesting_label) : NULL;
+    }
     return k;
 }
 
@@ -221,6 +290,12 @@ void view_keep_load(const cJSON *st)
     struct keep *k = keep_new((enum keep_kind)kind);
     if (!k)
         return;
+    k->nested = scrollback_int(st, "nested");
+    const char *label = scrollback_str(st, "label");
+    if (*label) {
+        free(k->label);
+        k->label = strdup(label);
+    }
     k->a = strdup(scrollback_str(st, "a"));
     k->b = strdup(scrollback_str(st, "b"));
     k->role = (enum ui_role)scrollback_int(st, "role");
@@ -463,17 +538,19 @@ int view_tool_path(const char *input_json, const char *cwd, char *out, size_t si
 
 void view_activity(const char *marker, const char *text, enum ui_role role)
 {
-    int indent = TOOL_INDENT + (int)ui_cells(marker) + 1;
+    int indent = TOOL_INDENT + nest + (int)ui_cells(marker) + 1;
     int columns = ui_columns();
     int budget = columns - indent;
     if (budget < 8)
         budget = 8;
 
-    ui_pad(TOOL_INDENT);
-    ui_esc(ui_style(UI_CHROME));
-    ui_put(marker);
-    ui_esc(ui_style(UI_RESET));
-    ui_put(" ");
+    nest_pad(TOOL_INDENT);
+    if (*marker) {
+        ui_esc(ui_style(UI_CHROME));
+        ui_put(marker);
+        ui_esc(ui_style(UI_RESET));
+        ui_put(" ");
+    }
 
     if (!text || !*text) {
         ui_put("\n");
@@ -515,10 +592,10 @@ void view_tool_call(const char *name, const char *arg)
     char tag[64];
     tool_tag(name, tag, sizeof tag);
 
-    int indent = TOOL_INDENT + (int)ui_cells(tag) + 1;
+    int indent = TOOL_INDENT + nest + (int)ui_cells(tag) + 1;
     int columns = ui_columns();
 
-    ui_pad(TOOL_INDENT);
+    nest_pad(TOOL_INDENT);
     ui_esc(ui_style(UI_TOOL));
     ui_put(tag);
     ui_esc(ui_style(UI_RESET));
@@ -560,7 +637,7 @@ static unsigned char *row_spans(const char *name, const char *row, size_t prefix
 
 static int cluster_budget(void)
 {
-    int budget = ui_columns() - TOOL_INDENT - 2;
+    int budget = ui_columns() - TOOL_INDENT - nest - 2;
     return budget < 8 ? 8 : budget;
 }
 
@@ -578,7 +655,7 @@ static void cluster_paint(const char *line, const unsigned char *spans)
     if (fit > len)
         fit = len;
 
-    ui_pad(TOOL_INDENT);
+    nest_pad(TOOL_INDENT);
     ui_esc(ui_style(UI_TOOL));
     ui_putn(line, tag);
     ui_esc(ui_style(UI_RESET));
@@ -594,9 +671,11 @@ static void cluster_paint(const char *line, const unsigned char *spans)
 
 #define TOOL_PREVIEW_ROWS 3
 
+#define PREVIEW_INDENT 4
+
 static int preview_budget(void)
 {
-    int budget = ui_columns() - 6;
+    int budget = ui_columns() - PREVIEW_INDENT - nest - 2;
     return budget < 8 ? 8 : budget;
 }
 
@@ -615,7 +694,7 @@ static int preview_line(const char *start, size_t n, int budget, enum ui_role ro
 
     size_t skip = 0;
     size_t fit = ui_wrap_row(clipped, strlen(clipped), (size_t)budget, &skip, NULL);
-    ui_put("    ");
+    nest_pad(PREVIEW_INDENT);
     ui_esc(ui_style(role));
     ui_putn(clipped, fit);
     if (clipped[fit])
@@ -629,7 +708,7 @@ static void preview_elision(int lines)
 {
     if (lines <= 0)
         return;
-    ui_put("    ");
+    nest_pad(PREVIEW_INDENT);
     ui_esc(ui_style(UI_DIM));
     ui_printf("+%d line%s", lines, lines == 1 ? "" : "s");
     ui_esc(ui_style(UI_RESET));
@@ -687,7 +766,7 @@ void view_tool_output(const char *text, enum ui_role role)
         return;
 
     int columns = ui_columns();
-    int budget = columns - 6;
+    int budget = columns - PREVIEW_INDENT - nest - 2;
     if (budget < 8)
         budget = 8;
 
@@ -707,7 +786,7 @@ void view_tool_output(const char *text, enum ui_role role)
         if (*clipped) {
             size_t skip = 0;
             size_t fit = ui_wrap_row(clipped, strlen(clipped), (size_t)budget, &skip, NULL);
-            ui_put("    ");
+            nest_pad(PREVIEW_INDENT);
             ui_esc(ui_style(role));
             ui_putn(clipped, fit);
             if (clipped[fit])

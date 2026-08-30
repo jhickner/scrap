@@ -70,6 +70,10 @@ typedef struct {
     const char *diff;       /* authoritative unified patch for a tool result;
                                NULL when the driver does not report one         */
     const char *id;         /* TASK: the backend's own id for the task          */
+    const char *parent;     /* the tool call this event belongs to rather than
+                               the session itself -- a subagent's own work comes
+                               up the same stream. NULL for the session's own,
+                               and for drivers that do not say                  */
     int failed;             /* TOOL_RESULT: the tool did not succeed            */
 } backend_event;
 
@@ -334,7 +338,8 @@ typedef struct { backend_state st; claude_client *client; claude_result live; } 
 static void backend_claude_event(void *ud, const claude_event *e) {
     backend_claude *x = ((Backend *)ud)->ctx;
     backend_event ev = { .text = e->text, .name = e->name, .input_json = e->input_json,
-                         .arg = e->arg, .id = e->id, .failed = e->failed };
+                         .arg = e->arg, .id = e->id, .parent = e->parent,
+                         .failed = e->failed };
     switch (e->kind) {
     case CLAUDE_EV_ASSISTANT:   ev.kind = BACKEND_EV_ASSISTANT;   break;
     case CLAUDE_EV_THINKING:    ev.kind = BACKEND_EV_THINKING;    break;

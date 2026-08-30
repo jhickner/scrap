@@ -14,6 +14,7 @@
    stay at "launched" -- what ran, not how it ended. */
 struct task {
     char   id[40];
+    char   parent[40]; /* the tool call that started it, when the backend says */
     char   desc[140];
     char   type[40];
     char   status[24];
@@ -47,6 +48,14 @@ int tasks_pending(const struct tasktab *t);
 int tasks_count(const struct tasktab *t);
 
 const struct task *tasks_at(const struct tasktab *t, int i);
+
+/* The task a tool call started, so the work coming up the stream from inside it
+   can be named. NULL when the call started no task. */
+const struct task *tasks_by_parent(const struct tasktab *t, const char *tool_use_id);
+
+/* A few cells of the task's description, to mark its work apart from the
+   session's own and from another agent's. */
+void tasks_label(const struct task *a, char *out, size_t size);
 
 /* "agent running: review the diff" — one line for a status change. */
 /* Close every entry still reading as running: the backend says the work is

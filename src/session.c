@@ -128,7 +128,7 @@ struct session {
 
 struct evcopy {
     backend_event  ev;
-    char          *text, *name, *input_json, *arg, *diff, *id;
+    char          *text, *name, *input_json, *arg, *diff, *id, *parent;
     struct evcopy *next;
 };
 
@@ -203,9 +203,14 @@ static void clip_utf8(char *s)
     s[whole] = '\0';
 }
 
+/* What the session itself is doing. A subagent's work runs under a call that is
+   already recorded, so counting it here would report the wrong actor. */
 static void note_recent(struct session *s, const backend_event *ev)
 {
     char line[SESSION_RECENT_MAX];
+
+    if (ev->parent && *ev->parent)
+        return;
 
     if (ev->kind == BACKEND_EV_TOOL) {
         char what[1024] = "";
@@ -295,7 +300,8 @@ static void render_event(struct session *s, const backend_event *ev)
         return;
     }
 
-    if (ev->kind == BACKEND_EV_ASSISTANT && ev->text && *ev->text)
+    if (ev->kind == BACKEND_EV_ASSISTANT && ev->text && *ev->text &&
+        !(ev->parent && *ev->parent))
         replace(&s->last_block, ev->text);
 
     note_recent(s, ev);
@@ -309,6 +315,16 @@ static void render_event(struct session *s, const backend_event *ev)
 
     if (s->quiet || s->silent || live != s)
         return;
+
+    /* A subagent's work comes up the same stream as the session's own: what it
+       says is not the session's answer, and what it calls is not a call the
+       session made. The task the parent call started names which agent, so two
+       running at once do not read as one. */
+    int  nested = ev->parent && *ev->parent;
+    char whose[32] = "";
+    if (nested)
+        tasks_label(tasks_by_parent(&s->tasks, ev->parent), whose, sizeof whose);
+    view_keep_nest(nested, whose);
 
     int paused = 0;
 
@@ -358,9 +374,15 @@ static void render_event(struct session *s, const backend_event *ev)
         status_pause();
         paused = 1;
 
-        md_render_kept(ev->text, 0);
-        stream_append(s, ev->text);
-        view_keep_break();
+        if (nested) {
+            /* the nesting mark is drawn for it, so it needs no marker of its own */
+            view_keep_break();
+            view_keep_activity("", ev->text, UI_DIM);
+        } else {
+            md_render_kept(ev->text, 0);
+            stream_append(s, ev->text);
+            view_keep_break();
+        }
         s->view.after_collapse = 0;
         break;
 
@@ -382,7 +404,8 @@ static void render_event(struct session *s, const backend_event *ev)
 
         status_pause();
         paused = 1;
-        s->call_open = 1;
+        if (!nested)
+            s->call_open = 1;
         view_keep_tool_call(name, arg, collapses);
 
         char path[4096];
@@ -436,7 +459,7 @@ static void render_event(struct session *s, const backend_event *ev)
         break;
     }
 
-    if (ev->kind == BACKEND_EV_TOOL_RESULT) {
+    if (ev->kind == BACKEND_EV_TOOL_RESULT && !nested) {
         s->call_open = 0;
         if (s->task_held) {
             status_pause();
@@ -445,6 +468,7 @@ static void render_event(struct session *s, const backend_event *ev)
         }
     }
 
+    view_keep_nest(0, NULL);
     if (paused)
         status_resume();
     ui_flush();
@@ -465,6 +489,7 @@ static void evcopy_free(struct evcopy *e)
     free(e->arg);
     free(e->diff);
     free(e->id);
+    free(e->parent);
     free(e);
 }
 
@@ -480,6 +505,7 @@ static void enqueue(struct session *s, const backend_event *ev)
     e->ev.arg = e->arg = dup_or_null(ev->arg);
     e->ev.diff = e->diff = dup_or_null(ev->diff);
     e->ev.id = e->id = dup_or_null(ev->id);
+    e->ev.parent = e->parent = dup_or_null(ev->parent);
 
     pthread_mutex_lock(&s->lock);
     if (s->tail)

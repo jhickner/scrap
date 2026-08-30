@@ -28,6 +28,10 @@ void view_tool_output(const char *text, enum ui_role role);
 
 void view_tool_error(const char *text);
 
+/* Draw what is kept from here on one step in, as the named subagent's work
+   rather than the session's own. */
+void view_keep_nest(int on, const char *label);
+
 void view_keep_activity(const char *marker, const char *text, enum ui_role role);
 
 void view_keep_tool_call(const char *name, const char *arg, int collapses);

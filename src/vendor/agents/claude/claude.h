@@ -139,6 +139,10 @@ typedef struct {
     const char *input_json; /* tool input as compact JSON, for TOOL */
     const char *id;         /* TASK: the CLI's task id */
     const char *arg;        /* TASK: the subagent type, when it reports one */
+    const char *parent;     /* the tool call this belongs to, when it is not the
+                               session's own work: the Agent tool_use whose
+                               subagent produced the message, and on TASK the
+                               tool_use that started the task. NULL otherwise */
     int failed;             /* TOOL_RESULT: the tool reported is_error */
 } claude_event;
 
@@ -614,7 +618,11 @@ static const char *cl_tool_result_text(cJSON *blk) {
     return NULL;
 }
 
+/* A subagent's messages come up the same stream as the session's own, told
+ * apart only by the tool_use that started it. */
 static void cl_emit(claude_client *c, cJSON *ev, const char *type) {
+    const char *parent =
+        cJSON_GetStringValue(cJSON_GetObjectItem(ev, "parent_tool_use_id"));
     cJSON *message = cJSON_GetObjectItemCaseSensitive(ev, "message");
     cJSON *content = message ? cJSON_GetObjectItemCaseSensitive(message, "content") : NULL;
     if (!cJSON_IsArray(content)) return;
@@ -622,7 +630,7 @@ static void cl_emit(claude_client *c, cJSON *ev, const char *type) {
     cJSON_ArrayForEach(blk, content) {
         const char *bt = cJSON_GetStringValue(cJSON_GetObjectItem(blk, "type"));
         if (!bt) continue;
-        claude_event out = {0};
+        claude_event out = {.parent = parent};
         if (strcmp(type, "assistant") == 0 && strcmp(bt, "text") == 0) {
             out.kind = CLAUDE_EV_ASSISTANT;
             out.text = cJSON_GetStringValue(cJSON_GetObjectItem(blk, "text"));
@@ -756,6 +764,7 @@ static int cl_handle_line(claude_client *c, const char *line, char **out) {
             if (!out.name)
                 out.name = !strcmp(sub, "task_started") ? "running" : "";
             out.arg = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "subagent_type"));
+            out.parent = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "tool_use_id"));
             out.text = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "description"));
             if (!out.text)
                 out.text = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "summary"));
