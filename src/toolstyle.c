@@ -8,6 +8,24 @@
 
 static char lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
 
+void toolstyle_label(char *out, size_t size, const char *name)
+{
+    if (!size)
+        return;
+    if (!strncmp(name, "mcp__", 5)) {
+        const char *sep = name, *last = name + 5;
+        while ((sep = strstr(sep, "__")) != NULL) {
+            last = sep + 2;
+            sep += 2;
+        }
+        name = last;
+    }
+    size_t i = 0;
+    for (; name[i] && i < size - 1; i++)
+        out[i] = lower(name[i]);
+    out[i] = '\0';
+}
+
 static int same_word(const char *a, const char *b)
 {
     for (; *a && *b; a++, b++)

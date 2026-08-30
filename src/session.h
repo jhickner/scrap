@@ -3,6 +3,7 @@
 #define SESSION_H
 
 #include "tty.h"
+#include "tasks.h"
 #include "vendor/agents/backend.h"
 
 struct session;
@@ -84,6 +85,17 @@ int  session_idle_fd(const struct session *s);
 
 int  session_idle_pump(struct session *s);
 int  session_idle_busy(const struct session *s);
+
+/* Background work this session started: the whole table, and the entry the
+   event being dispatched changed, for an observer rendering it. */
+const struct tasktab *session_tasks(const struct session *s);
+const struct task    *session_task_change(const struct session *s);
+int  session_task_repeat(const struct session *s);
+
+/* The session's background work ended without waking the agent, and nothing is
+   left to resume it. Nonzero once per stall, for a caller that can nudge. */
+int  session_stalled(struct session *s);
+int  session_stall_armed(const struct session *s);
 
 int session_switch_backend(struct session *s, const char *backend);
 

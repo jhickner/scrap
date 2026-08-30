@@ -30,6 +30,7 @@
 #include "settings.h"
 #include "sidechannel.h"
 #include "status.h"
+#include "tasks.h"
 #include "title.h"
 #include "tg.h"
 #include "toolstyle.h"
@@ -87,6 +88,13 @@ struct session {
     char    *error_note;
     int      idle_busy;
     int      trust_requested;
+    struct tasktab     tasks;
+    const struct task *task_change;
+    int      task_repeat;
+    unsigned long spoke; /* events other than task reports, for stall_watch */
+    double   stall_at;   /* when the last outstanding task went quiet */
+    int      stall_seen; /* work was outstanding at the previous pump */
+    int      stall_told;
     volatile double heard_at;
     volatile int    tool_open;
     int      interrupted;
@@ -210,6 +218,11 @@ static void note_recent(struct session *s, const backend_event *ev)
 
 static void render_event(struct session *s, const backend_event *ev)
 {
+    /* Anything but a task report is the backend talking, which is what tells a
+       stalled session from one whose work woke it. */
+    if (ev->kind != BACKEND_EV_TASK)
+        s->spoke++;
+
     if (ev->kind == BACKEND_EV_INIT) {
         replace(&s->resolved, ev->name);
         return;
@@ -231,6 +244,10 @@ static void render_event(struct session *s, const backend_event *ev)
 
     note_recent(s, ev);
 
+    s->task_change = tasks_note(&s->tasks, ev, &s->task_repeat);
+    if (s->task_change && !tasks_done(s->task_change))
+        s->stall_told = 0;
+
     if (s->observer)
         s->observer(s->observer_ud, ev);
 
@@ -243,7 +260,20 @@ static void render_event(struct session *s, const backend_event *ev)
     case BACKEND_EV_INIT:
     case BACKEND_EV_CWD:
     case BACKEND_EV_TRUST:
+        break;
+
+    /* Work that outlives the turn is the one thing a finished turn does not
+       account for, so each life-cycle change gets a line of its own. */
     case BACKEND_EV_TASK:
+        if (s->task_change) {
+            char line[240];
+            tasks_line(s->task_change, line, sizeof line);
+            status_pause();
+            paused = 1;
+            viewport_item_begin(VIEWPORT_ROWS(1, 1));
+            ui_note("%s", line);
+            viewport_item_end();
+        }
         break;
 
     case BACKEND_EV_WARNING:
@@ -473,6 +503,76 @@ static void tab_busy(struct session *s, int busy)
 
 static void name_poll(struct session *s);
 
+/* Work that outlives its turn is only over when the backend says so: the task
+   ends, its result wakes the model, and that turn is the answer. A task torn
+   down without one leaves the session at a prompt indistinguishable from an
+   answered one, with nothing left to resume it. Note the moment the last one
+   goes quiet so session_stalled() can time it. */
+static void stall_watch(struct session *s, int awake)
+{
+    /* A backend that counts its own outstanding work is the authority on it:
+       the table can be left holding a task whose end was never reported, which
+       is the very thing being watched for. */
+    int work = s->agent->busy ? session_idle_busy(s) : tasks_pending(&s->tasks);
+
+    if (work) {
+        s->stall_seen = 1;
+        s->stall_at = 0;
+        return;
+    }
+    if (awake) {
+        /* the turn the work woke: its answer is what resumes the session */
+        s->stall_seen = 0;
+        s->stall_at = 0;
+        return;
+    }
+    if (s->stall_seen) {
+        s->stall_seen = 0;
+        s->stall_at = now_seconds();
+        tasks_drop(&s->tasks);
+    }
+}
+
+/* Whether a stall is being timed, for a caller that has to come back for it:
+   nothing else will wake the loop once the work has gone quiet. */
+int session_stall_armed(const struct session *s)
+{
+    return s && s->stall_at && !s->stall_told &&
+           settings_get_int(SETTING_TASK_STALL, TASK_STALL_DEFAULT) > 0;
+}
+
+/* Nonzero once per stall, for the caller that can do something about it. */
+int session_stalled(struct session *s)
+{
+    int wait = settings_get_int(SETTING_TASK_STALL, TASK_STALL_DEFAULT);
+
+    if (!s || wait <= 0 || s->running || s->stall_told || !s->stall_at || !s->turns)
+        return 0;
+    if (now_seconds() - s->stall_at < wait)
+        return 0;
+    if (!s->heard_at || now_seconds() - s->heard_at < wait)
+        return 0;
+
+    s->stall_told = 1;
+    s->stall_at = 0;
+    return 1;
+}
+
+const struct tasktab *session_tasks(const struct session *s)
+{
+    return s ? &s->tasks : NULL;
+}
+
+const struct task *session_task_change(const struct session *s)
+{
+    return s ? s->task_change : NULL;
+}
+
+int session_task_repeat(const struct session *s)
+{
+    return s ? s->task_repeat : 0;
+}
+
 int session_idle_pump(struct session *s)
 {
     if (!s || !s->agent)
@@ -489,9 +589,12 @@ int session_idle_pump(struct session *s)
     }
     struct session *was = session_set_drawing(s);
     image_poll();
+    unsigned long before = s->spoke;
     int busy = s->agent->idle_pump(s->agent) ? 1 : 0;
     session_set_drawing(was);
 
+    /* a turn still open, or one that opened and closed inside this pump */
+    stall_watch(s, busy || s->spoke != before);
     tab_busy(s, busy);
     return busy;
 }
@@ -762,6 +865,7 @@ struct session *session_new(const char *backend, const char *cwd, const char *mo
     s->model = dup_model(s->backend, model);
     s->effort = effort ? strdup(effort) : NULL;
     s->thinking = 1;
+    tasks_reset(&s->tasks, s->backend);
     return s;
 }
 
@@ -1045,6 +1149,9 @@ static int restart(struct session *s, const char *resume_id)
         return 0;
     }
     retire(previous);
+    tasks_reset(&s->tasks, s->backend);
+    s->stall_seen = s->stall_told = 0;
+    s->stall_at = 0;
 
     if (resume_id && resume_id != s->id)
         set_id(s, resume_id);
@@ -1310,6 +1417,7 @@ int session_clear(struct session *s)
     if (!s->agent || !s->agent->reset(s->agent))
         return 0;
     reset_turns(s, RESET_BLOCK);
+    tasks_reset(&s->tasks, s->backend);
 
     s->title[0] = '\0';
     s->stale_title[0] = '\0';
@@ -1564,6 +1672,8 @@ static void turn_prepare(struct session *s, const char *text)
     s->heard_at = s->started;
     s->tool_open = 0;
     s->idle_busy = 1;
+    s->stall_told = 0;
+    s->stall_at = 0;
     s->interrupted = 0;
     s->abort_request = 0;
     publish(s, "working");

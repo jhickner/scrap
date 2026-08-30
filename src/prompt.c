@@ -48,7 +48,7 @@ struct prompt {
     int          external_taken;
     int        (*idle_fds)(void *ud, int *out, int max);
     int        (*idle_render)(void *ud);
-    int        (*idle_busy)(void *ud);
+    int        (*idle_poll)(void *ud);
     void        *idle_ud;
     void       (*replay)(void *ud);
     void        *replay_ud;
@@ -864,11 +864,11 @@ static char *take_line(struct prompt *p)
 }
 
 void prompt_set_idle(struct prompt *p, int (*fds)(void *ud, int *out, int max),
-                     int (*render)(void *ud), int (*busy)(void *ud), void *ud)
+                     int (*render)(void *ud), int (*poll)(void *ud), void *ud)
 {
     p->idle_fds = fds;
     p->idle_render = render;
-    p->idle_busy = busy;
+    p->idle_poll = poll;
     p->idle_ud = ud;
 }
 
@@ -1016,7 +1016,14 @@ static char *read_loop(struct prompt *p)
         }
 
         int animating = !resizing && p->animate_busy && p->animate_busy(p->animate_ud);
-        int wait = resizing ? TTY_RESIZE_SETTLE_MS : (animating ? SPIN_FRAME_MS : -1);
+        /* Nothing to read from is the usual reason to wait forever; work that
+           has to be timed rather than woken is the exception. */
+        int polling = !resizing && !animating && p->idle_poll &&
+                      p->idle_poll(p->idle_ud);
+        int wait = resizing      ? TTY_RESIZE_SETTLE_MS
+                   : animating   ? SPIN_FRAME_MS
+                   : polling     ? PROMPT_IDLE_POLL_MS
+                                 : -1;
 
         if (!tty_read(&ev, wait)) {
             if (resizing) {
@@ -1028,6 +1035,8 @@ static char *read_loop(struct prompt *p)
                 if (animating && p->animate_tick) {
                     p->animate_tick(p->animate_ud);
                     repaint(p);
+                } else if (polling) {
+                    idle_ready_hook(p);
                 }
                 takeover_check(p);
                 restart_check(p);

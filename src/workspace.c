@@ -409,6 +409,35 @@ int workspace_fds(int *out, int max)
 
 static void send_next(int index, int hold);
 
+/* A stalled session has background work that ended without waking the agent:
+   nothing is coming, and nothing is left to resume it. Say so where it happened
+   and send the turn that picks the work back up. */
+static const char STALL_PROMPT[] =
+    "The background work you started here ended without reporting back, so no "
+    "turn was run for it. Check what those tasks left behind and carry on from "
+    "there.";
+
+static void nudge_stalled(int index, int hold, int screen)
+{
+    struct tab *t = &tabs[index];
+
+    /* nothing is drawn or sent while the screen belongs to a child: the stall
+       keeps its timer and the next pump with the screen picks it up */
+    if (!screen || chrome_modal_active() || t->npending || session_turn_running(t->s))
+        return;
+    if (!session_stalled(t->s))
+        return;
+
+    enter_held(index, hold);
+    viewport_item_begin(VIEWPORT_ROWS(1, 1));
+    ui_note("background tasks ended without a reply, continuing");
+    viewport_item_end();
+    ui_flush();
+    leave();
+
+    workspace_send(index, STALL_PROMPT, "continuing from the stalled tasks");
+}
+
 static void settle_finished(int index, int hold)
 {
     if (!tabs[index].finished || chrome_modal_active())
@@ -438,6 +467,9 @@ static int pump(int hold, int screen)
         else
             busy |= session_idle_pump(s) ? 1 : 0;
         leave();
+
+        if (!running)
+            nudge_stalled(i, hold, screen);
 
         if (running && !session_turn_running(s)) {
             tabs[i].finished = 1;
@@ -506,6 +538,14 @@ void workspace_settle(struct session *s)
     leave();
     send_next(at, 0);
     spin_follow();
+}
+
+int workspace_stalling(void)
+{
+    for (int i = 0; i < ntabs; i++)
+        if (session_stall_armed(tabs[i].s))
+            return 1;
+    return 0;
 }
 
 int workspace_busy(void)

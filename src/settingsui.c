@@ -29,6 +29,8 @@ struct entry {
     int         low;
     int         high;
     const char *unbounded;
+    const char *key; /* S_ROWS: the setting it stores, and its default */
+    int         def;
 
     enum ui_group group;
 };
@@ -50,7 +52,12 @@ static const struct entry ENTRIES[] = {
      .low = IMAGE_ROWS_MIN, .high = IMAGE_ROWS_MAX},
     {.name = "echoed rows", .kind = S_ROWS,
      .about = "how much of a long typed line is echoed back",
-     .low = 0, .high = 100, .unbounded = "all of it"},
+     .low = 0, .high = 100, .unbounded = "all of it",
+     .key = SETTING_ECHO_ROWS, .def = ECHO_ROWS_DEFAULT},
+    {.name = "task stall seconds", .kind = S_ROWS,
+     .about = "wait before a nudge when background tasks end with no reply",
+     .low = 0, .high = 600, .unbounded = "no nudge",
+     .key = SETTING_TASK_STALL, .def = TASK_STALL_DEFAULT},
     {.name = "input colour", .kind = S_COLOR,
      .about = "the prompt, its echo, and the sticky line",
      .group = UI_GROUP_INPUT},
@@ -95,19 +102,17 @@ static void flag_set(struct session *s, int at, int on)
 
 static int rows_of(const struct entry *e)
 {
-    return e->high == IMAGE_ROWS_MAX
-               ? image_rows()
-               : settings_get_int(SETTING_ECHO_ROWS, ECHO_ROWS_DEFAULT);
+    return e->key ? settings_get_int(e->key, e->def) : image_rows();
 }
 
 static void rows_set(const struct entry *e, int rows)
 {
-    if (e->high == IMAGE_ROWS_MAX) {
+    if (!e->key) {
         image_set_rows(rows);
         settings_set_int(SETTING_IMAGE_ROWS, image_rows());
-    } else {
-        settings_set_int(SETTING_ECHO_ROWS, rows);
+        return;
     }
+    settings_set_int(e->key, rows);
 }
 
 static void value_of(const struct session *s, int at, char *out, size_t cap)

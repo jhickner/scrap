@@ -79,8 +79,13 @@ void prompt_restart_check(struct prompt *p);
 void prompt_set_animate(struct prompt *p, int (*busy)(void *ud), void (*tick)(void *ud),
                         void *ud);
 
+/* How often the idle hooks are run when nothing will wake the loop for them */
+#define PROMPT_IDLE_POLL_MS 500
+
+/* fds/render are the wait-and-drain pair; poll reports work whose next step is
+   due at a time rather than on an fd, and is what bounds the wait. */
 void prompt_set_idle(struct prompt *p, int (*fds)(void *ud, int *out, int max),
-                     int (*render)(void *ud), int (*busy)(void *ud), void *ud);
+                     int (*render)(void *ud), int (*poll)(void *ud), void *ud);
 
 char *prompt_take_queued(struct prompt *p);
 

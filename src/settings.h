@@ -11,6 +11,12 @@
 
 #define ECHO_ROWS_DEFAULT 10
 
+/* Seconds to wait, after the last background task of a session ends without
+   waking the agent, before the session is nudged on. 0 turns the nudge off. */
+#define SETTING_TASK_STALL "task_stall_seconds"
+
+#define TASK_STALL_DEFAULT 45
+
 #define SETTING_MUX_BACKENDS "mux_backends"
 #define SETTING_BACKEND      "backend"
 

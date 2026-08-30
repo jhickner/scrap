@@ -36,7 +36,9 @@
 #include "sessionlist.h"
 #include "sessionview.h"
 #include "status.h"
+#include "tasks.h"
 #include "text.h"
+#include "toolstyle.h"
 #include "tty.h"
 #include "ui.h"
 #include "viewport.h"
@@ -295,33 +297,9 @@ int tg_fds(int *out, int max)
     return 1;
 }
 
-static void copy_trunc(char *dst, size_t size, const char *src)
-{
-    size_t i = 0;
-    for (; src && src[i] && i < size - 1; i++)
-        dst[i] = src[i];
-    if (src && src[i]) {
-        for (size_t j = i; j > 0; j--) {
-            unsigned char c = (unsigned char)dst[j - 1];
-            if ((c & 0xC0) == 0x80)
-                continue;
-            size_t need = (c & 0x80) == 0    ? 1 : (c & 0xE0) == 0xC0 ? 2
-                        : (c & 0xF0) == 0xE0 ? 3 : 4;
-            if (j - 1 + need > i)
-                i = j - 1;
-            break;
-        }
-        if (i + 4 <= size) {
-            memcpy(dst + i, "...", 3);
-            i += 3;
-        }
-    }
-    dst[i] = '\0';
-}
-
 static void one_line(char *dst, size_t size, const char *src)
 {
-    copy_trunc(dst, size, src);
+    text_trunc(dst, size, src);
     for (size_t i = 0; dst[i]; i++)
         if (dst[i] == '\n' || dst[i] == '\r' || dst[i] == '\t')
             dst[i] = ' ';
@@ -647,22 +625,6 @@ static const char *short_path(const char *p)
     return p;
 }
 
-static void tool_label(char *dst, size_t size, const char *name)
-{
-    if (!strncmp(name, "mcp__", 5)) {
-        const char *sep = name, *last = name + 5;
-        while ((sep = strstr(sep, "__")) != NULL) {
-            last = sep + 2;
-            sep += 2;
-        }
-        name = last;
-    }
-    size_t i = 0;
-    for (; name[i] && i < size - 1; i++)
-        dst[i] = (char)tolower((unsigned char)name[i]);
-    dst[i] = '\0';
-}
-
 static const char *tool_arg(cJSON *in)
 {
     return view_tool_arg_value(in);
@@ -671,13 +633,13 @@ static const char *tool_arg(cJSON *in)
 static void tool_line(char *label, size_t ln, char *arg, size_t an,
                       const backend_event *ev)
 {
-    tool_label(label, ln, ev->name ? ev->name : "tool");
+    toolstyle_label(label, ln, ev->name ? ev->name : "tool");
     cJSON *in = ev->input_json ? cJSON_Parse(ev->input_json) : NULL;
     const char *v = in ? tool_arg(in) : ev->arg;
     if (v && (!strcmp(label, "read") || !strcmp(label, "edit") ||
               !strcmp(label, "write") || !strcmp(label, "notebookedit")))
         v = short_path(v);
-    copy_trunc(arg, an, v ? v : (ev->input_json ? ev->input_json : ""));
+    text_trunc(arg, an, v ? v : (ev->input_json ? ev->input_json : ""));
     cJSON_Delete(in);
 }
 
@@ -696,7 +658,7 @@ static void put_diff_lines(mdv2_buf *b, const char *s, char sign, int *left)
         size_t k = len < sizeof tmp - 1 ? len : sizeof tmp - 1;
         memcpy(tmp, s, k);
         tmp[k] = '\0';
-        copy_trunc(line, sizeof line, tmp);
+        text_trunc(line, sizeof line, tmp);
         mdv2_putc(b, sign);
         mdv2_esc_code(b, line, strlen(line));
         mdv2_putc(b, '\n');
@@ -776,148 +738,13 @@ static void send_tool_line(const backend_event *ev)
     free(b.p);
 }
 
-#define SUBAGENT_MAX 16
-
-struct subagent {
-    char   id[40];
-    char   desc[140];
-    char   type[40];
-    char   status[24];
-    char   latest[240];
-    time_t started, ended;
-    int    repeats;
-};
-
-static struct subagent agents[SUBAGENT_MAX];
-static int agent_count;
-static int task_events;
 static int repeat_task;
 
-static int subagent_done(const struct subagent *a)
+static void send_task_line(const struct task *a)
 {
-    return strcmp(a->status, "running") != 0 && strcmp(a->status, "pending") != 0;
-}
-
-static struct subagent *subagent_find(const char *id)
-{
-    for (int i = 0; i < agent_count; i++)
-        if (!strcmp(agents[i].id, id))
-            return &agents[i];
-    return NULL;
-}
-
-static struct subagent *subagent_add(const char *id)
-{
-    if (agent_count < SUBAGENT_MAX) {
-        struct subagent *a = &agents[agent_count++];
-        memset(a, 0, sizeof *a);
-        snprintf(a->id, sizeof a->id, "%s", id);
-        return a;
-    }
-    for (int i = 0; i < agent_count; i++) {
-        if (!subagent_done(&agents[i]))
-            continue;
-        memmove(&agents[i], &agents[i + 1],
-                (size_t)(agent_count - i - 1) * sizeof agents[0]);
-        struct subagent *a = &agents[agent_count - 1];
-        memset(a, 0, sizeof *a);
-        snprintf(a->id, sizeof a->id, "%s", id);
-        return a;
-    }
-    return NULL;
-}
-
-static int subagents_running(void)
-{
-    int n = 0;
-    for (int i = 0; i < agent_count; i++)
-        if (!subagent_done(&agents[i]))
-            n++;
-    return n;
-}
-
-static void human_secs(char *out, size_t size, long secs)
-{
-    if (secs < 60)
-        snprintf(out, size, "%lds", secs);
-    else if (secs < 3600)
-        snprintf(out, size, "%ldm%02lds", secs / 60, secs % 60);
-    else
-        snprintf(out, size, "%ldh%02ldm", secs / 3600, (secs % 3600) / 60);
-}
-
-static struct subagent *subagent_note(const backend_event *ev)
-{
-    if (!ev->id || !*ev->id)
-        return NULL;
-    struct subagent *a = subagent_find(ev->id);
-    int fresh = 0;
-    if (!a) {
-        if (!(a = subagent_add(ev->id)))
-            return NULL;
-        a->started = time(NULL);
-        snprintf(a->status, sizeof a->status, "running");
-        fresh = 1;
-    }
-    if (ev->arg && *ev->arg)
-        snprintf(a->type, sizeof a->type, "%s", ev->arg);
-    if (ev->text && *ev->text) {
-        if (!a->desc[0])
-            copy_trunc(a->desc, sizeof a->desc, ev->text);
-        else
-            copy_trunc(a->latest, sizeof a->latest, ev->text);
-    }
-    int changed = fresh;
-
-    if (ev->name && *ev->name && strcmp(a->status, ev->name) &&
-        !(subagent_done(a) && !strcmp(ev->name, "running"))) {
-        snprintf(a->status, sizeof a->status, "%s", ev->name);
-        changed = 1;
-    }
-    if (subagent_done(a) && !a->ended)
-        a->ended = time(NULL);
-    return changed ? a : NULL;
-}
-
-static int is_spawn_tool(const char *name)
-{
-    static const char *const spawn[] = {
-        "task", "agent", "spawn_subagent", "spawn_agent", "workflow", NULL
-    };
-    char lower[64];
-    tool_label(lower, sizeof lower, name);
-    for (int i = 0; spawn[i]; i++)
-        if (!strcmp(lower, spawn[i]))
-            return 1;
-    return 0;
-}
-
-static struct subagent *subagent_note_launch(const backend_event *ev)
-{
-    static int seq;
-    if (!ev->name || !is_spawn_tool(ev->name))
-        return NULL;
-    char id[40];
-    snprintf(id, sizeof id, "%s-%d", sess ? session_backend(sess) : "agent", ++seq);
-    struct subagent *a = subagent_add(id);
-    if (!a)
-        return NULL;
-    a->started = time(NULL);
-    snprintf(a->status, sizeof a->status, "launched");
-    cJSON *in = ev->input_json ? cJSON_Parse(ev->input_json) : NULL;
-    const char *d = in ? tool_arg(in) : NULL;
-    copy_trunc(a->desc, sizeof a->desc, d ? d : ev->name);
-    cJSON_Delete(in);
-    return a;
-}
-
-static void send_subagent_line(const struct subagent *a)
-{
-    char took[32] = "";
-    if (subagent_done(a))
-        human_secs(took, sizeof took, (long)(a->ended - a->started));
-    send_notef("agent %s: %s%s%s", a->status, a->desc[0] ? a->desc : a->id,
-               took[0] ? " in " : "", took);
+    char line[240];
+    tasks_line(a, line, sizeof line);
+    send_note(line);
 }
 
 __attribute__((format(printf, 4, 5)))
@@ -936,17 +763,19 @@ static void appendf(char *buf, size_t size, size_t *n, const char *fmt, ...)
 
 static void send_agents(void)
 {
-    if (!agent_count) {
+    const struct tasktab *t = session_tasks(sess);
+
+    if (!tasks_count(t)) {
         send_note("no background agents this session");
         return;
     }
     char msg[2000];
     size_t n = 0;
     time_t now = time(NULL);
-    for (int i = 0; i < agent_count; i++) {
-        struct subagent *a = &agents[i];
+    for (int i = 0; i < tasks_count(t); i++) {
+        const struct task *a = tasks_at(t, i);
         char took[32], desc[160];
-        human_secs(took, sizeof took, (long)((a->ended ? a->ended : now) - a->started));
+        tasks_duration(took, sizeof took, (long)((a->ended ? a->ended : now) - a->started));
         one_line(desc, sizeof desc, a->desc[0] ? a->desc : a->id);
         appendf(msg, sizeof msg, &n, "%-9s %-6s %s%s%s\n", a->status, took, desc,
                 a->type[0] ? "  @" : "", a->type);
@@ -956,8 +785,8 @@ static void send_agents(void)
             appendf(msg, sizeof msg, &n, "          %s\n", one);
         }
     }
-    appendf(msg, sizeof msg, &n, "\n%d running", subagents_running());
-    if (!task_events)
+    appendf(msg, sizeof msg, &n, "\n%d running", tasks_running(t));
+    if (!t->lifecycle)
         appendf(msg, sizeof msg, &n,
                 "\n%s reports no subagent life cycle, so these are the spawn\n"
                 "calls seen: what ran, not how it ended.",
@@ -988,16 +817,14 @@ static void on_event(void *ud, const backend_event *ev)
 {
     (void)ud;
 
-    if (ev->kind == BACKEND_EV_TASK) {
-        task_events = 1;
+    /* the session keeps the table; this is only what the event changed in it */
+    const struct task *changed = session_task_change(sess);
 
-        struct subagent *prev = subagent_find(ev->id ? ev->id : "");
-        int was_done = prev && subagent_done(prev);
-        struct subagent *a = subagent_note(ev);
-        if (was_done && !a && prev->repeats++ >= 1)
+    if (ev->kind == BACKEND_EV_TASK) {
+        if (session_task_repeat(sess))
             repeat_task = 1;
-        if (a && mirroring())
-            send_subagent_line(a);
+        if (changed && mirroring())
+            send_task_line(changed);
         return;
     }
 
@@ -1012,12 +839,9 @@ static void on_event(void *ud, const backend_event *ev)
 
     switch (ev->kind) {
     case BACKEND_EV_TOOL:
-        if (!task_events) {
-            struct subagent *a = subagent_note_launch(ev);
-            if (a) {
-                send_subagent_line(a);
-                break;
-            }
+        if (changed) {
+            send_task_line(changed);
+            break;
         }
         send_tool_line(ev);
         break;
@@ -1768,7 +1592,7 @@ static void send_bridge_status(void)
     appendf(msg, sizeof msg, &n, "%-10s %d scheduled\n", "reminders",
             reminders_scheduled_count());
     appendf(msg, sizeof msg, &n, "%-10s %d running, %d this session\n", "agents",
-            subagents_running(), agent_count);
+            tasks_running(session_tasks(sess)), tasks_count(session_tasks(sess)));
     pthread_mutex_lock(&log_lock);
     if (last_log[0]) {
         char extra[32] = "";

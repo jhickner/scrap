@@ -69,6 +69,30 @@ int text_split_commas(char *list, const char **out, int max)
     return n;
 }
 
+void text_trunc(char *out, size_t size, const char *in)
+{
+    size_t i = 0;
+    for (; in && in[i] && i < size - 1; i++)
+        out[i] = in[i];
+    if (in && in[i]) {
+        for (size_t j = i; j > 0; j--) {
+            unsigned char c = (unsigned char)out[j - 1];
+            if ((c & 0xC0) == 0x80)
+                continue;
+            size_t need = (c & 0x80) == 0    ? 1 : (c & 0xE0) == 0xC0 ? 2
+                        : (c & 0xF0) == 0xE0 ? 3 : 4;
+            if (j - 1 + need > i)
+                i = j - 1;
+            break;
+        }
+        if (i + 4 <= size) {
+            memcpy(out + i, "...", 3);
+            i += 3;
+        }
+    }
+    out[i] = '\0';
+}
+
 void text_one_line(const char *in, char *out, size_t size)
 {
     size_t o = 0;

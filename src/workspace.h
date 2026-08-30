@@ -61,6 +61,9 @@ int  workspace_pump_quiet(void);
 int  workspace_drain(void);
 int  workspace_busy(void);
 
+/* a session waiting out a stall: the pump has to be run on a timer to see it */
+int  workspace_stalling(void);
+
 const char *workspace_status(const struct session *s);
 
 #endif

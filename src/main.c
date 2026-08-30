@@ -230,7 +230,7 @@ static void side_tick(void *ud)
     workspace_pump();
     status_tick();
 }
-static int idle_busy(void *ud)   { (void)ud; return workspace_busy(); }
+static int idle_poll(void *ud)   { (void)ud; return workspace_stalling(); }
 static void replay(void *ud)      { (void)ud; session_replay(workspace_current()); }
 static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
 static void switcher(void *ud)
@@ -691,7 +691,7 @@ int main(int argc, char **argv)
     prompt_set_live_command(prompt, live_command, NULL);
     prompt_set_queued_source(prompt, tab_queued, tab_queued_at, tab_unqueue, NULL);
     prompt_set_echo_filter(prompt, echo_filter, NULL);
-    prompt_set_idle(prompt, idle_fds, idle_render, idle_busy, NULL);
+    prompt_set_idle(prompt, idle_fds, idle_render, idle_poll, NULL);
     prompt_set_restart(prompt, restart_pending, idle_restart, NULL);
     prompt_set_takeover(prompt, takeover_pending, takeover_run, prompt);
     prompt_set_switcher(prompt, switcher, NULL);

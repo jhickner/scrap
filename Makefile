@@ -108,6 +108,9 @@ $(BUILD)/groktest: tools/groktest.c src/vendor/impl.o src/vendor/cJSON.o | $(BUI
 $(BUILD)/filedifftest: tools/filedifftest.c src/filediff.o src/ui.o src/viewport.o src/block.o src/settings.o src/tty.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
+$(BUILD)/taskstest: tools/taskstest.c src/tasks.o src/text.o src/toolstyle.o src/vendor/cJSON.o | $(BUILD)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
+
 $(BUILD)/claudetest: tools/claudetest.c src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
@@ -163,7 +166,7 @@ CHECKS  := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest 
            groktest filedifftest pitest agenttabstest statustest transcripttest \
            sessionviewtest sessionloadtest highlighttest muxcfgtest telegramtest boardtest modelstest \
            boardgridtest boardtiletest viewstest replboxtest ttytest gitinfotest \
-           sidechannelviewtest sidechannelcmdtest
+           sidechannelviewtest sidechannelcmdtest taskstest
 
 check: $(addprefix $(BUILD)/,$(CHECKS))
 	@for t in $^; do echo "$$t"; ./$$t || exit 1; done

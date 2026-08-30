@@ -1,0 +1,224 @@
+#include "tasks.h"
+
+#include <stdio.h>
+#include <string.h>
+
+#include "text.h"
+#include "toolstyle.h"
+#include "vendor/cJSON.h"
+
+void tasks_reset(struct tasktab *t, const char *tag)
+{
+    if (!t)
+        return;
+    memset(t, 0, sizeof *t);
+    snprintf(t->tag, sizeof t->tag, "%s", tag && *tag ? tag : "task");
+}
+
+int tasks_done(const struct task *a)
+{
+    return a && strcmp(a->status, "running") != 0 && strcmp(a->status, "pending") != 0;
+}
+
+int tasks_running(const struct tasktab *t)
+{
+    int n = 0;
+    for (int i = 0; t && i < t->n; i++)
+        if (!tasks_done(&t->v[i]))
+            n++;
+    return n;
+}
+
+int tasks_pending(const struct tasktab *t)
+{
+    int n = 0;
+    for (int i = 0; t && i < t->n; i++)
+        if (!t->v[i].inferred && !tasks_done(&t->v[i]))
+            n++;
+    return n;
+}
+
+int tasks_count(const struct tasktab *t)
+{
+    return t ? t->n : 0;
+}
+
+const struct task *tasks_at(const struct tasktab *t, int i)
+{
+    return t && i >= 0 && i < t->n ? &t->v[i] : NULL;
+}
+
+static struct task *find(struct tasktab *t, const char *id)
+{
+    for (int i = 0; i < t->n; i++)
+        if (!strcmp(t->v[i].id, id))
+            return &t->v[i];
+    return NULL;
+}
+
+/* A full table drops the oldest finished entry: what is still running is what a
+   caller waiting on the work needs to keep. */
+static struct task *add(struct tasktab *t, const char *id)
+{
+    if (t->n < TASKS_MAX) {
+        struct task *a = &t->v[t->n++];
+        memset(a, 0, sizeof *a);
+        snprintf(a->id, sizeof a->id, "%s", id);
+        return a;
+    }
+    for (int i = 0; i < t->n; i++) {
+        if (!tasks_done(&t->v[i]))
+            continue;
+        memmove(&t->v[i], &t->v[i + 1], (size_t)(t->n - i - 1) * sizeof t->v[0]);
+        struct task *a = &t->v[t->n - 1];
+        memset(a, 0, sizeof *a);
+        snprintf(a->id, sizeof a->id, "%s", id);
+        return a;
+    }
+    return NULL;
+}
+
+static const struct task *note_lifecycle(struct tasktab *t, const backend_event *ev,
+                                         int *repeat)
+{
+    struct task *prev = find(t, ev->id);
+    int          was_done = prev && tasks_done(prev);
+
+    struct task *a = prev;
+    int          fresh = 0;
+    if (!a) {
+        if (!(a = add(t, ev->id)))
+            return NULL;
+        a->started = time(NULL);
+        snprintf(a->status, sizeof a->status, "running");
+        fresh = 1;
+    }
+    if (ev->arg && *ev->arg)
+        snprintf(a->type, sizeof a->type, "%s", ev->arg);
+    if (ev->text && *ev->text) {
+        if (!a->desc[0])
+            text_trunc(a->desc, sizeof a->desc, ev->text);
+        else
+            text_trunc(a->latest, sizeof a->latest, ev->text);
+    }
+
+    int changed = fresh;
+    if (ev->name && *ev->name && strcmp(a->status, ev->name) &&
+        !(tasks_done(a) && !strcmp(ev->name, "running"))) {
+        snprintf(a->status, sizeof a->status, "%s", ev->name);
+        changed = 1;
+    }
+    if (tasks_done(a) && !a->ended)
+        a->ended = time(NULL);
+
+    if (was_done && !changed && a->repeats++ >= 1 && repeat)
+        *repeat = 1;
+    return changed ? a : NULL;
+}
+
+static int is_spawn_tool(const char *name)
+{
+    static const char *const spawn[] = {
+        "task", "agent", "spawn_subagent", "spawn_agent", "workflow", NULL
+    };
+    char lower[64];
+    toolstyle_label(lower, sizeof lower, name);
+    for (int i = 0; spawn[i]; i++)
+        if (!strcmp(lower, spawn[i]))
+            return 1;
+    return 0;
+}
+
+/* What a spawn call was for, in the terms the drivers use for it. */
+static const char *spawn_desc(const cJSON *in)
+{
+    static const char *const keys[] = {"description", "prompt", "task", "instructions"};
+    for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
+        const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(in, keys[i]));
+        if (v && *v)
+            return v;
+    }
+    return NULL;
+}
+
+static const struct task *note_launch(struct tasktab *t, const backend_event *ev)
+{
+    if (!ev->name || !is_spawn_tool(ev->name))
+        return NULL;
+
+    char id[40];
+    snprintf(id, sizeof id, "%s-%d", t->tag[0] ? t->tag : "task", ++t->seq);
+    struct task *a = add(t, id);
+    if (!a)
+        return NULL;
+
+    a->started = time(NULL);
+    a->inferred = 1;
+    snprintf(a->status, sizeof a->status, "launched");
+
+    cJSON      *in = ev->input_json ? cJSON_Parse(ev->input_json) : NULL;
+    const char *d = in ? spawn_desc(in) : ev->arg;
+    text_trunc(a->desc, sizeof a->desc, d ? d : ev->name);
+    cJSON_Delete(in);
+    return a;
+}
+
+const struct task *tasks_note(struct tasktab *t, const backend_event *ev, int *repeat)
+{
+    if (repeat)
+        *repeat = 0;
+    if (!t || !ev)
+        return NULL;
+
+    if (ev->kind == BACKEND_EV_TASK) {
+        t->lifecycle = 1;
+        if (!ev->id || !*ev->id)
+            return NULL;
+        return note_lifecycle(t, ev, repeat);
+    }
+    if (ev->kind == BACKEND_EV_TOOL && !t->lifecycle)
+        return note_launch(t, ev);
+    return NULL;
+}
+
+int tasks_drop(struct tasktab *t)
+{
+    int n = 0;
+    for (int i = 0; t && i < t->n; i++) {
+        struct task *a = &t->v[i];
+        if (a->inferred || tasks_done(a))
+            continue;
+        snprintf(a->status, sizeof a->status, "dropped");
+        a->ended = time(NULL);
+        n++;
+    }
+    return n;
+}
+
+void tasks_duration(char *out, size_t size, long secs)
+{
+    if (secs < 0)
+        secs = 0;
+    if (secs < 60)
+        snprintf(out, size, "%lds", secs);
+    else if (secs < 3600)
+        snprintf(out, size, "%ldm%02lds", secs / 60, secs % 60);
+    else
+        snprintf(out, size, "%ldh%02ldm", secs / 3600, (secs % 3600) / 60);
+}
+
+void tasks_line(const struct task *a, char *out, size_t size)
+{
+    char took[32] = "";
+    char what[160];
+
+    if (!a) {
+        snprintf(out, size, "%s", "");
+        return;
+    }
+    if (tasks_done(a))
+        tasks_duration(took, sizeof took, (long)(a->ended - a->started));
+    text_one_line(a->desc[0] ? a->desc : a->id, what, sizeof what);
+    snprintf(out, size, "agent %s: %s%s%s", a->status, what, took[0] ? " in " : "",
+             took);
+}
