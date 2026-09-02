@@ -137,6 +137,52 @@ struct pending {
     unsigned mark;
 };
 
+/* every image transmitted this session, in the order it was drawn: the viewer
+   steps through these, and a click names one by the id in its cells */
+struct shot {
+    uint32_t id;
+    char    *path;
+};
+
+static struct shot *shots;
+static int          nshots, shots_cap;
+
+static void shot_add(uint32_t id, const char *path)
+{
+    if (!path || !*path)
+        return;
+    for (int i = 0; i < nshots; i++)
+        if (shots[i].id == id)
+            return;
+    if (nshots == shots_cap) {
+        int cap = shots_cap ? shots_cap * 2 : 16;
+        struct shot *grown = realloc(shots, (size_t)cap * sizeof *grown);
+        if (!grown)
+            return;
+        shots = grown;
+        shots_cap = cap;
+    }
+    char *copy = strdup(path);
+    if (!copy)
+        return;
+    shots[nshots++] = (struct shot){id, copy};
+}
+
+int image_count(void) { return nshots; }
+
+const char *image_path_at(int i)
+{
+    return i >= 0 && i < nshots ? shots[i].path : NULL;
+}
+
+int image_index_of(uint32_t id)
+{
+    for (int i = 0; i < nshots; i++)
+        if (shots[i].id == id)
+            return i;
+    return -1;
+}
+
 static struct img_cache cache[CACHE_MAX];
 static int cache_n;
 static struct pending pending[PENDING_MAX];
@@ -263,7 +309,17 @@ static uint32_t next_id(void)
            (uint32_t)(0x40 | (counter++ & 0x3F));
 }
 
-static void write_placeholders(uint32_t id, int indent, int cols, int rows)
+/* The counter byte of next_id() always carries bit 6, so an id ending in 0x3F
+   is one no inline image can be given: the viewer reuses it for every image it
+   draws at full size, and never collides with the transcript. */
+static uint32_t full_id(void)
+{
+    unsigned pid = (unsigned)getpid();
+    return (uint32_t)(0x40 | (pid & 0x3F)) << 16 |
+           (uint32_t)(0x40 | ((pid >> 6) & 0x3F)) << 8 | 0x3F;
+}
+
+static void write_placeholders(uint32_t id, int indent, int cols, int rows, int trail)
 {
     kg_virtual_place(id, cols, rows);
     for (int r = 0; r < rows; r++) {
@@ -274,52 +330,53 @@ static void write_placeholders(uint32_t id, int indent, int cols, int rows)
             kg_placeholder_cell(id, r, c);
         term_to_row = 0;
         ui_esc("\x1b[39m");
-        ui_put("\n");
+        if (trail || r < rows - 1)
+            ui_put("\n");
     }
     ui_flush();
 }
 
-void image_fit(int img_w, int img_h, int cw, int ch, int cols_box, int rows_box,
-               int *cols, int *rows)
+void image_place(uint32_t id, int indent, int cols, int rows)
 {
-    if (img_w > 0 && img_h > 0 && cw > 0 && ch > 0) {
-        int natural_cols = (img_w + cw - 1) / cw;
-        int natural_rows = (img_h + ch - 1) / ch;
-        if (natural_cols > 0 && natural_cols < cols_box)
-            cols_box = natural_cols;
-        if (natural_rows > 0 && natural_rows < rows_box)
-            rows_box = natural_rows;
+    if (id && cols > 0 && rows > 0)
+        write_placeholders(id, indent, cols, rows, 0);
+}
 
-        long box_w = (long)cols_box * cw, box_h = (long)rows_box * ch;
-        int  c, r;
-        if ((long)img_w * box_h > (long)img_h * box_w) {
-            c = cols_box;
-            long want_h = (long)img_h * box_w / img_w;
-            r = (int)((want_h + ch / 2) / ch);
-        } else {
-            r = rows_box;
-            long want_w = (long)img_w * box_h / img_h;
-            c = (int)((want_w + cw / 2) / cw);
-        }
-
-        if (c < 1)
-            c = 1;
-        if (r < 1)
-            r = 1;
-        if (c > cols_box)
-            c = cols_box;
-        if (r > rows_box)
-            r = rows_box;
-
-        if (c > KG_DIACRITIC_COUNT)
-            c = KG_DIACRITIC_COUNT;
-        if (r > KG_DIACRITIC_COUNT)
-            r = KG_DIACRITIC_COUNT;
-        *cols = c;
-        *rows = r;
-        return;
+static void fit_cells(int img_w, int img_h, int cw, int ch, int cols_box, int rows_box,
+                      int *cols, int *rows)
+{
+    long box_w = (long)cols_box * cw, box_h = (long)rows_box * ch;
+    int  c, r;
+    if ((long)img_w * box_h > (long)img_h * box_w) {
+        c = cols_box;
+        long want_h = (long)img_h * box_w / img_w;
+        r = (int)((want_h + ch / 2) / ch);
+    } else {
+        r = rows_box;
+        long want_w = (long)img_w * box_h / img_h;
+        c = (int)((want_w + cw / 2) / cw);
     }
 
+    if (c < 1)
+        c = 1;
+    if (r < 1)
+        r = 1;
+    if (c > cols_box)
+        c = cols_box;
+    if (r > rows_box)
+        r = rows_box;
+
+    if (c > KG_DIACRITIC_COUNT)
+        c = KG_DIACRITIC_COUNT;
+    if (r > KG_DIACRITIC_COUNT)
+        r = KG_DIACRITIC_COUNT;
+    *cols = c;
+    *rows = r;
+}
+
+/* the box to fall back on before the pixel size of an image is known */
+static void fit_blind(int cols_box, int rows_box, int *cols, int *rows)
+{
     int side = cols_box < rows_box * 2 ? cols_box : rows_box * 2;
     if (side > 48)
         side = 48;
@@ -327,6 +384,36 @@ void image_fit(int img_w, int img_h, int cw, int ch, int cols_box, int rows_box,
     *rows = side / 2 > 0 ? side / 2 : 1;
     if (*rows > rows_box)
         *rows = rows_box;
+}
+
+void image_fit(int img_w, int img_h, int cw, int ch, int cols_box, int rows_box,
+               int *cols, int *rows)
+{
+    if (img_w > 0 && img_h > 0 && cw > 0 && ch > 0) {
+        /* an image smaller than the box is drawn at its own size rather than
+           enlarged into it */
+        int natural_cols = (img_w + cw - 1) / cw;
+        int natural_rows = (img_h + ch - 1) / ch;
+        if (natural_cols > 0 && natural_cols < cols_box)
+            cols_box = natural_cols;
+        if (natural_rows > 0 && natural_rows < rows_box)
+            rows_box = natural_rows;
+        fit_cells(img_w, img_h, cw, ch, cols_box, rows_box, cols, rows);
+        return;
+    }
+
+    fit_blind(cols_box, rows_box, cols, rows);
+}
+
+/* image_fit without the natural-size clamp: the largest box-filling rectangle
+   of the image's shape, enlarging a small image to get there */
+void image_fill(int img_w, int img_h, int cw, int ch, int cols_box, int rows_box,
+                int *cols, int *rows)
+{
+    if (img_w > 0 && img_h > 0 && cw > 0 && ch > 0)
+        fit_cells(img_w, img_h, cw, ch, cols_box, rows_box, cols, rows);
+    else
+        fit_blind(cols_box, rows_box, cols, rows);
 }
 
 static int box_size(int indent, int img_w, int img_h, int *cols, int *rows)
@@ -444,7 +531,7 @@ static void place(uint32_t id, int indent, int img_w, int img_h)
 {
     int cols, rows;
     if (box_size(indent, img_w, img_h, &cols, &rows))
-        write_placeholders(id, indent, cols, rows);
+        write_placeholders(id, indent, cols, rows, 1);
 }
 
 static int show_png(const unsigned char *data, size_t len, const char *path, time_t mtime,
@@ -460,6 +547,7 @@ static int show_png(const unsigned char *data, size_t len, const char *path, tim
 
     uint32_t id = next_id();
     kg_transmit_png(id, data, len);
+    shot_add(id, path);
     place_kept(id, indent, img_w, img_h, path);
     if (path)
         cache_store(path, mtime, id, img_w, img_h);
@@ -488,6 +576,7 @@ static int show_decoded(const char *path, time_t mtime, int indent)
 
     uint32_t id = next_id();
     kg_transmit_ex(id, im.rgb, im.w, im.h, 3);
+    shot_add(id, path);
     place_kept(id, indent, im.src_w, im.src_h, path);
     cache_store(path, mtime, id, im.src_w, im.src_h);
     imagedec_free(&im);
@@ -531,6 +620,7 @@ static int start_convert(const char *path, time_t mtime, int indent)
     snprintf(pending[slot].src, sizeof pending[slot].src, "%s", path);
     pending[slot].mtime = mtime;
 
+    shot_add(id, path);
     pending[slot].mark = place_kept(id, indent, 0, 0, path);
     cache_store(path, mtime, id, 0, 0);
     return 1;
@@ -571,6 +661,68 @@ int image_show(const char *path, int indent)
     }
     free(expanded);
     return ok;
+}
+
+uint32_t image_load(const char *path, int cols_box, int rows_box, int *cols, int *rows)
+{
+    if (!image_available() || !path || !*path || cols_box < 1 || rows_box < 1)
+        return 0;
+
+    int cw, ch, term_rows;
+    cell_pixels(&cw, &ch, &term_rows);
+
+    unsigned char head[32];
+    size_t        head_n = peek_file(path, head, sizeof head);
+    if (head_n == 0)
+        return 0;
+
+    uint32_t id = full_id();
+
+    if (is_png(head, head_n)) {
+        size_t         len = 0;
+        unsigned char *data = load_file(path, &len);
+        if (!data)
+            return 0;
+        int img_w = 0, img_h = 0;
+        int ok = png_dims(data, len, &img_w, &img_h);
+        if (ok) {
+            kg_transmit_png(id, data, len);
+            image_fill(img_w, img_h, cw, ch, cols_box, rows_box, cols, rows);
+        }
+        free(data);
+        return ok ? id : 0;
+    }
+
+    int probe_w = 0, probe_h = 0;
+    if (!imagedec_probe(path, &probe_w, &probe_h))
+        return 0;
+
+    image_fill(probe_w, probe_h, cw, ch, cols_box, rows_box, cols, rows);
+
+    /* enlarging is the terminal's job: it scales the image into the cells the
+       placeholders cover, so never decode past what the file holds */
+    int px_w = *cols * cw, px_h = *rows * ch;
+    if (px_w > probe_w || px_h > probe_h) {
+        px_w = probe_w;
+        px_h = probe_h;
+    }
+
+    static const uint8_t bg[3] = {0, 0, 0};
+    Image                im = {0};
+    if (!imagedec_load_fit(path, bg, px_w, px_h, &im))
+        return 0;
+
+    /* orientation can transpose the frame the probe reported */
+    image_fill(im.src_w, im.src_h, cw, ch, cols_box, rows_box, cols, rows);
+    kg_transmit_ex(id, im.rgb, im.w, im.h, 3);
+    imagedec_free(&im);
+    return id;
+}
+
+void image_drop(uint32_t id)
+{
+    if (id)
+        kg_delete(id);
 }
 
 static void finish_pending(struct pending *p, int status)

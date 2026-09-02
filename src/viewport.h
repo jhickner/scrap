@@ -2,6 +2,7 @@
 #define VIEWPORT_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 int  viewport_active(void);
 
@@ -62,6 +63,10 @@ unsigned viewport_mark(void);
 int      viewport_visible(unsigned mark);
 
 void *viewport_item_data(unsigned mark);
+
+/* the image whose placeholder cells the last paint left on a screen row,
+   1-based; 0 when the row holds none */
+uint32_t viewport_image_at_row(int row);
 
 void  viewport_item_update(unsigned mark);
 

@@ -65,6 +65,8 @@ struct prompt {
     void        *takeover_ud;
     void       (*switcher)(void *ud);
     void        *switcher_ud;
+    int        (*click)(void *ud, int row);
+    void        *click_ud;
     void       (*board)(void *ud);
     void        *board_ud;
     void       (*split)(void *ud, int quiet);
@@ -655,6 +657,7 @@ static const struct prompt_key SHORTCUTS[] = {
     {"ctrl-n / ctrl-o", "cycle the colours of your input / of reply highlights"},
     {"ctrl-f", "compact or full tool calls, redrawing the transcript"},
     {"page up/down", "scroll the transcript half a screen"},
+    {"click an image", "open it at full size, \xe2\x86\x90\xe2\x86\x92 to step"},
     {"ctrl-l", "clear the screen"},
 };
 
@@ -824,6 +827,11 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
         viewport_scroll(-(tty_rows() / 2));
         return KEY_OK;
 
+    case TK_MOUSE_DOWN:
+        if (p->click)
+            p->click(p->click_ud, ev->row);
+        return KEY_OK;
+
     case TK_SCROLL_UP:
         viewport_scroll(3);
         return KEY_OK;
@@ -920,6 +928,12 @@ void prompt_set_cancel(struct prompt *p, int (*fn)(void *ud), void *ud)
 {
     p->cancel = fn;
     p->cancel_ud = ud;
+}
+
+void prompt_set_click(struct prompt *p, int (*fn)(void *ud, int row), void *ud)
+{
+    p->click = fn;
+    p->click_ud = ud;
 }
 
 void prompt_set_switcher(struct prompt *p, void (*fn)(void *ud), void *ud)

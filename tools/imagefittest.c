@@ -76,6 +76,28 @@ int main(void)
     if (cols < 1 || rows < 1 || cols > 4 || rows > 2)
         fail("a tiny pane still gets a box", 1600, 900, cols, rows);
 
+    /* the full-size viewer fills its box rather than stopping at 1:1 */
+    image_fill(160, 160, CW, CH, 80, 20, &cols, &rows);
+    if (rows != 20 || cols != 40)
+        fail("a small image is enlarged to fill the box", 160, 160, cols, rows);
+
+    image_fill(336, 432, CW, CH, 87, 52, &cols, &rows);
+    if (rows != 52 || cols < 78 || cols > 84)
+        fail("a small portrait photo fills the height", 336, 432, cols, rows);
+
+    image_fill(1600, 900, CW, CH, 80, 20, &cols, &rows);
+    {
+        int fit_cols = 0, fit_rows = 0;
+        image_fit(1600, 900, CW, CH, 80, 20, &fit_cols, &fit_rows);
+        if (cols != fit_cols || rows != fit_rows)
+            fail("an image larger than the box fits the same either way", 1600, 900,
+                 cols, rows);
+    }
+
+    image_fill(0, 0, CW, CH, 80, 20, &cols, &rows);
+    if (cols < 1 || rows < 1 || cols > 80 || rows > 20)
+        fail("an unknown image still gets a usable box", 0, 0, cols, rows);
+
     if (failures)
         return 1;
     fprintf(stderr, "imagefittest: all checks passed\n");

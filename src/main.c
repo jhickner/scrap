@@ -20,6 +20,7 @@
 #include "gitinfo.h"
 #include "hud.h"
 #include "image.h"
+#include "imageview.h"
 #include "livelist.h"
 #include "prompt.h"
 #include "restart.h"
@@ -238,6 +239,12 @@ static void side_tick(void *ud)
 static int idle_poll(void *ud)   { (void)ud; return workspace_polling(); }
 static void replay(void *ud)      { (void)ud; session_replay(workspace_current()); }
 static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
+static int clicked(void *ud, int row)
+{
+    (void)ud;
+    return imageview_click(row);
+}
+
 static void switcher(void *ud)
 {
     (void)ud;
@@ -700,6 +707,7 @@ int main(int argc, char **argv)
     prompt_set_restart(prompt, restart_pending, idle_restart, NULL);
     prompt_set_takeover(prompt, takeover_pending, takeover_run, prompt);
     prompt_set_switcher(prompt, switcher, NULL);
+    prompt_set_click(prompt, clicked, NULL);
     prompt_set_split(prompt, splitter, NULL);
     prompt_set_another(prompt, another, NULL);
     prompt_set_cycle(prompt, cycle_session, NULL);

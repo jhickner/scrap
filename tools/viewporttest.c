@@ -345,6 +345,49 @@ static void check_item_counting(struct screen *s)
         fail("each entry is on screen once");
 }
 
+static void placeholder_rows(void *ud, int cols)
+{
+    (void)ud;
+    (void)cols;
+    /* two rows of cells carrying image id 0x010203 in their foreground */
+    for (int r = 0; r < 2; r++)
+        ui_put("\x1b[38;2;1;2;3m\xf4\x8e\xbb\xae\xf4\x8e\xbb\xae\x1b[39m\n");
+}
+
+static void block_with_image(void *ud, int cols)
+{
+    ui_put("before\n");
+    placeholder_rows(ud, cols);
+    ui_put("after\n");
+}
+
+static void check_image_at_row(struct screen *s)
+{
+    viewport_clear();
+    set_size(80, 24);
+
+    say("one");
+    /* nested inside another item, which is where images actually land */
+    viewport_item_begin(&(struct viewport_entry){.render = block_with_image, .reflow = 1});
+    block_with_image(NULL, 80);
+    viewport_item_end();
+    chrome("CHROME-prompt", NULL);
+
+    refresh(s, 80, 24);
+
+    int at = 0;
+    for (int row = 1; row <= 24; row++)
+        if (viewport_image_at_row(row) == 0x010203u)
+            at++;
+    if (at != 2)
+        fail("both placeholder rows name the image");
+    for (int row = 1; row <= 24; row++)
+        if (viewport_image_at_row(row) != 0 && viewport_image_at_row(row) != 0x010203u)
+            fail("no other row names an image");
+    if (viewport_image_at_row(0) != 0 || viewport_image_at_row(99) != 0)
+        fail("a row off the screen names nothing");
+}
+
 static void nested_render(void *ud, int cols)
 {
     (void)ud;
@@ -658,6 +701,7 @@ int main(void)
     check_chrome_scrolls_off(&s);
     check_soft_wrap(&s);
     check_item_counting(&s);
+    check_image_at_row(&s);
     check_ends_blank();
     check_nested_capture(&s);
     check_reflow(&s);

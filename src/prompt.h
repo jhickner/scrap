@@ -59,6 +59,9 @@ void prompt_set_cancel(struct prompt *p, int (*fn)(void *ud), void *ud);
 
 void prompt_set_switcher(struct prompt *p, void (*fn)(void *ud), void *ud);
 
+/* what a click on a transcript row opens, given the 1-based screen row */
+void prompt_set_click(struct prompt *p, int (*fn)(void *ud, int row), void *ud);
+
 void prompt_set_board(struct prompt *p, void (*fn)(void *ud), void *ud);
 
 void prompt_set_another(struct prompt *p, void (*fn)(void *ud), void *ud);

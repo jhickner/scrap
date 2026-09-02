@@ -1014,6 +1014,37 @@ static void row_into_frame(struct frame *f, const char *s, int W)
 
 static char *blank_row(void) { return strdup(""); }
 
+/* The id of the image whose placeholder cells sit on a painted screen row.
+   Images render inside whatever item encloses them - an assistant's markdown
+   block, usually - so the item under a click does not name one. The cell does:
+   in placeholder mode the id travels in its foreground colour. */
+uint32_t viewport_image_at_row(int row)
+{
+    static const char placeholder[] = "\xf4\x8e\xbb\xae"; /* U+10EEEE */
+
+    int at = row - 1;
+    if (at < 0 || at >= shown.n)
+        return 0;
+
+    const char *s = shown.row[at];
+    uint32_t    fg = 0;
+    for (const char *p = s; *p;) {
+        if (p[0] == '\x1b' && p[1] == '[') {
+            int r, g, b, n = 0;
+            if (sscanf(p + 2, "38;2;%d;%d;%dm%n", &r, &g, &b, &n) == 3 && n > 0 &&
+                r >= 0 && r < 256 && g >= 0 && g < 256 && b >= 0 && b < 256) {
+                fg = (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
+                p += 2 + n;
+                continue;
+            }
+        }
+        if (strncmp(p, placeholder, 4) == 0)
+            return fg;
+        p++;
+    }
+    return 0;
+}
+
 static int window_pending(struct item *pending)
 {
     if (open_len && !open_wrapped) {
