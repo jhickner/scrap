@@ -35,6 +35,9 @@ static void term_move_cursor(int col, int row) { printf("\x1b[%d;%dH", row + 1, 
 
 #define KITTY_IMPLEMENTATION
 #include "vendor/kitty.h"
+
+#define IMAGEDEC_IMPLEMENTATION
+#include "vendor/imagedec.h"
 #include "text.h"
 
 #define IMAGE_MAX_BYTES (16u * 1024u * 1024u)
@@ -83,6 +86,16 @@ static unsigned char *load_file(const char *path, size_t *len)
         return NULL;
     }
     return buf;
+}
+
+static size_t peek_file(const char *path, unsigned char *buf, size_t want)
+{
+    int fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return 0;
+    ssize_t n = read(fd, buf, want);
+    close(fd);
+    return n > 0 ? (size_t)n : 0;
 }
 
 static uint32_t be32(const unsigned char *p)
@@ -156,6 +169,15 @@ static void cache_store(const char *path, time_t mtime, uint32_t id, int img_w, 
     slot->id = id;
     slot->img_w = img_w;
     slot->img_h = img_h;
+}
+
+static void cache_drop(const char *path, time_t mtime)
+{
+    for (int i = 0; i < cache_n; i++)
+        if (cache[i].mtime == mtime && strcmp(cache[i].path, path) == 0) {
+            cache[i] = cache[--cache_n];
+            return;
+        }
 }
 
 static pid_t convert_start(const char *path, char *tmp, size_t tmp_sz)
@@ -324,14 +346,37 @@ struct placed {
     uint32_t id;
     int      indent;
     int      img_w, img_h;
+    int      failed;
+    char    *path;
 };
 
 static void place(uint32_t id, int indent, int img_w, int img_h);
+
+static void placed_free(void *ud)
+{
+    struct placed *p = ud;
+    free(p->path);
+    free(p);
+}
+
+static void failed_line(const char *path, int indent)
+{
+    ui_pad(indent);
+    ui_esc(ui_style(UI_DIM));
+    ui_put("[image] ");
+    ui_put(path ? path : "");
+    ui_esc(ui_style(UI_RESET));
+    ui_put("\n");
+}
 
 static void placed_render(void *ud, int cols)
 {
     (void)cols;
     const struct placed *p = ud;
+    if (p->failed) {
+        failed_line(p->path, p->indent);
+        return;
+    }
     place(p->id, p->indent, p->img_w, p->img_h);
 }
 
@@ -345,6 +390,10 @@ static char *placed_encode(void *ud)
     cJSON_AddNumberToObject(o, "indent", p->indent);
     cJSON_AddNumberToObject(o, "w", p->img_w);
     cJSON_AddNumberToObject(o, "h", p->img_h);
+    if (p->failed)
+        cJSON_AddNumberToObject(o, "failed", 1);
+    if (p->path)
+        cJSON_AddStringToObject(o, "path", p->path);
     char *out = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     return out;
@@ -359,25 +408,29 @@ void image_placed_load(const cJSON *st)
     p->indent = scrollback_int(st, "indent");
     p->img_w = scrollback_int(st, "w");
     p->img_h = scrollback_int(st, "h");
+    p->failed = scrollback_int(st, "failed");
+    const char *path = scrollback_str(st, "path");
+    p->path = path && *path ? strdup(path) : NULL;
 
     unsigned mark = viewport_item_begin(&(struct viewport_entry){
-        .render = placed_render, .ud = p, .free_ud = free, .reflow = 1});
-    place(p->id, p->indent, p->img_w, p->img_h);
+        .render = placed_render, .ud = p, .free_ud = placed_free, .reflow = 1});
+    placed_render(p, 0);
     viewport_item_end();
     viewport_item_persist(mark, IMAGE_PLACED_KIND, placed_encode);
 }
 
-static unsigned place_kept(uint32_t id, int indent, int img_w, int img_h)
+static unsigned place_kept(uint32_t id, int indent, int img_w, int img_h, const char *path)
 {
     unsigned mark = 0;
-    struct placed *p = malloc(sizeof *p);
+    struct placed *p = calloc(1, sizeof *p);
     if (p) {
         p->id = id;
         p->indent = indent;
         p->img_w = img_w;
         p->img_h = img_h;
+        p->path = path ? strdup(path) : NULL;
         mark = viewport_item_begin(&(struct viewport_entry){
-        .render = placed_render, .ud = p, .free_ud = free, .reflow = 1});
+        .render = placed_render, .ud = p, .free_ud = placed_free, .reflow = 1});
     }
     place(id, indent, img_w, img_h);
     if (p) {
@@ -407,9 +460,37 @@ static int show_png(const unsigned char *data, size_t len, const char *path, tim
 
     uint32_t id = next_id();
     kg_transmit_png(id, data, len);
-    place_kept(id, indent, img_w, img_h);
+    place_kept(id, indent, img_w, img_h, path);
     if (path)
         cache_store(path, mtime, id, img_w, img_h);
+    return 1;
+}
+
+/* Formats the vendored decoder reads - jpeg above all - go straight to pixels,
+   scaled to the box on the way out of the decoder. */
+static int show_decoded(const char *path, time_t mtime, int indent)
+{
+    int probe_w = 0, probe_h = 0;
+    if (!imagedec_probe(path, &probe_w, &probe_h))
+        return 0;
+
+    int cols, rows;
+    if (!box_size(indent, probe_w, probe_h, &cols, &rows))
+        return 0;
+
+    int cw, ch, term_rows;
+    cell_pixels(&cw, &ch, &term_rows);
+
+    static const uint8_t bg[3] = {0, 0, 0};
+    Image im = {0};
+    if (!imagedec_load_fit(path, bg, cols * cw, rows * ch, &im))
+        return 0;
+
+    uint32_t id = next_id();
+    kg_transmit_ex(id, im.rgb, im.w, im.h, 3);
+    place_kept(id, indent, im.src_w, im.src_h, path);
+    cache_store(path, mtime, id, im.src_w, im.src_h);
+    imagedec_free(&im);
     return 1;
 }
 
@@ -419,7 +500,7 @@ static int start_convert(const char *path, time_t mtime, int indent)
     for (int i = 0; i < PENDING_MAX; i++) {
         if (pending[i].live && strcmp(pending[i].src, path) == 0 &&
             pending[i].mtime == mtime) {
-            place_kept(pending[i].id, indent, 0, 0);
+            place_kept(pending[i].id, indent, 0, 0, path);
             return 1;
         }
         if (!pending[i].live && slot < 0)
@@ -450,7 +531,7 @@ static int start_convert(const char *path, time_t mtime, int indent)
     snprintf(pending[slot].src, sizeof pending[slot].src, "%s", path);
     pending[slot].mtime = mtime;
 
-    pending[slot].mark = place_kept(id, indent, 0, 0);
+    pending[slot].mark = place_kept(id, indent, 0, 0, path);
     cache_store(path, mtime, id, 0, 0);
     return 1;
 }
@@ -466,36 +547,46 @@ int image_show(const char *path, int indent)
 
     struct img_cache *hit = cache_find(file, mtime);
     if (hit) {
-        place_kept(hit->id, indent, hit->img_w, hit->img_h);
+        place_kept(hit->id, indent, hit->img_w, hit->img_h, file);
         free(expanded);
         return 1;
     }
 
-    size_t len = 0;
-    unsigned char *data = load_file(file, &len);
+    unsigned char head[32];
+    size_t head_n = peek_file(file, head, sizeof head);
     int ok = 0;
-    if (data && is_png(data, len)) {
-        ok = show_png(data, len, file, mtime, indent);
-    } else if (data) {
-        ok = start_convert(file, mtime, indent);
+    if (head_n == 0) {
+        free(expanded);
+        return 0;
     }
-    free(data);
+
+    if (is_png(head, head_n)) {
+        size_t len = 0;
+        unsigned char *data = load_file(file, &len);
+        if (data)
+            ok = show_png(data, len, file, mtime, indent);
+        free(data);
+    } else {
+        ok = show_decoded(file, mtime, indent) || start_convert(file, mtime, indent);
+    }
     free(expanded);
     return ok;
 }
 
 static void finish_pending(struct pending *p, int status)
 {
+    int ok = 0;
+
     p->live = 0;
     if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
         size_t len = 0;
         unsigned char *data = load_file(p->tmp, &len);
         if (data) {
-            kg_transmit_png(p->id, data, len);
-
             int w = 0, h = 0;
             if (png_dims(data, len, &w, &h)) {
+                kg_transmit_png(p->id, data, len);
                 cache_store(p->src, p->mtime, p->id, w, h);
+                ok = 1;
                 struct placed *pl = p->mark ? viewport_item_data(p->mark) : NULL;
                 if (pl) {
                     pl->img_w = w;
@@ -505,6 +596,14 @@ static void finish_pending(struct pending *p, int status)
             }
         }
         free(data);
+    }
+    if (!ok) {
+        cache_drop(p->src, p->mtime);
+        struct placed *pl = p->mark ? viewport_item_data(p->mark) : NULL;
+        if (pl) {
+            pl->failed = 1;
+            viewport_item_update(p->mark);
+        }
     }
     discard_temp_png(p->tmp);
 }

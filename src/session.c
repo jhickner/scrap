@@ -2048,6 +2048,7 @@ static void drain_events(struct session *s)
         render_event(s, &e->ev);
         evcopy_free(e);
     }
+    image_poll();
     task_hold_expire(s);
     session_set_drawing(was);
 }

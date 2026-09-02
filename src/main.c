@@ -209,6 +209,9 @@ static int idle_render(void *ud)
 
     if (tg_pending())
         tty_wake();
+    struct session *drew = session_set_drawing(workspace_current());
+    image_poll();
+    session_set_drawing(drew);
     int busy = workspace_pump();
     status_tick();
     return busy;

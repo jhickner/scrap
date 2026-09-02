@@ -28,6 +28,25 @@ ifneq ($(shell uname -s),Darwin)
 LIBS += -lutil
 endif
 
+# libjpeg-turbo decodes a jpeg straight out of the DCT at 1/2, 1/4 or 1/8
+# scale, so drawing a camera photo costs a fraction of its pixels. Optional:
+# without it stb_image decodes every jpeg at full resolution. The static
+# archive is preferred so the binary carries no brew dylib with it.
+JPEG_PREFIX ?= $(shell pkg-config --variable=prefix libjpeg 2>/dev/null || \
+                       brew --prefix jpeg-turbo 2>/dev/null)
+ifneq ($(wildcard $(JPEG_PREFIX)/include/jpeglib.h),)
+  ALL_CFLAGS += -DPIX_HAVE_JPEG -I$(JPEG_PREFIX)/include
+  ifneq ($(wildcard $(JPEG_PREFIX)/lib/libjpeg.a),)
+    JPEG_LIBS := $(JPEG_PREFIX)/lib/libjpeg.a
+  else
+    JPEG_LIBS := -L$(JPEG_PREFIX)/lib -ljpeg
+  endif
+else ifneq ($(wildcard /usr/include/jpeglib.h),)
+  ALL_CFLAGS += -DPIX_HAVE_JPEG
+  JPEG_LIBS := -ljpeg
+endif
+LIBS += $(JPEG_LIBS)
+
 $(BIN): $(OBJ)
 	$(CC) $(ALL_CFLAGS) -o $@ $(OBJ) $(LDFLAGS) $(LIBS)
 
@@ -61,7 +80,7 @@ $(BUILD)/chrometest: tools/chrometest.c src/status.o src/chrome.o src/block.o sr
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
 $(BUILD)/imagerowtest: tools/imagerowtest.c src/image.o src/viewport.o src/ui.o src/tty.o src/settings.o src/scrollback.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
-	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(JPEG_LIBS)
 
 $(BUILD)/overlaytest: tools/overlaytest.c src/overlay.o src/menu.o src/ui.o src/viewport.o src/tty.o src/settings.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
@@ -79,7 +98,7 @@ $(BUILD)/gitinfotest: tools/gitinfotest.c src/gitinfo.o src/text.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
 $(BUILD)/imagefittest: tools/imagefittest.c src/image.o src/ui.o src/viewport.o src/block.o src/settings.o src/tty.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
-	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(JPEG_LIBS)
 
 $(BUILD)/reflowtest: tools/reflowtest.c src/ui.o src/viewport.o src/block.o src/settings.o src/tty.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
@@ -121,10 +140,10 @@ $(BUILD)/agenttabstest: tools/agenttabstest.c src/agenttabs.o src/text.o src/ven
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
 $(BUILD)/imagetest: tools/imagetest.c src/image.o src/md.o src/ui.o src/viewport.o src/block.o src/settings.o src/tty.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)
-	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(JPEG_LIBS)
 
 $(BUILD)/mdtest: tools/mdtest.c src/md.o src/ui.o src/viewport.o src/block.o src/settings.o src/tty.o src/text.o src/image.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
-	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(JPEG_LIBS)
 
 $(BUILD)/pastetest: tools/pastetest.c src/paste.o src/text.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
