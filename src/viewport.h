@@ -55,6 +55,10 @@ void viewport_chrome_row(int at, const char *s);
 
 void viewport_chrome_keep(int keep);
 
+/* hold the transcript still under a modal, which owns every row: the scroll
+   position is restored when the pin comes off */
+void viewport_chrome_pin(int on);
+
 int viewport_ends_blank(void);
 
 void viewport_clear(void);

@@ -388,6 +388,92 @@ static void check_image_at_row(struct screen *s)
         fail("a row off the screen names nothing");
 }
 
+/* the id 0x010203 is carried in the placeholder cells' foreground */
+static int row_has_image(struct screen *s, int row)
+{
+    return strstr(row_text(s, row - 1), "\xf4\x8e\xbb\xae") != NULL;
+}
+
+static void check_image_at_row_scrolled(struct screen *s)
+{
+    viewport_clear();
+    set_size(80, 24);
+
+    for (int i = 0; i < 30; i++) {
+        char line[64];
+        snprintf(line, sizeof line, "filler %d", i);
+        say(line);
+    }
+    viewport_item_begin(&(struct viewport_entry){.render = block_with_image, .reflow = 1});
+    block_with_image(NULL, 80);
+    viewport_item_end();
+    for (int i = 0; i < 30; i++) {
+        char line[64];
+        snprintf(line, sizeof line, "tail %d", i);
+        say(line);
+    }
+    chrome("CHROME-prompt", NULL);
+
+    refresh(s, 80, 24);
+
+    for (int back = 0; back < 40; back++) {
+        if (back)
+            viewport_scroll(1);
+        redraw(s);
+        for (int row = 1; row <= 24; row++) {
+            int      drawn = row_has_image(s, row);
+            uint32_t named = viewport_image_at_row(row);
+            if (drawn && named != 0x010203u)
+                fail("a drawn image row names the image while scrolled");
+            if (!drawn && named != 0)
+                fail("a row without the image names nothing while scrolled");
+        }
+    }
+    viewport_scroll_end();
+    redraw(s);
+}
+
+static void check_modal_holds_the_screen(struct screen *s)
+{
+    viewport_clear();
+    set_size(80, 24);
+
+    for (int i = 0; i < 60; i++) {
+        char line[64];
+        snprintf(line, sizeof line, "transcript %d", i);
+        say(line);
+    }
+    chrome("CHROME-prompt", NULL);
+    refresh(s, 80, 24);
+
+    viewport_scroll(20);
+    redraw(s);
+    if (strstr(row_text(s, 23), "CHROME-prompt"))
+        fail("scrolling back takes the prompt off screen");
+
+    /* a modal claims every row: it must show even though the transcript is
+       scrolled back past where the chrome would sit */
+    char *rows[3] = {"MODAL-title", "MODAL-body", "MODAL-foot"};
+    viewport_chrome_pin(1);
+    viewport_chrome(rows, 3, 0, -1);
+    redraw(s);
+
+    int seen = 0;
+    for (int row = 0; row < 24; row++)
+        if (strstr(row_text(s, row), "MODAL-body"))
+            seen = 1;
+    if (!seen)
+        fail("a modal opened while scrolled back is on screen");
+
+    /* and closing it puts the reader back where they were */
+    viewport_chrome_pin(0);
+    chrome("CHROME-prompt", NULL);
+    redraw(s);
+    if (!strstr(row_text(s, 23), "transcript 40") ||
+        !strstr(row_text(s, 0), "transcript 17"))
+        fail("closing a modal returns to the scrolled position");
+}
+
 static void nested_render(void *ud, int cols)
 {
     (void)ud;
@@ -702,6 +788,8 @@ int main(void)
     check_soft_wrap(&s);
     check_item_counting(&s);
     check_image_at_row(&s);
+    check_image_at_row_scrolled(&s);
+    check_modal_holds_the_screen(&s);
     check_ends_blank();
     check_nested_capture(&s);
     check_reflow(&s);

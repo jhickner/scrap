@@ -35,7 +35,11 @@ static int split(char *body, char **line, int max)
 
 void block_fill(int on) { fill = on ? 1 : 0; }
 
-void block_pin(int on) { pinned = on ? 1 : 0; }
+void block_pin(int on)
+{
+    pinned = on ? 1 : 0;
+    viewport_chrome_pin(pinned);
+}
 
 void block_begin(void)
 {

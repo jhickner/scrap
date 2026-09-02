@@ -81,6 +81,13 @@ static int painted_cols;
 static unsigned anchor_id;
 static int      anchor_skip;
 
+/* a modal owns the whole screen, so the transcript under it holds still: the
+   scroll position is put aside and handed back when the modal goes */
+static int      pinned;
+static int      pin_scrolled;
+static unsigned pin_anchor;
+static int      pin_skip;
+
 /* every input to window_geometry bumps this; the cached geometry carries the
    epoch it was measured at */
 static unsigned layout_epoch = 1;
@@ -96,6 +103,28 @@ static int sync_frames(void)
     if (on < 0)
         on = getenv("TMUX") == NULL;
     return on;
+}
+
+void viewport_chrome_pin(int on)
+{
+    on = !!on;
+    if (on == pinned)
+        return;
+    pinned = on;
+    if (on) {
+        pin_scrolled = scrolled;
+        pin_anchor = anchor_id;
+        pin_skip = anchor_skip;
+        scrolled = 0;
+    } else {
+        scrolled = pin_scrolled;
+        anchor_id = pin_anchor;
+        anchor_skip = pin_skip;
+    }
+    if (on)
+        anchor_id = 0, anchor_skip = 0;
+    dirty = 1;
+    layout_changed();
 }
 
 void viewport_sync_placeholders(int on)
@@ -1446,6 +1475,8 @@ void viewport_chrome_clear(void)
 
 void viewport_scroll(int delta)
 {
+    if (pinned)
+        return;
     anchor_id = 0;
     scrolled += delta;
     if (scrolled < 0)
@@ -1457,6 +1488,9 @@ void viewport_scroll(int delta)
 
 void viewport_scroll_end(void)
 {
+    pin_scrolled = 0;
+    if (pinned)
+        return;
     anchor_id = 0;
     scrolled = 0;
     dirty = 1;
