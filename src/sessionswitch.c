@@ -16,7 +16,6 @@
 #include "hud.h"
 #include "boardwork.h"
 #include "livelist.h"
-#include "menu.h"
 #include "models.h"
 #include "parent.h"
 #include "pick.h"
@@ -373,21 +372,6 @@ static void yank(const struct live_session *v)
     ui_flush();
 }
 
-/* the menu the new-session row opens: a session on the defaults, or one whose
-   backend, model and opening prompt are asked for */
-enum { NEW_DEFAULT, NEW_CUSTOM };
-
-static struct menu new_menu;
-
-static void new_menu_open(void)
-{
-    menu_clear(&new_menu);
-    menu_add(&new_menu, "default", 0);
-    menu_add(&new_menu, "custom", 0);
-    new_menu.sel = NEW_DEFAULT;
-    new_menu.open = new_menu.n > 0;
-}
-
 static int spawn_new(const char *backend, const char *model, const char *prompt)
 {
     struct session *here = workspace_current();
@@ -443,6 +427,21 @@ static int new_custom(void)
         free(line);
         return again;
     }
+}
+
+/* the new-session row opens this: a session on the defaults, or one whose
+   backend, model and opening prompt are asked for */
+static int open_new(void)
+{
+    const struct pick_item how[] = {
+        {"default", "the default backend and model"},
+        {"custom", "a backend, a model and a prompt"},
+    };
+
+    int which = pick_run("a new session", how, 2, 0);
+    if (which < 0)
+        return 1;
+    return which == 1 ? new_custom() : new_default();
 }
 
 static void ask_new(const struct row *r, const struct live_session *live)
@@ -689,8 +688,7 @@ static int switch_once(void)
     struct listing listing = {rows, n, spin, marks, icons, &live, &nlive, 0, 0};
     sync_columns(&listing);
     listing.sig = listing_sig(&listing);
-    struct pick_live shown = {.heading = heading, .menu = &new_menu,
-                              .spin = spin, .mark = marks,
+    struct pick_live shown = {.heading = heading, .spin = spin, .mark = marks,
                               .icon = icons, .tick = relist, .ud = &listing};
     int picked = pick_run_live(title, items, n, initial, &shown, PICK_SEARCH_SLASH,
                                shortcuts, &pressed);
@@ -700,20 +698,13 @@ static int switch_once(void)
         chosen = rows[picked];
 
     if (pressed > 0 && pressed < 0x20 && pressed != '\n' && pressed != '\t' &&
-        pressed != PICK_KEY_RIGHT && pressed != PICK_KEY_MENU)
+        pressed != PICK_KEY_RIGHT)
         pressed |= 0x60;
 
     if (pressed == PICK_KEY_RIGHT)
         pressed = chosen.kind == ROW_LIVE ? KEY_GO
                 : chosen.kind == ROW_NEW  ? '\n'
                                           : 0;
-
-    /* the menu belongs to the new-session row alone; enter on any other row is
-       the plain choice */
-    if (pressed == PICK_KEY_MENU && chosen.kind != ROW_NEW) {
-        new_menu.open = 0;
-        pressed = 0;
-    }
 
     free(items);
     free(rows);
@@ -735,7 +726,6 @@ static int switch_once(void)
     }
 
     if (picked < 0) {
-        new_menu.open = 0;
         free(live);
         return 0;
     }
@@ -754,23 +744,15 @@ static int switch_once(void)
         return 1;
     }
 
-    if (chosen.kind == ROW_NEW &&
-        (pressed == PICK_KEY_MENU || pressed == KEY_GO || pressed == '\n')) {
+    if (chosen.kind == ROW_NEW && (pressed == KEY_GO || pressed == '\n')) {
+        int again = open_new();
         resume_row = picked;
-        if (!new_menu.open) {
-            new_menu_open();
-            free(live);
-            return 1;
-        }
-        int what = new_menu.sel;
-        new_menu.open = 0;
-        int again = what == NEW_CUSTOM ? new_custom() : new_default();
         free(live);
         return again;
     }
 
     if (pressed == KEY_NEW) {
-        int again = new_default();
+        int again = open_new();
         resume_row = picked;
         free(live);
         return again;
@@ -815,7 +797,12 @@ static int switch_once(void)
         yank(&live[chosen.at]);
         break;
     case ROW_NEW:
-        break;
+        {
+            int again = open_new();
+            resume_row = picked;
+            free(live);
+            return again;
+        }
     case ROW_HEAD:
         break;
     }
