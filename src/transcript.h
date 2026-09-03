@@ -22,6 +22,7 @@ void transcript_clear(struct transcript *t);
 int  transcript_add(struct transcript *t, const char *backend, const char *user,
                     const char *assistant, int interrupted);
 
-char *transcript_handoff(const struct transcript *t, size_t max_bytes);
+char *transcript_handoff(const struct transcript *t, size_t max_bytes,
+                         const char *id);
 
 #endif

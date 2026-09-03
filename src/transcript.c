@@ -11,8 +11,9 @@ static const char INTRO[] =
     "backend. The transcript below is prior dialogue, not a new request. "
     "Use it to preserve the user's goals, decisions, and unfinished work. "
     "Do not answer the transcript itself; wait for and answer the next user "
-    "message. The current workspace is shared with the prior backend and its "
-    "files are authoritative.\n\n";
+    "message. Do not load or resume a different session from this directory. "
+    "The current workspace is shared with the prior backend and its files are "
+    "authoritative.\n\n";
 
 static void turn_free(struct transcript_turn *turn)
 {
@@ -91,15 +92,33 @@ static int append_text(char **out, size_t *length, size_t *capacity, const char 
     return 1;
 }
 
-char *transcript_handoff(const struct transcript *t, size_t max_bytes)
+char *transcript_handoff(const struct transcript *t, size_t max_bytes,
+                         const char *id)
 {
     if (!t || t->count == 0)
         return NULL;
     if (max_bytes < sizeof INTRO + 256)
         max_bytes = sizeof INTRO + 256;
 
+    char named[1024];
+    const char *intro = INTRO;
+    if (id && *id) {
+        snprintf(named, sizeof named,
+                 "You are continuing session %s, which began in another "
+                 "coding-agent backend. The transcript below is prior dialogue "
+                 "from that session, not a new request and not another session "
+                 "in this directory. Use it to preserve the user's goals, "
+                 "decisions, and unfinished work. Do not answer the transcript "
+                 "itself; wait for and answer the next user message. Do not "
+                 "load or resume a different session from this directory. The "
+                 "current workspace is shared with the prior backend and its "
+                 "files are authoritative.\n\n",
+                 id);
+        intro = named;
+    }
+
     size_t first = t->count;
-    size_t used = sizeof INTRO;
+    size_t used = strlen(intro);
     for (size_t i = t->count; i > 0; i--) {
         size_t need = turn_size(&t->turns[i - 1]);
         if (used + need > max_bytes && first < t->count)
@@ -110,7 +129,7 @@ char *transcript_handoff(const struct transcript *t, size_t max_bytes)
 
     char *out = NULL;
     size_t length = 0, capacity = 0;
-    if (!append_text(&out, &length, &capacity, INTRO))
+    if (!append_text(&out, &length, &capacity, intro))
         return NULL;
     if (first > 0) {
         char omitted[128];

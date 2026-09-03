@@ -24,6 +24,7 @@
 #include "md.h"
 #include "models.h"
 #include "parent.h"
+#include "sessionload.h"
 #include "sessionprefs.h"
 #include "sessionview.h"
 #include "viewport.h"
@@ -1153,7 +1154,12 @@ int session_switch_backend(struct session *s, const char *backend)
     if (strcmp(s->backend, backend) == 0)
         return 1;
 
-    char *handoff = transcript_handoff(&s->transcript, 128 * 1024);
+    struct transcript disk = {0};
+    const struct transcript *src = &s->transcript;
+    if (s->id[0] && sessionload_fill(&disk, s->backend, s->cwd, s->id))
+        src = &disk;
+    char *handoff = transcript_handoff(src, 128 * 1024, s->id[0] ? s->id : NULL);
+    transcript_free(&disk);
     backend_opts o = {0};
     o.name = backend;
     o.system = handoff;
@@ -1472,6 +1478,8 @@ int session_resume(struct session *s, const char *id)
     if (!restart(s, id))
         return 0;
     reset_turns(s, 0);
+    if (s->id[0])
+        sessionload_fill(&s->transcript, s->backend, s->cwd, s->id);
     return 1;
 }
 

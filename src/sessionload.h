@@ -12,4 +12,8 @@ int sessionload_replay(const char *backend, const char *cwd, const char *id,
 struct session;
 int sessionload_into(const struct session *s);
 
+struct transcript;
+int sessionload_fill(struct transcript *t, const char *backend, const char *cwd,
+                     const char *id);
+
 #endif

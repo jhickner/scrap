@@ -15,22 +15,31 @@ static void require(int condition, const char *message)
 int main(void)
 {
     struct transcript t = {0};
-    require(transcript_handoff(&t, 4096) == NULL, "empty transcript made a handoff");
+    require(transcript_handoff(&t, 4096, NULL) == NULL, "empty transcript made a handoff");
     require(transcript_add(&t, "claude", "first question", "first answer", 0),
             "could not add first turn");
     require(transcript_add(&t, "codex", "latest question", "latest answer", 1),
             "could not add latest turn");
 
-    char *all = transcript_handoff(&t, 4096);
+    char *all = transcript_handoff(&t, 4096, NULL);
     require(all != NULL, "could not build handoff");
     require(strstr(all, "prior dialogue, not a new request") != NULL,
             "continuation instructions missing");
+    require(strstr(all, "Do not load or resume a different session") != NULL,
+            "directory warning missing");
     require(strstr(all, "first question") != NULL && strstr(all, "first answer") != NULL,
             "first turn missing");
     require(strstr(all, "latest question") != NULL && strstr(all, "latest answer") != NULL,
             "latest turn missing");
     require(strstr(all, "codex, interrupted") != NULL, "turn metadata missing");
     free(all);
+
+    char *named = transcript_handoff(&t, 4096, "sess-1111");
+    require(named != NULL, "could not build named handoff");
+    require(strstr(named, "session sess-1111") != NULL, "session id missing");
+    require(strstr(named, "not another session in this directory") != NULL,
+            "session pinning missing");
+    free(named);
 
     char large[1200];
     memset(large, 'x', sizeof large - 1);
@@ -39,7 +48,7 @@ int main(void)
     require(transcript_add(&t, "claude", large, large, 0), "could not add old turn");
     require(transcript_add(&t, "claude", "keep this", "and this", 0),
             "could not add recent turn");
-    char *bounded = transcript_handoff(&t, 900);
+    char *bounded = transcript_handoff(&t, 900, NULL);
     require(bounded != NULL, "could not build bounded handoff");
     require(strstr(bounded, "omitted 1 older turn") != NULL, "omission not reported");
     require(strstr(bounded, "keep this") != NULL && strstr(bounded, "and this") != NULL,

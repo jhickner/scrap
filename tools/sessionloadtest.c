@@ -9,6 +9,7 @@
 #include "session.h"
 #include "sessionload.h"
 #include "sessionlist.h"
+#include "transcript.h"
 #include "sessionview.h"
 #include "toolstyle.h"
 #include "ui.h"
@@ -27,19 +28,18 @@ static void expect(int ok, const char *what)
     }
 }
 
+static char fixture_dir[1024];
+
 int sessionlist_available(const char *backend)
 {
-    (void)backend;
-    return 0;
+    return backend && !strcmp(backend, "claude");
 }
 
 int sessionlist_dir(const char *backend, const char *cwd, char *out, size_t size)
 {
     (void)backend;
     (void)cwd;
-    (void)out;
-    (void)size;
-    return 0;
+    return fixture_dir[0] && snprintf(out, size, "%s", fixture_dir) < (int)size;
 }
 
 const char *session_id(const struct session *s) { (void)s; return NULL; }
@@ -151,6 +151,54 @@ int main(void)
     expect(users == 1, "codex user message");
     expect(assistants == 1, "codex assistant message");
     expect(tools == 1, "codex tool call");
+
+    snprintf(fixture_dir, sizeof fixture_dir, "%s/claude", root);
+    expect(mkdir(fixture_dir, 0700) == 0, "claude fixture dir");
+    char mine[1200], other[1200];
+    snprintf(mine, sizeof mine, "%s/session-mine.jsonl", fixture_dir);
+    snprintf(other, sizeof other, "%s/session-other.jsonl", fixture_dir);
+    FILE *mine_f = fopen(mine, "w");
+    FILE *other_f = fopen(other, "w");
+    expect(mine_f != NULL && other_f != NULL, "claude fixtures");
+    if (mine_f && other_f) {
+        fputs("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":"
+              "[{\"type\":\"text\",\"text\":\"the session I am in\"}]}}\n",
+              mine_f);
+        fputs("{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\","
+              "\"content\":[{\"type\":\"text\",\"text\":\"work on this one\"}]}}\n",
+              mine_f);
+        fputs("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":"
+              "[{\"type\":\"text\",\"text\":\"the other session\"}]}}\n",
+              other_f);
+        fputs("{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\","
+              "\"content\":[{\"type\":\"text\",\"text\":\"the wrong transcript\"}]}}\n",
+              other_f);
+        fclose(mine_f);
+        fclose(other_f);
+    }
+
+    struct transcript filled = {0};
+    expect(sessionload_fill(&filled, "claude", "/worktree", "session-mine") == 1,
+           "fill this session");
+    expect(filled.count == 1, "one turn from this session");
+    expect(filled.turns && !strcmp(filled.turns[0].user, "the session I am in"),
+           "this session's user");
+    expect(filled.turns && !strcmp(filled.turns[0].assistant, "work on this one"),
+           "this session's assistant");
+    expect(filled.turns && !strstr(filled.turns[0].user, "the other session") &&
+               !strstr(filled.turns[0].assistant, "the wrong transcript"),
+           "other session stayed out");
+    char *handoff = transcript_handoff(&filled, 4096, "session-mine");
+    expect(handoff && strstr(handoff, "session session-mine"), "handoff names this id");
+    expect(handoff && strstr(handoff, "the session I am in"), "handoff has this turn");
+    expect(handoff && !strstr(handoff, "the wrong transcript"),
+           "handoff omitted the other session");
+    free(handoff);
+    transcript_free(&filled);
+
+    unlink(mine);
+    unlink(other);
+    rmdir(fixture_dir);
 
     unlink(path);
     rmdir(day);

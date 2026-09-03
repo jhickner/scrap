@@ -11,6 +11,7 @@
 #include "sessionlist.h"
 #include "session.h"
 #include "sessionview.h"
+#include "transcript.h"
 #include "toolstyle.h"
 #include "ui.h"
 #include "viewport.h"
@@ -200,6 +201,72 @@ static int user_text(const char *text, char *out, size_t size)
         !strncmp(out, "Caveat:", 7) || out[0] == '<')
         return 0;
     return 1;
+}
+
+static int grow_text(char **dst, size_t *len, size_t *cap, const char *src)
+{
+    if (!src || !*src)
+        return 1;
+    size_t n = strlen(src);
+    if (*len + n + 1 > *cap) {
+        size_t next = *cap ? *cap : 256;
+        while (next < *len + n + 1)
+            next *= 2;
+        char *grown = realloc(*dst, next);
+        if (!grown)
+            return 0;
+        *dst = grown;
+        *cap = next;
+    }
+    memcpy(*dst + *len, src, n + 1);
+    *len += n;
+    return 1;
+}
+
+static int content_plain(const cJSON *content, char **dst, size_t *len, size_t *cap)
+{
+    if (cJSON_IsString(content))
+        return grow_text(dst, len, cap, content->valuestring);
+    if (!cJSON_IsArray(content))
+        return 1;
+
+    const cJSON *block;
+    cJSON_ArrayForEach(block, content) {
+        const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(block, "type"));
+        const char *body = cJSON_GetStringValue(cJSON_GetObjectItem(block, "text"));
+        if (!kind || !body || !*body)
+            continue;
+        if (strcmp(kind, "text") && strcmp(kind, "input_text") &&
+            strcmp(kind, "output_text"))
+            continue;
+        if (*len && !grow_text(dst, len, cap, "\n"))
+            return 0;
+        if (!grow_text(dst, len, cap, body))
+            return 0;
+    }
+    return 1;
+}
+
+static char *user_from(const cJSON *content)
+{
+    char *plain = NULL;
+    size_t len = 0, cap = 0;
+    if (!content_plain(content, &plain, &len, &cap) || !plain) {
+        free(plain);
+        return NULL;
+    }
+    char *out = malloc(len + 1);
+    if (!out) {
+        free(plain);
+        return NULL;
+    }
+    if (!user_text(plain, out, len + 1)) {
+        free(plain);
+        free(out);
+        return NULL;
+    }
+    free(plain);
+    return out;
 }
 
 static void draw_tool(const cJSON *block, const char *cwd)
@@ -394,4 +461,56 @@ int sessionload_replay(const char *backend, const char *cwd, const char *id,
     fclose(f);
     ui_flush();
     return drawn;
+}
+
+int sessionload_fill(struct transcript *t, const char *backend, const char *cwd,
+                     const char *id)
+{
+    char path[4096];
+    if (!t || !sessionload_path(backend, cwd, id, path, sizeof path))
+        return 0;
+
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return 0;
+
+    char   *line = NULL;
+    size_t  cap = 0;
+    ssize_t n;
+    char   *user = NULL, *assistant = NULL;
+    size_t  alen = 0, acap = 0;
+    size_t  before = t->count;
+
+    while ((n = getline(&line, &cap, f)) > 0) {
+        if (n > LINE_MAX)
+            continue;
+        cJSON *ev = cJSON_ParseWithLength(line, (size_t)n);
+        if (!ev)
+            continue;
+
+        const cJSON *content = NULL;
+        enum role role = line_message(ev, &content);
+        if (role == ROLE_USER) {
+            char *got = user_from(content);
+            if (got) {
+                if (user && assistant)
+                    transcript_add(t, backend, user, assistant, 0);
+                free(user);
+                free(assistant);
+                user = got;
+                assistant = NULL;
+                alen = acap = 0;
+            }
+        } else if (role == ROLE_ASSISTANT && user) {
+            content_plain(content, &assistant, &alen, &acap);
+        }
+        cJSON_Delete(ev);
+    }
+    if (user && assistant && *assistant)
+        transcript_add(t, backend, user, assistant, 0);
+    free(user);
+    free(assistant);
+    free(line);
+    fclose(f);
+    return (int)(t->count - before);
 }
