@@ -699,7 +699,6 @@ static int switch_once(void)
         struct row *r = &rows[n];
         r->kind = ROW_NEW;
         snprintf(r->label, sizeof r->label, "+ new session");
-        snprintf(r->detail, sizeof r->detail, "default, or a backend and model");
         heading[n++] = PICK_APART;
     }
 
