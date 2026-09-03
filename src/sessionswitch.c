@@ -16,6 +16,7 @@
 #include "hud.h"
 #include "boardwork.h"
 #include "livelist.h"
+#include "menu.h"
 #include "models.h"
 #include "parent.h"
 #include "pick.h"
@@ -48,7 +49,6 @@ enum row_kind {
     ROW_TAB,
     ROW_LIVE,
     ROW_NEW,
-    ROW_ASK,
     ROW_HEAD,
 };
 
@@ -373,7 +373,45 @@ static void yank(const struct live_session *v)
     ui_flush();
 }
 
-static int open_new(void)
+/* the menu the new-session row opens: a session on the defaults, or one whose
+   backend, model and opening prompt are asked for */
+enum { NEW_DEFAULT, NEW_CUSTOM };
+
+static struct menu new_menu;
+
+static void new_menu_open(void)
+{
+    menu_clear(&new_menu);
+    menu_add(&new_menu, "default", 0);
+    menu_add(&new_menu, "custom", 0);
+    new_menu.sel = NEW_DEFAULT;
+    new_menu.open = new_menu.n > 0;
+}
+
+static int spawn_new(const char *backend, const char *model, const char *prompt)
+{
+    struct session *here = workspace_current();
+    int at = workspace_spawn(backend, model, NULL, here ? session_cwd(here) : NULL,
+                             NULL);
+    if (at < 0) {
+        ui_error("could not start the %s CLI", backend);
+        ui_put("\n");
+        ui_flush();
+        return 0;
+    }
+    if (prompt && *prompt)
+        workspace_send(at, prompt, NULL);
+    hud_print(workspace_current());
+    ui_flush();
+    return 0;
+}
+
+static int new_default(void)
+{
+    return spawn_new(cmd_default_backend(), NULL, NULL);
+}
+
+static int new_custom(void)
 {
     int count = 0, initial = 0;
     const struct pick_item *choices = cmd_backend_choices(&count);
@@ -398,16 +436,12 @@ static int open_new(void)
             model = list[pickedm].label;
         }
 
-        struct session *here = workspace_current();
-        if (workspace_spawn(backend, model, NULL, here ? session_cwd(here) : NULL, NULL) < 0) {
-            ui_error("could not start the %s CLI", backend);
-            ui_put("\n");
-            ui_flush();
-            return 0;
-        }
-        hud_print(workspace_current());
-        ui_flush();
-        return 0;
+        char *line = ask_run("a prompt to start with, or nothing", NULL);
+        if (!line)
+            continue;
+        int again = spawn_new(backend, model, line);
+        free(line);
+        return again;
     }
 }
 
@@ -624,16 +658,8 @@ static int switch_once(void)
         struct row *r = &rows[n];
         r->kind = ROW_NEW;
         snprintf(r->label, sizeof r->label, "+ new session");
-        snprintf(r->detail, sizeof r->detail, "pick a backend and model");
+        snprintf(r->detail, sizeof r->detail, "default, or a backend and model");
         heading[n++] = PICK_APART;
-    }
-
-    if (n < MAX_ROWS) {
-        struct row *r = &rows[n];
-        r->kind = ROW_ASK;
-        snprintf(r->label, sizeof r->label, "+ new session, with a prompt");
-        snprintf(r->detail, sizeof r->detail, "started here and left running");
-        heading[n++] = 0;
     }
 
     struct pick_item *items = calloc((size_t)n, sizeof *items);
@@ -663,7 +689,8 @@ static int switch_once(void)
     struct listing listing = {rows, n, spin, marks, icons, &live, &nlive, 0, 0};
     sync_columns(&listing);
     listing.sig = listing_sig(&listing);
-    struct pick_live shown = {.heading = heading, .spin = spin, .mark = marks,
+    struct pick_live shown = {.heading = heading, .menu = &new_menu,
+                              .spin = spin, .mark = marks,
                               .icon = icons, .tick = relist, .ud = &listing};
     int picked = pick_run_live(title, items, n, initial, &shown, PICK_SEARCH_SLASH,
                                shortcuts, &pressed);
@@ -673,11 +700,20 @@ static int switch_once(void)
         chosen = rows[picked];
 
     if (pressed > 0 && pressed < 0x20 && pressed != '\n' && pressed != '\t' &&
-        pressed != PICK_KEY_RIGHT)
+        pressed != PICK_KEY_RIGHT && pressed != PICK_KEY_MENU)
         pressed |= 0x60;
 
     if (pressed == PICK_KEY_RIGHT)
-        pressed = chosen.kind == ROW_LIVE ? KEY_GO : 0;
+        pressed = chosen.kind == ROW_LIVE ? KEY_GO
+                : chosen.kind == ROW_NEW  ? '\n'
+                                          : 0;
+
+    /* the menu belongs to the new-session row alone; enter on any other row is
+       the plain choice */
+    if (pressed == PICK_KEY_MENU && chosen.kind != ROW_NEW) {
+        new_menu.open = 0;
+        pressed = 0;
+    }
 
     free(items);
     free(rows);
@@ -699,6 +735,7 @@ static int switch_once(void)
     }
 
     if (picked < 0) {
+        new_menu.open = 0;
         free(live);
         return 0;
     }
@@ -717,8 +754,23 @@ static int switch_once(void)
         return 1;
     }
 
+    if (chosen.kind == ROW_NEW &&
+        (pressed == PICK_KEY_MENU || pressed == KEY_GO || pressed == '\n')) {
+        resume_row = picked;
+        if (!new_menu.open) {
+            new_menu_open();
+            free(live);
+            return 1;
+        }
+        int what = new_menu.sel;
+        new_menu.open = 0;
+        int again = what == NEW_CUSTOM ? new_custom() : new_default();
+        free(live);
+        return again;
+    }
+
     if (pressed == KEY_NEW) {
-        int again = open_new();
+        int again = new_default();
         resume_row = picked;
         free(live);
         return again;
@@ -735,15 +787,6 @@ static int switch_once(void)
             jump(&live[chosen.at]);
         } else if (chosen.kind == ROW_TAB) {
             workspace_show(chosen.at);
-        } else if (chosen.kind == ROW_ASK) {
-            ask_new(&chosen, live);
-            free(live);
-            return 1;
-        } else if (chosen.kind == ROW_NEW) {
-            int again = open_new();
-            resume_row = picked;
-            free(live);
-            return again;
         }
         free(live);
         return 0;
@@ -772,16 +815,7 @@ static int switch_once(void)
         yank(&live[chosen.at]);
         break;
     case ROW_NEW:
-        {
-            int again = open_new();
-            resume_row = picked;
-            free(live);
-            return again;
-        }
-    case ROW_ASK:
-        ask_new(&chosen, live);
-        free(live);
-        return 1;
+        break;
     case ROW_HEAD:
         break;
     }
