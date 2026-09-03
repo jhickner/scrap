@@ -1074,7 +1074,9 @@ const char *tg_system_note(void)
         "answers short and say the answer first. To show them a picture — a "
         "render, a screenshot, a photo — write it as a markdown image with an "
         "absolute local path, ![alt](/abs/path.png), and it is sent as a photo; "
-        "the file has to be on this machine.\n");
+        "the file has to be on this machine. That only sends the image to them; "
+        "it does not show it to you. To look at an image yourself, read it with "
+        "the Read tool first, then write the markdown.\n");
 
     if (server && art_base[0])
         appendf(note, sizeof note, &n,

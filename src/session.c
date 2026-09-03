@@ -1098,7 +1098,9 @@ static Backend *agent(struct session *s)
           "path — ![alt](/abs/path.png) — alone on its own line. PNG is drawn "
           "directly; other formats are converted first. Use this whenever an image "
           "would answer better than words: a render you just produced, a screenshot, "
-          "a diagram, a photo the user asked about."
+          "a diagram, a photo the user asked about. This only displays the image to "
+          "the user; it does not show it to you. To look at an image yourself, read "
+          "it with the Read tool first, then write the markdown."
         : NULL;
 
     char *joined = NULL;
