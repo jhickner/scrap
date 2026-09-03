@@ -331,6 +331,15 @@ void chrome_paint(void)
     block_end(first + caret_row, caret_col);
 }
 
+int chrome_tab_at(int row, int col)
+{
+    int top = viewport_chrome_top();
+
+    if (tab_row < 0 || top < 0 || row - 1 - top != tab_row)
+        return -1;
+    return tabbar_hit(col);
+}
+
 int chrome_paint_spin(void)
 {
     if (spin_row < 0 || !status_spinning() || ui_columns() < 24 || !block_have())

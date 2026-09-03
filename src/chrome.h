@@ -9,6 +9,9 @@ void chrome_paint(void);
 
 int  chrome_paint_spin(void);
 
+/* the session a click on the tab bar names, or -1 for a click anywhere else */
+int  chrome_tab_at(int row, int col);
+
 void chrome_clear(void);
 
 void chrome_keep_above(void);

@@ -44,6 +44,10 @@ static unsigned digest(void)
 
 static unsigned painted;
 
+/* the columns each tab's entry was painted across, so a click can name one */
+static struct { int start, end; } span[WORKSPACE_MAX];
+static int spans;
+
 static int spin_due(void)
 {
     for (int i = 0; i < workspace_count(); i++)
@@ -96,9 +100,11 @@ void tabbar_paint(int cols)
     int    n = workspace_count();
     size_t budget = cols > 1 ? (size_t)(cols - 1) : 1;
     int    left = n;
+    size_t at = 1;
 
     spin_advance(&frame, &frame_at);
     painted = digest();
+    spans = 0;
     ui_esc(UI_ERASE_EOL);
 
     for (int i = 0; i < n; i++) {
@@ -109,7 +115,9 @@ void tabbar_paint(int cols)
 
         name_of(s, name, sizeof name);
 
-        size_t need = (i ? 2 : 0) + (glyph ? 2 : 0) + ui_cells(name);
+        int    here = i == workspace_index();
+        size_t gap = i ? 2 : 0;
+        size_t need = gap + (glyph ? 2 : 0) + (here ? 4 : 0) + ui_cells(name);
         if (need > budget)
             break;
 
@@ -122,13 +130,18 @@ void tabbar_paint(int cols)
             ui_put(glyph);
             ui_put(" ");
         }
-        ui_esc(ui_style(i == workspace_index() ? UI_TEXT : UI_DIM));
-        if (i == workspace_index())
-            ui_esc("\x1b[4m");
+        ui_esc(ui_style(here ? UI_TEXT : UI_DIM));
+        if (here)
+            ui_put("[ ");
         ui_put(name);
-        if (i == workspace_index())
-            ui_esc("\x1b[24m");
+        if (here)
+            ui_put(" ]");
 
+        span[spans].start = (int)(at + gap);
+        span[spans].end = (int)(at + need - 1);
+        spans++;
+
+        at += need;
         budget -= need;
         left--;
     }
@@ -142,4 +155,12 @@ void tabbar_paint(int cols)
         }
     }
     ui_esc(ui_style(UI_RESET));
+}
+
+int tabbar_hit(int col)
+{
+    for (int i = 0; i < spans; i++)
+        if (col >= span[i].start && col <= span[i].end)
+            return i;
+    return -1;
 }

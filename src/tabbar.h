@@ -12,4 +12,7 @@ int  tabbar_stale(void);
 
 void tabbar_paint(int cols);
 
+/* the session whose entry the last paint put under a column, or -1 */
+int  tabbar_hit(int col);
+
 #endif

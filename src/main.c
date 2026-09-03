@@ -242,6 +242,12 @@ static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
 static int clicked(void *ud, int row, int col)
 {
     (void)ud;
+    int tab = chrome_tab_at(row, col);
+    if (tab >= 0) {
+        if (tab != workspace_index())
+            workspace_show(tab);
+        return 1;
+    }
     return imageview_click(row, col);
 }
 
