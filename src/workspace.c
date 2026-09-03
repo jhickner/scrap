@@ -13,6 +13,7 @@
 #include "sessionview.h"
 #include "settings.h"
 #include "status.h"
+#include "tabbar.h"
 #include "tg.h"
 #include "ui.h"
 #include "viewport.h"
@@ -520,6 +521,8 @@ static int pump(int hold, int screen)
             status_sticky_busy(session_busy(tabs[cur].s));
         }
         spin_follow();
+        if (!chrome_modal_active() && !status_spinning() && tabbar_stale())
+            chrome_paint();
     }
     return busy;
 }

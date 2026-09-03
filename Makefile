@@ -70,13 +70,13 @@ tests: $(TOOLS)
 $(BUILD)/palette: tools/palette.c src/vendor/colors.h | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ tools/palette.c
 
-$(BUILD)/spintest: tools/spintest.c src/status.o src/chrome.o src/block.o src/prompt.o src/replframe.o src/replkeys.o src/files.o src/paste.o src/settings.o src/tty.o src/ui.o src/viewport.o src/bash.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)
+$(BUILD)/spintest: tools/spintest.c tools/stubs/tabbar.c src/status.o src/chrome.o src/block.o src/prompt.o src/replframe.o src/replkeys.o src/files.o src/paste.o src/settings.o src/tty.o src/ui.o src/viewport.o src/bash.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
-$(BUILD)/statustest: tools/statustest.c src/status.o src/chrome.o src/prompt.o src/replframe.o src/replkeys.o src/files.o src/paste.o src/bash.o src/block.o src/tty.o src/ui.o src/viewport.o src/settings.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)
+$(BUILD)/statustest: tools/statustest.c tools/stubs/tabbar.c src/status.o src/chrome.o src/prompt.o src/replframe.o src/replkeys.o src/files.o src/paste.o src/bash.o src/block.o src/tty.o src/ui.o src/viewport.o src/settings.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
-$(BUILD)/chrometest: tools/chrometest.c src/status.o src/chrome.o src/block.o src/prompt.o src/replframe.o src/replkeys.o src/files.o src/paste.o src/settings.o src/tty.o src/ui.o src/viewport.o src/bash.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)
+$(BUILD)/chrometest: tools/chrometest.c tools/stubs/tabbar.c src/status.o src/chrome.o src/block.o src/prompt.o src/replframe.o src/replkeys.o src/files.o src/paste.o src/settings.o src/tty.o src/ui.o src/viewport.o src/bash.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
 $(BUILD)/imagerowtest: tools/imagerowtest.c src/image.o src/viewport.o src/ui.o src/tty.o src/settings.o src/scrollback.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
@@ -166,7 +166,7 @@ $(BUILD)/telegramtest: tools/telegramtest.c src/vendor/cJSON.o | $(BUILD)
 $(BUILD)/boardtest: tools/boardtest.c src/board.o src/boardname.o src/boardstep.o src/boardcfg.o src/boarddefaults.o src/boardflow.o src/boardlog.o src/mdcfg.o src/replyjson.o src/child.o src/gitcmd.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
-$(BUILD)/boardgridtest: tools/boardgridtest.c src/boardgrid.o src/menu.o src/overlay.o src/chrome.o src/block.o src/prompt.o src/replframe.o src/replkeys.o src/files.o src/paste.o src/settings.o src/status.o src/tty.o src/ui.o src/viewport.o src/bash.o src/frontend.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
+$(BUILD)/boardgridtest: tools/boardgridtest.c tools/stubs/tabbar.c src/boardgrid.o src/menu.o src/overlay.o src/chrome.o src/block.o src/prompt.o src/replframe.o src/replkeys.o src/files.o src/paste.o src/settings.o src/status.o src/tty.o src/ui.o src/viewport.o src/bash.o src/frontend.o src/text.o src/vendor/impl.o src/vendor/cJSON.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
 
 $(BUILD)/boardtiletest: tools/boardtiletest.c src/boardtile.o src/text.o | $(BUILD)
