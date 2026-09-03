@@ -10,6 +10,7 @@
 #include "workspace.h"
 
 #define NAME_CELLS 14
+#define NAME_CELLS_MIN 4
 #define MIN_COLS   24
 
 #define DOT "\xe2\x97\x8f"
@@ -85,14 +86,44 @@ static const char *mark(int at, enum ui_role *role)
     return NULL;
 }
 
-static void name_of(const struct session *s, char *out, size_t size)
+static void name_of(const struct session *s, size_t cells, char *out, size_t size)
 {
     const char *title = session_title(s);
     if (!title || !*title)
         title = "untitled";
 
-    size_t fit = ui_fit_visible(title, strlen(title), NAME_CELLS);
-    snprintf(out, size, "%.*s%s", (int)fit, title, title[fit] ? "\xe2\x80\xa6" : "");
+    size_t len = strlen(title);
+    size_t fit = ui_fit_visible(title, len, cells);
+    if (fit == len) {
+        snprintf(out, size, "%s", title);
+        return;
+    }
+    fit = ui_fit_visible(title, len, cells - 1);
+    snprintf(out, size, "%.*s\xe2\x80\xa6", (int)fit, title);
+}
+
+/* fixed cost of a tab's entry: separator, mark, and the current tab's brackets */
+static size_t frame_cells(int at)
+{
+    enum ui_role role;
+    return (at ? 2 : 0) + (mark(at, &role) ? 2 : 0) +
+           (at == workspace_index() ? 4 : 0);
+}
+
+/* the widest name cap that still fits every tab, or 0 if none does */
+static size_t name_cells(int n, size_t budget)
+{
+    for (size_t cap = NAME_CELLS; cap >= NAME_CELLS_MIN; cap--) {
+        size_t need = 0;
+        for (int i = 0; i < n; i++) {
+            char name[256];
+            name_of(workspace_at(i), cap, name, sizeof name);
+            need += frame_cells(i) + ui_cells(name);
+        }
+        if (need <= budget)
+            return cap;
+    }
+    return 0;
 }
 
 void tabbar_paint(int cols)
@@ -104,6 +135,9 @@ void tabbar_paint(int cols)
 
     spin_advance(&frame, &frame_at);
     painted = digest();
+    size_t cells = name_cells(n, budget);
+    if (!cells)
+        cells = NAME_CELLS_MIN;
     spans = 0;
     ui_esc(UI_ERASE_EOL);
 
@@ -113,11 +147,11 @@ void tabbar_paint(int cols)
         const char     *glyph = mark(i, &role);
         char            name[256];
 
-        name_of(s, name, sizeof name);
+        name_of(s, cells, name, sizeof name);
 
         int    here = i == workspace_index();
         size_t gap = i ? 2 : 0;
-        size_t need = gap + (glyph ? 2 : 0) + (here ? 4 : 0) + ui_cells(name);
+        size_t need = frame_cells(i) + ui_cells(name);
         if (need > budget)
             break;
 
