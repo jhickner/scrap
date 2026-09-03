@@ -565,6 +565,22 @@ void workspace_settle(struct session *s)
     spin_follow(0);
 }
 
+void workspace_wait_turn(int index)
+{
+    if (index < 0 || index >= ntabs)
+        return;
+    struct session *s = tabs[index].s;
+    if (!session_turn_running(s))
+        return;
+
+    enter(index);
+    session_turn_wait(s);
+    tabs[index].finished = 0;
+    if (on_finish)
+        on_finish(s);
+    leave();
+}
+
 int workspace_polling(void)
 {
     for (int i = 0; i < ntabs; i++)

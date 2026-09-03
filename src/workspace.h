@@ -47,6 +47,8 @@ char *workspace_unqueue(int index);
 
 void workspace_settle(struct session *s);
 
+void workspace_wait_turn(int index);
+
 void workspace_on_finish(void (*fn)(struct session *s));
 
 void workspace_on_settled(void (*fn)(struct session *s));

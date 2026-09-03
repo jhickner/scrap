@@ -390,7 +390,7 @@ static void close_live(const struct live_session *v, const struct live_session *
 
     char screen[4400];
     int said = 0;
-    if (handoff_ask(v->pid, v->id, screen, sizeof screen, waiting, &said)) {
+    if (handoff_kill(v->pid, v->id, screen, sizeof screen, waiting, &said)) {
         unlink(screen);
         return;
     }
@@ -875,7 +875,8 @@ int sessionswitch_gave_last(void) { return gave_last; }
 void sessionswitch_serve_request(void)
 {
     char id[128];
-    if (!handoff_take_request(id, sizeof id))
+    int closing = 0;
+    if (!handoff_take_request(id, sizeof id, &closing))
         return;
 
     int at = workspace_find_id(id);
@@ -883,6 +884,9 @@ void sessionswitch_serve_request(void)
         handoff_refuse(id);
         return;
     }
+
+    if (!closing)
+        workspace_wait_turn(at);
 
     char screen[4400];
     if (handoff_screen_path(id, screen, sizeof screen))
