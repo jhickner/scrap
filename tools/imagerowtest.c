@@ -168,11 +168,13 @@ int main(void)
 }
 
 void bash_ran_load(const cJSON *st);
+void hud_load(const cJSON *st);
 void md_kept_load(const cJSON *st);
 void prompt_echo_load(const cJSON *st);
 void sidechannel_btw_load(const cJSON *st);
 void view_keep_load(const cJSON *st);
 void bash_ran_load(const cJSON *st) { (void)st; }
+void hud_load(const cJSON *st) { (void)st; }
 void md_kept_load(const cJSON *st) { (void)st; }
 void prompt_echo_load(const cJSON *st) { (void)st; }
 void sidechannel_btw_load(const cJSON *st) { (void)st; }

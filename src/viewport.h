@@ -68,6 +68,9 @@ int      viewport_visible(unsigned mark);
 
 void *viewport_item_data(unsigned mark);
 
+/* nothing has been printed since this item closed */
+int   viewport_item_last(unsigned mark);
+
 /* the image whose placeholder cells the last paint left on a screen row,
    1-based; 0 when the row holds none */
 uint32_t viewport_image_at_row(int row);

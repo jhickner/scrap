@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "app.h"
+#include "hud.h"
 #include "session.h"
 #include "sessionfork.h"
 #include "tty.h"
@@ -195,10 +196,12 @@ int restart_exec(struct session *s)
         argv[0] = arg;
     }
 
-    viewport_item_begin(VIEWPORT_ROWS(1, 1));
-    ui_bar(ui_style(UI_DIM), "restarting");
-    viewport_item_end();
-    ui_flush();
+    if (!hud_restarted()) {
+        viewport_item_begin(VIEWPORT_ROWS(1, 1));
+        ui_bar(ui_style(UI_DIM), "restarting");
+        viewport_item_end();
+        ui_flush();
+    }
 
     char tabs[4096];
     if (tabs_path(tabs, sizeof tabs) && tabs_dump(s, tabs)) {

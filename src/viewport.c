@@ -232,6 +232,11 @@ static int index_of_mark(unsigned mark)
     return mark >= next_id ? nitems : 0;
 }
 
+int viewport_item_last(unsigned mark)
+{
+    return mark && !open_len && nitems > 0 && items[nitems - 1].id == mark;
+}
+
 void *viewport_item_data(unsigned mark)
 {
     struct item *it = item_by_mark(mark);

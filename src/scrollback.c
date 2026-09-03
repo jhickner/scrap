@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "bash.h"
+#include "hud.h"
 #include "image.h"
 #include "md.h"
 #include "prompt.h"
@@ -17,6 +18,7 @@ static const struct {
     const char *kind;
     void      (*load)(const cJSON *st);
 } LOADERS[] = {
+    {HUD_KIND,            hud_load},
     {MD_KEPT_KIND,        md_kept_load},
     {VIEW_KEEP_KIND,      view_keep_load},
     {PROMPT_ECHO_KIND,    prompt_echo_load},
