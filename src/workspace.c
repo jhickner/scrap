@@ -62,8 +62,9 @@ void workspace_on_turn(void (*fn)(struct session *s))
 
 /* The spinner follows the tab on screen: its turn, or -- with no turn in flight
    -- the background work it is still waiting on, which is otherwise invisible
-   at a prompt that looks answered. */
-static void spin_follow(void)
+   at a prompt that looks answered. `match` also ends a spinner this follow did
+   not start, which is what a blocking turn leaves behind on a tab switch. */
+static void spin_follow(int match)
 {
     static const struct session *spinning;
     static int                   spinning_work;
@@ -74,8 +75,11 @@ static void spin_follow(void)
     const struct session *want = turn || work ? s : NULL;
 
     if (want == spinning && work == spinning_work) {
-        if (!want)
+        if (!want) {
+            if (match)
+                status_end();
             return;
+        }
         if (work)
             session_work_word(want);
         else
@@ -233,7 +237,7 @@ void workspace_show(int index)
     status_sticky_prompt(tabs[cur].sticky);
     status_sticky_busy(session_busy(tabs[cur].s));
     follow(tabs[cur].s);
-    spin_follow();
+    spin_follow(1);
     viewport_forget();
     view_collapse(session_compact(tabs[cur].s));
 
@@ -392,7 +396,7 @@ static void drop(int index, const struct session *fallback)
         status_sticky_prompt(tabs[cur].sticky);
         status_sticky_busy(session_busy(tabs[cur].s));
         follow(tabs[cur].s);
-        spin_follow();
+        spin_follow(1);
         viewport_forget();
         tg_refocus();
     }
@@ -520,7 +524,7 @@ static int pump(int hold, int screen)
             status_set_note(session_title(tabs[cur].s));
             status_sticky_busy(session_busy(tabs[cur].s));
         }
-        spin_follow();
+        spin_follow(0);
         if (!chrome_modal_active() && !status_spinning() && tabbar_stale())
             chrome_paint();
     }
@@ -558,7 +562,7 @@ void workspace_settle(struct session *s)
         on_finish(s);
     leave();
     send_next(at, 0);
-    spin_follow();
+    spin_follow(0);
 }
 
 int workspace_polling(void)
@@ -598,7 +602,7 @@ static void send_next(int index, int hold)
     leave();
     free(p.line);
     free(p.shown);
-    spin_follow();
+    spin_follow(0);
 }
 
 int workspace_send(int index, const char *line, const char *shown)
@@ -626,7 +630,7 @@ int workspace_send(int index, const char *line, const char *shown)
         on_turn(t->s);
     int ok = session_turn_begin(t->s, line);
     leave();
-    spin_follow();
+    spin_follow(0);
     return ok;
 }
 

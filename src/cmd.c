@@ -338,7 +338,11 @@ static void do_backend(struct session *s, const char *arg)
 
     if (retry) {
         reply_note("retrying the failed turn with %s", arg);
-        session_turn(s, retry);
+        int tab = workspace_index_of(s);
+        if (tab >= 0)
+            workspace_send(tab, retry, NULL);
+        else
+            session_turn(s, retry);
         free(retry);
     }
 }

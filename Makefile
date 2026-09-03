@@ -175,6 +175,9 @@ $(BUILD)/boardtiletest: tools/boardtiletest.c src/boardtile.o src/text.o | $(BUI
 $(BUILD)/viewstest: tools/viewstest.c src/views.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
+$(BUILD)/workspacetest: tools/workspacetest.c tools/stubs/tabbar.c src/workspace.o src/status.o src/chrome.o src/block.o src/prompt.o src/replframe.o src/replkeys.o src/files.o src/paste.o src/settings.o src/tty.o src/ui.o src/viewport.o src/bash.o src/vendor/impl.o src/vendor/cJSON.o src/text.o | $(BUILD)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LIBS)
+
 $(BUILD)/highlighttest: tools/highlighttest.c src/highlight.o | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^)
 
@@ -184,7 +187,7 @@ $(BUILD)/replboxtest: tools/replboxtest.c src/replbox.o src/replframe.o src/repl
 CHECKS  := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest reflowtest toolstyletest sessionlisttest claudetest codextest \
            groktest filedifftest pitest agenttabstest statustest transcripttest \
            sessionviewtest sessionloadtest highlighttest muxcfgtest telegramtest boardtest modelstest \
-           boardgridtest boardtiletest viewstest replboxtest ttytest gitinfotest \
+           boardgridtest boardtiletest viewstest workspacetest replboxtest ttytest gitinfotest \
            sidechannelviewtest sidechannelcmdtest taskstest
 
 check: $(addprefix $(BUILD)/,$(CHECKS))
