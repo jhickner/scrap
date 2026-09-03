@@ -166,6 +166,17 @@ int main(void)
         workspace_show(1);
         if (status_spinning())
             fail("switching back to the idle tab ends the spinner");
+
+        if (workspace_count() != 2)
+            fail("two tabs stay open");
+        if (workspace_close(1) != 1)
+            fail("close drops a tab");
+        if (workspace_count() != 1 || workspace_current() != &a)
+            fail("the remaining tab is the one left");
+        if (workspace_close(0) != 0)
+            fail("close drops the last tab");
+        if (workspace_count() || workspace_current())
+            fail("no tab remains");
     }
 
     workspace_end();

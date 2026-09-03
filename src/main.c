@@ -253,18 +253,20 @@ static int clicked(void *ud, int row, int col)
 
 static void switcher(void *ud)
 {
-    (void)ud;
     struct session *here = workspace_current();
     views_last(here ? session_cwd(here) : NULL);
+    if (!workspace_count())
+        prompt_stop(ud);
 }
 
 static void board(void *ud)
 {
-    (void)ud;
     struct session *here = workspace_current();
     if (!here)
         return;
     views_board(session_cwd(here));
+    if (!workspace_count())
+        prompt_stop(ud);
 }
 
 static void cycle_session(void *ud, int delta)
@@ -712,14 +714,14 @@ int main(int argc, char **argv)
     prompt_set_idle(prompt, idle_fds, idle_render, idle_poll, NULL);
     prompt_set_restart(prompt, restart_pending, idle_restart, NULL);
     prompt_set_takeover(prompt, takeover_pending, takeover_run, prompt);
-    prompt_set_switcher(prompt, switcher, NULL);
+    prompt_set_switcher(prompt, switcher, prompt);
     prompt_set_click(prompt, clicked, NULL);
     prompt_set_split(prompt, splitter, NULL);
     prompt_set_another(prompt, another, NULL);
     prompt_set_cycle(prompt, cycle_session, NULL);
     prompt_set_collapse(prompt, collapse_tools, NULL);
     view_collapse(session_compact(session));
-    prompt_set_board(prompt, board, NULL);
+    prompt_set_board(prompt, board, prompt);
     prompt_set_cancel(prompt, cancel_turn, NULL);
     workspace_on_finish(turn_done);
 

@@ -74,7 +74,33 @@ static int item_apart(const struct view *v, int i)
 
 #define LABEL_SHARE(cols) ((cols) * 3 / 5)
 
-static size_t align_width(const struct view *v, int columns)
+static size_t col_max(const struct view *v, const char *const *col, size_t cap)
+{
+    if (!col)
+        return 0;
+    size_t width = 0;
+    for (int row = 0; row < v->count; row++) {
+        int i = v->order[row];
+        if (item_heading(v, i) || item_apart(v, i) || !col[i] || !col[i][0])
+            continue;
+        size_t cells = ui_cells(col[i]);
+        if (cells > width)
+            width = cells;
+    }
+    if (!width)
+        return 0;
+    return width > cap ? cap : width;
+}
+
+static size_t lead_width(const struct view *v, int columns)
+{
+    if (!v->live || !v->live->lead)
+        return 0;
+    size_t cap = columns > 40 ? 24 : (columns > 24 ? 16 : 8);
+    return col_max(v, v->live->lead, cap);
+}
+
+static size_t align_width(const struct view *v, int columns, size_t lead_w)
 {
     if (!v->live || !v->live->align)
         return 0;
@@ -88,7 +114,34 @@ static size_t align_width(const struct view *v, int columns)
         if (cells > width)
             width = cells;
     }
-    size_t cap = (size_t)LABEL_SHARE(columns);
+    size_t cap;
+    if (lead_w) {
+        int rest = columns - 4 - (int)lead_w - 2;
+        if (rest < 20)
+            rest = 20;
+        cap = (size_t)LABEL_SHARE(rest);
+    } else {
+        cap = (size_t)LABEL_SHARE(columns);
+    }
+    return width > cap ? cap : width;
+}
+
+static size_t detail_width(const struct view *v, size_t cap)
+{
+    if (!v->live || !v->live->tail)
+        return 0;
+    size_t width = 0;
+    for (int row = 0; row < v->count; row++) {
+        int i = v->order[row];
+        if (item_heading(v, i) || item_apart(v, i) ||
+            !v->items[i].detail || !v->items[i].detail[0])
+            continue;
+        size_t cells = ui_cells(v->items[i].detail);
+        if (cells > width)
+            width = cells;
+    }
+    if (!width)
+        return 0;
     return width > cap ? cap : width;
 }
 
@@ -101,6 +154,20 @@ static size_t fit_bytes(const char *s, size_t budget, int *cut)
     if (*cut)
         fit = ui_fit_bytes(s, budget ? budget - 1 : 0);
     return fit;
+}
+
+static size_t put_field(const char *s, size_t width, int *cut)
+{
+    if (!s)
+        s = "";
+    size_t n = fit_bytes(s, width, cut);
+    ui_putn(s, n);
+    if (*cut)
+        ui_put("…");
+    size_t cells = ui_cells_n(s, n) + (*cut ? 1 : 0);
+    if (cells < width)
+        ui_pad((int)(width - cells));
+    return width;
 }
 
 static int item_spins(const struct view *v, int i)
@@ -221,7 +288,15 @@ static void refilter(struct view *v)
             v->score[v->count++] = 0;
             continue;
         }
-        int s = v->query[0] ? text_fuzzy_score(v->items[i].label, v->query) : 0;
+        int s = 0;
+        if (v->query[0]) {
+            s = text_fuzzy_score(v->items[i].label, v->query);
+            if (v->live && v->live->lead && v->live->lead[i] && v->live->lead[i][0]) {
+                int ls = text_fuzzy_score(v->live->lead[i], v->query);
+                if (ls > s)
+                    s = ls;
+            }
+        }
         if (s < 0 && !under)
             continue;
         int at = v->count++;
@@ -312,7 +387,9 @@ static void paint_under(struct view *v, struct menu *box, int *box_row)
     int    columns = ui_columns();
     int    rows = 0;
     int    base = chrome_gap();
-    size_t pad_to = align_width(v, columns);
+    size_t lead_w = lead_width(v, columns);
+    size_t pad_to = align_width(v, columns, lead_w);
+    size_t detail_w = detail_width(v, 24);
 
     for (int i = 0; i < HIT_MAX; i++)
         v->hit[i] = -1;
@@ -365,6 +442,28 @@ static void paint_under(struct view *v, struct menu *box, int *box_row)
         ui_esc(ui_style(selected ? UI_ACCENT : UI_RESET));
         ui_put(selected ? "  \xe2\x86\x92 " : "    ");
 
+        size_t lead_used = 0;
+        if (lead_w) {
+            const char *lead = v->live->lead[i];
+            int show = lead && *lead;
+            if (show && row > v->top) {
+                int prev = v->order[row - 1];
+                const char *was = v->live->lead[prev];
+                if (was && !strcmp(was, lead))
+                    show = 0;
+            }
+            ui_esc(ui_style(UI_DIM));
+            if (show) {
+                int lcut = 0;
+                put_field(lead, lead_w, &lcut);
+            } else {
+                ui_pad((int)lead_w);
+            }
+            ui_esc(ui_style(selected ? UI_ACCENT : UI_RESET));
+            ui_put("  ");
+            lead_used = lead_w + 2;
+        }
+
         size_t status = 0;
         if (v->live && (v->live->spin || v->live->mark)) {
             const char *mark = v->live->mark ? v->live->mark[i] : NULL;
@@ -401,7 +500,9 @@ static void paint_under(struct view *v, struct menu *box, int *box_row)
             status += 2;
         }
 
-        size_t label_budget = columns > 5 + (int)status ? (size_t)(columns - 5 - (int)status) : 1;
+        size_t label_budget = columns > 5 + (int)status + (int)lead_used
+                                  ? (size_t)(columns - 5 - (int)status - (int)lead_used)
+                                  : 1;
 
         if (pad_to && items[i].detail && *items[i].detail && label_budget > pad_to)
             label_budget = pad_to;
@@ -418,19 +519,38 @@ static void paint_under(struct view *v, struct menu *box, int *box_row)
             shown = pad_to;
         }
 
-        size_t used = 4 + status + shown;
+        size_t used = 4 + lead_used + status + shown;
 
         if (items[i].detail && *items[i].detail) {
             int budget = columns - (int)used - 4;
             if (budget > 6) {
                 ui_put("  ");
                 ui_esc(ui_style(UI_DIM));
-                size_t skip = 0;
-                size_t fit = ui_wrap_row(items[i].detail, strlen(items[i].detail),
-                                         (size_t)budget, &skip, NULL);
-                ui_putn(items[i].detail, fit);
-                if (items[i].detail[fit])
-                    ui_put("…");
+                if (detail_w && !item_apart(v, i)) {
+                    size_t dw = detail_w;
+                    if (dw > (size_t)budget)
+                        dw = (size_t)budget;
+                    int dcut = 0;
+                    put_field(items[i].detail, dw, &dcut);
+                    const char *tail = v->live && v->live->tail ? v->live->tail[i]
+                                                               : NULL;
+                    int left = columns - (int)used - 2 - (int)dw - 2;
+                    if (tail && *tail && left > 2) {
+                        ui_put("  ");
+                        int tcut = 0;
+                        size_t tn = fit_bytes(tail, (size_t)left, &tcut);
+                        ui_putn(tail, tn);
+                        if (tcut)
+                            ui_put("…");
+                    }
+                } else {
+                    size_t skip = 0;
+                    size_t fit = ui_wrap_row(items[i].detail, strlen(items[i].detail),
+                                             (size_t)budget, &skip, NULL);
+                    ui_putn(items[i].detail, fit);
+                    if (items[i].detail[fit])
+                        ui_put("…");
+                }
                 ui_esc(ui_style(UI_RESET));
             }
         }

@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,6 +63,7 @@ struct row {
     char cwd[512];
     char label[256];
     char detail[512];
+    char when[48];
 };
 
 static void row_status(struct row *r, const char *status)
@@ -83,10 +85,9 @@ static void tab_rows(struct row *rows, int *n)
 
         path_home_relative(session_cwd(s), r->cwd, sizeof r->cwd);
         const char *card = boardwork_card_of(s);
-        snprintf(r->label, sizeof r->label, "%s %s%s",
+        snprintf(r->label, sizeof r->label, "%s %s",
                  i == workspace_index() ? "\xe2\x96\xb8" : "\xc2\xb7",
-                 title && *title ? title : "untitled",
-                 i == workspace_index() ? " (here)" : "");
+                 title && *title ? title : "untitled");
         if (card)
             snprintf(r->card, sizeof r->card, "%s", card);
         snprintf(r->id, sizeof r->id, "%s", session_id(s) ? session_id(s) : "");
@@ -159,20 +160,21 @@ static void fill_live(struct row *r, const struct live_session *v)
     if (in_tmux && !near && wname && *wname)
         snprintf(where, sizeof where, "%s \xc2\xb7 ", wname);
 
-    snprintf(r->label, sizeof r->label, "%s %s",
-             near ? "\xe2\x86\x92" : "\xe2\x87\x84",
+    snprintf(r->label, sizeof r->label, "%s",
              v->title[0] ? v->title : "untitled");
     snprintf(r->card, sizeof r->card, "%s", v->card);
     if (v->card[0])
-        snprintf(r->detail, sizeof r->detail, "card %s \xc2\xb7 %s %s \xc2\xb7 %s%s",
+        snprintf(r->detail, sizeof r->detail, "card %s \xc2\xb7 %s %s",
                  v->card, v->backend,
-                 models_short_name(v->backend, v->label[0] ? v->label : v->model),
-                 where, when);
+                 models_short_name(v->backend, v->label[0] ? v->label : v->model));
     else
-        snprintf(r->detail, sizeof r->detail, "%s %s \xc2\xb7 %s%s",
+        snprintf(r->detail, sizeof r->detail, "%s %s",
                  v->backend,
-                 models_short_name(v->backend, v->label[0] ? v->label : v->model),
-                 where, when);
+                 models_short_name(v->backend, v->label[0] ? v->label : v->model));
+    if (where[0])
+        snprintf(r->when, sizeof r->when, "%s%s", where, when);
+    else
+        snprintf(r->when, sizeof r->when, "%s", when);
     row_status(r, v->status);
 }
 
@@ -196,7 +198,7 @@ static void live_rows(struct row *rows, int *n, const struct live_session *live,
 }
 
 /* a row nests under its parent only when the parent is in the same directory
-   group: a heading has to keep describing every row under it */
+   group, so the cwd column still describes every row under it */
 static int in_group(const struct row *in, int n, const char *group, const char *id)
 {
     for (int i = 0; i < n; i++)
@@ -207,8 +209,12 @@ static int in_group(const struct row *in, int n, const char *group, const char *
 
 static void nest_label(struct row *r, int depth)
 {
-    const char *text = strchr(r->label, ' ');
-    text = text ? text + 1 : r->label;
+    const char *text = r->label;
+    if (r->kind == ROW_TAB) {
+        const char *sp = strchr(r->label, ' ');
+        if (sp)
+            text = sp + 1;
+    }
 
     char under[sizeof r->label];
     snprintf(under, sizeof under, "%*s\xe2\x94\x94 %s", depth * 2, "", text);
@@ -291,12 +297,6 @@ static int group_rows(const struct row *in, int n, struct row *out,
         if (!group)
             break;
 
-        if (m < max) {
-            out[m].kind = ROW_HEAD;
-            snprintf(out[m].label, sizeof out[m].label, "%s", group);
-            heading[m] = PICK_HEADING;
-            m++;
-        }
         emit_tree(in, n, used, out, heading, &m, max, group, NULL, 0);
 
         /* whatever a cycle or the depth cap stranded still has to be listed */
@@ -368,6 +368,38 @@ static void yank(const struct live_session *v)
     unlink(screen);
     ui_bar(ui_style(UI_DIM), "session is here \xc2\xb7 %s",
            v->title[0] ? v->title : v->backend);
+    ui_put("\n");
+    ui_flush();
+}
+
+static int pid_count(const struct live_session *live, int n, long pid)
+{
+    int found = 0;
+    for (int i = 0; i < n; i++)
+        if (live[i].pid == pid)
+            found++;
+    return found;
+}
+
+static void close_live(const struct live_session *v, const struct live_session *live,
+                       int nlive)
+{
+    ui_bar(ui_style(UI_DIM), "closing the session\xe2\x80\xa6");
+    ui_put("\n");
+    ui_flush();
+
+    char screen[4400];
+    int said = 0;
+    if (handoff_ask(v->pid, v->id, screen, sizeof screen, waiting, &said)) {
+        unlink(screen);
+        return;
+    }
+
+    if (pid_count(live, nlive, v->pid) == 1 && v->pid > 0 &&
+        kill((pid_t)v->pid, SIGTERM) == 0)
+        return;
+
+    ui_error("could not close that session");
     ui_put("\n");
     ui_flush();
 }
@@ -527,6 +559,8 @@ struct listing {
     unsigned char       *spin;
     const char         **marks;
     const char         **icons;
+    const char         **leads;
+    const char         **tails;
     struct live_session **live;
     int                 *nlive;
     double               read_at;
@@ -539,6 +573,8 @@ static void sync_columns(struct listing *l)
         l->spin[i] = (unsigned char)l->rows[i].spin;
         l->marks[i] = l->rows[i].mark;
         l->icons[i] = l->rows[i].card[0] ? WORKER_MARK : "";
+        l->leads[i] = l->rows[i].cwd;
+        l->tails[i] = l->rows[i].when;
     }
 }
 
@@ -547,7 +583,7 @@ static unsigned long listing_sig(const struct listing *l)
     unsigned long h = 5381;
     for (int i = 0; i < l->n; i++) {
         const struct row *r = &l->rows[i];
-        const char *parts[] = {r->label, r->detail, r->mark, r->card};
+        const char *parts[] = {r->label, r->detail, r->mark, r->card, r->when};
         for (size_t p = 0; p < sizeof parts / sizeof *parts; p++)
             for (const char *c = parts[p]; c && *c; c++)
                 h = h * 33 + (unsigned char)*c;
@@ -598,6 +634,7 @@ static int relist(void *ud)
             r->spin = 0;
             r->mark[0] = '\0';
             r->card[0] = '\0';
+            r->when[0] = '\0';
         }
     }
     sync_columns(l);
@@ -622,13 +659,18 @@ static int switch_once(void)
     unsigned char *spin = calloc(MAX_ROWS, 1);
     const char **marks = calloc(MAX_ROWS, sizeof *marks);
     const char **icons = calloc(MAX_ROWS, sizeof *icons);
-    if (!found || !rows || !heading || !spin || !marks || !icons) {
+    const char **leads = calloc(MAX_ROWS, sizeof *leads);
+    const char **tails = calloc(MAX_ROWS, sizeof *tails);
+    if (!found || !rows || !heading || !spin || !marks || !icons || !leads ||
+        !tails) {
         free(found);
         free(rows);
         free(heading);
         free(spin);
         free(marks);
         free(icons);
+        free(leads);
+        free(tails);
         free(live);
         return 0;
     }
@@ -668,6 +710,8 @@ static int switch_once(void)
         free(spin);
         free(marks);
         free(icons);
+        free(leads);
+        free(tails);
         free(live);
         return 0;
     }
@@ -685,11 +729,13 @@ static int switch_once(void)
 
     char title[256];
     snprintf(title, sizeof title, "sessions");
-    struct listing listing = {rows, n, spin, marks, icons, &live, &nlive, 0, 0};
+    struct listing listing = {rows, n, spin, marks, icons, leads, tails, &live,
+                              &nlive, 0, 0};
     sync_columns(&listing);
     listing.sig = listing_sig(&listing);
     struct pick_live shown = {.heading = heading, .spin = spin, .mark = marks,
-                              .icon = icons, .tick = relist, .ud = &listing};
+                              .icon = icons, .lead = leads, .tail = tails,
+                              .align = 1, .tick = relist, .ud = &listing};
     int picked = pick_run_live(title, items, n, initial, &shown, PICK_SEARCH_SLASH,
                                shortcuts, &pressed);
 
@@ -712,6 +758,8 @@ static int switch_once(void)
     free(spin);
     free(marks);
     free(icons);
+    free(leads);
+    free(tails);
 
     if (pressed == KEY_ALL) {
         show_all = !show_all;
@@ -775,14 +823,15 @@ static int switch_once(void)
     }
 
     if (pressed == KEY_CLOSE) {
-        if (chosen.kind == ROW_TAB && workspace_count() > 1) {
+        if (chosen.kind == ROW_TAB) {
+            int last = workspace_count() <= 1;
             workspace_close(chosen.at);
-        } else if (chosen.kind == ROW_TAB) {
-            ui_note("that is the only session here");
-            ui_put("\n");
-            ui_flush();
-            free(live);
-            return 0;
+            if (last) {
+                free(live);
+                return 0;
+            }
+        } else if (chosen.kind == ROW_LIVE) {
+            close_live(&live[chosen.at], live, nlive);
         }
         resume_row = picked;
         free(live);
