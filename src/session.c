@@ -58,6 +58,7 @@ struct session {
     char     id[128];
     char     title[128];
     char     stale_title[128];
+    char     held_title[128];
     int      announce_title;
     int      retitle;
     int      named;
@@ -772,7 +773,7 @@ static int adopt_title(struct session *s)
 
 static void name_poll(struct session *s)
 {
-    if (!s || s->title[0] || !s->agent)
+    if (!s || !s->agent)
         return;
 
     if (!s->id[0]) {
@@ -780,9 +781,19 @@ static void name_poll(struct session *s)
         if (!id)
             return;
         set_id(s, id);
-        if (s->title[0] || !s->id[0])
-            return;
     }
+
+    /* a rename that landed before the conversation had an id */
+    if (s->id[0] && s->held_title[0]) {
+        title_set(s->id, s->held_title);
+        s->held_title[0] = '\0';
+        s->named = 1;
+        s->retitle = 0;
+        adopt_title(s);
+    }
+
+    if (s->title[0])
+        return;
 
     if (!s->named) {
         if (s->skip_naming || !s->prompt)
@@ -825,7 +836,24 @@ const char *session_rename_error(enum session_rename why)
 
 enum session_rename session_rename(struct session *s, const char *name)
 {
-    if (!s || !s->id[0])
+    if (!s)
+        return SESSION_RENAME_NO_ID;
+
+    /* the id arrives when the first turn ends and the name is filed under it;
+       until then the session wears it and name_poll files it */
+    if (!s->id[0] && name && *name) {
+        if (!title_clean(name, s->held_title, sizeof s->held_title))
+            return SESSION_RENAME_BAD_NAME;
+        snprintf(s->title, sizeof s->title, "%s", s->held_title);
+        s->stale_title[0] = '\0';
+        s->named = 1;
+        s->retitle = 0;
+        status_set_note(s->title);
+        publish(s, s->idle_busy ? "working" : "finished");
+        return SESSION_RENAME_OK;
+    }
+
+    if (!s->id[0])
         return SESSION_RENAME_NO_ID;
 
     if (name && *name) {
@@ -1451,6 +1479,7 @@ static void started_over(struct session *s)
     reset_turns(s, RESET_BLOCK | RESET_WORKDIR);
     s->title[0] = '\0';
     s->stale_title[0] = '\0';
+    s->held_title[0] = '\0';
     s->announce_title = 0;
     s->retitle = 1;
     s->named = 0;
@@ -1540,6 +1569,7 @@ int session_clear(struct session *s)
 
     s->title[0] = '\0';
     s->stale_title[0] = '\0';
+    s->held_title[0] = '\0';
     s->announce_title = 0;
     s->retitle = 1;
     s->named = 0;

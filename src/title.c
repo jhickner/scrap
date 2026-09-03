@@ -90,9 +90,9 @@ static void write_cache(const char *id, const char *title)
     close(fd);
 }
 
-int title_set(const char *id, const char *name)
+int title_clean(const char *name, char *out, size_t size)
 {
-    if (!id || !*id || !name)
+    if (!name || !out || size == 0)
         return 0;
     char text[256];
     snprintf(text, sizeof text, "%s", name);
@@ -100,6 +100,15 @@ int title_set(const char *id, const char *name)
         if (*p == '\t' || *p == '\n')
             *p = ' ';
     if (!tidy(text))
+        return 0;
+    snprintf(out, size, "%s", text);
+    return 1;
+}
+
+int title_set(const char *id, const char *name)
+{
+    char text[256];
+    if (!id || !*id || !title_clean(name, text, sizeof text))
         return 0;
     write_cache(id, text);
     return 1;
