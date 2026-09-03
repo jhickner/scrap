@@ -1048,33 +1048,48 @@ static void row_into_frame(struct frame *f, const char *s, int W)
 
 static char *blank_row(void) { return strdup(""); }
 
-/* The id of the image whose placeholder cells sit on a painted screen row.
+/* The id of the image whose placeholder cell sits at a painted screen cell.
    Images render inside whatever item encloses them - an assistant's markdown
    block, usually - so the item under a click does not name one. The cell does:
-   in placeholder mode the id travels in its foreground colour. */
-uint32_t viewport_image_at_row(int row)
+   in placeholder mode the id travels in its foreground colour. A row can hold
+   text beside the image, so the column has to match as well as the row. */
+uint32_t viewport_image_at(int row, int col)
 {
     static const char placeholder[] = "\xf4\x8e\xbb\xae"; /* U+10EEEE */
 
     int at = row - 1;
-    if (at < 0 || at >= shown.n)
+    if (at < 0 || at >= shown.n || col < 1)
         return 0;
 
     const char *s = shown.row[at];
+    size_t      n = strlen(s);
     uint32_t    fg = 0;
-    for (const char *p = s; *p;) {
-        if (p[0] == '\x1b' && p[1] == '[') {
-            int r, g, b, n = 0;
-            if (sscanf(p + 2, "38;2;%d;%d;%dm%n", &r, &g, &b, &n) == 3 && n > 0 &&
-                r >= 0 && r < 256 && g >= 0 && g < 256 && b >= 0 && b < 256) {
+    size_t      cells = 0;
+
+    for (size_t i = 0; i < n;) {
+        enum ui_esc_kind kind;
+        size_t           end = ui_esc_span(s, n, i, &kind);
+
+        if (kind == UI_ESC_SGR) {
+            int r, g, b, used = 0;
+            if (sscanf(s + i + 2, "38;2;%d;%d;%dm%n", &r, &g, &b, &used) == 3 &&
+                used > 0 && r >= 0 && r < 256 && g >= 0 && g < 256 && b >= 0 &&
+                b < 256)
                 fg = (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
-                p += 2 + n;
-                continue;
-            }
+            i = end;
+            continue;
         }
-        if (strncmp(p, placeholder, 4) == 0)
+        if (kind != UI_ESC_TEXT) {
+            i = end;
+            continue;
+        }
+
+        size_t wide = ui_cells_n(s + i, end - i);
+        if (end - i >= 4 && memcmp(s + i, placeholder, 4) == 0 &&
+            (size_t)col > cells && (size_t)col <= cells + (wide ? wide : 1))
             return fg;
-        p++;
+        cells += wide;
+        i = end;
     }
     return 0;
 }

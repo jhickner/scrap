@@ -65,7 +65,7 @@ struct prompt {
     void        *takeover_ud;
     void       (*switcher)(void *ud);
     void        *switcher_ud;
-    int        (*click)(void *ud, int row);
+    int        (*click)(void *ud, int row, int col);
     void        *click_ud;
     void       (*board)(void *ud);
     void        *board_ud;
@@ -829,7 +829,7 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
 
     case TK_MOUSE_DOWN:
         if (p->click)
-            p->click(p->click_ud, ev->row);
+            p->click(p->click_ud, ev->row, ev->col);
         return KEY_OK;
 
     case TK_SCROLL_UP:
@@ -930,7 +930,8 @@ void prompt_set_cancel(struct prompt *p, int (*fn)(void *ud), void *ud)
     p->cancel_ud = ud;
 }
 
-void prompt_set_click(struct prompt *p, int (*fn)(void *ud, int row), void *ud)
+void prompt_set_click(struct prompt *p, int (*fn)(void *ud, int row, int col),
+                      void *ud)
 {
     p->click = fn;
     p->click_ud = ud;

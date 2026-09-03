@@ -239,10 +239,10 @@ static void side_tick(void *ud)
 static int idle_poll(void *ud)   { (void)ud; return workspace_polling(); }
 static void replay(void *ud)      { (void)ud; session_replay(workspace_current()); }
 static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
-static int clicked(void *ud, int row)
+static int clicked(void *ud, int row, int col)
 {
     (void)ud;
-    return imageview_click(row);
+    return imageview_click(row, col);
 }
 
 static void switcher(void *ud)

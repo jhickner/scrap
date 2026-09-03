@@ -166,8 +166,8 @@ int imageview_open(int at)
     return 1;
 }
 
-int imageview_click(int row)
+int imageview_click(int row, int col)
 {
-    uint32_t id = viewport_image_at_row(row);
+    uint32_t id = viewport_image_at(row, col);
     return id ? imageview_open(image_index_of(id)) : 0;
 }

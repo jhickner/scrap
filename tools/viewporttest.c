@@ -377,15 +377,67 @@ static void check_image_at_row(struct screen *s)
 
     int at = 0;
     for (int row = 1; row <= 24; row++)
-        if (viewport_image_at_row(row) == 0x010203u)
+        if (viewport_image_at(row, 1) == 0x010203u)
             at++;
     if (at != 2)
         fail("both placeholder rows name the image");
     for (int row = 1; row <= 24; row++)
-        if (viewport_image_at_row(row) != 0 && viewport_image_at_row(row) != 0x010203u)
-            fail("no other row names an image");
-    if (viewport_image_at_row(0) != 0 || viewport_image_at_row(99) != 0)
+        for (int col = 1; col <= 80; col++)
+            if (viewport_image_at(row, col) != 0 &&
+                viewport_image_at(row, col) != 0x010203u)
+                fail("no other cell names an image");
+
+    /* the fixture draws two placeholder cells, so the rest of the row is bare */
+    for (int row = 1; row <= 24; row++) {
+        if (viewport_image_at(row, 1) != viewport_image_at(row, 2))
+            fail("both placeholder cells name the image");
+        for (int col = 3; col <= 80; col++)
+            if (viewport_image_at(row, col) != 0)
+                fail("a column past the image names nothing");
+    }
+    if (viewport_image_at(0, 1) != 0 || viewport_image_at(99, 1) != 0)
         fail("a row off the screen names nothing");
+    if (viewport_image_at(1, 0) != 0)
+        fail("a column off the screen names nothing");
+}
+
+/* an image drawn beside text: only the placeholder cells are the image */
+static void image_beside_text(void *ud, int cols)
+{
+    (void)ud;
+    (void)cols;
+    ui_put("text \x1b[38;2;1;2;3m\xf4\x8e\xbb\xae\xf4\x8e\xbb\xae\x1b[39m tail\n");
+}
+
+static void check_image_at_column(struct screen *s)
+{
+    viewport_clear();
+    set_size(80, 24);
+
+    viewport_item_begin(&(struct viewport_entry){.render = image_beside_text,
+                                                 .reflow = 1});
+    image_beside_text(NULL, 80);
+    viewport_item_end();
+    chrome("CHROME-prompt", NULL);
+
+    refresh(s, 80, 24);
+
+    int at = 0;
+    for (int row = 1; row <= 24; row++) {
+        if (viewport_image_at(row, 6) != 0x010203u)
+            continue;
+        at++;
+        for (int col = 1; col <= 5; col++)
+            if (viewport_image_at(row, col) != 0)
+                fail("the text before an image names nothing");
+        if (viewport_image_at(row, 7) != 0x010203u)
+            fail("the second placeholder cell names the image");
+        for (int col = 8; col <= 80; col++)
+            if (viewport_image_at(row, col) != 0)
+                fail("the text after an image names nothing");
+    }
+    if (at != 1)
+        fail("the row beside the text names the image");
 }
 
 /* the id 0x010203 is carried in the placeholder cells' foreground */
@@ -422,7 +474,7 @@ static void check_image_at_row_scrolled(struct screen *s)
         redraw(s);
         for (int row = 1; row <= 24; row++) {
             int      drawn = row_has_image(s, row);
-            uint32_t named = viewport_image_at_row(row);
+            uint32_t named = viewport_image_at(row, 1);
             if (drawn && named != 0x010203u)
                 fail("a drawn image row names the image while scrolled");
             if (!drawn && named != 0)
@@ -788,6 +840,7 @@ int main(void)
     check_soft_wrap(&s);
     check_item_counting(&s);
     check_image_at_row(&s);
+    check_image_at_column(&s);
     check_image_at_row_scrolled(&s);
     check_modal_holds_the_screen(&s);
     check_ends_blank();
