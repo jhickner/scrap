@@ -57,9 +57,24 @@ static char styles[UI_RESET][64];
 
 static int slots[UI_RESET];
 
+static char sel_bg[48];
+static int  sel_row;
+
 static unsigned mix(unsigned fg, unsigned bg, int pct)
 {
     return (fg * (100 - pct) + bg * pct + 50) / 100;
+}
+
+static void build_sel_bg(void)
+{
+    if (!use_color) {
+        sel_bg[0] = '\0';
+        return;
+    }
+    Color a = color_get((ColorIndex)slots[UI_ACCENT]);
+    Color b = color_get(COLOR_BASE0);
+    snprintf(sel_bg, sizeof sel_bg, "\x1b[48;2;%u;%u;%um",
+             mix(a.r, b.r, 92), mix(a.g, b.g, 92), mix(a.b, b.b, 92));
 }
 
 static void build_style(int role)
@@ -115,6 +130,8 @@ static void apply_group(int group, int at)
         slots[role] = SWATCH[at].slot;
         build_style(role);
     }
+    if (group == UI_GROUP_INPUT)
+        build_sel_bg();
 }
 
 static int saved_swatch(int group)
@@ -200,6 +217,7 @@ void ui_init(void)
         slots[i] = ROLES[i].slot;
         build_style(i);
     }
+    build_sel_bg();
 
     for (int g = 0; g < GROUP_N; g++) {
         int at = saved_swatch(g);
@@ -212,11 +230,28 @@ const char *ui_style(enum ui_role role)
 {
     if (!use_color)
         return "";
-    if (role == UI_RESET)
+    if (role == UI_RESET) {
+        if (sel_row && sel_bg[0]) {
+            static char keep[80];
+            snprintf(keep, sizeof keep, "\x1b[0m%s", sel_bg);
+            return keep;
+        }
         return "\x1b[0m";
+    }
     if (role < 0 || role >= UI_RESET)
         return "";
     return styles[role];
+}
+
+void ui_row_sel(int on)
+{
+    sel_row = on ? 1 : 0;
+    if (!use_color)
+        return;
+    if (on && sel_bg[0])
+        ui_esc(sel_bg);
+    else
+        ui_esc("\x1b[0m");
 }
 
 int ui_color(void) { return use_color; }

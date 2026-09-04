@@ -62,6 +62,8 @@ void ui_pad(int cells);
 
 const char *ui_style(enum ui_role role);
 
+void ui_row_sel(int on);
+
 int ui_color(void);
 
 const char *ui_cycle(enum ui_group group, int delta);

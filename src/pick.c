@@ -439,6 +439,8 @@ static void paint_under(struct view *v, struct menu *box, int *box_row)
             v->hit[base + rows] = (short)row;
 
         int selected = (row == sel);
+        if (selected)
+            ui_row_sel(1);
         ui_esc(ui_style(selected ? UI_ACCENT : UI_RESET));
         ui_put(selected ? "  \xe2\x86\x92 " : "    ");
 
@@ -553,6 +555,10 @@ static void paint_under(struct view *v, struct menu *box, int *box_row)
                 }
                 ui_esc(ui_style(UI_RESET));
             }
+        }
+        if (selected) {
+            ui_esc(UI_ERASE_EOL);
+            ui_row_sel(0);
         }
         ui_put("\n");
         rows++;

@@ -589,6 +589,8 @@ static void paint_row(struct grid *v, int row)
         }
 
         put_edge(edge, BOX_V, &used);
+        if (picked)
+            ui_row_sel(1);
         pad_to(&used, r->col + GRID_INDENT);
 
         if (line >= 0 && line < v->drawn[at].n) {
@@ -608,6 +610,8 @@ static void paint_row(struct grid *v, int row)
         }
 
         pad_to(&used, r->col + r->w - 1);
+        if (picked)
+            ui_row_sel(0);
         put_edge(edge, BOX_V, &used);
     }
     ui_put("\n");
