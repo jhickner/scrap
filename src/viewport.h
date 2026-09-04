@@ -99,6 +99,7 @@ struct viewport_state *viewport_state_new(void);
 void viewport_state_free(struct viewport_state *st);
 
 void viewport_hold(int on);
+int  viewport_held(void);
 
 void viewport_stash(struct viewport_state *st);
 void viewport_adopt(struct viewport_state *st);

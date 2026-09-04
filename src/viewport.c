@@ -696,6 +696,11 @@ void viewport_hold(int on)
     held = on ? 1 : 0;
 }
 
+int viewport_held(void)
+{
+    return held;
+}
+
 struct viewport_state *viewport_state_new(void)
 {
     return calloc(1, sizeof(struct viewport_state));

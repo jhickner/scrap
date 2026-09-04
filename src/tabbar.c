@@ -65,13 +65,15 @@ int tabbar_stale(void)
     return digest() != painted || spin_due();
 }
 
-/* the spinner over the input already counts out the current tab's turn */
+/* a turn on the current tab is counted out above the prompt; everything else
+   that is working, including this tab's leftover background work, marks here */
 static const char *mark(int at, enum ui_role *role)
 {
     const struct session *s = workspace_at(at);
     const char           *status = workspace_status(s);
 
-    if (!strcmp(status, "working") && at != workspace_index()) {
+    if (!strcmp(status, "working") &&
+        (at != workspace_index() || !session_turn_running(s))) {
         *role = UI_SPIN;
         return spin_glyph(frame);
     }

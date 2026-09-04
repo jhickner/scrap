@@ -273,9 +273,12 @@ static void task_hold_expire(struct session *s)
         return;
     if (s->call_open && now_seconds() - s->task_held_at < TASK_HOLD_SECONDS)
         return;
-    status_pause();
+    int hide = !viewport_held();
+    if (hide)
+        status_pause();
     task_unhold(s);
-    status_resume();
+    if (hide)
+        status_resume();
     ui_flush();
 }
 
@@ -329,11 +332,14 @@ static void render_event(struct session *s, const backend_event *ev)
     view_keep_nest(nested, whose);
 
     int paused = 0;
+    int hide = !viewport_held();
 
     /* a call that ended without output leaves its lines to the next event */
     if (s->task_held && !s->call_open) {
-        status_pause();
-        paused = 1;
+        if (hide) {
+            status_pause();
+            paused = 1;
+        }
         task_unhold(s);
     }
 
@@ -354,16 +360,20 @@ static void render_event(struct session *s, const backend_event *ev)
         tasks_line(s->task_change, line, sizeof line);
         if (task_hold(s, line))
             break;
-        status_pause();
-        paused = 1;
+        if (hide) {
+            status_pause();
+            paused = 1;
+        }
         paint_note(line);
         break;
     }
 
     case BACKEND_EV_WARNING:
         if (ev->text && *ev->text) {
-            status_pause();
-            paused = 1;
+            if (hide) {
+                status_pause();
+                paused = 1;
+            }
             viewport_item_begin(VIEWPORT_ROWS(1, 1));
             ui_note("%s", ev->text);
             viewport_item_end();
@@ -373,8 +383,10 @@ static void render_event(struct session *s, const backend_event *ev)
     case BACKEND_EV_ASSISTANT:
         if (!ev->text || !*ev->text)
             break;
-        status_pause();
-        paused = 1;
+        if (hide) {
+            status_pause();
+            paused = 1;
+        }
 
         if (nested) {
             /* the nesting mark is drawn for it, so it needs no marker of its own */
@@ -391,8 +403,10 @@ static void render_event(struct session *s, const backend_event *ev)
     case BACKEND_EV_THINKING:
         if (!s->thinking || !ev->text || !*ev->text)
             break;
-        status_pause();
-        paused = 1;
+        if (hide) {
+            status_pause();
+            paused = 1;
+        }
         view_keep_break();
         view_keep_activity("\xe2\x9c\xbb", ev->text, UI_THINKING);
         s->view.after_collapse = 0;
@@ -404,8 +418,10 @@ static void render_event(struct session *s, const backend_event *ev)
         view_tool_argument(ev, s->cwd, arg, sizeof arg);
         int collapses = toolstyle_collapses(name, ev->input_json, ev->arg);
 
-        status_pause();
-        paused = 1;
+        if (hide) {
+            status_pause();
+            paused = 1;
+        }
         if (!nested)
             s->call_open = 1;
         view_keep_tool_call(name, arg, collapses);
@@ -422,8 +438,10 @@ static void render_event(struct session *s, const backend_event *ev)
 
     case BACKEND_EV_TOOL_RESULT:
         if (ev->failed) {
-            status_pause();
-            paused = 1;
+            if (hide) {
+                status_pause();
+                paused = 1;
+            }
             view_keep_break();
             filediff_clear();
             {
@@ -441,8 +459,10 @@ static void render_event(struct session *s, const backend_event *ev)
         }
 
         if (!s->view.after_collapse) {
-            status_pause();
-            paused = 1;
+            if (hide) {
+                status_pause();
+                paused = 1;
+            }
 
             char *patch;
             if (ev->diff) {
@@ -464,8 +484,10 @@ static void render_event(struct session *s, const backend_event *ev)
     if (ev->kind == BACKEND_EV_TOOL_RESULT && !nested) {
         s->call_open = 0;
         if (s->task_held) {
-            status_pause();
-            paused = 1;
+            if (hide) {
+                status_pause();
+                paused = 1;
+            }
             task_unhold(s);
         }
     }
@@ -969,7 +991,7 @@ static int abort_check(void)
 
     name_poll(live);
     usage_poll(live);
-    if (live) {
+    if (live && !viewport_held()) {
         set_spin_word(live);
         set_spin_alert(live);
     }

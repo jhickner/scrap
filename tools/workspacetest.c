@@ -167,6 +167,17 @@ int main(void)
         if (status_spinning())
             fail("switching back to the idle tab ends the spinner");
 
+        workspace_pump();
+        if (status_spinning())
+            fail("a working tab behind this one does not keep the spinner");
+
+        b.work = 1;
+        workspace_show(1);
+        workspace_pump();
+        if (status_spinning())
+            fail("background work does not take the input spinner");
+        b.work = 0;
+
         if (workspace_count() != 2)
             fail("two tabs stay open");
         if (workspace_close(1) != 1)
