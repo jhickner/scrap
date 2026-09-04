@@ -114,6 +114,27 @@ static void check_bottom_up(struct screen *s)
             fail("nothing is painted at the top of an unfilled screen");
 }
 
+static void check_restore_keeps_chrome(struct screen *s)
+{
+    viewport_clear();
+    viewport_chrome_clear();
+    set_size(80, 24);
+    say("banner");
+    refresh(s, 80, 24);
+
+    if (!strstr(row_text(s, 23), "banner"))
+        fail("without chrome the newest row sits on the last screen row");
+
+    char *row = "";
+    viewport_chrome(&row, 1, 0, 0);
+    redraw(s);
+
+    if (strstr(row_text(s, 23), "banner"))
+        fail("a reserved prompt row lifts the banner off the last row");
+    if (!strstr(row_text(s, 22), "banner"))
+        fail("the banner sits on the row above the reserved prompt");
+}
+
 static void check_tail(struct screen *s)
 {
     viewport_clear();
@@ -835,6 +856,7 @@ int main(void)
 
     check_tail(&s);
     check_bottom_up(&s);
+    check_restore_keeps_chrome(&s);
     check_scroll(&s);
     check_chrome_scrolls_off(&s);
     check_soft_wrap(&s);

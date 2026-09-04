@@ -616,19 +616,24 @@ int main(int argc, char **argv)
         ui_raw(1);
         ui_cursor_plain();
 
+        /* typeahead echo, before 1049h snapshots the main screen. skip on
+           restart: the alt screen is already up, and the erase desyncs it. */
+        if (!restore_arg && tty_input_waiting()) {
+            ui_esc("\r");
+            ui_esc(UI_ERASE_BELOW);
+            ui_flush();
+        }
+
         if (restore_arg) {
             view_collapse(settings_get_int(SETTING_COMPACT, 0));
             viewport_inherit();
+            /* so the restore paint keeps a prompt row under the hud */
+            char *row = "";
+            viewport_chrome(&row, 1, 0, 0);
             scrollback_restore(restore_arg);
             unlink(restore_arg);
         } else {
             viewport_begin();
-        }
-
-        if (tty_input_waiting()) {
-            ui_esc("\r");
-            ui_esc(UI_ERASE_BELOW);
-            ui_flush();
         }
     }
 
@@ -735,12 +740,15 @@ int main(int argc, char **argv)
     if (telegram)
         prompt_set_external(prompt, chat_line, NULL);
 
+    chrome_paint();
+
     if (!resume || !cmd_resume(session))
         hud_print(session);
 
     if (tabs_arg) {
         restore_tabs(tabs_arg);
         unlink(tabs_arg);
+        chrome_paint();
     }
 
     boardwork_reattach();
