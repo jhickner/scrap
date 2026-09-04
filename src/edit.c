@@ -4,11 +4,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#include "block.h"
 #include "chrome.h"
 #include "text.h"
-#include "tty.h"
-#include "ui.h"
+#include "terminalrun.h"
 #include "viewport.h"
 
 static const char *editor_command(void)
@@ -33,21 +31,7 @@ static int run_editor(const char *path)
         return -1;
 
     chrome_clear();
-    viewport_suspend();
-    ui_raw(0);
-    tty_raw_end();
-
-    int status = system(cmd);
-
-    if (tty_raw_begin() != 0) {
-        fprintf(stderr, "could not return the terminal to raw mode\n");
-        exit(1);
-    }
-    ui_raw(1);
-    ui_cursor_plain();
-    block_forget();
-    viewport_resume();
-    return status;
+    return terminal_run_external(cmd);
 }
 
 int edit_open(const char *path)

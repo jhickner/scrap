@@ -92,6 +92,9 @@ static int      pin_skip;
    epoch it was measured at */
 static unsigned layout_epoch = 1;
 
+static const void *local_owner;
+static void       *local_data;
+
 static void layout_changed(void) { layout_epoch++; }
 
 #define MOUSE_ON  "\x1b[?1000h\x1b[?1006h"
@@ -196,8 +199,6 @@ static void cup(int row, int col)
 int viewport_active(void) { return active && !suspended; }
 
 void viewport_touch(void) { dirty = 1; layout_changed(); }
-
-int viewport_scrolled(void) { return scrolled; }
 
 unsigned viewport_mark(void) { return next_id; }
 
@@ -701,6 +702,8 @@ struct viewport_state {
     int    scrolled;
     unsigned anchor_id;
     int      anchor_skip;
+    const void *local_owner;
+    void       *local_data;
 };
 
 void viewport_hold(int on)
@@ -728,7 +731,20 @@ void viewport_state_free(struct viewport_state *st)
     free(st->open_buf);
     if (st->open_free && st->open_ud)
         st->open_free(st->open_ud);
+    free(st->local_data);
     free(st);
+}
+
+void *viewport_state_local(const void *owner, size_t size)
+{
+    if (!owner || !size)
+        return NULL;
+    if (local_data)
+        return local_owner == owner ? local_data : NULL;
+    local_data = calloc(1, size);
+    if (local_data)
+        local_owner = owner;
+    return local_data;
 }
 
 void viewport_stash(struct viewport_state *st)
@@ -751,6 +767,8 @@ void viewport_stash(struct viewport_state *st)
     st->scrolled = scrolled;
     st->anchor_id = anchor_id;
     st->anchor_skip = anchor_skip;
+    st->local_owner = local_owner;
+    st->local_data = local_data;
 
     items = NULL;
     nitems = items_cap = 0;
@@ -766,6 +784,8 @@ void viewport_stash(struct viewport_state *st)
     scrolled = 0;
     anchor_id = 0;
     anchor_skip = 0;
+    local_owner = NULL;
+    local_data = NULL;
     dirty = 1;
     layout_changed();
 }
@@ -790,6 +810,8 @@ void viewport_adopt(struct viewport_state *st)
     scrolled = st->scrolled;
     anchor_id = st->anchor_id;
     anchor_skip = st->anchor_skip;
+    local_owner = st->local_owner;
+    local_data = st->local_data;
     memset(st, 0, sizeof *st);
     dirty = 1;
     layout_changed();

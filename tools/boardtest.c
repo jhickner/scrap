@@ -238,6 +238,68 @@ static void test_update_leaves_others_alone(void)
     board_free(after, n_after);
 }
 
+static void test_atomic_worker_commit(void)
+{
+    char id[BOARD_ID_MAX] = {0};
+    expect(board_add("record a worker result once", "/tmp/repo", id), "capture");
+    const char *queue[] = {"implement", "merge"};
+    expect(board_queued(id, queue, 2), "queue worker actions");
+
+    struct board_card *cards = NULL;
+    int n = board_load(&cards);
+    struct board_card *c = board_find(cards, n, id);
+    if (!c) {
+        fail("card for atomic commit");
+        board_free(cards, n);
+        return;
+    }
+    struct board_card edited = *c;
+    edited.tokens_in = 321;
+    snprintf(edited.session, sizeof edited.session, "session-atomic");
+    const struct board_message stopped[] = {
+        {"implement", "the worker failed"},
+        {"board", "no commit on the branch"},
+    };
+    expect(board_commit(&edited, BOARD_MOVE_STOPPED, "implement", stopped, 2),
+           "worker state, transition and notes commit together");
+    board_free(cards, n);
+
+    n = board_load(&cards);
+    c = board_find(cards, n, id);
+    expect(c && c->tokens_in == 321, "atomic commit keeps accounting");
+    expect(c && !strcmp(c->session, "session-atomic"), "atomic commit keeps session");
+    expect(c && c->stopped && c->queue_n == 0, "atomic commit stops the queue");
+    expect(c && c->log_n == 2, "atomic commit appends every note");
+    board_free(cards, n);
+
+    char closed_id[BOARD_ID_MAX] = {0};
+    expect(board_add("close in the same transaction", "/tmp/repo", closed_id),
+           "capture closing card");
+    const char *closing[] = {"merge"};
+    expect(board_queued(closed_id, closing, 1), "queue closing action");
+    n = board_load(&cards);
+    c = board_find(cards, n, closed_id);
+    if (!c) {
+        fail("closing card for atomic commit");
+        board_free(cards, n);
+        return;
+    }
+    snprintf(c->session, sizeof c->session, "session-closing");
+    const struct board_message finished = {"merge", "landed"};
+    expect(board_commit(c, BOARD_MOVE_CLOSED, "merge", &finished, 1),
+           "passing close commits once");
+    board_free(cards, n);
+
+    n = board_load(&cards);
+    c = board_find(cards, n, closed_id);
+    expect(c && c->closed && !c->session[0], "atomic close clears the session");
+    expect(c && c->done_n == 1 && !strcmp(c->done[0], "merge"),
+           "atomic close records the action");
+    expect(c && c->log_n == 1 && !strcmp(c->log[0].text, "landed"),
+           "atomic close records its result");
+    board_free(cards, n);
+}
+
 static void test_remove(void)
 {
     char id[BOARD_ID_MAX] = {0};
@@ -1210,6 +1272,7 @@ int main(void)
     test_note_and_close();
     test_update_preserves_created();
     test_update_leaves_others_alone();
+    test_atomic_worker_commit();
     test_remove();
     test_an_old_column_reads_as_closed_or_not();
     test_actions_are_what_the_files_say();

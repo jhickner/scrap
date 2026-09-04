@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "boardtile.h"
 #include "chrome.h"
 #include "frontend.h"
 #include "menu.h"

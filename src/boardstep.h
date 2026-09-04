@@ -3,8 +3,7 @@
 
 #include <stddef.h>
 
-#include "boardcfg.h"
-
+struct board_action;
 struct board_card;
 
 /* An action's prompt names the card's paths and branches in braces --

@@ -1,7 +1,5 @@
 #include "title.h"
 
-#include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +8,7 @@
 #include <unistd.h>
 
 #include "app.h"
+#include "kvlog.h"
 #include "vendor/agents/backend.h"
 #include "text.h"
 
@@ -23,28 +22,7 @@ int title_lookup(const char *id, char *out, size_t size)
     char path[1200];
     if (!id || !*id || !path_config_file(path, sizeof path, "titles"))
         return 0;
-    FILE *f = fopen(path, "r");
-    if (!f)
-        return 0;
-
-    char *line = NULL;
-    size_t cap = 0;
-    size_t id_len = strlen(id);
-    int found = 0;
-
-    while (getline(&line, &cap, f) > 0) {
-        if (strncmp(line, id, id_len) != 0 || line[id_len] != '\t')
-            continue;
-        char *text = line + id_len + 1;
-        text[strcspn(text, "\n")] = '\0';
-        if (*text) {
-            snprintf(out, size, "%s", text);
-            found = 1;
-        }
-    }
-    free(line);
-    fclose(f);
-    return found;
+    return kvlog_lookup(path, id, out, size);
 }
 
 static int tidy(char *text)
@@ -67,27 +45,7 @@ static void write_cache(const char *id, const char *title)
     char path[1200];
     if (!path_config_file(path, sizeof path, "titles"))
         return;
-    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0600);
-    if (fd < 0)
-        return;
-    char row[256];
-    int n = snprintf(row, sizeof row, "%s\t%s\n", id, title);
-
-    if (n > 0 && (size_t)n < sizeof row) {
-        const char *p = row;
-        size_t left = (size_t)n;
-        while (left) {
-            ssize_t w = write(fd, p, left);
-            if (w < 0) {
-                if (errno == EINTR)
-                    continue;
-                break;
-            }
-            p += w;
-            left -= (size_t)w;
-        }
-    }
-    close(fd);
+    (void)kvlog_append(path, id, title);
 }
 
 int title_clean(const char *name, char *out, size_t size)

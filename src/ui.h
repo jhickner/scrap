@@ -83,9 +83,6 @@ void ui_flush(void);
 
 void ui_esc(const char *s);
 
-void ui_sync_begin(void);
-void ui_sync_end(void);
-
 int ui_reflow_rows(const int *row_widths, int count, int cols);
 
 int    ui_columns(void);

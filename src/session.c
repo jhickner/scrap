@@ -14,18 +14,16 @@
 #include "agenttabs.h"
 #include "block.h"
 #include "app.h"
-#include "prompt.h"
-#include "filediff.h"
 #include "gitinfo.h"
 #include "hud.h"
 #include "image.h"
 #include "livelist.h"
 #include "restart.h"
-#include "md.h"
 #include "models.h"
 #include "parent.h"
 #include "sessionload.h"
 #include "sessionprefs.h"
+#include "sessionpresent.h"
 #include "sessionview.h"
 #include "viewport.h"
 #include "settings.h"
@@ -34,19 +32,12 @@
 #include "tasks.h"
 #include "title.h"
 #include "tg.h"
-#include "toolstyle.h"
 #include "transcript.h"
 #include "tty.h"
 #include "ui.h"
 #include "vendor/agents/backend.h"
 #include "text.h"
 #include "vendor/cJSON.h"
-
-/* How many task lines may wait out a tool call, and how long they wait before
-   being drawn where they happened: the wait is only worth it while the call's
-   output is imminent. */
-#define TASK_HOLD_MAX     4
-#define TASK_HOLD_SECONDS 3.0
 
 struct session {
     Backend *agent;
@@ -69,15 +60,12 @@ struct session {
     char    *failed_prompt;
     struct transcript transcript;
     char    *last_block;
-    char    *streamed;
-    size_t   streamed_len, streamed_cap;
     int      turns;
     double   cost_usd;
     long     tokens_in, tokens_out;
     long     context_tokens;
     long     context_window;
     int      quiet;
-    int      silent;
     char    *system_extra;
     session_event_fn observer;
     void    *observer_ud;
@@ -99,10 +87,6 @@ struct session {
     struct tasktab     tasks;
     const struct task *task_change;
     int      task_repeat;
-    char     task_hold[TASK_HOLD_MAX][240];
-    int      task_held;  /* task lines waiting for the open call to finish */
-    double   task_held_at;
-    int      call_open;  /* a tool call has been drawn, its output has not */
     unsigned long spoke; /* events other than task reports, for stall_watch */
     double   work_at;    /* when the outstanding background work started */
     double   stall_at;   /* when the last outstanding task went quiet */
@@ -130,7 +114,7 @@ struct session {
     backend_result  meta;
     double          started;
 
-    struct turnview view;
+    struct sessionpresent present;
 };
 
 struct evcopy {
@@ -148,32 +132,6 @@ static void replace(char **slot, const char *value)
 static int same_string(const char *a, const char *b)
 {
     return a == b || (a && b && !strcmp(a, b));
-}
-
-static void stream_append(struct session *s, const char *value)
-{
-    if (!value || !*value)
-        return;
-    size_t add = strlen(value);
-    if (s->streamed_len + add + 1 > s->streamed_cap) {
-        size_t want = s->streamed_cap ? s->streamed_cap : 1024;
-        while (want < s->streamed_len + add + 1)
-            want *= 2;
-        char *grown = realloc(s->streamed, want);
-        if (!grown)
-            return;
-        s->streamed = grown;
-        s->streamed_cap = want;
-    }
-    memcpy(s->streamed + s->streamed_len, value, add + 1);
-    s->streamed_len += add;
-}
-
-static void stream_reset(struct session *s)
-{
-    free(s->streamed);
-    s->streamed = NULL;
-    s->streamed_len = s->streamed_cap = 0;
 }
 
 static struct session *live;
@@ -239,54 +197,6 @@ static void note_recent(struct session *s, const backend_event *ev)
     s->recent_n++;
 }
 
-static void paint_note(const char *line)
-{
-    viewport_item_begin(VIEWPORT_ROWS(1, 1));
-    ui_note("%s", line);
-    viewport_item_end();
-}
-
-/* The CLI reports a backgrounded command twice: as the tool call, and as a task
-   of its own. Its life cycle therefore arrives while the call is still waiting
-   for its output, where a line of its own would split the pair -- so it waits
-   for the output instead. Nonzero when the line was taken. */
-static int task_hold(struct session *s, const char *line)
-{
-    if (!s->call_open || s->task_held >= TASK_HOLD_MAX)
-        return 0;
-    if (!s->task_held)
-        s->task_held_at = now_seconds();
-    snprintf(s->task_hold[s->task_held], sizeof s->task_hold[0], "%s", line);
-    s->task_held++;
-    return 1;
-}
-
-static int task_unhold(struct session *s)
-{
-    int held = s->task_held;
-    for (int i = 0; i < held; i++)
-        paint_note(s->task_hold[i]);
-    s->task_held = 0;
-    return held;
-}
-
-/* Draw what is held, whether or not the call it is waiting on ever answered.
-   Only for the session being drawn: this paints. */
-static void task_hold_expire(struct session *s)
-{
-    if (!s->task_held || s->quiet || s->silent)
-        return;
-    if (s->call_open && now_seconds() - s->task_held_at < TASK_HOLD_SECONDS)
-        return;
-    int hide = !viewport_held();
-    if (hide)
-        status_pause();
-    task_unhold(s);
-    if (hide)
-        status_resume();
-    ui_flush();
-}
-
 static void render_event(struct session *s, const backend_event *ev)
 {
     /* Anything but a task report is the backend talking, which is what tells a
@@ -323,184 +233,10 @@ static void render_event(struct session *s, const backend_event *ev)
     if (s->observer)
         s->observer(s->observer_ud, ev);
 
-    if (s->quiet || s->silent || live != s)
+    if (s->quiet || live != s)
         return;
-
-    /* A subagent's work comes up the same stream as the session's own: what it
-       says is not the session's answer, and what it calls is not a call the
-       session made. The task the parent call started names which agent, so two
-       running at once do not read as one. */
-    int  nested = ev->parent && *ev->parent;
-    char whose[32] = "";
-    if (nested)
-        tasks_label(tasks_by_parent(&s->tasks, ev->parent), whose, sizeof whose);
-    view_keep_nest(nested, whose);
-
-    int paused = 0;
-    int hide = !viewport_held();
-
-    /* a call that ended without output leaves its lines to the next event */
-    if (s->task_held && !s->call_open) {
-        if (hide) {
-            status_pause();
-            paused = 1;
-        }
-        task_unhold(s);
-    }
-
-    switch (ev->kind) {
-    case BACKEND_EV_INIT:
-    case BACKEND_EV_CWD:
-    case BACKEND_EV_TRUST:
-        break;
-
-    /* Work that outlives the turn is the one thing a finished turn does not
-       account for, so each life-cycle change gets a line of its own. */
-    case BACKEND_EV_TASK: {
-        char line[240];
-        /* a task that opens while a call is on screen is that call, under the
-           name the CLI gave it: the end is the part the call does not report */
-        if (!s->task_change || (s->call_open && !tasks_done(s->task_change)))
-            break;
-        tasks_line(s->task_change, line, sizeof line);
-        if (task_hold(s, line))
-            break;
-        if (hide) {
-            status_pause();
-            paused = 1;
-        }
-        paint_note(line);
-        break;
-    }
-
-    case BACKEND_EV_WARNING:
-        if (ev->text && *ev->text) {
-            if (hide) {
-                status_pause();
-                paused = 1;
-            }
-            viewport_item_begin(VIEWPORT_ROWS(1, 1));
-            ui_note("%s", ev->text);
-            viewport_item_end();
-        }
-        break;
-
-    case BACKEND_EV_ASSISTANT:
-        if (!ev->text || !*ev->text)
-            break;
-        if (hide) {
-            status_pause();
-            paused = 1;
-        }
-
-        if (nested) {
-            /* the nesting mark is drawn for it, so it needs no marker of its own */
-            view_keep_break();
-            view_keep_activity("", ev->text, UI_DIM);
-        } else {
-            md_render_kept(ev->text, 0);
-            stream_append(s, ev->text);
-            view_keep_break();
-        }
-        s->view.after_collapse = 0;
-        break;
-
-    case BACKEND_EV_THINKING:
-        if (!s->thinking || !ev->text || !*ev->text)
-            break;
-        if (hide) {
-            status_pause();
-            paused = 1;
-        }
-        view_keep_break();
-        view_keep_activity("\xe2\x9c\xbb", ev->text, UI_THINKING);
-        s->view.after_collapse = 0;
-        break;
-
-    case BACKEND_EV_TOOL: {
-        const char *name = ev->name ? ev->name : "?";
-        char arg[4096];
-        view_tool_argument(ev, s->cwd, arg, sizeof arg);
-        int collapses = toolstyle_collapses(name, ev->input_json, ev->arg);
-
-        if (hide) {
-            status_pause();
-            paused = 1;
-        }
-        if (!nested)
-            s->call_open = 1;
-        view_keep_tool_call(name, arg, collapses);
-
-        char path[4096];
-        if (!collapses && view_tool_path(ev->input_json, s->cwd, path, sizeof path))
-            filediff_snapshot(path);
-        else
-            filediff_clear();
-
-        s->view.after_collapse = collapses;
-        break;
-    }
-
-    case BACKEND_EV_TOOL_RESULT:
-        if (ev->failed) {
-            if (hide) {
-                status_pause();
-                paused = 1;
-            }
-            view_keep_break();
-            filediff_clear();
-            {
-                const char *why = ev->text && *ev->text ? ev->text : NULL;
-                if (!why || !strcmp(why, "failed")) {
-                    view_keep_output("failed", UI_ERROR, 0);
-                } else {
-                    char line[4096];
-                    snprintf(line, sizeof line, "failed: %s", why);
-                    view_keep_output(line, UI_ERROR, 1);
-                }
-            }
-            s->view.after_collapse = 0;
-            break;
-        }
-
-        if (!s->view.after_collapse) {
-            if (hide) {
-                status_pause();
-                paused = 1;
-            }
-
-            char *patch;
-            if (ev->diff) {
-                patch = strdup(ev->diff);
-                filediff_clear();
-            } else {
-                patch = filediff_take_patch();
-            }
-            if (filediff_patch_draws(patch)) {
-                view_keep_diff(patch);
-            } else {
-                free(patch);
-                view_keep_output(ev->text, UI_DIM, 0);
-            }
-        }
-        break;
-    }
-
-    if (ev->kind == BACKEND_EV_TOOL_RESULT && !nested) {
-        s->call_open = 0;
-        if (s->task_held) {
-            if (hide) {
-                status_pause();
-                paused = 1;
-            }
-            task_unhold(s);
-        }
-    }
-
-    view_keep_nest(0, NULL);
-    if (paused)
-        status_resume();
-    ui_flush();
+    sessionpresent_event(&s->present, ev, s->cwd, &s->tasks, s->task_change,
+                         s->thinking);
 }
 
 static void wake_write(struct session *s);
@@ -645,11 +381,6 @@ int session_work_count(const struct session *s)
     return s->agent->busy ? session_idle_busy(s) : tasks_pending(&s->tasks);
 }
 
-double session_work_elapsed(const struct session *s)
-{
-    return s && s->work_at ? now_seconds() - s->work_at : 0;
-}
-
 /* Work that outlives its turn is only over when the backend says so: the task
    ends, its result wakes the model, and that turn is the answer. A task torn
    down without one leaves the session at a prompt indistinguishable from an
@@ -731,14 +462,13 @@ int session_idle_pump(struct session *s)
         return 0;
 
     if (!s->idle_busy) {
-        view_keep_break();
-        s->view.after_collapse = 0;
+        sessionpresent_break(&s->present);
     }
     struct session *was = session_set_drawing(s);
     image_poll();
     unsigned long before = s->spoke;
     int busy = s->agent->idle_pump(s->agent) ? 1 : 0;
-    task_hold_expire(s);
+    sessionpresent_expire(&s->present, s->quiet);
     session_set_drawing(was);
 
     /* a turn still open, or one that opened and closed inside this pump */
@@ -939,31 +669,6 @@ double session_quiet(const struct session *s)
     return quiet > 0 ? quiet : 0;
 }
 
-static void set_spin_alert(const struct session *s)
-{
-    double quiet = session_quiet(s);
-    if (quiet < SESSION_QUIET_SECONDS) {
-        status_set_alert(NULL);
-        return;
-    }
-    char since[32], text[64];
-    text_duration(quiet, since, sizeof since);
-    snprintf(text, sizeof text, "%s quiet for %s", s->backend, since);
-    status_set_alert(text);
-}
-
-static void set_spin_word(const struct session *s)
-{
-    const char *effort = spin_effort(s);
-    if (effort_is_off(effort)) {
-        status_set_word("working");
-        return;
-    }
-    char phrase[64];
-    snprintf(phrase, sizeof phrase, "thinking with %s effort", effort);
-    status_set_word(phrase);
-}
-
 int session_poll_input(void)
 {
     if (!tty_is_raw())
@@ -998,10 +703,9 @@ static int abort_check(void)
 
     name_poll(live);
     usage_poll(live);
-    if (live && !viewport_held()) {
-        set_spin_word(live);
-        set_spin_alert(live);
-    }
+    if (live && !viewport_held())
+        sessionpresent_spin(live->backend, spin_effort(live), session_quiet(live),
+                            SESSION_QUIET_SECONDS);
 
     int interrupt = session_poll_input();
     if (live && live->abort_hook)
@@ -1052,20 +756,7 @@ void session_replay(struct session *s)
     hud_print(s);
     if (!s)
         return;
-    for (size_t i = 0; i < s->transcript.count; i++) {
-        const struct transcript_turn *t = &s->transcript.turns[i];
-        if (t->user && *t->user)
-            prompt_echo_message(t->user);
-        if (t->assistant && *t->assistant)
-            md_render_kept(t->assistant, 0);
-        if (t->interrupted) {
-            viewport_item_begin(VIEWPORT_ROWS(0, 1));
-            ui_error("  interrupted");
-            viewport_item_end();
-            ui_flush();
-        }
-    }
-    ui_flush();
+    sessionpresent_replay(&s->transcript);
 }
 
 void session_free(struct session *s)
@@ -1101,7 +792,7 @@ void session_free(struct session *s)
     free(s->last_reply);
     free(s->failed_prompt);
     free(s->last_block);
-    stream_reset(s);
+    sessionpresent_free(&s->present);
     free(s->prompt);
     free(s->permission);
     free(s->error_note);
@@ -1234,8 +925,6 @@ int session_switch_backend(struct session *s, const char *backend)
 }
 
 void session_set_quiet(struct session *s, int quiet) { s->quiet = quiet; }
-
-void session_set_silent(struct session *s, int silent) { s->silent = silent; }
 
 int session_recent_seq(const struct session *s)
 {
@@ -1732,78 +1421,6 @@ static void update_title(struct session *s)
     adopt_title(s);
 }
 
-struct footer {
-    double elapsed;
-    long   tokens;
-    long   window;
-    double cost;
-    char   title[128];
-};
-
-static void footer_render(void *ud, int cols)
-{
-    const struct footer *f = ud;
-
-    char used[32], window[32];
-    text_humanize(f->tokens, used, sizeof used);
-    text_humanize(f->window, window, sizeof window);
-
-    char line[384];
-    size_t n = 0;
-    #define APPEND(...)                                                                        \
-        do {                                                                                   \
-            int w = snprintf(line + n, sizeof line - n, __VA_ARGS__);                           \
-            if (w > 0)                                                                          \
-                n += (size_t)w < sizeof line - n ? (size_t)w : sizeof line - n - 1;             \
-        } while (0)
-
-    APPEND("%.0fs", f->elapsed);
-    if (f->window > 0) {
-        int percent = (int)((double)f->tokens * 100.0 / (double)f->window);
-        APPEND(" \xc2\xb7 %s / %s (%d%%)", used, window, percent);
-    } else if (f->tokens > 0) {
-        APPEND(" \xc2\xb7 %s", used);
-    }
-    if (f->cost > 0)
-        APPEND(" \xc2\xb7 $%.4f", f->cost);
-
-    int wrapped = 0;
-    if (f->title[0]) {
-        int room = cols - 1;
-        size_t want = ui_cells(line) + ui_cells(" \xc2\xb7 ") + ui_cells(f->title);
-        if (room > 0 && want <= (size_t)room)
-            APPEND(" \xc2\xb7 %s", f->title);
-        else
-            wrapped = 1;
-    }
-    #undef APPEND
-
-    ui_esc(ui_style(UI_DIM));
-    ui_put(line);
-    ui_esc(ui_style(UI_RESET));
-    ui_put("\n");
-    if (wrapped)
-        ui_wrapped(f->title, 0, UI_DIM);
-}
-
-static void print_footer(struct session *s, double elapsed)
-{
-    struct footer *f = calloc(1, sizeof *f);
-    if (!f)
-        return;
-    f->elapsed = elapsed;
-    f->tokens = s->context_tokens;
-    f->window = s->context_window;
-    f->cost = s->cost_usd;
-    snprintf(f->title, sizeof f->title, "%s", s->title);
-
-    viewport_item_begin(&(struct viewport_entry){
-        .render = footer_render, .ud = f, .free_ud = free, .reflow = 1});
-    footer_render(f, ui_columns());
-    viewport_item_end();
-    ui_flush();
-}
-
 static int dir_alive(const char *path)
 {
     struct stat st;
@@ -1951,14 +1568,11 @@ static int turn_ready(struct session *s, const char *text)
 static void turn_prepare(struct session *s, const char *text)
 {
     replace(&s->last_block, NULL);
-    stream_reset(s);
+    sessionpresent_turn_begin(&s->present);
     replace(&s->prompt, text);
-    s->view.after_collapse = 0;
-    view_keep_break();
     s->started = now_seconds();
     s->heard_at = s->started;
     s->tool_open = 0;
-    s->call_open = 0;
     s->idle_busy = 1;
     s->stall_told = 0;
     s->stall_at = 0;
@@ -1973,7 +1587,7 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     const backend_result m = *meta;
     const char *text = s->prompt ? s->prompt : "";
     s->heard_at = 0;
-    s->call_open = 0; /* a call the turn ended in the middle of holds nothing */
+    sessionpresent_turn_end(&s->present);
     const char *id = s->agent->session_id(s->agent);
     if (id)
         set_id(s, id);
@@ -1988,9 +1602,6 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
                     "the working directory was deleted mid-turn; the session has "
                     "been restarted");
         const char *detail = session_last_error(s);
-        if (s->silent)
-            return 0;
-
         if (s->quiet) {
             if (detail)
                 fprintf(stderr, "%s: %s\n", s->backend, detail);
@@ -1998,60 +1609,17 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
                 fprintf(stderr, "the %s process stopped responding\n", s->backend);
             return 0;
         }
-        viewport_item_begin(VIEWPORT_ROWS(1, 1));
-        if (detail)
-            ui_error("%s: %s", s->backend, detail);
-        else
-            ui_error("the %s process stopped responding", s->backend);
-        viewport_item_end();
-        ui_flush();
+        sessionpresent_failure(s->backend, detail);
         return 0;
     }
 
-    int shown = (s->last_block && strcmp(reply, s->last_block) == 0) ||
-                (s->streamed && strcmp(reply, s->streamed) == 0);
-    if (s->silent) {
-        if (!*reply && s->last_block)
-            replace(&reply, s->last_block);
-    } else if (s->quiet) {
-        const char *tail = *reply ? reply : (s->last_block ? s->last_block : "");
-        if (*tail) {
-            ui_put(tail);
-            ui_put("\n");
-        } else {
-            const char *detail = s->agent->last_error(s->agent);
-            char why[128];
-
-            if (m.subtype[0] && strcmp(m.subtype, "success") != 0)
-                snprintf(why, sizeof why, "the turn ended without a reply (%s)",
-                         m.subtype);
-            else
-                snprintf(why, sizeof why, "the turn ended without a reply");
-            fprintf(stderr, "%s\n",
-                    detail && *detail ? detail
-                    : m.interrupted   ? "the turn was interrupted"
-                    : m.is_error      ? "the turn ended in an error"
-                                      : why);
-        }
-    } else if (!*reply && m.is_error) {
-        const char *detail = s->agent->last_error(s->agent);
-        viewport_item_begin(VIEWPORT_ROWS(1, 1));
-        if (detail && *detail)
-            ui_error("%s: %s", s->backend, detail);
-        else
-            ui_error("the %s turn ended in an error", s->backend);
-        viewport_item_end();
-        ui_flush();
-    } else if (*reply && !shown) {
-        md_render_kept(reply, 0);
-    }
+    const char *tail = *reply ? reply : (s->last_block ? s->last_block : "");
+    const char *detail = NULL;
+    if ((s->quiet && !*tail) || (!s->quiet && !*reply && m.is_error))
+        detail = s->agent->last_error(s->agent);
+    sessionpresent_turn_result(&s->present, s->backend, reply, s->last_block,
+                               detail, &m, s->quiet);
     s->interrupted = m.interrupted;
-    if (m.interrupted && !s->silent) {
-        viewport_item_begin(VIEWPORT_ROWS(0, 1));
-        ui_error("  interrupted");
-        viewport_item_end();
-        ui_flush();
-    }
 
     if (*reply)
         replace(&s->last_reply, reply);
@@ -2080,8 +1648,9 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     update_title(s);
     remember_model(s);
     remember_window(s);
-    if (!s->quiet && !s->silent)
-        print_footer(s, elapsed);
+    if (!s->quiet)
+        sessionpresent_footer(elapsed, s->context_tokens, s->context_window,
+                              s->cost_usd, s->title);
     return 1;
 }
 
@@ -2092,8 +1661,9 @@ int session_turn(struct session *s, const char *text)
 
     turn_prepare(s, text);
     struct session *was = session_set_drawing(s);
-    if (!s->quiet && !s->silent) {
-        set_spin_word(s);
+    if (!s->quiet) {
+        sessionpresent_spin(s->backend, spin_effort(s), session_quiet(s),
+                            SESSION_QUIET_SECONDS);
         status_begin();
     }
 
@@ -2102,7 +1672,7 @@ int session_turn(struct session *s, const char *text)
     usage_poll(s);
     double elapsed = now_seconds() - s->started;
     session_set_drawing(was);
-    if (!s->quiet && !s->silent)
+    if (!s->quiet)
         status_end();
 
     return turn_finish(s, reply, &meta, elapsed);
@@ -2217,7 +1787,7 @@ static void drain_events(struct session *s)
         evcopy_free(e);
     }
     image_poll();
-    task_hold_expire(s);
+    sessionpresent_expire(&s->present, s->quiet);
     session_set_drawing(was);
 }
 
@@ -2482,77 +2052,38 @@ void session_spin_word(const struct session *s)
 {
     if (!s)
         return;
-    set_spin_word(s);
-    set_spin_alert(s);
-}
-
-/* The word for work with no turn behind it: the count is all there is to say,
-   and it is the whole point of showing the row. */
-void session_work_word(const struct session *s)
-{
-    char text[32];
-    int  n = session_work_count(s);
-
-    snprintf(text, sizeof text, "%d task%s", n, n == 1 ? "" : "s");
-    status_set_word(text);
-    status_set_alert(NULL);
+    sessionpresent_spin(s->backend, spin_effort(s), session_quiet(s),
+                        SESSION_QUIET_SECONDS);
 }
 
 void session_report(const struct session *s)
 {
-    char used[32], window[32];
-    text_humanize(s->context_tokens, used, sizeof used);
-    text_humanize(s->context_window, window, sizeof window);
-
     const char *auth = auth_description(s);
-    viewport_item_begin(VIEWPORT_ROWS(1, 1));
-    ui_note("  backend  %s", s->backend);
-    ui_note("  model    %s", session_model(s));
-    if (session_can_set_effort(s))
-        ui_note("  effort   %s", session_effort(s));
-    if (auth)
-        ui_note("  auth     %s", auth);
-
-    if (strcmp(s->backend, "claude") == 0) {
-        ui_note("  config   %s", s->customizations ? "skills, CLAUDE.md, MCP, agents"
-                                                   : "safe mode (customizations off)");
-        ui_note("  tools    %s", session_permission(s));
-    }
-    ui_note("  calls    %s", s->compact ? "compact (one row each)" : "full blocks");
-    if (tg_label())
-        ui_note("  chat     %s", tg_label());
-    if (s->id[0])
-        ui_note("  session  %s", s->id);
+    char parent[200] = "";
     if (s->id[0]) {
         char up[128];
         if (parent_of(s->id, up, sizeof up)) {
-            char name[200];
-            if (!title_lookup(up, name, sizeof name))
-                snprintf(name, sizeof name, "%s", up);
-            ui_note("  parent   %s", name);
+            if (!title_lookup(up, parent, sizeof parent))
+                snprintf(parent, sizeof parent, "%s", up);
         }
     }
 
-    char scratch[512];
-    path_home_relative(s->cwd, scratch, sizeof scratch);
-    const char *dir = s->cwd ? scratch : ".";
-    int room = ui_columns() - 12;
-    size_t cells = ui_cells(dir);
-    if (room > 8 && cells > (size_t)room) {
-        while (*dir && ui_cells(dir) > (size_t)room - 1)
-            dir++;
-        ui_note("  cwd      …%s", dir);
-    } else {
-        ui_note("  cwd      %s", dir);
-    }
-    ui_note("  turns    %d", s->turns);
-    if (s->context_window > 0)
-        ui_note("  context  %s / %s", used, window);
-    if (s->cost_usd > 0 || auth)
-        ui_note("  cost     $%.4f%s", s->cost_usd,
-                auth && strcmp(auth, "subscription login") == 0
-                    ? "  (list price; the subscription is not billed per token)"
-                    : "");
-    viewport_item_end();
-    ui_flush();
+    struct sessionpresent_report r = {
+        .backend = s->backend,
+        .model = session_model(s),
+        .effort = session_can_set_effort(s) ? session_effort(s) : NULL,
+        .auth = auth,
+        .permission = !strcmp(s->backend, "claude") ? session_permission(s) : NULL,
+        .chat = tg_label(),
+        .id = s->id[0] ? s->id : NULL,
+        .parent = parent[0] ? parent : NULL,
+        .cwd = s->cwd,
+        .customizations = s->customizations,
+        .compact = s->compact,
+        .turns = s->turns,
+        .context_tokens = s->context_tokens,
+        .context_window = s->context_window,
+        .cost = s->cost_usd,
+    };
+    sessionpresent_report(&r);
 }

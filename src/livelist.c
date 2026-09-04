@@ -173,12 +173,6 @@ const char *livelist_tmux_window(void)
     return tmux_window;
 }
 
-const char *livelist_tmux_window_name(void)
-{
-    tmux_where();
-    return tmux_wname;
-}
-
 void livelist_begin(void)
 {
     if (!live_dir(dir, sizeof dir)) {
@@ -461,4 +455,3 @@ int livelist_closed_load(struct live_session **out)
     free(live);
     return n;
 }
-

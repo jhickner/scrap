@@ -1,8 +1,7 @@
 #ifndef BOARDGRID_H
 #define BOARDGRID_H
 
-#include "boardtile.h"
-
+struct board_tile;
 struct menu;
 
 #define GRID_LANE_MIN 15

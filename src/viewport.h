@@ -35,6 +35,7 @@ void viewport_item_end(void);
 void viewport_suspend(void);
 void viewport_resume(void);
 
+
 void viewport_paint(void);
 
 /* synchronized paints preserve Kitty placeholder combining marks in tmux */
@@ -100,6 +101,10 @@ struct viewport_state;
 struct viewport_state *viewport_state_new(void);
 void viewport_state_free(struct viewport_state *st);
 
+/* Module-private state attached to the currently adopted viewport. The owner
+   token keeps unrelated clients from accidentally sharing the one slot. */
+void *viewport_state_local(const void *owner, size_t size);
+
 void viewport_hold(int on);
 int  viewport_held(void);
 
@@ -108,6 +113,5 @@ void viewport_adopt(struct viewport_state *st);
 
 void viewport_scroll(int delta);
 void viewport_scroll_end(void);
-int  viewport_scrolled(void);
 
 #endif

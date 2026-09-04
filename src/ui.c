@@ -511,9 +511,6 @@ void ui_pad(int cells)
     }
 }
 
-void ui_sync_begin(void) { out("\x1b[?2026h", 8); }
-void ui_sync_end(void) { out("\x1b[?2026l", 8); }
-
 int ui_reflow_rows(const int *row_widths, int count, int cols)
 {
     if (cols <= 0)

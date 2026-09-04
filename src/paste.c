@@ -7,18 +7,13 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "app.h"
 #include "text.h"
 
 static int paste_dir(char *out, size_t size)
 {
-    const char *home = getenv("HOME");
-    if (!home)
+    char base[4096];
+    if (!path_config_dir(base, sizeof base))
         return 0;
-    char base[1024];
-    if ((size_t)snprintf(base, sizeof base, "%s/.config/%s", home, APP_NAME) >= sizeof base)
-        return 0;
-    mkdir(base, 0700);
     if ((size_t)snprintf(out, size, "%s/pastes", base) >= size)
         return 0;
     mkdir(out, 0700);

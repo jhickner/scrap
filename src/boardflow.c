@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "board.h"
+#include "boardcfg.h"
+
 _Static_assert(BOARD_PIPELINE_LONG <= BOARD_QUEUE,
                "a pipeline has to fit in a card's queue");
 

@@ -81,8 +81,6 @@ int tty_input_waiting(void);
 
 unsigned tty_resize_epoch(void);
 
-int tty_cursor_pos(int *row, int *col);
-
 #define TTY_RESIZE_SETTLE_MS 100
 
 #define TTY_MIN_COLUMNS 20

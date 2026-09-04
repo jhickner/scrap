@@ -878,8 +878,6 @@ int boardwork_rejoin(const struct board_card *c, char *why, int size)
    close from the board is: the worktree the card carried goes with it. */
 static void close_after(struct worker *w)
 {
-    if (!board_close(w->id))
-        board_note(w->id, "board", "the store did not take the close");
     boardwork_let_go(w->id);
 }
 
@@ -925,10 +923,10 @@ void boardwork_finished(struct session *s)
     /* an interrupt cancels the turn, not the action: the card keeps its queue
        and its session, and the action stands where it was */
     if (session_last_interrupted(s)) {
-        if (!board_update(&edited))
+        const struct board_message message = {"board", "the turn was interrupted"};
+        if (!board_commit(&edited, BOARD_MOVE_NONE, NULL, &message, 1))
             board_note(w->id, "board", "the store did not take the update");
         board_free(cards, n);
-        board_note(w->id, "board", "the turn was interrupted");
         return;
     }
 
@@ -944,34 +942,34 @@ void boardwork_finished(struct session *s)
     int passed = ran && !broke && !empty && (!failed || !*failed);
     int closes = passed && boardflow_closes(c, p);
 
-    int stored = board_update(&edited);
-    board_free(cards, n);
+    char *failure_note = NULL;
+    const char *result_note = reply && *reply ? reply : "finished without saying anything";
+    if (failed && *failed) {
+        size_t need = strlen(failed) + 32;
+        failure_note = malloc(need);
+        if (failure_note) {
+            snprintf(failure_note, need, "the turn failed: %s", failed);
+            result_note = failure_note;
+        } else {
+            result_note = failed;
+        }
+    }
 
-    if (passed)
-        stored &= board_took(w->id, ran);
-    else if (ran)
-        stored &= board_stopped(w->id);
+    struct board_message messages[2] = {
+        {w->job, result_note},
+        {"board", empty ? "no commit on the branch" : NULL},
+    };
+    enum board_move move = closes ? BOARD_MOVE_CLOSED
+                                  : passed ? BOARD_MOVE_TOOK
+                                           : ran ? BOARD_MOVE_STOPPED : BOARD_MOVE_NONE;
+    int stored = board_commit(&edited, move, ran, messages, 2);
+    free(failure_note);
+    board_free(cards, n);
 
     if (!stored)
         board_note(w->id, "board", "the store did not take the update");
 
-    if (failed && *failed) {
-        size_t need = strlen(failed) + 32;
-        char  *said = malloc(need);
-        if (said) {
-            snprintf(said, need, "the turn failed: %s", failed);
-            board_note(w->id, w->job, said);
-            free(said);
-        } else {
-            board_note(w->id, w->job, failed);
-        }
-    } else {
-        board_note(w->id, w->job,
-                   reply && *reply ? reply : "finished without saying anything");
-    }
-    if (empty)
-        board_note(w->id, "board", "no commit on the branch");
-    else if (closes && stored)
+    if (closes && stored)
         close_after(w);
     else if ((!failed || !*failed) && stored)
         pick_after(w);

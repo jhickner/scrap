@@ -21,7 +21,6 @@ int  mdcfg_parse(struct mdcfg *m, char *text);
 void mdcfg_free(struct mdcfg *m);
 
 const char *mdcfg_get(const struct mdcfg *m, const char *key);
-int         mdcfg_has(const struct mdcfg *m, const char *key);
 int         mdcfg_int(const struct mdcfg *m, const char *key, int fallback);
 
 int mdcfg_write(const char *path, const char *const *keys,

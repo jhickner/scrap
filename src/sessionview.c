@@ -86,9 +86,22 @@ static void tool_tag(const char *name, char *out, size_t size);
 static unsigned char *row_spans(const char *name, const char *row, size_t prefix);
 static int cluster_budget(void);
 
-static int collapsed;
+struct sessionview_state {
+    int      collapsed;
+    unsigned run_start;
+};
 
-int view_collapsed(void) { return collapsed; }
+static char state_owner;
+
+static struct sessionview_state *view_state(void)
+{
+    static struct sessionview_state fallback;
+    struct sessionview_state *st =
+        viewport_state_local(&state_owner, sizeof(struct sessionview_state));
+    return st ? st : &fallback;
+}
+
+int view_collapsed(void) { return view_state()->collapsed; }
 
 static int keep_drops(const struct keep *k)
 {
@@ -153,11 +166,11 @@ static void keep_render(void *ud, int cols)
     nest_label = k->nested ? k->label : NULL;
     nest = k->nested ? nest_width(nest_label) : 0;
     nest_said = 0;
-    if (collapsed && keep_drops(k)) {
+    if (view_state()->collapsed && keep_drops(k)) {
         nest = 0;
         return;
     }
-    if (k->kind == KEEP_CALL && (collapsed || k->collapses)) {
+    if (k->kind == KEEP_CALL && (view_state()->collapsed || k->collapses)) {
         call_collapsed(k);
         nest = 0;
         return;
@@ -242,8 +255,6 @@ static char *keep_encode(void *ud)
 
 static void restate(unsigned from, int stale);
 
-static unsigned run_start;
-
 /* the blank always gets reserved here: a pad can be hidden later but not
    conjured, so an item born without one could never take a gap on a toggle */
 static unsigned keep(struct keep *k)
@@ -255,7 +266,7 @@ static unsigned keep(struct keep *k)
     viewport_item_end();
     viewport_item_persist(mark, VIEW_KEEP_KIND, keep_encode);
     if (mark)
-        restate(run_start ? run_start : mark, 0);
+        restate(view_state()->run_start ? view_state()->run_start : mark, 0);
     return mark;
 }
 
@@ -333,7 +344,7 @@ void view_keep_tool_call(const char *name, const char *arg, int collapses)
     keep(k);
 }
 
-void view_keep_break(void) { run_start = 0; }
+void view_keep_break(void) { view_state()->run_start = 0; }
 
 void view_keep_output(const char *text, enum ui_role role, int error)
 {
@@ -389,14 +400,14 @@ static void restate_item(unsigned mark, const char *kind, void *ud, void *ctx)
     }
     struct keep *k = ud;
 
-    if (collapsed && keep_drops(k)) {
+    if (view_state()->collapsed && keep_drops(k)) {
         viewport_item_hide(mark, 1);
         if (c->stale)
             viewport_item_stale(mark);
         return;
     }
 
-    int as_row = k->kind == KEEP_CALL && (collapsed || k->collapses);
+    int as_row = k->kind == KEEP_CALL && (view_state()->collapsed || k->collapses);
 
     char row[4096];
     if (as_row && c->head && c->head->collapses == k->collapses &&
@@ -409,7 +420,7 @@ static void restate_item(unsigned mark, const char *kind, void *ud, void *ctx)
 
     viewport_item_hide(mark, 0);
 
-    viewport_item_pad(mark, !collapsed);
+    viewport_item_pad(mark, !view_state()->collapsed);
     if (c->stale)
         viewport_item_stale(mark);
 
@@ -429,7 +440,7 @@ static void restate(unsigned from, int stale)
 {
     struct collapse c = {.stale = stale};
     viewport_scan(from, restate_item, &c);
-    run_start = c.head_mark;
+    view_state()->run_start = c.head_mark;
     viewport_repad();
 }
 
@@ -439,8 +450,8 @@ void view_collapse(int on)
 {
     int want = on ? 1 : 0;
     viewport_on_width(rewidth);
-    if (collapsed != want) {
-        collapsed = want;
+    if (view_state()->collapsed != want) {
+        view_state()->collapsed = want;
         restate(0, 1);
     }
     viewport_paint();
@@ -817,4 +828,3 @@ void view_tool_output(const char *text, enum ui_role role)
         ui_put("\n");
     }
 }
-

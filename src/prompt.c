@@ -24,12 +24,12 @@
 #include "replframe.h"
 #include "replkeys.h"
 #include "text.h"
+#include "terminalrun.h"
 
 struct prompt {
     Repl         repl;
     struct replframe frame;
     int          painted_cols;
-    int          above_painted;
     char        *history_path;
     prompt_live_fn live_command;
     void          *live_ud;
@@ -559,20 +559,7 @@ static void edit_in_editor(struct prompt *p, int live)
         status_pause();
     else
         chrome_clear();
-    viewport_suspend();
-    ui_raw(0);
-    tty_raw_end();
-
-    int status = system(cmd);
-
-    if (tty_raw_begin() != 0) {
-        fprintf(stderr, "could not return the terminal to raw mode\n");
-        exit(1);
-    }
-    ui_raw(1);
-    ui_cursor_plain();
-    block_forget();
-    viewport_resume();
+    int status = terminal_run_external(cmd);
 
     int ok = status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
     if (ok) {

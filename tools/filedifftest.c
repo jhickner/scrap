@@ -48,6 +48,7 @@ static void check_supplied(void)
 
 static void check_snapshot(void)
 {
+    struct filediff_snapshot snap = {0};
     char path[] = "/tmp/mux-filedifftest-XXXXXX";
     int  fd = mkstemp(path);
     if (fd < 0) {
@@ -59,7 +60,7 @@ static void check_snapshot(void)
     (void)!write(fd, before, strlen(before));
     close(fd);
 
-    filediff_snapshot(path);
+    filediff_snapshot(&snap, path);
 
     FILE *f = fopen(path, "w");
     if (!f) {
@@ -71,7 +72,7 @@ static void check_snapshot(void)
           "enough to need cutting short\nkeep three\n", f);
     fclose(f);
 
-    char *patch = filediff_take_patch();
+    char *patch = filediff_take_patch(&snap);
     if (!filediff_patch_draws(patch)) {
         fail("a changed file yields a patch", patch);
         free(patch);
@@ -102,6 +103,7 @@ static void check_snapshot(void)
 
 static void check_unchanged(void)
 {
+    struct filediff_snapshot snap = {0};
     char path[] = "/tmp/mux-filedifftest-XXXXXX";
     int  fd = mkstemp(path);
     if (fd < 0) {
@@ -111,12 +113,62 @@ static void check_unchanged(void)
     (void)!write(fd, "same\n", 5);
     close(fd);
 
-    filediff_snapshot(path);
-    char *patch = filediff_take_patch();
+    filediff_snapshot(&snap, path);
+    char *patch = filediff_take_patch(&snap);
     if (patch)
         fail("an unchanged file yields no patch", patch);
     free(patch);
     unlink(path);
+}
+
+static void check_interleaved(void)
+{
+    struct filediff_snapshot one = {0}, two = {0};
+    char path_one[] = "/tmp/mux-filediff-one-XXXXXX";
+    char path_two[] = "/tmp/mux-filediff-two-XXXXXX";
+    int fd_one = mkstemp(path_one), fd_two = mkstemp(path_two);
+    if (fd_one < 0 || fd_two < 0) {
+        if (fd_one >= 0) close(fd_one);
+        if (fd_two >= 0) close(fd_two);
+        unlink(path_one);
+        unlink(path_two);
+        fail("two temp files to diff", NULL);
+        return;
+    }
+    (void)!write(fd_one, "one before\n", 11);
+    (void)!write(fd_two, "two before\n", 11);
+    close(fd_one);
+    close(fd_two);
+
+    filediff_snapshot(&one, path_one);
+    filediff_snapshot(&two, path_two);
+
+    FILE *f = fopen(path_one, "w");
+    if (f) {
+        fputs("one after\n", f);
+        fclose(f);
+    }
+    f = fopen(path_two, "w");
+    if (f) {
+        fputs("two after\n", f);
+        fclose(f);
+    }
+
+    char *patch_one = filediff_take_patch(&one);
+    char *patch_two = filediff_take_patch(&two);
+    if (!patch_one || !strstr(patch_one, "one before") ||
+        !strstr(patch_one, "one after") || strstr(patch_one, "two after"))
+        fail("the first interleaved snapshot keeps its own file", patch_one);
+    if (!patch_two || !strstr(patch_two, "two before") ||
+        !strstr(patch_two, "two after") || strstr(patch_two, "one after"))
+        fail("the second interleaved snapshot keeps its own file", patch_two);
+
+    free(patch_one);
+    free(patch_two);
+    filediff_clear(&one);
+    filediff_clear(&two);
+    unlink(path_one);
+    unlink(path_two);
 }
 
 int main(void)
@@ -126,6 +178,7 @@ int main(void)
     check_supplied();
     check_snapshot();
     check_unchanged();
+    check_interleaved();
 
     if (failures)
         return 1;

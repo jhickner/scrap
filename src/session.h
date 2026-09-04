@@ -3,10 +3,11 @@
 #define SESSION_H
 
 #include "tty.h"
-#include "tasks.h"
 #include "vendor/agents/backend.h"
 
 struct session;
+struct task;
+struct tasktab;
 
 typedef int (*session_key_fn)(void *ud, tty_event *ev);
 void session_set_typeahead(session_key_fn fn, void *ud);
@@ -20,8 +21,6 @@ void            session_free(struct session *s);
 void            session_replay(struct session *s);
 
 void session_set_quiet(struct session *s, int quiet);
-
-void session_set_silent(struct session *s, int silent);
 
 typedef void (*session_event_fn)(void *ud, const backend_event *ev);
 void session_set_observer(struct session *s, session_event_fn fn, void *ud);
@@ -103,12 +102,9 @@ const struct tasktab *session_tasks(const struct session *s);
 const struct task    *session_task_change(const struct session *s);
 int  session_task_repeat(const struct session *s);
 
-/* Background work the agent has running with no turn in flight, and how long
-   it has been running: an idle prompt with work outstanding is not a finished
-   one, and nothing else on screen says so. */
-int    session_work_count(const struct session *s);
-double session_work_elapsed(const struct session *s);
-void   session_work_word(const struct session *s);
+/* Background work the agent has running with no turn in flight: an idle prompt
+   with work outstanding is not a finished one. */
+int session_work_count(const struct session *s);
 
 /* The session's background work ended without waking the agent, and nothing is
    left to resume it. Nonzero once per stall, for a caller that can nudge. */
