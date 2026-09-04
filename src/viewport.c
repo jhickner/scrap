@@ -237,6 +237,18 @@ int viewport_item_last(unsigned mark)
     return mark && !open_len && nitems > 0 && items[nitems - 1].id == mark;
 }
 
+/* the newest item of this kind on the screen in front, 0 when there is none:
+   a mark is only good for the screen it was made on, and every tab has one */
+unsigned viewport_item_find(const char *kind)
+{
+    if (!kind)
+        return 0;
+    for (int i = nitems - 1; i >= 0; i--)
+        if (items[i].kind && !strcmp(items[i].kind, kind))
+            return items[i].id;
+    return 0;
+}
+
 void *viewport_item_data(unsigned mark)
 {
     struct item *it = item_by_mark(mark);

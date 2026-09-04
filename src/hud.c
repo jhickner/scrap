@@ -35,12 +35,10 @@ struct row {
 struct hud {
     struct row row[2];
     int        restarts;
+    /* came back from a restart rather than being printed here, and has not
+       been rewritten yet */
+    int        restored;
 };
-
-/* the hud this session printed last, and whether it came back from a restart
-   rather than being printed here */
-static unsigned last;
-static unsigned restored;
 
 static void row_add(struct row *r, enum ui_role role, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
@@ -195,7 +193,7 @@ static char *hud_encode(void *ud)
     return text;
 }
 
-static unsigned hud_place(struct hud *h)
+static void hud_place(struct hud *h)
 {
     unsigned mark = viewport_item_begin(&(struct viewport_entry){
         .render = hud_render, .ud = h, .free_ud = hud_free, .reflow = 1,
@@ -204,7 +202,6 @@ static unsigned hud_place(struct hud *h)
     viewport_item_end();
     viewport_item_persist(mark, HUD_KIND, hud_encode);
     ui_flush();
-    return mark;
 }
 
 void hud_load(const cJSON *st)
@@ -222,8 +219,8 @@ void hud_load(const cJSON *st)
                     scrollback_str(seg, "t"));
     }
 
-    last = hud_place(h);
-    restored = last;
+    h->restored = 1;
+    hud_place(h);
 }
 
 void hud_print(const struct session *s)
@@ -233,12 +230,12 @@ void hud_print(const struct session *s)
 
     /* a hud carried across a restart is rewritten in place, so a window
        restarted over and over keeps one block and one count */
-    struct hud *back = restored && restored == last ? viewport_item_data(last)
-                                                    : NULL;
-    restored = 0;
-    if (back) {
+    unsigned    mark = viewport_item_find(HUD_KIND);
+    struct hud *back = mark ? viewport_item_data(mark) : NULL;
+    if (back && back->restored) {
+        back->restored = 0;
         hud_fill(back, s);
-        viewport_item_update(last);
+        viewport_item_update(mark);
         ui_flush();
         return;
     }
@@ -247,16 +244,17 @@ void hud_print(const struct session *s)
     if (!h)
         return;
     hud_fill(h, s);
-    last = hud_place(h);
+    hud_place(h);
 }
 
 int hud_restarted(void)
 {
-    struct hud *h = last ? viewport_item_data(last) : NULL;
+    unsigned    mark = viewport_item_find(HUD_KIND);
+    struct hud *h = mark ? viewport_item_data(mark) : NULL;
     if (!h)
         return 0;
     h->restarts++;
-    viewport_item_update(last);
+    viewport_item_update(mark);
     ui_flush();
     return 1;
 }

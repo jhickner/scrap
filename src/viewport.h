@@ -66,6 +66,8 @@ void viewport_clear(void);
 unsigned viewport_mark(void);
 int      viewport_visible(unsigned mark);
 
+unsigned viewport_item_find(const char *kind);
+
 void *viewport_item_data(unsigned mark);
 
 /* nothing has been printed since this item closed */
