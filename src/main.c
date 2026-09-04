@@ -617,6 +617,7 @@ int main(int argc, char **argv)
         ui_cursor_plain();
 
         if (restore_arg) {
+            view_collapse(settings_get_int(SETTING_COMPACT, 0));
             viewport_inherit();
             scrollback_restore(restore_arg);
             unlink(restore_arg);

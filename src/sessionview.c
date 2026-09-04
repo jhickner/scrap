@@ -437,9 +437,12 @@ static void rewidth(void) { restate(0, 0); }
 
 void view_collapse(int on)
 {
-    collapsed = on ? 1 : 0;
+    int want = on ? 1 : 0;
     viewport_on_width(rewidth);
-    restate(0, 1);
+    if (collapsed != want) {
+        collapsed = want;
+        restate(0, 1);
+    }
     viewport_paint();
 }
 
