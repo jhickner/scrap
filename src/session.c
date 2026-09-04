@@ -987,6 +987,8 @@ int session_poll_input(void)
     return interrupt;
 }
 
+/* The session whose work this thread is running: set on every thread but the
+   window's own, so the abort check knows not to draw or read from it. */
 static __thread struct session *owner;
 
 static int abort_check(void)
@@ -1381,6 +1383,12 @@ static void start_notify(void)
 static void *start_thread(void *ud)
 {
     struct session *s = ud;
+
+    /* a backend can poll the abort check all through its handshake, and that
+       check draws and reads the terminal. Only the thread the window runs on
+       may do that: claim the session so this one answers and nothing else. */
+    owner = s;
+
     restart_shield_thread();
     s->start_ok = connect_agent(s);
     s->start_finished = 1;
