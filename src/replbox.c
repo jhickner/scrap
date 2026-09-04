@@ -132,8 +132,3 @@ Repl *replbox_repl(struct replbox *b)
 {
     return &b->repl;
 }
-
-struct replframe *replbox_frame(struct replbox *b)
-{
-    return &b->frame;
-}

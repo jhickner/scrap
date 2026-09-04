@@ -1,9 +1,9 @@
 #ifndef BOARDFLOW_H
 #define BOARDFLOW_H
 
-#include "board.h"
-#include "boardcfg.h"
+#include <stddef.h>
 
+struct board_action;
 struct board_card;
 
 /* The action at the head of the card's queue, which is the one it is on. */

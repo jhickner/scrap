@@ -2,8 +2,6 @@
 #ifndef STATUS_H
 #define STATUS_H
 
-#include "ui.h"
-
 #define SPIN_FRAME_MS 90
 
 int    spin_advance(int *frame, double *at);

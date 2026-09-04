@@ -43,14 +43,6 @@ int child_running(const char *key)
     return 0;
 }
 
-int child_busy(void)
-{
-    for (int i = 0; i < CHILD_SLOTS; i++)
-        if (slots[i].pid && !slots[i].done)
-            return 1;
-    return 0;
-}
-
 static struct slot *free_slot(const char *key)
 {
     for (int i = 0; i < CHILD_SLOTS; i++)
@@ -115,14 +107,6 @@ int child_start(const char *key, char *const argv[], const char *cwd)
     if (!s)
         return 0;
     return spawn(s, key, argv, cwd);
-}
-
-int child_shell(const char *key, const char *command, const char *cwd)
-{
-    if (!command || !*command)
-        return 0;
-    char *const argv[] = {(char *)"/bin/sh", (char *)"-c", (char *)command, NULL};
-    return child_start(key, argv, cwd);
 }
 
 /* Past the cap the output is discarded rather than left in the pipe: a child

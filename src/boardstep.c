@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "board.h"
+#include "boardcfg.h"
 #include "gitcmd.h"
 
 struct fills {

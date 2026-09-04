@@ -5,8 +5,6 @@
 #include <stddef.h>
 #include <time.h>
 
-#include "boardcfg.h"
-
 struct board_card;
 
 #define BOARD_ID_MAX    16
@@ -121,5 +119,23 @@ int board_stopped(const char *id);
 int board_took(const char *id, const char *action);
 
 int board_close(const char *id);
+
+/* One completed worker turn updates accounting/session state, advances or
+   stops its action, and records its notes under a single store lock/write. */
+enum board_move {
+    BOARD_MOVE_NONE,
+    BOARD_MOVE_TOOK,
+    BOARD_MOVE_STOPPED,
+    BOARD_MOVE_CLOSED,
+};
+
+struct board_message {
+    const char *who;
+    const char *text;
+};
+
+int board_commit(const struct board_card *state, enum board_move move,
+                 const char *action, const struct board_message *messages,
+                 int message_count);
 
 #endif

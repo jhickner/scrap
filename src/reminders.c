@@ -3,17 +3,15 @@
 #include "vendor/cJSON.h"
 
 #include <ctype.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/file.h>
 #include <time.h>
 #include <unistd.h>
 
-#define REMINDERS_MAX_BYTES (1u << 24)
-#define REMINDERS_PATH_MAX  4300
+#include "filelock.h"
 
+#define REMINDERS_MAX_BYTES (1u << 24)
 const char *reminders_path(void)
 {
     static char path[4200];
@@ -22,33 +20,14 @@ const char *reminders_path(void)
     return path;
 }
 
-static int sidecar_path(char *out, size_t n, const char *suffix)
-{
-    int k = snprintf(out, n, "%s%s", reminders_path(), suffix);
-    return k > 0 && (size_t)k < n;
-}
-
 static int store_lock(int op)
 {
-    char lp[REMINDERS_PATH_MAX];
-    if (!sidecar_path(lp, sizeof lp, ".lock"))
-        return -1;
-    int fd = open(lp, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
-    if (fd < 0)
-        return -1;
-    if (flock(fd, op) != 0) {
-        close(fd);
-        return -1;
-    }
-    return fd;
+    return filelock_acquire(reminders_path(), op);
 }
 
 static void store_unlock(int fd)
 {
-    if (fd >= 0) {
-        flock(fd, LOCK_UN);
-        close(fd);
-    }
+    filelock_release(fd);
 }
 
 int reminders_scheduled_count(void)

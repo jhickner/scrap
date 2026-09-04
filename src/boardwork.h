@@ -2,11 +2,6 @@
 #ifndef BOARDWORK_H
 #define BOARDWORK_H
 
-#include <stddef.h>
-
-#include "boardcfg.h"
-#include "boardflow.h"
-
 struct board_card;
 struct session;
 

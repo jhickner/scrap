@@ -1,14 +1,13 @@
 #include "board.h"
 
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include "boardlog.h"
+#include "filelock.h"
 #include "gitcmd.h"
 #include "mdcfg.h"
 #include "text.h"
@@ -110,33 +109,14 @@ int board_md_path(const char *dir, const char *id, char *out, size_t size)
     return (size_t)snprintf(out, size, "%s/%s.md", at, id) < size;
 }
 
-static int sidecar_path(char *out, size_t n, const char *suffix)
-{
-    int k = snprintf(out, n, "%s%s", board_path(), suffix);
-    return k > 0 && (size_t)k < n;
-}
-
 static int store_lock(int op)
 {
-    char lp[BOARD_PATH_MAX];
-    if (!sidecar_path(lp, sizeof lp, ".lock"))
-        return -1;
-    int fd = open(lp, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
-    if (fd < 0)
-        return -1;
-    if (flock(fd, op) != 0) {
-        close(fd);
-        return -1;
-    }
-    return fd;
+    return filelock_acquire(board_path(), op);
 }
 
 static void store_unlock(int fd)
 {
-    if (fd >= 0) {
-        flock(fd, LOCK_UN);
-        close(fd);
-    }
+    filelock_release(fd);
 }
 
 static char *dup_or_empty(const char *s)
@@ -778,6 +758,77 @@ int board_close(const char *id)
     if (!with_card(id, apply_close, NULL))
         return 0;
     boardlog_note(id, "you", "closed");
+    return 1;
+}
+
+struct commit_args {
+    const struct board_card    *state;
+    enum board_move             move;
+    const char                 *action;
+    const struct board_message *messages;
+    int                         message_count;
+    int                         dropped;
+};
+
+static int apply_commit(struct board_card *c, void *ud)
+{
+    struct commit_args *a = ud;
+    if (!card_adopt(c, a->state))
+        return 0;
+
+    switch (a->move) {
+    case BOARD_MOVE_NONE:
+        break;
+    case BOARD_MOVE_TOOK:
+        if (!a->action || !*a->action || !apply_took(c, (void *)a->action))
+            return 0;
+        break;
+    case BOARD_MOVE_STOPPED:
+        if (!apply_stopped(c, &a->dropped))
+            return 0;
+        break;
+    case BOARD_MOVE_CLOSED:
+        if (!a->action || !*a->action || !apply_took(c, (void *)a->action) ||
+            !apply_close(c, NULL))
+            return 0;
+        break;
+    }
+
+    for (int i = 0; i < a->message_count; i++) {
+        const struct board_message *m = &a->messages[i];
+        if (!m->text || !*m->text)
+            continue;
+        if (!note_append(c, m->who, m->text))
+            return 0;
+    }
+    return 1;
+}
+
+int board_commit(const struct board_card *state, enum board_move move,
+                 const char *action, const struct board_message *messages,
+                 int message_count)
+{
+    if (!state || message_count < 0 || (message_count && !messages))
+        return 0;
+
+    struct commit_args a = {state, move, action, messages, message_count, 0};
+    if (!with_card(state->id, apply_commit, &a))
+        return 0;
+
+    if (move == BOARD_MOVE_STOPPED) {
+        char said[64];
+        if (a.dropped)
+            snprintf(said, sizeof said, "stopped, and %d queued action%s dropped",
+                     a.dropped, a.dropped == 1 ? "" : "s");
+        else
+            snprintf(said, sizeof said, "stopped");
+        boardlog_note(state->id, "board", said);
+    }
+    for (int i = 0; i < message_count; i++)
+        if (messages[i].text && *messages[i].text)
+            boardlog_note(state->id, messages[i].who, messages[i].text);
+    if (move == BOARD_MOVE_CLOSED)
+        boardlog_note(state->id, "you", "closed");
     return 1;
 }
 

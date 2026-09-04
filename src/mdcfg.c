@@ -91,14 +91,6 @@ const char *mdcfg_get(const struct mdcfg *m, const char *key)
     return "";
 }
 
-int mdcfg_has(const struct mdcfg *m, const char *key)
-{
-    for (int i = 0; i < m->n; i++)
-        if (!strcmp(m->keys[i], key))
-            return 1;
-    return 0;
-}
-
 int mdcfg_int(const struct mdcfg *m, const char *key, int fallback)
 {
     const char *s = mdcfg_get(m, key);

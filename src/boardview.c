@@ -70,7 +70,6 @@ struct vrow {
     unsigned char spin;
     const char   *mark;
     unsigned char mark_role;
-    int           action;
 };
 
 struct vlist {

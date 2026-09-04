@@ -47,6 +47,5 @@ int livelist_alive(long pid);
 int livelist_jump(const struct live_session *v, char *why, int size);
 
 const char *livelist_tmux_window(void);
-const char *livelist_tmux_window_name(void);
 
 #endif

@@ -36,6 +36,5 @@ const char *replbox_line(const struct replbox *b);
 void        replbox_set_text(struct replbox *b, const char *text);
 void        replbox_reset(struct replbox *b);
 Repl       *replbox_repl(struct replbox *b);
-struct replframe *replbox_frame(struct replbox *b);
 
 #endif

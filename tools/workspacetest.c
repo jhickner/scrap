@@ -110,16 +110,10 @@ int session_idle_fd(const struct session *s) { (void)s; return -1; }
 int session_stall_armed(const struct session *s) { (void)s; return 0; }
 int session_stalled(struct session *s) { (void)s; return 0; }
 double session_turn_elapsed(const struct session *s) { (void)s; return 0; }
-double session_work_elapsed(const struct session *s) { (void)s; return 0; }
 void session_spin_word(const struct session *s)
 {
     (void)s;
     status_set_word("working");
-}
-void session_work_word(const struct session *s)
-{
-    (void)s;
-    status_set_word("1 task");
 }
 const char *session_failed_prompt(const struct session *s) { (void)s; return NULL; }
 

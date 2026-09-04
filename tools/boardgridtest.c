@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "boardgrid.h"
+#include "boardtile.h"
 #include "restart.h"
 #include "sidechannel.h"
 

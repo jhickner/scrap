@@ -147,6 +147,43 @@ static int merges(struct screen *s)
     return ok;
 }
 
+static int state_isolation(struct screen *s)
+{
+    struct viewport_state *vp_a = viewport_state_new();
+    struct viewport_state *vp_b = viewport_state_new();
+    if (!vp_a || !vp_b) {
+        viewport_state_free(vp_a);
+        viewport_state_free(vp_b);
+        return fail("two viewport states for session-view isolation", NULL);
+    }
+
+    viewport_clear();
+    view_collapse(1);
+    view_keep_tool_call("Read", "tab-a", 0);
+    viewport_stash(vp_a);
+
+    viewport_adopt(vp_b);
+    int ok = 1;
+    if (view_collapsed())
+        ok = fail("a fresh tab does not inherit collapse or cluster state", NULL) == 0;
+    view_keep_break();
+    viewport_stash(vp_b);
+
+    viewport_adopt(vp_a);
+    if (!view_collapsed())
+        ok = fail("a tab restores its own collapse state", NULL) == 0;
+    view_keep_tool_call("Read", "tab-a-next", 0);
+    viewport_paint();
+    pump(s);
+    if (row_with(s, "tab-a") < 0 || row_with(s, "tab-a-next") != row_with(s, "tab-a"))
+        ok = fail("a tab restores its own incremental cluster state", NULL) == 0;
+
+    viewport_clear();
+    viewport_state_free(vp_a);
+    viewport_state_free(vp_b);
+    return ok;
+}
+
 static int collapse_redraws(void)
 {
     char path[] = "/tmp/mux-sessionviewtest-XXXXXX";
@@ -169,6 +206,8 @@ static int collapse_redraws(void)
     struct screen s;
     screen_init(&s, 24, 80);
 
+    int ok = state_isolation(&s);
+
     view_collapse(0);
     view_keep_tool_call("Bash", "ls -la", 0);
     view_keep_output("total 8\nfoo\nbar", UI_DIM, 0);
@@ -177,7 +216,6 @@ static int collapse_redraws(void)
     viewport_paint();
     pump(&s);
 
-    int ok = 1;
     if (count_on_screen(&s, "ls -la") != 1 || count_on_screen(&s, "total 8") != 1)
         ok = fail("the full view draws the call and its output", NULL) == 0;
 

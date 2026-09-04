@@ -2,12 +2,10 @@
 #ifndef PROMPT_H
 #define PROMPT_H
 
-#include "vendor/cJSON.h"
-
 #include "tty.h"
-#include "ui.h"
 #include "vendor/repl.h"
 
+typedef struct cJSON cJSON;
 struct prompt;
 
 struct prompt *prompt_new(const ReplCommand *commands, int command_count);

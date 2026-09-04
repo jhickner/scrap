@@ -13,13 +13,6 @@
 #define CONTEXT    2
 #define LCS_BUDGET 2000000L
 
-static struct {
-    int    have;
-    char   path[4096];
-    char  *before;
-    size_t before_len;
-} snap;
-
 struct linevec {
     const char **p;
     size_t      *n;
@@ -396,52 +389,55 @@ int filediff_render_patch(const char *patch)
     return changed > 0;
 }
 
-void filediff_clear(void)
+void filediff_clear(struct filediff_snapshot *snap)
 {
-    free(snap.before);
-    snap.before = NULL;
-    snap.before_len = 0;
-    snap.path[0] = '\0';
-    snap.have = 0;
+    if (!snap)
+        return;
+    free(snap->before);
+    snap->before = NULL;
+    snap->before_len = 0;
+    snap->path[0] = '\0';
+    snap->have = 0;
 }
 
-void filediff_snapshot(const char *path)
+void filediff_snapshot(struct filediff_snapshot *snap, const char *path)
 {
-    filediff_clear();
-    if (!path || !*path)
+    filediff_clear(snap);
+    if (!snap || !path || !*path)
         return;
 
     struct stat st;
     if (stat(path, &st) == 0) {
         if (!S_ISREG(st.st_mode) || (size_t)st.st_size > MAX_BYTES)
             return;
-        snap.before = text_slurp(path, MAX_BYTES, &snap.before_len);
-        if (!snap.before)
+        snap->before = text_slurp(path, MAX_BYTES, &snap->before_len);
+        if (!snap->before)
             return;
     } else {
-        snap.before = calloc(1, 1);
-        if (!snap.before)
+        snap->before = calloc(1, 1);
+        if (!snap->before)
             return;
-        snap.before_len = 0;
+        snap->before_len = 0;
     }
 
-    snprintf(snap.path, sizeof snap.path, "%s", path);
-    snap.have = 1;
+    snprintf(snap->path, sizeof snap->path, "%s", path);
+    snap->have = 1;
 }
 
-char *filediff_take_patch(void)
+char *filediff_take_patch(struct filediff_snapshot *snap)
 {
-    if (!snap.have)
+    if (!snap || !snap->have)
         return NULL;
 
     size_t after_len = 0;
-    char *after = text_slurp(snap.path, MAX_BYTES, &after_len);
+    char *after = text_slurp(snap->path, MAX_BYTES, &after_len);
     char *patch = NULL;
-    if (after && !(after_len == snap.before_len && memcmp(after, snap.before, after_len) == 0))
+    if (after && !(after_len == snap->before_len &&
+                   memcmp(after, snap->before, after_len) == 0))
 
-        patch = patch_diff(snap.before, snap.before_len, after, after_len, NULL);
+        patch = patch_diff(snap->before, snap->before_len, after, after_len, NULL);
 
     free(after);
-    filediff_clear();
+    filediff_clear(snap);
     return patch;
 }
