@@ -35,7 +35,6 @@ static int room_for(void)
 static void paint(void *ud)
 {
     struct field *f = ud;
-    int           columns = ui_columns();
 
     replbox_width(&f->box, width_of());
 
@@ -47,11 +46,6 @@ static void paint(void *ud)
     replbox_scroll(&f->box, room);
     int top = replbox_top(&f->box);
 
-    ui_esc(ui_style(UI_CHROME));
-    ui_put(UI_BAR);
-    ui_esc(ui_style(UI_RESET));
-    ui_put(" ");
-    ui_esc(ui_style(UI_DIM));
     {
         char        said[256];
         const char *title = f->title ? f->title : "";
@@ -60,10 +54,8 @@ static void paint(void *ud)
                      top + 1, top + room, rows);
         else
             snprintf(said, sizeof said, "%s", title);
-        ui_putn(said, ui_fit_bytes(said, (size_t)(columns > 3 ? columns - 3 : 1)));
+        chrome_title_paint(said);
     }
-    ui_esc(ui_style(UI_RESET));
-    ui_put("\n");
 
     int end = rows <= room ? rows : top + room;
     for (int y = top; y < end; y++) {

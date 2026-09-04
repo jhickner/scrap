@@ -1401,7 +1401,7 @@ void viewport_paint(void)
     batch_begin();
     if (sync)
         direct_str("\x1b[?2026h");
-    direct_str("\x1b[?25l");
+    direct_str(UI_CURSOR_HIDE);
     direct_str("\x1b[?7l");
 
     int span = built.n;
@@ -1446,7 +1446,7 @@ void viewport_paint(void)
         if (col > W)
             col = W;
         cup(body + 1 + chrome_caret_row, col);
-        direct_str("\x1b[?25h");
+        direct_str(UI_CURSOR_SHOW);
     }
 
     if (sync)
@@ -1562,7 +1562,7 @@ void viewport_begin(void)
     if (active)
         return;
     active = 1;
-    direct_str("\x1b[?1049h");
+    direct_str(UI_ALT_ON);
     direct_str(MOUSE_ON);
     tty_keyboard_on();
     fflush(stdout);
@@ -1578,8 +1578,8 @@ void viewport_end(void)
     handed = 0;
     suspended = 0;
     direct_str(MOUSE_OFF);
-    direct_str("\x1b[?25h");
-    direct_str("\x1b[?1049l");
+    direct_str(UI_CURSOR_SHOW);
+    direct_str(UI_ALT_OFF);
     fflush(stdout);
 }
 
@@ -1592,7 +1592,7 @@ void viewport_handoff(void)
     handed = 1;
     suspended = 0;
     direct_str(MOUSE_OFF);
-    direct_str("\x1b[?25h");
+    direct_str(UI_CURSOR_SHOW);
     fflush(stdout);
 }
 
@@ -1660,8 +1660,8 @@ void viewport_suspend(void)
     suspended = 1;
     deferred = 0;
     direct_str(MOUSE_OFF);
-    direct_str("\x1b[?25h");
-    direct_str("\x1b[?1049l");
+    direct_str(UI_CURSOR_SHOW);
+    direct_str(UI_ALT_OFF);
     fflush(stdout);
 }
 
@@ -1670,7 +1670,7 @@ void viewport_resume(void)
     if (!active || !suspended)
         return;
     suspended = 0;
-    direct_str("\x1b[?1049h");
+    direct_str(UI_ALT_ON);
     direct_str(MOUSE_ON);
     tty_keyboard_on();
     fflush(stdout);

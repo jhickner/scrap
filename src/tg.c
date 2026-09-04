@@ -1,7 +1,6 @@
 
 #include "tg.h"
 
-#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -32,6 +31,7 @@
 #include "handoff.h"
 #include "restart.h"
 #include "session.h"
+#include "settings.h"
 #include "sessionlist.h"
 #include "sessionview.h"
 #include "status.h"
@@ -49,7 +49,6 @@
 #define TG_LIMIT    4000
 #define MAX_ATTACH  8
 #define INBOX_MAX   32
-#define CFG_MAX     32
 #define MENU_MAX    16
 
 enum { MIRROR_OFF = 0, MIRROR_REMOTE = 1, MIRROR_ALL = 2 };
@@ -103,9 +102,6 @@ struct tg_runtime {
     int                 dispatching_live;
     char                system_note[12288];
 
-    struct { char key[64]; char val[512]; } cfg[CFG_MAX];
-    int cfg_count;
-
     struct inbox_item inbox[INBOX_MAX];
     int inbox_head;
     int inbox_count;
@@ -120,7 +116,6 @@ static struct tg_runtime runtime = {
     .mirror = MIRROR_ALL,
     .wake_pipe = {-1, -1},
     .poll_seconds = 30,
-    .cfg_count = -1,
     .log_lock = PTHREAD_MUTEX_INITIALIZER,
     .inbox_lock = PTHREAD_MUTEX_INITIALIZER,
 };
@@ -148,8 +143,6 @@ static struct tg_runtime runtime = {
 #define log_lock     runtime.log_lock
 #define from_chat    runtime.from_chat
 #define repeat_task  runtime.repeat_task
-#define cfg          runtime.cfg
-#define cfg_count    runtime.cfg_count
 #define inbox        runtime.inbox
 #define inbox_head   runtime.inbox_head
 #define inbox_count  runtime.inbox_count
@@ -165,52 +158,12 @@ static struct session *current_session(void)
 
 static void tg_cleanup(void);
 
-static char *trim(char *s)
-{
-    while (*s && isspace((unsigned char)*s))
-        s++;
-    char *e = s + strlen(s);
-    while (e > s && isspace((unsigned char)e[-1]))
-        *--e = '\0';
-    return s;
-}
-
-static void cfg_load(void)
-{
-    cfg_count = 0;
-    char path[4200];
-    if (!path_config_file(path, sizeof path, "telegram"))
-        return;
-    FILE *f = fopen(path, "r");
-    if (!f)
-        return;
-    char line[700];
-    while (fgets(line, sizeof line, f) && cfg_count < CFG_MAX) {
-        char *s = trim(line);
-        if (!*s || *s == '#')
-            continue;
-        char *eq = strchr(s, '=');
-        if (!eq)
-            continue;
-        *eq = '\0';
-        char *k = trim(s), *v = trim(eq + 1);
-        if (!*k)
-            continue;
-        snprintf(cfg[cfg_count].key, sizeof cfg[0].key, "%s", k);
-        snprintf(cfg[cfg_count].val, sizeof cfg[0].val, "%s", v);
-        cfg_count++;
-    }
-    fclose(f);
-}
+static struct settings tgcfg;
 
 static const char *cfg_get(const char *key, const char *dflt)
 {
-    if (cfg_count < 0)
-        cfg_load();
-    for (int i = 0; i < cfg_count; i++)
-        if (!strcmp(cfg[i].key, key) && cfg[i].val[0])
-            return cfg[i].val;
-    return dflt;
+    const char *v = settings_get(&tgcfg, key, NULL);
+    return (v && *v) ? v : dflt;
 }
 
 static long cfg_get_long(const char *key, long dflt)
@@ -243,24 +196,17 @@ static char *state_read(const char *name)
     return buf[0] ? strdup(buf) : NULL;
 }
 
+static int write_state(FILE *f, void *ud)
+{
+    return fprintf(f, "%s\n", ud ? (const char *)ud : "") > 0;
+}
+
 static void state_write(const char *name, const char *value)
 {
-    char path[4200], tmp[4300];
+    char path[4200];
     if (!state_path(name, path, sizeof path))
         return;
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    FILE *f = fopen(tmp, "w");
-    if (!f)
-        return;
-    fprintf(f, "%s\n", value ? value : "");
-    if (fflush(f) != 0 || fsync(fileno(f)) != 0) {
-        fclose(f);
-        remove(tmp);
-        return;
-    }
-    fclose(f);
-    if (rename(tmp, path) != 0)
-        remove(tmp);
+    text_spit(path, write_state, (void *)(value ? value : ""));
 }
 
 static void wake_up(void)
@@ -902,10 +848,8 @@ static void artifacts_init(void)
     if (dir && *dir) {
         snprintf(art_dir, sizeof art_dir, "%s", dir);
     } else {
-        char base[4096];
-        if (!path_config_dir(base, sizeof base))
+        if (!path_config_subdir(art_dir, sizeof art_dir, "artifacts"))
             return;
-        snprintf(art_dir, sizeof art_dir, "%s/artifacts", base);
     }
     mkdir(art_dir, 0700);
 
@@ -1009,35 +953,32 @@ const char *tg_system_note(void)
     return note;
 }
 
+static int fire_one_reminder(const char *text, void *ud)
+{
+    (void)ud;
+    if (!inbox_room())
+        return 0;
+
+    static const char fmt[] =
+        "A scheduled reminder just came due: \"%s\". Deliver it to the user "
+        "now -- your reply goes straight to THEM over the chat, so just tell "
+        "them (if it's an instruction to gather info, do that and reply with "
+        "the result). Do NOT text or email it to anyone, and do NOT "
+        "message/email another person unless this reminder explicitly names "
+        "sending it to a specific person.";
+    int need = snprintf(NULL, 0, fmt, text);
+    if (need < 0)
+        return 0;
+    char *p = malloc((size_t)need + 1);
+    if (!p)
+        return 0;
+    snprintf(p, (size_t)need + 1, fmt, text);
+    return inbox_push(p, 0);
+}
+
 static void fire_due_reminders(void)
 {
-    for (int guard = 0; guard < 64; guard++) {
-        char rem[2048];
-
-        /* popping rewrites the store, so a reminder the inbox would refuse has
-           to stay where it is until there is room for it */
-        if (!inbox_room())
-            break;
-        if (!reminders_pop_due(time(NULL), rem, sizeof rem))
-            break;
-
-        static const char fmt[] =
-            "A scheduled reminder just came due: \"%s\". Deliver it to the user "
-            "now -- your reply goes straight to THEM over the chat, so just tell "
-            "them (if it's an instruction to gather info, do that and reply with "
-            "the result). Do NOT text or email it to anyone, and do NOT "
-            "message/email another person unless this reminder explicitly names "
-            "sending it to a specific person.";
-        int need = snprintf(NULL, 0, fmt, rem);
-        if (need < 0)
-            break;
-        char *p = malloc((size_t)need + 1);
-        if (!p)
-            break;
-        snprintf(p, (size_t)need + 1, fmt, rem);
-        if (!inbox_push(p, 0))
-            break;
-    }
+    reminders_drain_due(time(NULL), fire_one_reminder, NULL);
 }
 
 static int poller_aborting(void)
@@ -1504,7 +1445,11 @@ int tg_start(struct session *s)
     stop_wanted = 0;
     from_chat = 0;
     repeat_task = 0;
-    cfg_count = -1;
+    char cfgpath[4200];
+    if (path_config_file(cfgpath, sizeof cfgpath, "telegram"))
+        settings_load(&tgcfg, cfgpath);
+    else
+        settings_load(&tgcfg, "");
     const char *token = bot_token();
     if (!token || !*token) {
         char path[4200];

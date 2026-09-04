@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 #include "text.h"
@@ -162,19 +161,5 @@ int mdcfg_list(const char *dir, char names[][MDCFG_NAME], int max)
 
 int mdcfg_dir(char *out, size_t size, const char *leaf)
 {
-    char base[4096];
-    if (!path_config_dir(base, sizeof base))
-        return 0;
-    if ((size_t)snprintf(out, size, "%s/%s", base, leaf) >= size)
-        return 0;
-
-    for (char *p = out + strlen(base) + 1; *p; p++) {
-        if (*p != '/')
-            continue;
-        *p = '\0';
-        mkdir(out, 0700);
-        *p = '/';
-    }
-    mkdir(out, 0700);
-    return 1;
+    return path_config_subdir(out, size, leaf);
 }

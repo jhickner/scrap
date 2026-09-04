@@ -17,7 +17,6 @@
 
 #define TASK_STALL_DEFAULT 45
 
-#define SETTING_MUX_BACKENDS "mux_backends"
 #define SETTING_BACKEND      "backend"
 
 #define SETTING_COLOR_INPUT    "color_input"
@@ -25,6 +24,21 @@
 
 #define MAX_SETTING_KEY    64
 #define MAX_SETTING_VALUE  256
+#define MAX_SETTINGS       512
+
+struct settings {
+    char path[4096];
+    int  count;
+    struct {
+        char key[MAX_SETTING_KEY];
+        char value[MAX_SETTING_VALUE];
+    } entries[MAX_SETTINGS];
+};
+
+void settings_load(struct settings *s, const char *path);
+const char *settings_get(const struct settings *s, const char *key,
+                         const char *fallback);
+void settings_put(struct settings *s, const char *key, const char *value);
 
 void settings_open(const char *path);
 

@@ -11,13 +11,7 @@
 
 static int paste_dir(char *out, size_t size)
 {
-    char base[4096];
-    if (!path_config_dir(base, sizeof base))
-        return 0;
-    if ((size_t)snprintf(out, size, "%s/pastes", base) >= size)
-        return 0;
-    mkdir(out, 0700);
-    return 1;
+    return path_config_subdir(out, size, "pastes");
 }
 
 static int paste_path(char *out, size_t size, const char *dir)

@@ -748,15 +748,10 @@ static int run(const char *title, const struct pick_item *items, int count,
             continue;
         }
         if (asking) {
-            if (ev.key == TK_TEXT) {
+            if (ev.key == TK_TEXT)
                 free(ev.text);
-                continue;
-            }
-            int yes = ev.key == TK_CHAR && (ev.cp == 'y' || ev.cp == 'Y');
-            int no = (ev.key == TK_CHAR &&
-                      (ev.cp == 'n' || ev.cp == 'N' || ev.cp == 3 || ev.cp == 4)) ||
-                     ev.key == TK_ESCAPE || ev.key == TK_EOF;
-            if (!yes && !no) {
+            int yn = chrome_read_yesno(&ev);
+            if (yn < 0) {
                 if (ev.key == TK_RESIZE) {
                     refilter(&v);
                     chrome_paint();
@@ -765,52 +760,34 @@ static int run(const char *title, const struct pick_item *items, int count,
             }
             result = (v.count && v.sel < v.count) ? v.order[v.sel] : -1;
             if (pressed)
-                *pressed = yes ? 'y' : 'n';
+                *pressed = yn ? 'y' : 'n';
             goto done;
         }
 
         struct menu *m = open_menu(&v);
         if (m) {
-            if (ev.key == TK_TEXT) {
+            if (ev.key == TK_TEXT)
                 free(ev.text);
-                continue;
-            }
-            if (ev.key == TK_UP || ev.key == TK_DOWN) {
-                menu_step(m, ev.key == TK_UP ? -1 : 1);
-                chrome_paint();
-                continue;
-            }
-            if (ev.key == TK_RIGHT) {
-                if (menu_steer(m, 1))
-                    chrome_paint();
-                continue;
-            }
-            if (ev.key == TK_LEFT) {
-                if (!menu_steer(m, -1)) {
-                    m->open = 0;
-                    refilter(&v);
-                }
-                chrome_paint();
-                continue;
-            }
-            if (ev.key == TK_ENTER) {
+            switch (menu_feed(m, &ev)) {
+            case MENU_PICK:
                 result = v.order[v.sel];
                 if (pressed)
                     *pressed = PICK_KEY_MENU;
                 goto done;
-            }
-            if (ev.key == TK_ESCAPE ||
-                (ev.key == TK_CHAR && (ev.cp == 3 || ev.cp == 4))) {
+            case MENU_CLOSE:
+                if (ev.key == TK_EOF)
+                    goto done;
                 m->open = 0;
                 refilter(&v);
                 chrome_paint();
-                continue;
-            }
-            if (ev.key == TK_EOF)
-                goto done;
-            if (ev.key == TK_RESIZE) {
-                refilter(&v);
+                break;
+            case MENU_USED:
+                if (ev.key == TK_RESIZE)
+                    refilter(&v);
                 chrome_paint();
+                break;
+            default:
+                break;
             }
             continue;
         }

@@ -32,13 +32,17 @@ static char fixture_dir[1024];
 
 int sessionlist_available(const char *backend)
 {
-    return backend && !strcmp(backend, "claude");
+    return backend && (!strcmp(backend, "claude") || !strcmp(backend, "codex"));
 }
 
 int sessionlist_dir(const char *backend, const char *cwd, char *out, size_t size)
 {
-    (void)backend;
     (void)cwd;
+    if (backend && !strcmp(backend, "codex")) {
+        const char *root = getenv("CODEX_HOME");
+        return root && *root &&
+               snprintf(out, size, "%s/sessions", root) < (int)size;
+    }
     return fixture_dir[0] && snprintf(out, size, "%s", fixture_dir) < (int)size;
 }
 

@@ -96,8 +96,12 @@ int board_cmp(const struct board_card *a, const struct board_card *b)
 const char *board_path(void)
 {
     static char path[4200];
-    if (!path[0] && !path_config_file(path, sizeof path, "board.jsonl"))
-        snprintf(path, sizeof path, "/tmp/board.jsonl");
+    static int  tried;
+    if (!tried) {
+        tried = 1;
+        if (!path_config_file(path, sizeof path, "board.jsonl"))
+            path[0] = '\0';
+    }
     return path;
 }
 
@@ -111,7 +115,10 @@ int board_md_path(const char *dir, const char *id, char *out, size_t size)
 
 static int store_lock(int op)
 {
-    return filelock_acquire(board_path(), op);
+    const char *p = board_path();
+    if (!p || !*p)
+        return -1;
+    return filelock_acquire(p, op);
 }
 
 static void store_unlock(int fd)
@@ -178,6 +185,108 @@ static int card_adopt(struct board_card *dst, const struct board_card *src)
         dst->log_n = src->log_n;
     }
     return dst->body != NULL;
+}
+
+static int card_dup(struct board_card *dst, const struct board_card *src)
+{
+    memset(dst, 0, sizeof *dst);
+    *dst = *src;
+    dst->body = dup_or_empty(src->body);
+    dst->log = NULL;
+    dst->log_n = 0;
+    if (src->log_n > 0) {
+        dst->log = calloc((size_t)src->log_n, sizeof *dst->log);
+        if (!dst->log)
+            return 0;
+        for (int i = 0; i < src->log_n; i++) {
+            dst->log[i].ts = src->log[i].ts;
+            set_str(dst->log[i].who, sizeof dst->log[i].who, src->log[i].who);
+            dst->log[i].text = dup_or_empty(src->log[i].text);
+        }
+        dst->log_n = src->log_n;
+    }
+    return dst->body != NULL;
+}
+
+static struct board_card *mem;
+static int                mem_n;
+static int                mem_ok;
+static int                mem_missing;
+static ino_t              mem_ino;
+static off_t              mem_size;
+static time_t             mem_when;
+
+static void mem_drop(void)
+{
+    board_free(mem, mem_n);
+    mem = NULL;
+    mem_n = 0;
+    mem_ok = 0;
+    mem_missing = 0;
+    mem_ino = 0;
+    mem_size = 0;
+    mem_when = 0;
+}
+
+static void mem_note_disk(void)
+{
+    struct stat st;
+    if (stat(board_path(), &st) != 0) {
+        mem_missing = 1;
+        mem_ino = 0;
+        mem_size = 0;
+        mem_when = 0;
+        return;
+    }
+    mem_missing = 0;
+    mem_ino = st.st_ino;
+    mem_size = st.st_size;
+    mem_when = st.st_mtime;
+}
+
+static int mem_fresh(void)
+{
+    struct stat st;
+    if (stat(board_path(), &st) != 0)
+        return mem_ok && mem_missing;
+    return mem_ok && !mem_missing && st.st_ino == mem_ino &&
+           st.st_size == mem_size && st.st_mtime == mem_when;
+}
+
+static int clone_cards(const struct board_card *src, int n, struct board_card **out)
+{
+    *out = NULL;
+    if (n <= 0)
+        return 0;
+    struct board_card *v = calloc((size_t)n, sizeof *v);
+    if (!v)
+        return 0;
+    int got = 0;
+    for (int i = 0; i < n; i++) {
+        if (!card_dup(&v[got], &src[i])) {
+            board_free(v, got);
+            return 0;
+        }
+        got++;
+    }
+    *out = v;
+    return got;
+}
+
+static int mem_keep(const struct board_card *v, int n)
+{
+    struct board_card *copy = NULL;
+    int                got = clone_cards(v, n, &copy);
+    if (n && got != n) {
+        board_free(copy, got);
+        mem_drop();
+        return 0;
+    }
+    mem_drop();
+    mem = copy;
+    mem_n = got;
+    mem_ok = 1;
+    return 1;
 }
 
 static int note_append(struct board_card *c, const char *who, const char *text)
@@ -360,14 +469,21 @@ static int by_created_desc(const void *a, const void *b)
 static int load_locked(struct board_card **out)
 {
     *out = NULL;
+    if (mem_fresh())
+        return clone_cards(mem, mem_n, out);
+
+    mem_drop();
 
     size_t len = 0;
     char  *text = text_slurp(board_path(), BOARD_MAX_BYTES, &len);
-    if (!text)
+    if (!text) {
+        mem_ok = 1;
+        mem_note_disk();
         return 0;
+    }
 
     struct board_card *v = NULL;
-    int                n = 0;
+    int                n = 0, cap = 0;
 
     char *save = text;
     for (char *line; (line = strsep(&save, "\n"));) {
@@ -381,13 +497,19 @@ static int load_locked(struct board_card **out)
 
         struct board_card card;
         if (card_from_json(o, &card)) {
-            struct board_card *grown = realloc(v, (size_t)(n + 1) * sizeof *grown);
-            if (grown) {
+            if (n == cap) {
+                int                ncap = cap ? cap * 2 : 8;
+                struct board_card *grown =
+                    realloc(v, (size_t)ncap * sizeof *grown);
+                if (!grown) {
+                    card_wipe(&card);
+                    cJSON_Delete(o);
+                    continue;
+                }
                 v = grown;
-                v[n++] = card;
-            } else {
-                card_wipe(&card);
+                cap = ncap;
             }
+            v[n++] = card;
         }
         cJSON_Delete(o);
     }
@@ -395,6 +517,8 @@ static int load_locked(struct board_card **out)
 
     if (n > 1)
         qsort(v, (size_t)n, sizeof *v, by_created_desc);
+    mem_keep(v, n);
+    mem_note_disk();
     *out = v;
     return n;
 }
@@ -425,9 +549,13 @@ static int write_cards(FILE *f, void *ud)
 static int save_locked(const struct board_card *v, int n)
 {
     struct save_set set = {v, n};
-    if (!text_spit(board_path(), write_cards, &set))
+    if (!text_spit(board_path(), write_cards, &set)) {
+        mem_drop();
         return 0;
+    }
     revision++;
+    mem_keep(v, n);
+    mem_note_disk();
     return 1;
 }
 
@@ -835,8 +963,12 @@ int board_commit(const struct board_card *state, enum board_move move,
 static const char *archive_path(void)
 {
     static char p[4200];
-    if (!p[0] && !path_config_file(p, sizeof p, "board-archive.jsonl"))
-        snprintf(p, sizeof p, "/tmp/board-archive.jsonl");
+    static int  tried;
+    if (!tried) {
+        tried = 1;
+        if (!path_config_file(p, sizeof p, "board-archive.jsonl"))
+            p[0] = '\0';
+    }
     return p;
 }
 
@@ -844,8 +976,12 @@ static const char *archive_path(void)
    through leaves both the archive and the store as they were. */
 static int archive_write(struct board_card *const *moved, int n)
 {
+    const char *path = archive_path();
+    if (!path || !*path)
+        return 0;
+
     char tmp[BOARD_PATH_MAX];
-    if ((size_t)snprintf(tmp, sizeof tmp, "%s.tmp", archive_path()) >= sizeof tmp)
+    if ((size_t)snprintf(tmp, sizeof tmp, "%s.tmp", path) >= sizeof tmp)
         return 0;
 
     FILE *out = fopen(tmp, "wb");

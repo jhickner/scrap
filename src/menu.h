@@ -2,6 +2,7 @@
 #define MENU_H
 
 #include "overlay.h"
+#include "tty.h"
 
 #define MENU_MAX   16
 #define MENU_LABEL 40
@@ -24,6 +25,9 @@ void menu_clear(struct menu *m);
 int  menu_add(struct menu *m, const char *label, int apart);
 void menu_step(struct menu *m, int dir);
 int  menu_steer(struct menu *m, int dir);
+
+enum menu_feed { MENU_IGNORE, MENU_USED, MENU_PICK, MENU_CLOSE };
+enum menu_feed menu_feed(struct menu *m, const tty_event *ev);
 
 int  menu_rows(const struct menu *m);
 int  menu_width(const struct menu *m);

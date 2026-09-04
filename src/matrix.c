@@ -773,8 +773,9 @@ static void send_all(struct view *v, const char *line)
 
 /* a cell's id only exists once it has taken a turn: that is when the row can
    be named, and when it becomes something a later /mux can reopen */
-static void catch_ids(struct view *v)
+static int catch_ids(struct view *v)
 {
+    int changed = 0;
     for (int i = 0; i < v->n; i++) {
         struct cell *c = &v->c[i];
         if (c->titled || !c->s)
@@ -797,7 +798,9 @@ static void catch_ids(struct view *v)
         label[fit] = '\0';
         title_set(c->id, label);
         c->titled = 1;
+        changed = 1;
     }
+    return changed;
 }
 
 static void keep(struct view *v, const char *cwd)
@@ -884,9 +887,10 @@ static struct session *view_run(struct view *v)
         if (!tty_read(&ev, PICK_POLL_MS)) {
             if (chrome_modal_interrupted())
                 break;
-            workspace_pump_quiet();
-            catch_ids(v);
-            chrome_paint();
+            int moved = workspace_pump_quiet();
+            moved |= catch_ids(v);
+            if (moved || status_spinning())
+                chrome_paint();
             continue;
         }
 

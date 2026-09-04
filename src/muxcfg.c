@@ -8,7 +8,6 @@
 #include "app.h"
 #include "models.h"
 #include "session.h"
-#include "settings.h"
 #include "text.h"
 #include "vendor/agents/backend.h"
 
@@ -33,9 +32,9 @@ static int store_path(char *out, size_t size)
     return path_config_file(out, size, MUX_FILE);
 }
 
-static void seed_from_settings(struct mux_set *s)
+static void seed_default(struct mux_set *s)
 {
-    const char *p = settings_get_str(SETTING_MUX_BACKENDS, MUX_DEFAULT);
+    const char *p = MUX_DEFAULT;
 
     while (*p && s->n < MUX_MAX) {
         while (*p == ',' || *p == ' ')
@@ -174,7 +173,7 @@ static void ensure_loaded(void)
     if (!nsets) {
         struct mux_set *s = &sets[nsets++];
         snprintf(s->name, sizeof s->name, "default");
-        seed_from_settings(s);
+        seed_default(s);
     }
     if (active >= nsets)
         active = 0;

@@ -15,14 +15,21 @@
 const char *reminders_path(void)
 {
     static char path[4200];
-    if (!path[0] && !path_config_file(path, sizeof path, "reminders"))
-        snprintf(path, sizeof path, "/tmp/reminders");
+    static int  inited;
+    if (!inited) {
+        inited = 1;
+        if (!path_config_file(path, sizeof path, "reminders"))
+            path[0] = '\0';
+    }
     return path;
 }
 
 static int store_lock(int op)
 {
-    return filelock_acquire(reminders_path(), op);
+    const char *path = reminders_path();
+    if (!path || !path[0])
+        return -1;
+    return filelock_acquire(path, op);
 }
 
 static void store_unlock(int fd)
@@ -30,25 +37,73 @@ static void store_unlock(int fd)
     filelock_release(fd);
 }
 
+typedef struct {
+    cJSON *o;
+    time_t at;
+} Ent;
+
+static void free_ents(Ent *ents, int nobj)
+{
+    for (int i = 0; i < nobj; i++)
+        if (ents[i].o)
+            cJSON_Delete(ents[i].o);
+    free(ents);
+}
+
+static int parse_ents(char *buf, Ent **ents_out, int *nobj_out)
+{
+    Ent *ents = NULL;
+    int  nobj = 0, cap = 0;
+    for (char *p = buf; *p;) {
+        char *nl = strchr(p, '\n');
+        if (nl)
+            *nl = '\0';
+        if (*p) {
+            cJSON *o = cJSON_Parse(p);
+            if (o) {
+                if (nobj == cap) {
+                    int  ncap = cap ? cap * 2 : 64;
+                    Ent *ne = realloc(ents, (size_t)ncap * sizeof *ne);
+                    if (!ne) {
+                        cJSON_Delete(o);
+                        free_ents(ents, nobj);
+                        return 0;
+                    }
+                    ents = ne;
+                    cap = ncap;
+                }
+                ents[nobj].o = o;
+                ents[nobj].at = (time_t)-1;
+                nobj++;
+            }
+        }
+        if (!nl)
+            break;
+        p = nl + 1;
+    }
+    *ents_out = ents;
+    *nobj_out = nobj;
+    return 1;
+}
+
 int reminders_scheduled_count(void)
 {
-    int   lock = store_lock(LOCK_SH);
-    FILE *f = fopen(reminders_path(), "rb");
-    if (!f) {
+    if (!reminders_path()[0])
+        return 0;
+    int lock = store_lock(LOCK_SH);
+
+    size_t len = 0;
+    char  *buf = text_slurp(reminders_path(), REMINDERS_MAX_BYTES, &len);
+    if (!buf) {
         store_unlock(lock);
         return 0;
     }
-    int n = 0, c, content = 0;
-    while ((c = fgetc(f)) != EOF) {
-        if (c == '\n') {
-            n += content;
-            content = 0;
-        } else if (c != ' ' && c != '\t' && c != '\r') {
-            content = 1;
-        }
-    }
-    n += content;
-    fclose(f);
+
+    Ent *ents = NULL;
+    int  nobj = 0;
+    int  n = parse_ents(buf, &ents, &nobj) ? nobj : 0;
+    free(buf);
+    free_ents(ents, nobj);
     store_unlock(lock);
     return n;
 }
@@ -208,11 +263,6 @@ static int reschedule(cJSON *o, time_t fired_ts, time_t now)
     return 0;
 }
 
-typedef struct {
-    cJSON *o;
-    time_t at;
-} Ent;
-
 struct rewrite {
     const Ent  *ents;
     int         nent;
@@ -242,6 +292,8 @@ static int write_entries(FILE *f, void *ud)
 static void store_rewrite(const Ent *ents, int nent, const char *orig, size_t orig_len)
 {
     const char *path = reminders_path();
+    if (!path || !path[0])
+        return;
     size_t      cur_len = 0;
     char       *cur = text_slurp(path, REMINDERS_MAX_BYTES, &cur_len);
     if (!cur)
@@ -256,8 +308,12 @@ static void store_rewrite(const Ent *ents, int nent, const char *orig, size_t or
     free(cur);
 }
 
-int reminders_pop_due(time_t now, char *out, size_t n)
+int reminders_drain_due(time_t now, int (*take)(const char *text, void *ud),
+                        void *ud)
 {
+    if (!take || !reminders_path()[0])
+        return 0;
+
     int lock = store_lock(LOCK_EX);
 
     size_t len = 0;
@@ -276,77 +332,84 @@ int reminders_pop_due(time_t now, char *out, size_t n)
     orig[len] = '\0';
 
     Ent *ents = NULL;
-    int  nobj = 0, cap = 0, dirty = 0, oom = 0;
-    for (char *p = buf; *p;) {
-        char *nl = strchr(p, '\n');
-        if (nl)
-            *nl = '\0';
-        if (*p) {
-            cJSON *o = cJSON_Parse(p);
-            if (o) {
-                if (nobj == cap) {
-                    int  ncap = cap ? cap * 2 : 64;
-                    Ent *ne = realloc(ents, (size_t)ncap * sizeof *ne);
-                    if (!ne) {
-                        cJSON_Delete(o);
-                        oom = 1;
-                        break;
-                    }
-                    ents = ne;
-                    cap = ncap;
-                }
-                ents[nobj].o = o;
-                ents[nobj].at = (time_t)-1;
-                nobj++;
-            }
-        }
-        if (!nl)
-            break;
-        p = nl + 1;
-    }
-    free(buf);
-
-    if (oom) {
+    int  nobj = 0;
+    if (!parse_ents(buf, &ents, &nobj)) {
         free(orig);
-        for (int i = 0; i < nobj; i++)
-            cJSON_Delete(ents[i].o);
-        free(ents);
+        free(buf);
         store_unlock(lock);
         return 0;
     }
+    free(buf);
 
+    int dirty = 0;
     for (int i = 0; i < nobj; i++)
         ents[i].at = effective_at(ents[i].o, now, &dirty);
 
-    int    fired = -1;
-    time_t fired_ts = 0;
-    for (int i = 0; i < nobj; i++)
-        if (ents[i].at != (time_t)-1 && ents[i].at <= now &&
-            (fired < 0 || ents[i].at < fired_ts)) {
-            fired = i;
-            fired_ts = ents[i].at;
+    int *due = NULL;
+    int  ndue = 0;
+    if (nobj > 0) {
+        due = malloc((size_t)nobj * sizeof *due);
+        if (!due) {
+            free(orig);
+            free_ents(ents, nobj);
+            store_unlock(lock);
+            return 0;
         }
+        for (int i = 0; i < nobj; i++)
+            if (ents[i].at != (time_t)-1 && ents[i].at <= now)
+                due[ndue++] = i;
+        for (int a = 0; a < ndue; a++)
+            for (int b = a + 1; b < ndue; b++)
+                if (ents[due[b]].at < ents[due[a]].at) {
+                    int t = due[a];
+                    due[a] = due[b];
+                    due[b] = t;
+                }
+    }
 
-    int result = 0;
-    if (fired >= 0) {
-        const char *txt = cJSON_GetStringValue(cJSON_GetObjectItem(ents[fired].o, "text"));
-        snprintf(out, n, "%s", txt ? txt : "(reminder)");
-        if (!reschedule(ents[fired].o, fired_ts, now)) {
-            cJSON_Delete(ents[fired].o);
-            ents[fired].o = NULL;
+    int taken = 0;
+    for (int d = 0; d < ndue; d++) {
+        int         i = due[d];
+        const char *txt = cJSON_GetStringValue(cJSON_GetObjectItem(ents[i].o, "text"));
+        if (!take(txt ? txt : "(reminder)", ud))
+            break;
+        if (!reschedule(ents[i].o, ents[i].at, now)) {
+            cJSON_Delete(ents[i].o);
+            ents[i].o = NULL;
         }
         dirty = 1;
-        result = 1;
+        taken++;
     }
 
     if (dirty)
         store_rewrite(ents, nobj, orig, len);
 
+    free(due);
     free(orig);
-    for (int i = 0; i < nobj; i++)
-        if (ents[i].o)
-            cJSON_Delete(ents[i].o);
-    free(ents);
+    free_ents(ents, nobj);
     store_unlock(lock);
-    return result;
+    return taken;
+}
+
+struct pop_once {
+    char  *out;
+    size_t n;
+    int    got;
+};
+
+static int take_one(const char *text, void *ud)
+{
+    struct pop_once *p = ud;
+    if (p->got)
+        return 0;
+    snprintf(p->out, p->n, "%s", text);
+    p->got = 1;
+    return 1;
+}
+
+int reminders_pop_due(time_t now, char *out, size_t n)
+{
+    struct pop_once p = {out, n, 0};
+    reminders_drain_due(now, take_one, &p);
+    return p.got;
 }

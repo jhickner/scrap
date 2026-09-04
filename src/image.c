@@ -534,19 +534,57 @@ static void place(uint32_t id, int indent, int img_w, int img_h)
         write_placeholders(id, indent, cols, rows, 1);
 }
 
-static int show_png(const unsigned char *data, size_t len, const char *path, time_t mtime,
-                    int indent)
+/* PNG is sent as stored; anything else is decoded to px_w x px_h (source size
+   when either is < 1). img_w/img_h receive the source dimensions. */
+static int transmit(const char *path, uint32_t id, int px_w, int px_h, int *img_w, int *img_h)
 {
+    unsigned char head[32];
+    size_t head_n = peek_file(path, head, sizeof head);
+    if (head_n == 0)
+        return 0;
+
+    if (is_png(head, head_n)) {
+        size_t len = 0;
+        unsigned char *data = load_file(path, &len);
+        if (!data)
+            return 0;
+        int ok = png_dims(data, len, img_w, img_h);
+        if (ok)
+            kg_transmit_png(id, data, len);
+        free(data);
+        return ok;
+    }
+
+    int probe_w = 0, probe_h = 0;
+    if (!imagedec_probe(path, &probe_w, &probe_h))
+        return 0;
+    if (px_w < 1)
+        px_w = probe_w;
+    if (px_h < 1)
+        px_h = probe_h;
+
+    static const uint8_t bg[3] = {0, 0, 0};
+    Image im = {0};
+    if (!imagedec_load_fit(path, bg, px_w, px_h, &im))
+        return 0;
+    *img_w = im.src_w;
+    *img_h = im.src_h;
+    kg_transmit_ex(id, im.rgb, im.w, im.h, 3);
+    imagedec_free(&im);
+    return 1;
+}
+
+static int show_png(const char *path, time_t mtime, int indent)
+{
+    uint32_t id = next_id();
     int img_w = 0, img_h = 0;
-    if (!png_dims(data, len, &img_w, &img_h))
+    if (!transmit(path, id, 0, 0, &img_w, &img_h))
         return 0;
 
     int cols, rows;
     if (!box_size(indent, img_w, img_h, &cols, &rows))
         return 0;
 
-    uint32_t id = next_id();
-    kg_transmit_png(id, data, len);
     shot_add(id, path);
     place_kept(id, indent, img_w, img_h, path);
     if (path)
@@ -569,17 +607,14 @@ static int show_decoded(const char *path, time_t mtime, int indent)
     int cw, ch, term_rows;
     cell_pixels(&cw, &ch, &term_rows);
 
-    static const uint8_t bg[3] = {0, 0, 0};
-    Image im = {0};
-    if (!imagedec_load_fit(path, bg, cols * cw, rows * ch, &im))
+    uint32_t id = next_id();
+    int img_w = 0, img_h = 0;
+    if (!transmit(path, id, cols * cw, rows * ch, &img_w, &img_h))
         return 0;
 
-    uint32_t id = next_id();
-    kg_transmit_ex(id, im.rgb, im.w, im.h, 3);
     shot_add(id, path);
-    place_kept(id, indent, im.src_w, im.src_h, path);
-    cache_store(path, mtime, id, im.src_w, im.src_h);
-    imagedec_free(&im);
+    place_kept(id, indent, img_w, img_h, path);
+    cache_store(path, mtime, id, img_w, img_h);
     return 1;
 }
 
@@ -650,15 +685,10 @@ int image_show(const char *path, int indent)
         return 0;
     }
 
-    if (is_png(head, head_n)) {
-        size_t len = 0;
-        unsigned char *data = load_file(file, &len);
-        if (data)
-            ok = show_png(data, len, file, mtime, indent);
-        free(data);
-    } else {
+    if (is_png(head, head_n))
+        ok = show_png(file, mtime, indent);
+    else
         ok = show_decoded(file, mtime, indent) || start_convert(file, mtime, indent);
-    }
     free(expanded);
     return ok;
 }
@@ -672,50 +702,32 @@ uint32_t image_load(const char *path, int cols_box, int rows_box, int *cols, int
     cell_pixels(&cw, &ch, &term_rows);
 
     unsigned char head[32];
-    size_t        head_n = peek_file(path, head, sizeof head);
+    size_t head_n = peek_file(path, head, sizeof head);
     if (head_n == 0)
         return 0;
 
-    uint32_t id = full_id();
-
-    if (is_png(head, head_n)) {
-        size_t         len = 0;
-        unsigned char *data = load_file(path, &len);
-        if (!data)
+    int px_w = 0, px_h = 0;
+    if (!is_png(head, head_n)) {
+        int probe_w = 0, probe_h = 0;
+        if (!imagedec_probe(path, &probe_w, &probe_h))
             return 0;
-        int img_w = 0, img_h = 0;
-        int ok = png_dims(data, len, &img_w, &img_h);
-        if (ok) {
-            kg_transmit_png(id, data, len);
-            image_fill(img_w, img_h, cw, ch, cols_box, rows_box, cols, rows);
+        image_fill(probe_w, probe_h, cw, ch, cols_box, rows_box, cols, rows);
+        /* enlarging is the terminal's job: it scales the image into the cells
+           the placeholders cover, so never decode past what the file holds */
+        px_w = *cols * cw;
+        px_h = *rows * ch;
+        if (px_w > probe_w || px_h > probe_h) {
+            px_w = probe_w;
+            px_h = probe_h;
         }
-        free(data);
-        return ok ? id : 0;
     }
 
-    int probe_w = 0, probe_h = 0;
-    if (!imagedec_probe(path, &probe_w, &probe_h))
+    uint32_t id = full_id();
+    int img_w = 0, img_h = 0;
+    if (!transmit(path, id, px_w, px_h, &img_w, &img_h))
         return 0;
-
-    image_fill(probe_w, probe_h, cw, ch, cols_box, rows_box, cols, rows);
-
-    /* enlarging is the terminal's job: it scales the image into the cells the
-       placeholders cover, so never decode past what the file holds */
-    int px_w = *cols * cw, px_h = *rows * ch;
-    if (px_w > probe_w || px_h > probe_h) {
-        px_w = probe_w;
-        px_h = probe_h;
-    }
-
-    static const uint8_t bg[3] = {0, 0, 0};
-    Image                im = {0};
-    if (!imagedec_load_fit(path, bg, px_w, px_h, &im))
-        return 0;
-
     /* orientation can transpose the frame the probe reported */
-    image_fill(im.src_w, im.src_h, cw, ch, cols_box, rows_box, cols, rows);
-    kg_transmit_ex(id, im.rgb, im.w, im.h, 3);
-    imagedec_free(&im);
+    image_fill(img_w, img_h, cw, ch, cols_box, rows_box, cols, rows);
     return id;
 }
 

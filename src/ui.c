@@ -499,6 +499,17 @@ void ui_esc(const char *s)
         emit(s, strlen(s));
 }
 
+void ui_box_rule(enum ui_role role, const char *left, const char *right, int width)
+{
+    ui_esc(ui_style(role));
+    ui_put(left);
+    for (int i = 2; i < width; i++)
+        ui_put(UI_BOX_H);
+    if (width > 1)
+        ui_put(right);
+    ui_esc(ui_style(UI_RESET));
+}
+
 void ui_pad(int cells)
 {
     static const char SPACES[] = "                                ";

@@ -52,10 +52,7 @@ static void nest_pad(int base)
     ui_put(" ");
 }
 
-/* KEEP_CLUSTER is only ever loaded: it is the pre-merge form of a row of
-   calls, kept so a scrollback written before the merge moved into the render
-   pass still draws */
-enum keep_kind { KEEP_ACTIVITY, KEEP_CALL, KEEP_OUTPUT, KEEP_DIFF, KEEP_CLUSTER };
+enum keep_kind { KEEP_ACTIVITY, KEEP_CALL, KEEP_OUTPUT, KEEP_DIFF };
 
 struct keep {
     enum keep_kind kind;
@@ -170,6 +167,11 @@ static void keep_render(void *ud, int cols)
         nest = 0;
         return;
     }
+    if (k->kind == KEEP_CALL && k->spans) {
+        cluster_paint(k->a, k->spans);
+        nest = 0;
+        return;
+    }
     if (k->kind == KEEP_CALL && (view_state()->collapsed || k->collapses)) {
         call_collapsed(k);
         nest = 0;
@@ -186,7 +188,6 @@ static void keep_render(void *ud, int cols)
             view_tool_output(k->a, k->role);
         break;
     case KEEP_DIFF:     filediff_render_patch(k->a);                     break;
-    case KEEP_CLUSTER:  cluster_paint(k->a, k->spans);                   break;
     }
     nest = 0;
 }
@@ -295,7 +296,11 @@ static struct keep *keep_new(enum keep_kind kind)
 void view_keep_load(const cJSON *st)
 {
     int kind = scrollback_int(st, "kind");
-    if (kind < KEEP_ACTIVITY || kind > KEEP_CLUSTER)
+    /* pre-merge dumps stored a collapsed row of calls as kind 4 */
+    enum { KEEP_CLUSTER = 4 };
+    if (kind == KEEP_CLUSTER)
+        kind = KEEP_CALL;
+    if (kind < KEEP_ACTIVITY || kind > KEEP_DIFF)
         return;
 
     struct keep *k = keep_new((enum keep_kind)kind);

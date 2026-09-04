@@ -51,17 +51,14 @@ int confirm_run(const char *question)
             chrome_modal(NULL, NULL);
             return 0;
         }
-        if (ev.key == TK_TEXT) {
+        if (ev.key == TK_TEXT)
             free(ev.text);
-            continue;
-        }
-        if (ev.key == TK_CHAR && (ev.cp == 'y' || ev.cp == 'Y')) {
+        int yn = chrome_read_yesno(&ev);
+        if (yn == 1) {
             chrome_modal(NULL, NULL);
             return 1;
         }
-        if ((ev.key == TK_CHAR && (ev.cp == 'n' || ev.cp == 'N' ||
-                                   ev.cp == 3 || ev.cp == 4)) ||
-            ev.key == TK_ESCAPE || ev.key == TK_EOF) {
+        if (yn == 0) {
             chrome_modal(NULL, NULL);
             return 0;
         }

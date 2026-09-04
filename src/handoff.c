@@ -1,6 +1,5 @@
 #include "handoff.h"
 
-#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,12 +16,7 @@
 
 static int dir_path(char *out, size_t size)
 {
-    char base[4096];
-    if (!path_config_dir(base, sizeof base))
-        return 0;
-    if ((size_t)snprintf(out, size, "%s/handoff", base) >= size)
-        return 0;
-    return mkdir(out, 0700) == 0 || errno == EEXIST;
+    return path_config_subdir(out, size, "handoff");
 }
 
 static int id_ok(const char *id)

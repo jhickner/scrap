@@ -85,6 +85,11 @@ int main(void)
     if (!write_file(path, "one\ntwo\n"))
         return 1;
     g = gitinfo_get(dir);
+    if (g->dirty)
+        fail("same dir is cached");
+
+    gitinfo_forget();
+    g = gitinfo_get(dir);
     if (!g->dirty)
         fail("first read after an edit is dirty");
     if (g->added < 1)

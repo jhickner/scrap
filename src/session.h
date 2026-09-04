@@ -2,6 +2,8 @@
 #ifndef SESSION_H
 #define SESSION_H
 
+#include <string.h>
+
 #include "tty.h"
 #include "vendor/agents/backend.h"
 
@@ -174,12 +176,54 @@ const char *session_cwd(const struct session *s);
 const char *session_workdir(const struct session *s);
 const char *session_backend(const struct session *s);
 
-#define SESSION_ARGV_MAX 11
+#define SESSION_ARGV_MAX 16
 enum {
     SESSION_ARGV_CWD    = 1u << 0,
     SESSION_ARGV_RESUME = 1u << 1,
     SESSION_ARGV_SAFE   = 1u << 2,
+    SESSION_ARGV_FORK   = 1u << 3,
 };
+
+static inline int mux_argv(char **out, int max, unsigned what,
+                           const char *program, const char *backend,
+                           const char *cwd, const char *model,
+                           const char *effort, const char *id, int safe,
+                           const char *prompt)
+{
+    int n = 0;
+    if (program && n < max)
+        out[n++] = (char *)program;
+    if (n + 2 <= max) {
+        out[n++] = (char *)"-b";
+        out[n++] = (char *)(backend ? backend : "claude");
+    }
+    if ((what & SESSION_ARGV_CWD) && cwd && *cwd && n + 2 <= max) {
+        out[n++] = (char *)"-C";
+        out[n++] = (char *)cwd;
+    }
+    if (model && *model && strcmp(model, "default") && n + 2 <= max) {
+        out[n++] = (char *)"-m";
+        out[n++] = (char *)model;
+    }
+    if (effort && *effort && strcmp(effort, "default") && n + 2 <= max) {
+        out[n++] = (char *)"-e";
+        out[n++] = (char *)effort;
+    }
+    if (safe && n < max)
+        out[n++] = (char *)"-s";
+    if ((what & SESSION_ARGV_RESUME) && id && *id && n + 2 <= max) {
+        out[n++] = (char *)"--session";
+        out[n++] = (char *)id;
+        if ((what & SESSION_ARGV_FORK) && n < max)
+            out[n++] = (char *)"--fork";
+    }
+    if (prompt && n < max)
+        out[n++] = (char *)prompt;
+    if (n < max)
+        out[n] = NULL;
+    return n;
+}
+
 int session_argv(const struct session *s, char **out, int max, unsigned what);
 const char *session_last_reply(const struct session *s);
 const char *session_last_error(const struct session *s);

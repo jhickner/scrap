@@ -8,6 +8,7 @@
 #include "text.h"
 #include "mdcfg.h"
 #include "boarddefaults.h"
+#include "session.h"
 #include "sessionfork.h"
 #include "vendor/agents/backend.h"
 
@@ -593,32 +594,16 @@ void boardcfg_levels_line(const struct board_backend *b, char *out, size_t size)
                      b->level[t].model[0] ? b->level[t].model : "default");
 }
 
-static int argv_pair(char **out, int n, int max, const char *flag, const char *value)
-{
-    if (n + 2 > max)
-        return n;
-    out[n++] = (char *)flag;
-    out[n++] = (char *)value;
-    return n;
-}
-
 int boardcfg_argv(const struct board_action *p, const char *prompt, char **out,
                   int max)
 {
     if (!p || !prompt || max < BOARDCFG_ARGV_MAX)
         return 0;
 
-    int flags = max - 2;
-    int n = 0;
-    out[n++] = (char *)sessionfork_program();
-    n = argv_pair(out, n, flags, "-b", p->backend[0] ? p->backend : "claude");
-    if (p->model[0] && strcmp(p->model, "default"))
-        n = argv_pair(out, n, flags, "-m", p->model);
-    if (p->effort[0] && strcmp(p->effort, "default"))
-        n = argv_pair(out, n, flags, "-e", p->effort);
-    out[n++] = (char *)prompt;
-    out[n] = NULL;
-    return n;
+    return mux_argv(out, max, 0, sessionfork_program(),
+                    p->backend[0] ? p->backend : "claude", NULL,
+                    p->model[0] ? p->model : NULL, p->effort[0] ? p->effort : NULL,
+                    NULL, 0, prompt);
 }
 
 const char *boardcfg_serving(void)

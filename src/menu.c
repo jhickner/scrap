@@ -5,15 +5,6 @@
 
 #include "ui.h"
 
-#define BOX_TL "\xe2\x95\xad"
-#define BOX_TR "\xe2\x95\xae"
-#define BOX_BL "\xe2\x95\xb0"
-#define BOX_BR "\xe2\x95\xaf"
-#define BOX_H  "\xe2\x94\x80"
-#define BOX_V  "\xe2\x94\x82"
-#define BOX_ML "\xe2\x94\x9c"
-#define BOX_MR "\xe2\x94\xa4"
-
 /* the borders, the space inside them and the cursor an item leaves room for */
 #define MENU_TRIM 6
 
@@ -55,6 +46,38 @@ int menu_steer(struct menu *m, int dir)
         m->choice = m->choices_n - 1;
     snprintf(m->suffix, sizeof m->suffix, "%s", m->choices[m->choice]);
     return 1;
+}
+
+enum menu_feed menu_feed(struct menu *m, const tty_event *ev)
+{
+    switch (ev->key) {
+    case TK_UP:
+        menu_step(m, -1);
+        return MENU_USED;
+    case TK_DOWN:
+        menu_step(m, 1);
+        return MENU_USED;
+    case TK_RIGHT:
+        menu_steer(m, 1);
+        return MENU_USED;
+    case TK_LEFT:
+        return menu_steer(m, -1) ? MENU_USED : MENU_CLOSE;
+    case TK_ENTER:
+        return MENU_PICK;
+    case TK_ESCAPE:
+    case TK_EOF:
+        return MENU_CLOSE;
+    case TK_CHAR:
+        if (ev->cp == 3 || ev->cp == 4)
+            return MENU_CLOSE;
+        return MENU_IGNORE;
+    case TK_TEXT:
+        return MENU_IGNORE;
+    case TK_RESIZE:
+        return MENU_USED;
+    default:
+        return MENU_IGNORE;
+    }
 }
 
 int menu_rows(const struct menu *m)
@@ -131,17 +154,6 @@ static int item_of(const struct menu *m, int row, int *rule)
     return -1;
 }
 
-static void put_rule(const char *left, const char *right, int width)
-{
-    ui_esc(ui_style(UI_ACCENT));
-    ui_put(left);
-    for (int i = 2; i < width; i++)
-        ui_put(BOX_H);
-    if (width > 1)
-        ui_put(right);
-    ui_esc(ui_style(UI_RESET));
-}
-
 void menu_paint_row(const struct menu *m, int row, int width)
 {
     int rows = menu_rows(m);
@@ -149,23 +161,23 @@ void menu_paint_row(const struct menu *m, int row, int width)
         return;
 
     if (row == 0) {
-        put_rule(BOX_TL, BOX_TR, width);
+        ui_box_rule(UI_ACCENT, UI_BOX_TL, UI_BOX_TR, width);
         return;
     }
     if (row == rows - 1) {
-        put_rule(BOX_BL, BOX_BR, width);
+        ui_box_rule(UI_ACCENT, UI_BOX_BL, UI_BOX_BR, width);
         return;
     }
 
     int rule = 0;
     int at = item_of(m, row, &rule);
     if (rule) {
-        put_rule(BOX_ML, BOX_MR, width);
+        ui_box_rule(UI_ACCENT, UI_BOX_ML, UI_BOX_MR, width);
         return;
     }
 
     ui_esc(ui_style(UI_ACCENT));
-    ui_put(BOX_V);
+    ui_put(UI_BOX_V);
     ui_esc(ui_style(UI_RESET));
 
     int picked = at == m->sel;
@@ -182,7 +194,7 @@ void menu_paint_row(const struct menu *m, int row, int width)
         ui_pad(width - 1 - used);
 
     ui_esc(ui_style(UI_ACCENT));
-    ui_put(BOX_V);
+    ui_put(UI_BOX_V);
     ui_esc(ui_style(UI_RESET));
 }
 

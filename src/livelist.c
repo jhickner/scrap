@@ -112,10 +112,7 @@ static int live_dir(char *out, size_t size)
     if (env && *env)
         return (size_t)snprintf(out, size, "%s", env) < size;
 
-    char base[4096];
-    if (!path_config_dir(base, sizeof base))
-        return 0;
-    return (size_t)snprintf(out, size, "%s/live", base) < size;
+    return path_config_subdir(out, size, "live");
 }
 
 static void tmux_where(void)

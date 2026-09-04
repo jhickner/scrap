@@ -239,6 +239,18 @@ void chrome_foot_paint(const char *ask, const char *hint, int columns)
     }
 }
 
+int chrome_read_yesno(const tty_event *ev)
+{
+    if (ev->key == TK_CHAR && (ev->cp == 'y' || ev->cp == 'Y'))
+        return 1;
+    if (ev->key == TK_CHAR &&
+        (ev->cp == 'n' || ev->cp == 'N' || ev->cp == 3 || ev->cp == 4))
+        return 0;
+    if (ev->key == TK_ESCAPE || ev->key == TK_EOF)
+        return 0;
+    return -1;
+}
+
 void chrome_paint(void)
 {
     if (kept)

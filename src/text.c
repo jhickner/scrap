@@ -331,6 +331,10 @@ int path_config_dir(char *out, size_t size)
     if ((size_t)snprintf(out, size, "%s/" APP_CONFIG, home) >= size)
         return 0;
 
+    static char made[4096];
+    if (!strcmp(made, out))
+        return 1;
+
     for (char *p = out + strlen(home) + 1; *p; p++) {
         if (*p != '/')
             continue;
@@ -339,6 +343,7 @@ int path_config_dir(char *out, size_t size)
         *p = '/';
     }
     mkdir(out, 0700);
+    snprintf(made, sizeof made, "%s", out);
     return 1;
 }
 
@@ -349,6 +354,25 @@ int path_config_file(char *out, size_t size, const char *leaf)
         return 0;
     if ((size_t)snprintf(out, size, "%s/%s", dir, leaf) >= size)
         return 0;
+    return 1;
+}
+
+int path_config_subdir(char *out, size_t size, const char *leaf)
+{
+    char base[4096];
+    if (!path_config_dir(base, sizeof base))
+        return 0;
+    if ((size_t)snprintf(out, size, "%s/%s", base, leaf) >= size)
+        return 0;
+
+    for (char *p = out + strlen(base) + 1; *p; p++) {
+        if (*p != '/')
+            continue;
+        *p = '\0';
+        mkdir(out, 0700);
+        *p = '/';
+    }
+    mkdir(out, 0700);
     return 1;
 }
 

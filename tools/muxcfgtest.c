@@ -116,22 +116,20 @@ static void write_file(const char *path, const char *text)
 
 static void case_legacy(const char *home)
 {
-    char path[512];
-    snprintf(path, sizeof path, "%s/settings", home);
-    write_file(path, SETTING_MUX_BACKENDS "=claude,codex:gpt-5.6-sol:high,nonesuch\n");
-    settings_open(path);
+    (void)home;
 
     struct mux_spec v[MUX_MAX];
     int             n = muxcfg_load(v, MUX_MAX);
 
-    assert(n == 2);
+    assert(n == 3);
     assert(!strcmp(v[0].backend, "claude"));
     assert(!strcmp(v[0].model, "claude-opus-5"));
     assert(!strcmp(v[0].effort, "high"));
     assert(!*v[0].prompt);
     assert(!strcmp(v[1].backend, "codex"));
-    assert(!strcmp(v[1].model, "gpt-5.6-sol"));
-    assert(!strcmp(v[1].effort, "high"));
+    assert(!*v[1].model);
+    assert(!*v[1].effort);
+    assert(!strcmp(v[2].backend, "grok"));
     assert(!strcmp(muxcfg_active(), "default"));
 }
 

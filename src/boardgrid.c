@@ -30,15 +30,6 @@
 /* the top and bottom border rows a tile carries beyond its text */
 #define GRID_BORDER 2
 
-#define BOX_TL "\xe2\x95\xad"
-#define BOX_TR "\xe2\x95\xae"
-#define BOX_BL "\xe2\x95\xb0"
-#define BOX_BR "\xe2\x95\xaf"
-#define BOX_H  "\xe2\x94\x80"
-#define BOX_V  "\xe2\x94\x82"
-#define BOX_ML "\xe2\x94\x9c"
-#define BOX_MR "\xe2\x94\xa4"
-
 /* the title bar and the row of lane names */
 #define GRID_HEAD 2
 
@@ -514,25 +505,13 @@ static void put_edge(enum ui_role role, const char *s, int *used)
 
 static void put_divider(enum ui_role role, int w, int *used)
 {
-    ui_esc(ui_style(role));
-    ui_put(BOX_ML);
-    for (int i = 2; i < w; i++)
-        ui_put(BOX_H);
-    if (w > 1)
-        ui_put(BOX_MR);
-    ui_esc(ui_style(UI_RESET));
+    ui_box_rule(role, UI_BOX_ML, UI_BOX_MR, w);
     *used += w;
 }
 
 static void put_rule(enum ui_role role, int top, int w, int *used)
 {
-    ui_esc(ui_style(role));
-    ui_put(top ? BOX_TL : BOX_BL);
-    for (int i = 2; i < w; i++)
-        ui_put(BOX_H);
-    if (w > 1)
-        ui_put(top ? BOX_TR : BOX_BR);
-    ui_esc(ui_style(UI_RESET));
+    ui_box_rule(role, top ? UI_BOX_TL : UI_BOX_BL, top ? UI_BOX_TR : UI_BOX_BR, w);
     *used += w;
 }
 
@@ -589,7 +568,7 @@ static void paint_row(struct grid *v, int row)
             continue;
         }
 
-        put_edge(edge, BOX_V, &used);
+        put_edge(edge, UI_BOX_V, &used);
         if (picked)
             ui_row_sel(1);
         pad_to(&used, r->col + GRID_INDENT);
@@ -613,7 +592,7 @@ static void paint_row(struct grid *v, int row)
         pad_to(&used, r->col + r->w - 1);
         if (picked)
             ui_row_sel(0);
-        put_edge(edge, BOX_V, &used);
+        put_edge(edge, UI_BOX_V, &used);
     }
     ui_put("\n");
 }
@@ -788,22 +767,17 @@ int boardgrid_run(const char *title, const struct board_tile *tiles,
         }
 
         if (asking) {
-            if (ev.key == TK_TEXT) {
+            if (ev.key == TK_TEXT)
                 free(ev.text);
-                continue;
-            }
-            int yes = ev.key == TK_CHAR && (ev.cp == 'y' || ev.cp == 'Y');
-            int no = (ev.key == TK_CHAR &&
-                      (ev.cp == 'n' || ev.cp == 'N' || ev.cp == 3 || ev.cp == 4)) ||
-                     ev.key == TK_ESCAPE || ev.key == TK_EOF;
-            if (!yes && !no) {
+            int yn = chrome_read_yesno(&ev);
+            if (yn < 0) {
                 if (ev.key == TK_RESIZE)
                     chrome_paint();
                 continue;
             }
             result = v.sel;
             if (pressed)
-                *pressed = yes ? 'y' : 'n';
+                *pressed = yn ? 'y' : 'n';
             goto done;
         }
 
@@ -813,39 +787,32 @@ int boardgrid_run(const char *title, const struct board_tile *tiles,
         }
 
         if (open_menu(&v)) {
-            if (ev.key == TK_UP || ev.key == TK_DOWN) {
-                menu_step(v.menu, ev.key == TK_UP ? -1 : 1);
-                chrome_paint();
-                continue;
-            }
-            if (ev.key == TK_LEFT || ev.key == TK_RIGHT) {
-                if (menu_steer(v.menu, ev.key == TK_LEFT ? -1 : 1))
-                    chrome_paint();
-                continue;
-            }
-            if (ev.key == TK_ENTER) {
+            switch (menu_feed(v.menu, &ev)) {
+            case MENU_PICK:
                 result = v.sel;
                 if (pressed)
                     *pressed = PICK_KEY_MENU;
                 goto done;
-            }
-            if (ev.key == TK_ESCAPE ||
-                (ev.key == TK_CHAR && (ev.cp == 3 || ev.cp == 4))) {
+            case MENU_CLOSE:
+                if (ev.key == TK_EOF)
+                    goto done;
                 v.menu->open = 0;
                 if (!relayout(&v)) {
                     result = GRID_NARROW;
                     goto done;
                 }
                 chrome_paint();
-                continue;
+                break;
+            case MENU_USED:
+                if (ev.key == TK_RESIZE && !relayout(&v)) {
+                    result = GRID_NARROW;
+                    goto done;
+                }
+                chrome_paint();
+                break;
+            default:
+                break;
             }
-            if (ev.key == TK_EOF)
-                goto done;
-            if (ev.key == TK_RESIZE && !relayout(&v)) {
-                result = GRID_NARROW;
-                goto done;
-            }
-            chrome_paint();
             continue;
         }
 

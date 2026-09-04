@@ -468,12 +468,10 @@ static int load_pi(const char *cwd, const char *skip_id, struct past_session **o
     return scan_dir(dir, skip_id, pi_fill, &pi, out);
 }
 
-static int codex_sessions_dir(const char *cwd, char *out, size_t size)
+static int codex_sessions_dir(char *out, size_t size)
 {
     const char *root = getenv("CODEX_HOME");
     char home[1024];
-    if (!cwd)
-        return 0;
     if (!root || !*root) {
         const char *h = getenv("HOME");
         if (!h || (size_t)snprintf(home, sizeof home, "%s/.codex", h) >= sizeof home)
@@ -587,7 +585,7 @@ static void codex_walk(const char *dir, int depth, struct codex_scan *scan)
 static int load_codex(const char *cwd, const char *skip_id, struct past_session **out)
 {
     char dir[2048];
-    if (!codex_sessions_dir(cwd, dir, sizeof dir))
+    if (!codex_sessions_dir(dir, sizeof dir))
         return 0;
     struct past_session *list = calloc(MAX_SESSIONS, sizeof *list);
     if (!list)
@@ -612,7 +610,7 @@ int sessionlist_dir(const char *backend, const char *cwd, char *out, size_t size
     if (!backend || !strcmp(backend, "claude"))
         return claude_dir(cwd, out, size);
     if (!strcmp(backend, "codex"))
-        return codex_sessions_dir(cwd, out, size);
+        return codex_sessions_dir(out, size);
     if (!strcmp(backend, "grok"))
         return grok_group_dir(cwd, out, size);
     if (!strcmp(backend, "pi")) {

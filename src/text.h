@@ -48,6 +48,8 @@ int path_config_dir(char *out, size_t size);
 
 int path_config_file(char *out, size_t size, const char *leaf);
 
+int path_config_subdir(char *out, size_t size, const char *leaf);
+
 void path_home_relative(const char *dir, char *out, size_t size);
 
 char *path_expand_home(const char *path);

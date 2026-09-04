@@ -1,6 +1,8 @@
 #ifndef CHROME_H
 #define CHROME_H
 
+#include "tty.h"
+
 struct prompt;
 
 void chrome_bind(struct prompt *p);
@@ -32,6 +34,9 @@ void chrome_title_paint(const char *title);
 /* the hint block, or the y/n question that stands in for it, under a modal */
 int  chrome_foot_rows(const char *ask, const char *hint, int columns);
 void chrome_foot_paint(const char *ask, const char *hint, int columns);
+
+/* 1 yes, 0 no, -1 ignore */
+int  chrome_read_yesno(const tty_event *ev);
 
 typedef void (*chrome_modal_fn)(void *ud);
 void chrome_modal(chrome_modal_fn fn, void *ud);

@@ -87,38 +87,19 @@ static int codex_find(const char *dir, const char *id, int depth, char *out,
     return found;
 }
 
-static int codex_path(const char *id, char *out, size_t size)
-{
-    const char *root = getenv("CODEX_HOME");
-    char        home[2048];
-    if (!root || !*root) {
-        root = getenv("HOME");
-        if (!root ||
-            (size_t)snprintf(home, sizeof home, "%s/.codex", root) >= sizeof home)
-            return 0;
-        root = home;
-    }
-
-    char sessions[2304];
-    if ((size_t)snprintf(sessions, sizeof sessions, "%s/sessions", root) >=
-        sizeof sessions)
-        return 0;
-    return codex_find(sessions, id, 3, out, size);
-}
-
 int sessionload_path(const char *backend, const char *cwd, const char *id,
                      char *out, size_t size)
 {
     char dir[2048];
     if (!id || !*id || strchr(id, '/'))
         return 0;
-    if (backend && !strcmp(backend, "codex"))
-        return codex_path(id, out, size);
     if (!sessionlist_available(backend))
         return 0;
     if (!sessionlist_dir(backend, cwd, dir, sizeof dir))
         return 0;
 
+    if (!strcmp(backend, "codex"))
+        return codex_find(dir, id, 3, out, size);
     if (!strcmp(backend, "grok"))
         return (size_t)snprintf(out, size, "%s/%s/chat_history.jsonl", dir, id) < size &&
                is_file(out);

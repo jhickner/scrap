@@ -534,11 +534,6 @@ static void paint(void *ud)
             st->top = 0;
     }
 
-    ui_esc(ui_style(UI_CHROME));
-    ui_put(UI_BAR);
-    ui_esc(ui_style(UI_RESET));
-    ui_put(" ");
-    ui_esc(ui_style(UI_DIM));
     {
         char        said[256];
         const char *title = form->title ? form->title : "";
@@ -547,11 +542,8 @@ static void paint(void *ud)
                      title, st->top + 1, st->top + room, n);
         else
             snprintf(said, sizeof said, "%s", title);
-        size_t fit = ui_fit_bytes(said, (size_t)(columns > 3 ? columns - 3 : 1));
-        ui_putn(said, fit);
+        chrome_title_paint(said);
     }
-    ui_esc(ui_style(UI_RESET));
-    ui_put("\n");
 
     int end = n <= room ? n : st->top + room;
     for (int i = st->top; i < end; i++) {

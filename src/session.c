@@ -1,6 +1,7 @@
 #include "session.h"
 
 #include <fcntl.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -756,6 +757,8 @@ void session_replay(struct session *s)
     hud_print(s);
     if (!s)
         return;
+    if (s->id[0] && sessionload_into(s))
+        return;
     sessionpresent_replay(&s->transcript);
 }
 
@@ -1163,24 +1166,10 @@ int session_take_trust_request(struct session *s)
 
 int session_set_model(struct session *s, const char *model)
 {
-    if (!s)
+    if (!session_retarget(s, model, s ? s->effort : NULL, s ? s->cwd : NULL))
         return 0;
-
-    char *next = dup_model(s->backend, model);
-    if (model && !next)
-        return 0;
-    char *previous = s->model;
-    s->model = next;
-    if (restart(s, s->id[0] ? s->id : NULL)) {
-        free(previous);
-        replace(&s->resolved, NULL);
-        prefs_remember_choice("model", s->backend, s->model);
-        publish(s, s->idle_busy ? "working" : "finished");
-        return 1;
-    }
-    free(s->model);
-    s->model = previous;
-    return 0;
+    prefs_remember_choice("model", s->backend, s->model);
+    return 1;
 }
 
 int session_set_effort(struct session *s, const char *effort)
@@ -1189,19 +1178,18 @@ int session_set_effort(struct session *s, const char *effort)
     if (!b || !(b->caps & BACKEND_CAP_EFFORT))
         return 0;
 
-    char *next = effort ? strdup(effort) : NULL;
-    if (effort && !next)
-        return 0;
-    char *previous = s->effort;
-    s->effort = next;
-    if (restart(s, s->id[0] ? s->id : NULL)) {
-        free(previous);
+    if (!s->running && (b->caps & BACKEND_CAP_LIVE_EFFORT) && b->set_effort) {
+        if (!b->set_effort(b, effort))
+            return 0;
+        replace(&s->effort, effort);
         prefs_remember_choice("effort", s->backend, s->effort);
         return 1;
     }
-    free(s->effort);
-    s->effort = previous;
-    return 0;
+
+    if (!session_retarget(s, s->model, effort, s->cwd))
+        return 0;
+    prefs_remember_choice("effort", s->backend, s->effort);
+    return 1;
 }
 
 static const struct {
@@ -1246,22 +1234,30 @@ const char *session_permission(const struct session *s)
     return (s && s->permission) ? s->permission : PERMISSIONS[PERMISSION_DEFAULT].name;
 }
 
+static int swap_and_restart(struct session *s, char **slot, const char *next)
+{
+    char *previous = *slot;
+    *slot = next ? strdup(next) : NULL;
+    if (next && !*slot) {
+        *slot = previous;
+        return 0;
+    }
+    if (restart(s, s->id[0] ? s->id : NULL)) {
+        free(previous);
+        return 1;
+    }
+    free(*slot);
+    *slot = previous;
+    return 0;
+}
+
 int session_set_permission(struct session *s, const char *mode)
 {
     if (!s->agent) {
         replace(&s->permission, mode);
         return 1;
     }
-
-    char *previous = s->permission;
-    s->permission = mode ? strdup(mode) : NULL;
-    if (restart(s, s->id[0] ? s->id : NULL)) {
-        free(previous);
-        return 1;
-    }
-    free(s->permission);
-    s->permission = previous;
-    return 0;
+    return swap_and_restart(s, &s->permission, mode);
 }
 
 void session_adopt_id(struct session *s, const char *id)
@@ -1295,8 +1291,6 @@ int session_resume(struct session *s, const char *id)
     if (!restart(s, id))
         return 0;
     reset_turns(s, 0);
-    if (s->id[0])
-        sessionload_fill(&s->transcript, s->backend, s->cwd, s->id);
     return 1;
 }
 
@@ -1820,8 +1814,14 @@ void session_turn_wait(struct session *s)
     while (s && s->running) {
         if (!session_turn_pump(s))
             break;
-        struct timespec ts = {0, 20 * 1000000L};
-        nanosleep(&ts, NULL);
+        int fd = session_wake_fd(s);
+        if (fd < 0) {
+            struct timespec ts = {0, 20 * 1000000L};
+            nanosleep(&ts, NULL);
+            continue;
+        }
+        struct pollfd p = {.fd = fd, .events = POLLIN};
+        poll(&p, 1, -1);
     }
 }
 
@@ -1956,39 +1956,14 @@ const char *session_workdir(const struct session *s)
 }
 const char *session_backend(const struct session *s) { return s->backend; }
 
-static int argv_pair(char **out, int n, int max, const char *flag, const char *value)
-{
-    if (n + 2 > max)
-        return n;
-    out[n++] = (char *)flag;
-    out[n++] = (char *)value;
-    return n;
-}
-
 int session_argv(const struct session *s, char **out, int max, unsigned what)
 {
-    int n = argv_pair(out, 0, max, "-b", session_backend(s));
-
-    const char *cwd = session_cwd(s);
-    if ((what & SESSION_ARGV_CWD) && cwd && *cwd)
-        n = argv_pair(out, n, max, "-C", cwd);
-
-    const char *model = session_model(s);
-    if (strcmp(model, "default"))
-        n = argv_pair(out, n, max, "-m", model);
-
-    const char *effort = session_effort(s);
-    if (strcmp(effort, "default"))
-        n = argv_pair(out, n, max, "-e", effort);
-
-    if ((what & SESSION_ARGV_SAFE) && !s->customizations && n < max)
-        out[n++] = (char *)"-s";
-
     const char *id = session_id(s);
-    if ((what & SESSION_ARGV_RESUME) && id && *id && session_can_resume(s))
-        n = argv_pair(out, n, max, "--session", id);
-
-    return n;
+    int resume = (what & SESSION_ARGV_RESUME) && id && session_can_resume(s);
+    return mux_argv(out, max, resume ? what : (what & ~SESSION_ARGV_RESUME),
+                    NULL, session_backend(s), session_cwd(s), session_model(s),
+                    session_effort(s), id,
+                    (what & SESSION_ARGV_SAFE) && s && !s->customizations, NULL);
 }
 
 int session_last_interrupted(const struct session *s) { return s ? s->interrupted : 0; }
