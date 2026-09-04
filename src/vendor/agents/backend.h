@@ -607,6 +607,13 @@ static void backend_codex_event(void *ud, const codex_event *cev) {
         } else if (cev->kind == CODEX_EV_WARNING) {
             ev.kind = BACKEND_EV_WARNING;
             ev.text = cev->text;
+        } else if (cev->kind == CODEX_EV_TASK) {
+            ev.kind = BACKEND_EV_TASK;
+            ev.id = cev->id;
+            ev.name = cev->name;
+            ev.text = cev->text;
+            ev.arg = "agent";
+            ev.parent = cev->parent;
         } else {
             return;
         }
@@ -718,6 +725,11 @@ static int backend_codex_idle_pump(Backend *b) {
     return x->client ? codex_idle_pump(x->client) : 0;
 }
 
+static int backend_codex_busy(Backend *b) {
+    backend_codex *x = b->ctx;
+    return x->client ? codex_background_tasks(x->client) : 0;
+}
+
 static const char *backend_codex_error(Backend *b) {
     backend_codex *x = b->ctx;
     return x->client ? codex_last_error(x->client) : NULL;
@@ -759,7 +771,8 @@ static Backend *backend_codex_open(const backend_opts *o) {
     if (!x || !b) { free(x); free(b); return NULL; }
     backend_state_init(&x->st, o);
     b->ctx = x;
-    b->caps = BACKEND_CAP_RESUME | BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT;
+    b->caps = BACKEND_CAP_RESUME | BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT |
+              BACKEND_CAP_TASKS;
     b->ask = backend_codex_ask;
     b->reset = backend_codex_reset;
     b->close = backend_codex_close;
@@ -775,6 +788,7 @@ static Backend *backend_codex_open(const backend_opts *o) {
     b->set_abort_check = backend_codex_set_abort;
     b->idle_fd = backend_codex_idle_fd;
     b->idle_pump = backend_codex_idle_pump;
+    b->busy = backend_codex_busy;
     b->session_id = backend_codex_session_id;
     b->model = backend_codex_model;
     b->effort = backend_codex_effort;

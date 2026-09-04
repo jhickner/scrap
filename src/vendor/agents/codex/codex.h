@@ -85,6 +85,7 @@ typedef enum {
     CODEX_EV_CWD,           /* text: the directory the thread works in now */
     CODEX_EV_TRUST,         /* text: project path awaiting trust approval   */
     CODEX_EV_WARNING,       /* text: actionable app-server config warning  */
+    CODEX_EV_TASK,          /* id + name (status) + text: a sub-agent      */
 } codex_event_kind;
 
 typedef struct {
@@ -93,6 +94,8 @@ typedef struct {
     const char *name;       /* tool name, for CODEX_EV_TOOL           */
     const char *input_json; /* compact tool input, for CODEX_EV_TOOL  */
     const char *diff;       /* unified patch, for a file-change result */
+    const char *id;         /* TASK: the sub-agent's thread id         */
+    const char *parent;     /* TASK: the spawn call it came from       */
     int failed;             /* TOOL_RESULT: status was not completed   */
 } codex_event;
 
@@ -100,10 +103,13 @@ void codex_set_event_cb(codex_client *c,
                         void (*cb)(void *ud, const codex_event *ev),
                         void *ud);
 void codex_set_abort_check(codex_client *c, int (*cb)(void));
-/* A config warning can arrive while app-server is warming in the background.
- * Watch this fd between turns and pump it on the UI thread. */
+/* Sub-agents run past the turn that spawned them, and a config warning can
+ * arrive while app-server is warming. Watch this fd between turns and pump it
+ * on the UI thread; the pump reports whether sub-agent work is still running. */
 int codex_idle_fd(codex_client *c);
 int codex_idle_pump(codex_client *c);
+/* Sub-agents spawned on this thread that have not gone idle again. */
+int codex_background_tasks(codex_client *c);
 /* Persist this path as trusted in the user's Codex config. */
 int codex_trust_project(codex_client *c, const char *path);
 /* Override subsequent turns' reasoning effort. NULL clears the override. */
@@ -144,6 +150,18 @@ void codex_stop(codex_client *c);
 #define CX_TICK_MS 20
 #define CX_ERR_MAX 4096
 #define CX_WARNING_MAX 1024
+#define CX_AGENTS_MAX 32
+
+/* A sub-agent spawned from this thread. It gets a thread of its own, so its
+ * work arrives under that id rather than the session's, and it outlives the
+ * turn that spawned it: the parent answers while the sub-agent is still
+ * running, and picks the result up in a later turn. */
+typedef struct {
+    char thread[64];
+    char path[128];         /* "/root/review_diff" -- the name it was given */
+    char call[64];          /* the spawn call it came from */
+    int  running;
+} cx_agent;
 
 struct codex_client {
     pid_t pid;
@@ -173,6 +191,8 @@ struct codex_client {
     int warning_ready;
     pthread_mutex_t warning_mu;
     int warning_mu_ready;
+    cx_agent agents[CX_AGENTS_MAX];
+    int nagents;
     pthread_t warm_thread;
     int warm_joinable;
     atomic_int warm_state;     /* 0 while starting, 1 ready, -1 failed */
@@ -258,7 +278,8 @@ static void cx_note_model(codex_client *c, cJSON *obj) {
 
 static void cx_emit(codex_client *c, const codex_event *ev) {
     static const char *const kinds[] = {
-        "assistant", "thinking", "tool", "tool-result", "cwd", "trust", "warning"
+        "assistant", "thinking", "tool", "tool-result", "cwd", "trust", "warning",
+        "task"
     };
     const char *preview = ev->kind == CODEX_EV_TOOL ? ev->name : ev->text;
     if (!preview) preview = ev->diff ? ev->diff : "";
@@ -273,6 +294,87 @@ static void cx_text_event(codex_client *c, codex_event_kind kind, const char *te
     if (!text) return;
     codex_event ev = { .kind = kind, .text = text };
     cx_emit(c, &ev);
+}
+
+/* ---------- sub-agents ----------
+ *
+ * A spawn is reported once, on the session's own thread, as a subAgentActivity
+ * item naming the thread the sub-agent got. Everything after that -- its turns,
+ * its tools, the point where it goes quiet -- arrives under that thread id, so
+ * the table below is what tells the two apart. */
+
+static cx_agent *cx_agent_find(codex_client *c, const char *thread) {
+    if (!thread || !*thread) return NULL;
+    for (int i = 0; i < c->nagents; i++)
+        if (!strcmp(c->agents[i].thread, thread)) return &c->agents[i];
+    return NULL;
+}
+
+/* Whether a notification belongs to the session's own thread. One without a
+ * thread id at all does: only the per-thread streams carry one. */
+static int cx_own_thread(codex_client *c, cJSON *params) {
+    const char *tid = params ? cJSON_GetStringValue(
+        cJSON_GetObjectItemCaseSensitive(params, "threadId")) : NULL;
+    if (!tid || !*tid || !c->session_id[0]) return 1;
+    return !strcmp(tid, c->session_id);
+}
+
+int codex_background_tasks(codex_client *c) {
+    int n = 0;
+    for (int i = 0; c && i < c->nagents; i++)
+        if (c->agents[i].running) n++;
+    return n;
+}
+
+static void cx_agent_event(codex_client *c, cx_agent *a, const char *status) {
+    codex_event ev = {
+        .kind = CODEX_EV_TASK,
+        .id = a->thread,
+        .name = status,
+        .text = a->path,
+        .parent = a->call[0] ? a->call : NULL,
+    };
+    cx_emit(c, &ev);
+}
+
+/* A full table drops the oldest agent that has finished: what is still running
+ * is what the caller waiting on the work needs. */
+static void cx_agent_spawned(codex_client *c, const char *thread, const char *path,
+                             const char *call) {
+    if (!thread || !*thread || cx_agent_find(c, thread)) return;
+    if (c->nagents == CX_AGENTS_MAX) {
+        int drop = -1;
+        for (int i = 0; i < c->nagents && drop < 0; i++)
+            if (!c->agents[i].running) drop = i;
+        if (drop < 0) return;
+        memmove(&c->agents[drop], &c->agents[drop + 1],
+                (size_t)(c->nagents - drop - 1) * sizeof c->agents[0]);
+        c->nagents--;
+    }
+    cx_agent *a = &c->agents[c->nagents++];
+    memset(a, 0, sizeof *a);
+    snprintf(a->thread, sizeof a->thread, "%s", thread);
+    snprintf(a->path, sizeof a->path, "%s", path ? path : "agent");
+    if (call) snprintf(a->call, sizeof a->call, "%s", call);
+    a->running = 1;
+    cx_agent_event(c, a, "running");
+}
+
+/* app-server reports a thread going active or idle. A sub-agent that goes idle
+ * has yielded: its work is done until something sends it another turn, which is
+ * the end the caller is waiting for. */
+static void cx_agent_status(codex_client *c, cJSON *params) {
+    const char *tid = params ? cJSON_GetStringValue(
+        cJSON_GetObjectItemCaseSensitive(params, "threadId")) : NULL;
+    cx_agent *a = cx_agent_find(c, tid);
+    if (!a) return;
+    const char *state = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(
+        cJSON_GetObjectItemCaseSensitive(params, "status"), "type"));
+    if (!state) return;
+    int running = !strcmp(state, "active");
+    if (running == a->running) return;
+    a->running = running;
+    cx_agent_event(c, a, running ? "running" : "completed");
 }
 
 /* App-server mirrors configWarning notifications to stderr with timestamps and
@@ -422,46 +524,67 @@ static void cx_note_exit(codex_client *c) {
                  cli, WEXITSTATUS(status));
 }
 
-static int cx_read(codex_client *c, cJSON **out, int honor_abort) {
+/* One message out of what has already been read, or 0 when the buffer holds no
+ * complete line. */
+static int cx_line(codex_client *c, cJSON **out) {
     *out = NULL;
     for (;;) {
         char *nl = memchr(c->buf, '\n', c->len);
-        if (nl) {
-            size_t n = (size_t)(nl - c->buf);
-            if (n && c->buf[n - 1] == '\r') n--;
-            char save = c->buf[n]; c->buf[n] = '\0';
-            *out = n ? cJSON_Parse(c->buf) : NULL;
-            c->buf[n] = save;
-            size_t used = (size_t)(nl + 1 - c->buf);
-            memmove(c->buf, c->buf + used, c->len - used); c->len -= used;
-            if (*out) return 1;
-            continue;
-        }
-        if (honor_abort && c->abort && c->abort()) return 0;
-        struct pollfd p[2] = {
-            { c->out_fd, POLLIN, 0 }, { c->err_fd, POLLIN, 0 }
-        };
-        int pr = poll(p, 2, CX_TICK_MS);
-        if (pr < 0) { if (errno == EINTR) continue; return -1; }
-        if (!pr) continue;
-        if (p[1].revents) {
-            cx_drain_stderr(c);
-            if (p[1].revents & (POLLHUP | POLLERR)) {
-                close(c->err_fd);
-                c->err_fd = -1;
-            }
-        }
-        if (!(p[0].revents & (POLLIN | POLLHUP))) continue;
-        char tmp[8192]; ssize_t nr = read(c->out_fd, tmp, sizeof tmp);
-        if (nr <= 0) { cx_drain_stderr(c); cx_note_exit(c); return -1; }
-        if (c->len + (size_t)nr + 1 > c->cap) {
-            size_t nc = (c->len + (size_t)nr + 1) * 2;
-            char *nb = realloc(c->buf, nc);
-            if (!nb) return -1;
-            c->buf = nb; c->cap = nc;
-        }
-        memcpy(c->buf + c->len, tmp, (size_t)nr); c->len += (size_t)nr;
+        if (!nl) return 0;
+        size_t n = (size_t)(nl - c->buf);
+        if (n && c->buf[n - 1] == '\r') n--;
+        char save = c->buf[n]; c->buf[n] = '\0';
+        *out = n ? cJSON_Parse(c->buf) : NULL;
+        c->buf[n] = save;
+        size_t used = (size_t)(nl + 1 - c->buf);
+        memmove(c->buf, c->buf + used, c->len - used); c->len -= used;
+        if (*out) return 1;
     }
+}
+
+/* Wait up to timeout_ms for more output. 1/read something, 0/nothing yet,
+ * -1/the child is gone. */
+static int cx_fill(codex_client *c, int timeout_ms) {
+    struct pollfd p[2] = {
+        { c->out_fd, POLLIN, 0 }, { c->err_fd, POLLIN, 0 }
+    };
+    int pr = poll(p, 2, timeout_ms);
+    if (pr < 0) return errno == EINTR ? 0 : -1;
+    if (!pr) return 0;
+    if (p[1].revents) {
+        cx_drain_stderr(c);
+        if (p[1].revents & (POLLHUP | POLLERR)) {
+            close(c->err_fd);
+            c->err_fd = -1;
+        }
+    }
+    if (!(p[0].revents & (POLLIN | POLLHUP))) return 0;
+    char tmp[8192]; ssize_t nr = read(c->out_fd, tmp, sizeof tmp);
+    if (nr <= 0) { cx_drain_stderr(c); cx_note_exit(c); return -1; }
+    if (c->len + (size_t)nr + 1 > c->cap) {
+        size_t nc = (c->len + (size_t)nr + 1) * 2;
+        char *nb = realloc(c->buf, nc);
+        if (!nb) return -1;
+        c->buf = nb; c->cap = nc;
+    }
+    memcpy(c->buf + c->len, tmp, (size_t)nr); c->len += (size_t)nr;
+    return 1;
+}
+
+static int cx_read(codex_client *c, cJSON **out, int honor_abort) {
+    *out = NULL;
+    for (;;) {
+        if (cx_line(c, out)) return 1;
+        if (honor_abort && c->abort && c->abort()) return 0;
+        if (cx_fill(c, CX_TICK_MS) < 0) return -1;
+    }
+}
+
+/* One message, only if it is already there. */
+static int cx_take(codex_client *c, cJSON **out) {
+    if (cx_line(c, out)) return 1;
+    if (cx_fill(c, 0) <= 0) return 0;
+    return cx_line(c, out);
 }
 
 /* App-server can issue client requests. Headless threads use approvalPolicy
@@ -507,13 +630,20 @@ static int cx_handle_notification(codex_client *c, cJSON *msg) {
     const char *method = cJSON_GetStringValue(
         cJSON_GetObjectItemCaseSensitive(msg, "method"));
     cJSON *params = cJSON_GetObjectItemCaseSensitive(msg, "params");
-    if (params) {
+    int own = cx_own_thread(c, params);
+    if (params && own) {
         cJSON *turn = cJSON_GetObjectItemCaseSensitive(params, "turn");
         cx_note_effort(c, params);
         cx_note_effort(c, turn);
         cx_note_model(c, params);
         cx_note_model(c, turn);
     }
+    if (method && !strcmp(method, "thread/status/changed")) {
+        if (!own) cx_agent_status(c, params);
+        return 1;
+    }
+    if (!own)
+        return 1;                   /* a sub-agent's thread reports its own */
     if (method && !strcmp(method, "thread/settings/updated")) {
         cx_note_cwd(c, params ? cJSON_GetObjectItemCaseSensitive(params, "threadSettings")
                               : NULL);
@@ -700,7 +830,6 @@ codex_client *codex_start(const codex_opts *opts) {
             "--disable", "hooks",
             "--disable", "apps",
             "--disable", "remote_plugin",
-            "--disable", "multi_agent",
             "--config", "project_doc_max_bytes=0",
             NULL
         };
@@ -730,12 +859,48 @@ codex_client *codex_start(const codex_opts *opts) {
 void codex_set_verbose(codex_client *c, int on) { if (c) c->verbose = on; }
 void codex_set_abort_check(codex_client *c, int (*cb)(void)) { if (c) c->abort = cb; }
 
+/* Until the warm thread publishes readiness it is the only reader of stdout, so
+ * the queued-warning pipe is all there is to watch. After that, stdout is where
+ * a sub-agent's progress arrives between turns. */
 int codex_idle_fd(codex_client *c) {
-    return c && c->pid > 0 ? c->notice_fd[0] : -1;
+    if (!c || c->pid <= 0) return -1;
+    if (atomic_load_explicit(&c->warm_state, memory_order_acquire) != 1)
+        return c->notice_fd[0];
+    return c->out_fd;
+}
+
+/* Read what app-server has to say with no turn in flight. Only the sub-agent
+ * life cycle is reported: a sub-agent's own messages and tools belong to its
+ * thread, not to this session's transcript. */
+static void cx_item_event(codex_client *c, cJSON *params, int started,
+                          char **fallback);
+
+static void cx_idle_message(codex_client *c, cJSON *msg) {
+    cJSON *id = cJSON_GetObjectItemCaseSensitive(msg, "id");
+    const char *method = cJSON_GetStringValue(
+        cJSON_GetObjectItemCaseSensitive(msg, "method"));
+    if (!method) return;
+    if (id) { cx_reject_server_request(c, msg); return; }
+    cJSON *params = cJSON_GetObjectItemCaseSensitive(msg, "params");
+    if (cx_handle_notification(c, msg)) return;
+    if (!cx_own_thread(c, params)) return;
+    if (!strcmp(method, "item/started") || !strcmp(method, "item/completed")) {
+        char *fallback = NULL;
+        cx_item_event(c, params, !strcmp(method, "item/started"), &fallback);
+        free(fallback);
+    }
 }
 
 int codex_idle_pump(codex_client *c) {
     if (!c || c->notice_fd[0] < 0) return 0;
+    if (atomic_load_explicit(&c->warm_state, memory_order_acquire) == 1) {
+        for (int i = 0; i < 64; i++) {
+            cJSON *msg;
+            if (!cx_take(c, &msg)) break;
+            cx_idle_message(c, msg);
+            cJSON_Delete(msg);
+        }
+    }
     char bytes[64];
     while (read(c->notice_fd[0], bytes, sizeof bytes) > 0) {}
     pthread_mutex_lock(&c->warning_mu);
@@ -749,7 +914,7 @@ int codex_idle_pump(codex_client *c) {
         cx_emit(c, &ev);
         free(warning);
     }
-    return 0;
+    return codex_background_tasks(c) > 0;
 }
 
 int codex_trust_project(codex_client *c, const char *path) {
@@ -1110,7 +1275,16 @@ static void cx_item_event(codex_client *c, cJSON *params, int started,
     const char *type = item ? cJSON_GetStringValue(
         cJSON_GetObjectItemCaseSensitive(item, "type")) : NULL;
     if (!type) return;
-    if (!strcmp(type, "agentMessage")) {
+    if (!strcmp(type, "subAgentActivity")) {
+        if (!started) return;
+        const char *kind = cJSON_GetStringValue(
+            cJSON_GetObjectItemCaseSensitive(item, "kind"));
+        if (kind && strcmp(kind, "started")) return;
+        cx_agent_spawned(c,
+            cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "agentThreadId")),
+            cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "agentPath")),
+            cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "id")));
+    } else if (!strcmp(type, "agentMessage")) {
         if (started) return;
         const char *s = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "text"));
         if (s) { free(*fallback); *fallback = strdup(s); }

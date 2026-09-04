@@ -17,6 +17,8 @@ static int warning_events;
 static char warning_text[1024];
 static int trust_events;
 static char trust_path[1024];
+static int task_events;
+static char task_id[64], task_status[32], task_path[128], task_parent[64];
 
 static long milliseconds(void)
 {
@@ -55,6 +57,12 @@ static void capture_event(void *ud, const codex_event *ev)
     } else if (ev->kind == CODEX_EV_TRUST) {
         trust_events++;
         snprintf(trust_path, sizeof trust_path, "%s", ev->text ? ev->text : "");
+    } else if (ev->kind == CODEX_EV_TASK) {
+        task_events++;
+        snprintf(task_id, sizeof task_id, "%s", ev->id ? ev->id : "");
+        snprintf(task_status, sizeof task_status, "%s", ev->name ? ev->name : "");
+        snprintf(task_path, sizeof task_path, "%s", ev->text ? ev->text : "");
+        snprintf(task_parent, sizeof task_parent, "%s", ev->parent ? ev->parent : "");
     } else if (ev->kind == CODEX_EV_WARNING) {
         warning_events++;
         snprintf(warning_text, sizeof warning_text, "%s", ev->text ? ev->text : "");
@@ -228,9 +236,28 @@ static int mock_server(void)
                            "\"call_id\":\"call-1\",\"output\":["
                            "{\"type\":\"input_text\",\"text\":\"Script completed\\n\"},"
                            "{\"type\":\"input_text\",\"text\":\"Output:\\n/project\\n\"}]}}}\n");
+                    /* a sub-agent, and the thread of its own that it talks on:
+                       none of it belongs to this turn's answer */
+                    printf("{\"method\":\"item/started\",\"params\":{"
+                           "\"threadId\":\"thread-1\",\"turnId\":\"turn-2\",\"item\":{"
+                           "\"type\":\"subAgentActivity\",\"id\":\"call-agent-1\","
+                           "\"kind\":\"started\",\"agentThreadId\":\"thread-2\","
+                           "\"agentPath\":\"/root/review_diff\"}}}\n");
+                    printf("{\"method\":\"thread/status/changed\",\"params\":{"
+                           "\"threadId\":\"thread-2\","
+                           "\"status\":{\"type\":\"active\"}}}\n");
+                    printf("{\"method\":\"item/agentMessage/delta\",\"params\":{"
+                           "\"threadId\":\"thread-2\",\"delta\":\"sub\"}}\n");
+                    printf("{\"method\":\"turn/completed\",\"params\":{"
+                           "\"threadId\":\"thread-2\","
+                           "\"turn\":{\"status\":\"completed\"}}}\n");
                 }
                 printf("{\"method\":\"turn/completed\",\"params\":{"
                        "\"turn\":{\"status\":\"completed\"}}}\n");
+                if (turns == 2)
+                    printf("{\"method\":\"thread/status/changed\",\"params\":{"
+                           "\"threadId\":\"thread-2\","
+                           "\"status\":{\"type\":\"idle\"}}}\n");
             }
             fflush(stdout);
         } else if (method && !strcmp(method, "turn/interrupt")) {
@@ -323,6 +350,23 @@ int main(int argc, char **argv)
         return 1;
     }
     free(reply);
+
+    if (task_events != 1 || strcmp(task_id, "thread-2") ||
+        strcmp(task_status, "running") || strcmp(task_path, "/root/review_diff") ||
+        strcmp(task_parent, "call-agent-1") || codex_background_tasks(client) != 1) {
+        fprintf(stderr, "codextest: spawned sub-agent was not reported (%d, %s, %s, %s, %d)\n",
+                task_events, task_id, task_status, task_parent,
+                codex_background_tasks(client));
+        codex_stop(client);
+        return 1;
+    }
+    if (codex_idle_pump(client) || codex_background_tasks(client) ||
+        task_events != 2 || strcmp(task_status, "completed")) {
+        fprintf(stderr, "codextest: sub-agent going idle was not picked up (%d, %s, %d)\n",
+                task_events, task_status, codex_background_tasks(client));
+        codex_stop(client);
+        return 1;
+    }
 
     codex_opts fork_opts = { .cli_path = argv[0],
                              .resume_session = "thread-parent",
