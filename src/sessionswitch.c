@@ -274,11 +274,6 @@ static void emit_tree(const struct row *in, int n, char *used, struct row *out,
 static int group_rows(const struct row *in, int n, struct row *out,
                       unsigned char *heading, int max)
 {
-    struct session *here = workspace_current();
-    char mine[512] = "";
-    if (here)
-        path_home_relative(session_cwd(here), mine, sizeof mine);
-
     char used[MAX_ROWS] = {0};
     int m = 0;
 
@@ -287,10 +282,6 @@ static int group_rows(const struct row *in, int n, struct row *out,
         for (int i = 0; i < n; i++) {
             if (used[i])
                 continue;
-            if (mine[0] && !strcmp(in[i].cwd, mine)) {
-                group = mine;
-                break;
-            }
             if (!group || strcmp(in[i].cwd, group) < 0)
                 group = in[i].cwd;
         }
