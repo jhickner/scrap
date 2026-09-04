@@ -748,6 +748,10 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             return KEY_OK;
         }
         if (ev->cp == KEY_CTRL('L')) {
+            /* also the way back from a screen the terminal lost: every row is
+               written again rather than the difference from what was drawn */
+            viewport_forget();
+            repaint(p);
             if (live)
                 return KEY_OK;
             status_sticky_erased();
