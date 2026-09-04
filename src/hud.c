@@ -232,17 +232,26 @@ void hud_print(const struct session *s)
        restarted over and over keeps one block and one count */
     unsigned    mark = viewport_item_find(HUD_KIND);
     struct hud *back = mark ? viewport_item_data(mark) : NULL;
+    int         restarts = 0;
     if (back && back->restored) {
         back->restored = 0;
-        hud_fill(back, s);
+        if (viewport_item_last(mark)) {
+            hud_fill(back, s);
+            viewport_item_update(mark);
+            ui_flush();
+            return;
+        }
+        /* anything printed after it left the carried hud up in the
+           scrollback, out of sight: move the count onto a fresh one */
+        restarts = back->restarts;
+        back->restarts = 0;
         viewport_item_update(mark);
-        ui_flush();
-        return;
     }
 
     struct hud *h = calloc(1, sizeof *h);
     if (!h)
         return;
+    h->restarts = restarts;
     hud_fill(h, s);
     hud_place(h);
 }
