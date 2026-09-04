@@ -14,7 +14,8 @@ ALL_CFLAGS := -std=gnu11 $(WARNINGS) $(CFLAGS) -Isrc -Isrc/vendor
 BIN     := mux
 BUILD   := build
 
-TOOL_NAMES := $(patsubst tools/%.c,%,$(wildcard tools/*.c))
+CHECK_NAMES  := $(patsubst tests/%.c,%,$(wildcard tests/*.c))
+MANUAL_NAMES := $(patsubst tools/%.c,%,$(wildcard tools/*.c))
 CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           reflowtest toolstyletest sessionlisttest claudetest codextest \
           groktest filedifftest pitest agenttabstest statustest transcripttest \
@@ -24,13 +25,14 @@ CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           sidechannelcmdtest taskstest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest
 
-# Make every harness declare whether it is safe for an unattended check. This
-# deliberately fails at parse time when a new tools/*.c has not been classified.
-ifneq ($(strip $(filter $(CHECKS),$(MANUAL_TOOLS))),)
-$(error a tool cannot appear in both CHECKS and MANUAL_TOOLS)
+# A harness is classified by the directory it sits in: tests/ runs unattended,
+# tools/ is driven by hand. Both lists stay explicit so that dropping in a new
+# file fails at parse time instead of silently joining `make check`.
+ifneq ($(sort $(CHECK_NAMES)),$(sort $(CHECKS)))
+$(error every tests/*.c must be listed in CHECKS)
 endif
-ifneq ($(sort $(TOOL_NAMES)),$(sort $(CHECKS) $(MANUAL_TOOLS)))
-$(error tools/*.c must appear in exactly one of CHECKS or MANUAL_TOOLS)
+ifneq ($(sort $(MANUAL_NAMES)),$(sort $(MANUAL_TOOLS)))
+$(error every tools/*.c must be listed in MANUAL_TOOLS)
 endif
 
 CHECK_BINS  := $(addprefix $(BUILD)/,$(CHECKS))
@@ -106,88 +108,91 @@ $(addprefix $(BUILD)/,$(JPEG_TOOLS)): TOOL_LIBS = $(JPEG_LIBS)
 
 # Dependencies stay explicit below so each harness remains an isolated module
 # link. The compile/link mechanics and flag handling live in one place.
-$(TOOLS): $(BUILD)/%: tools/%.c | $(BUILD)
+$(CHECK_BINS): $(BUILD)/%: tests/%.c | $(BUILD)
+	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LDFLAGS) $(TOOL_LIBS)
+
+$(MANUAL_BINS): $(BUILD)/%: tools/%.c | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LDFLAGS) $(TOOL_LIBS)
 
 $(BUILD)/palette: tools/palette.c src/vendor/colors.h | $(BUILD)
 
-$(BUILD)/spintest: tools/spintest.c tools/stubs/tabbar.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
+$(BUILD)/spintest: tools/spintest.c tests/stubs/tabbar.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/statustest: tools/statustest.c tools/stubs/tabbar.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/bash.o $(BUILD)/block.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
+$(BUILD)/statustest: tests/statustest.c tests/stubs/tabbar.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/bash.o $(BUILD)/block.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/chrometest: tools/chrometest.c tools/stubs/tabbar.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
+$(BUILD)/chrometest: tests/chrometest.c tests/stubs/tabbar.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/imagerowtest: tools/imagerowtest.c $(BUILD)/image.o $(BUILD)/viewport.o $(BUILD)/ui.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/scrollback.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/imagerowtest: tests/imagerowtest.c $(BUILD)/image.o $(BUILD)/viewport.o $(BUILD)/ui.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/scrollback.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/overlaytest: tools/overlaytest.c $(BUILD)/overlay.o $(BUILD)/menu.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/overlaytest: tests/overlaytest.c $(BUILD)/overlay.o $(BUILD)/menu.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/viewporttest: tools/viewporttest.c $(BUILD)/viewport.o $(BUILD)/ui.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/viewporttest: tests/viewporttest.c $(BUILD)/viewport.o $(BUILD)/ui.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/ttytest: tools/ttytest.c $(BUILD)/tty.o $(BUILD)/viewport.o $(BUILD)/ui.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/ttytest: tests/ttytest.c $(BUILD)/tty.o $(BUILD)/viewport.o $(BUILD)/ui.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/keydump: tools/keydump.c $(BUILD)/tty.o $(BUILD)/viewport.o $(BUILD)/ui.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/gitinfotest: tools/gitinfotest.c $(BUILD)/gitinfo.o $(BUILD)/gitcmd.o $(BUILD)/text.o | $(BUILD)
+$(BUILD)/gitinfotest: tests/gitinfotest.c $(BUILD)/gitinfo.o $(BUILD)/gitcmd.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/imagefittest: tools/imagefittest.c $(BUILD)/image.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/imagefittest: tests/imagefittest.c $(BUILD)/image.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/reflowtest: tools/reflowtest.c $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/reflowtest: tests/reflowtest.c $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/sidechannelviewtest: tools/sidechannelviewtest.c $(BUILD)/sidechannelview.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/sidechannelviewtest: tests/sidechannelviewtest.c $(BUILD)/sidechannelview.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/sidechannelcmdtest: tools/sidechannelcmdtest.c $(BUILD)/sidechannelcmd.o | $(BUILD)
+$(BUILD)/sidechannelcmdtest: tests/sidechannelcmdtest.c $(BUILD)/sidechannelcmd.o | $(BUILD)
 
-$(BUILD)/toolstyletest: tools/toolstyletest.c $(BUILD)/toolstyle.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/toolstyletest: tests/toolstyletest.c $(BUILD)/toolstyle.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/sessionlisttest: tools/sessionlisttest.c $(BUILD)/sessionlist.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
+$(BUILD)/sessionlisttest: tests/sessionlisttest.c $(BUILD)/sessionlist.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/codextest: tools/codextest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/codextest: tests/codextest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/modelstest: tools/modelstest.c $(BUILD)/models.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/modelstest: tests/modelstest.c $(BUILD)/models.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/groktest: tools/groktest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/groktest: tests/groktest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/filedifftest: tools/filedifftest.c $(BUILD)/filediff.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
+$(BUILD)/filedifftest: tests/filedifftest.c $(BUILD)/filediff.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/taskstest: tools/taskstest.c $(BUILD)/tasks.o $(BUILD)/text.o $(BUILD)/toolstyle.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/taskstest: tests/taskstest.c $(BUILD)/tasks.o $(BUILD)/text.o $(BUILD)/toolstyle.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/claudetest: tools/claudetest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/claudetest: tests/claudetest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/pitest: tools/pitest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/pitest: tests/pitest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/agenttabstest: tools/agenttabstest.c $(BUILD)/agenttabs.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/agenttabstest: tests/agenttabstest.c $(BUILD)/agenttabs.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/imagetest: tools/imagetest.c $(BUILD)/image.o $(BUILD)/md.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/mdtest: tools/mdtest.c $(BUILD)/md.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/image.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/mdtest: tests/mdtest.c $(BUILD)/md.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/image.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/pastetest: tools/pastetest.c $(BUILD)/paste.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/transcripttest: tools/transcripttest.c $(BUILD)/transcript.o | $(BUILD)
+$(BUILD)/transcripttest: tests/transcripttest.c $(BUILD)/transcript.o | $(BUILD)
 
-$(BUILD)/sessionviewtest: tools/sessionviewtest.c $(BUILD)/sessionview.o $(BUILD)/filediff.o $(BUILD)/highlight.o $(BUILD)/toolstyle.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/sessionviewtest: tests/sessionviewtest.c $(BUILD)/sessionview.o $(BUILD)/filediff.o $(BUILD)/highlight.o $(BUILD)/toolstyle.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/sessionpresenttest: tools/sessionpresenttest.c tools/stubs/tabbar.c $(BUILD)/sessionpresent.o $(BUILD)/sessionview.o $(BUILD)/filediff.o $(BUILD)/highlight.o $(BUILD)/md.o $(BUILD)/prompt.o $(BUILD)/status.o $(BUILD)/tasks.o $(BUILD)/transcript.o $(BUILD)/toolstyle.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/bash.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/image.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/sessionpresenttest: tests/sessionpresenttest.c tests/stubs/tabbar.c $(BUILD)/sessionpresent.o $(BUILD)/sessionview.o $(BUILD)/filediff.o $(BUILD)/highlight.o $(BUILD)/md.o $(BUILD)/prompt.o $(BUILD)/status.o $(BUILD)/tasks.o $(BUILD)/transcript.o $(BUILD)/toolstyle.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/bash.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/image.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/sessionloadtest: tools/sessionloadtest.c $(BUILD)/sessionload.o $(BUILD)/transcript.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/sessionloadtest: tests/sessionloadtest.c $(BUILD)/sessionload.o $(BUILD)/transcript.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/muxcfgtest: tools/muxcfgtest.c $(BUILD)/muxcfg.o $(BUILD)/models.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/muxcfgtest: tests/muxcfgtest.c $(BUILD)/muxcfg.o $(BUILD)/models.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/telegramtest: tools/telegramtest.c $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/telegramtest: tests/telegramtest.c $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/boardtest: tools/boardtest.c $(BUILD)/board.o $(BUILD)/boardname.o $(BUILD)/boardstep.o $(BUILD)/boardcfg.o $(BUILD)/boarddefaults.o $(BUILD)/boardflow.o $(BUILD)/boardlog.o $(BUILD)/mdcfg.o $(BUILD)/replyjson.o $(BUILD)/child.o $(BUILD)/gitcmd.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/boardtest: tests/boardtest.c $(BUILD)/board.o $(BUILD)/boardname.o $(BUILD)/boardstep.o $(BUILD)/boardcfg.o $(BUILD)/boarddefaults.o $(BUILD)/boardflow.o $(BUILD)/boardlog.o $(BUILD)/mdcfg.o $(BUILD)/replyjson.o $(BUILD)/child.o $(BUILD)/gitcmd.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/boardgridtest: tools/boardgridtest.c tools/stubs/tabbar.c $(BUILD)/boardgrid.o $(BUILD)/menu.o $(BUILD)/overlay.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/status.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/frontend.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/boardgridtest: tests/boardgridtest.c tests/stubs/tabbar.c $(BUILD)/boardgrid.o $(BUILD)/menu.o $(BUILD)/overlay.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/status.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/frontend.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/boardtiletest: tools/boardtiletest.c $(BUILD)/boardtile.o $(BUILD)/text.o | $(BUILD)
+$(BUILD)/boardtiletest: tests/boardtiletest.c $(BUILD)/boardtile.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/viewstest: tools/viewstest.c $(BUILD)/views.o | $(BUILD)
+$(BUILD)/viewstest: tests/viewstest.c $(BUILD)/views.o | $(BUILD)
 
-$(BUILD)/workspacetest: tools/workspacetest.c tools/stubs/tabbar.c $(BUILD)/workspace.o $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
+$(BUILD)/workspacetest: tests/workspacetest.c tests/stubs/tabbar.c $(BUILD)/workspace.o $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/highlighttest: tools/highlighttest.c $(BUILD)/highlight.o | $(BUILD)
+$(BUILD)/highlighttest: tests/highlighttest.c $(BUILD)/highlight.o | $(BUILD)
 
-$(BUILD)/replboxtest: tools/replboxtest.c $(BUILD)/replbox.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/paste.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/files.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/replboxtest: tests/replboxtest.c $(BUILD)/replbox.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/paste.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/files.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 check: $(CHECK_BINS)
 	@for t in $^; do echo "$$t"; ./$$t || exit 1; done
