@@ -19,6 +19,9 @@
 #include "vendor/cJSON.h"
 
 #define MAX_LIVE 200
+
+/* how long a window that is gone stays reopenable */
+#define CLOSED_MAX_AGE (14L * 24 * 60 * 60)
 #define MAX_SLOTS 32
 
 static int  publishing;
@@ -304,13 +307,32 @@ static int newer(const void *a, const void *b)
     return x->slot - y->slot;
 }
 
-int livelist_load(struct live_session **out)
+/* A window that went away without tidying up is still a window: its records
+   move aside so it can be reopened, rather than being dropped on sight. */
+static int closed_dir(char *out, size_t size)
 {
-    *out = NULL;
-
     char where[4200];
     if (!live_dir(where, sizeof where))
         return 0;
+    return (size_t)snprintf(out, size, "%s/closed", where) < size;
+}
+
+static void retire(const char *path, const char *name)
+{
+    char where[4300], to[9000];
+    if (!closed_dir(where, sizeof where)) {
+        unlink(path);
+        return;
+    }
+    mkdir(where, 0700);
+    snprintf(to, sizeof to, "%s/%s", where, name);
+    if (rename(path, to) != 0)
+        unlink(path);
+}
+
+static int load_dir(const char *where, int live, struct live_session **out)
+{
+    *out = NULL;
 
     DIR *d = opendir(where);
     if (!d)
@@ -362,11 +384,20 @@ int livelist_load(struct live_session **out)
         copy_str(v->pane, sizeof v->pane, rec, "pane");
         cJSON_Delete(rec);
 
-        if (!livelist_alive(v->pid)) {
+        if (live) {
+            if (!livelist_alive(v->pid)) {
+                /* nothing to reopen a session with no id from */
+                if (v->id[0])
+                    retire(path, e->d_name);
+                else
+                    unlink(path);
+                continue;
+            }
+        } else if (v->ts && time(NULL) - v->ts > CLOSED_MAX_AGE) {
             unlink(path);
             continue;
         }
-        v->mine = v->pid == (long)getpid();
+        v->mine = live && v->pid == (long)getpid();
         count++;
     }
     closedir(d);
@@ -378,4 +409,51 @@ int livelist_load(struct live_session **out)
     qsort(list, (size_t)count, sizeof *list, newer);
     *out = list;
     return count;
+}
+
+int livelist_load(struct live_session **out)
+{
+    char where[4200];
+    *out = NULL;
+    if (!live_dir(where, sizeof where))
+        return 0;
+    return load_dir(where, 1, out);
+}
+
+int livelist_closed_load(struct live_session **out)
+{
+    struct live_session *live = NULL;
+    char                 where[4300];
+
+    *out = NULL;
+    /* a window that has just gone still has its records in the live dir until
+       something reads it: retire those before listing what is closed */
+    livelist_load(&live);
+    free(live);
+
+    if (!closed_dir(where, sizeof where))
+        return 0;
+    return load_dir(where, 0, out);
+}
+
+void livelist_closed_drop(long pid)
+{
+    char where[4300];
+    if (!closed_dir(where, sizeof where))
+        return;
+
+    DIR *d = opendir(where);
+    if (!d)
+        return;
+
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        long owner = strtol(e->d_name, NULL, 10);
+        if (owner != pid)
+            continue;
+        char path[9000];
+        snprintf(path, sizeof path, "%s/%s", where, e->d_name);
+        unlink(path);
+    }
+    closedir(d);
 }

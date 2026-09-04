@@ -33,6 +33,8 @@
 #include "sessionview.h"
 #include "settings.h"
 #include "sidechannel.h"
+#include "reopen.h"
+#include "tabs.h"
 #include "status.h"
 #include "tg.h"
 #include "tty.h"
@@ -69,148 +71,6 @@ static void restore_terminal(void)
     tty_raw_end();
 }
 
-static void replay_tab(struct session *s, void *ud)
-{
-    const char *screen = ud;
-    struct stat st;
-
-    if (screen && *screen && stat(screen, &st) == 0 && st.st_size > 0 &&
-        scrollback_restore(screen))
-        return;
-    hud_print(s);
-    sessionload_into(s);
-}
-
-struct pending_tab {
-    char           *screen;
-    struct session *s;
-};
-
-static struct pending_tab pending_tabs[WORKSPACE_MAX];
-static int               npending_tabs;
-
-static void tabs_prepare(const char *path)
-{
-    FILE *f = fopen(path, "r");
-    if (!f)
-        return;
-
-    char line[6144];
-    while (npending_tabs < WORKSPACE_MAX - 1 && fgets(line, sizeof line, f)) {
-        line[strcspn(line, "\n")] = '\0';
-        char       *rest = line;
-        const char *screen = strsep(&rest, "\t");
-        const char *backend = NULL, *cwd = NULL, *model = NULL, *effort = NULL;
-        const char *id = NULL;
-        for (char *arg; (arg = strsep(&rest, "\t"));) {
-            if (arg[0] != '-' || !strcmp(arg, "-s"))
-                continue;
-            char *value = strsep(&rest, "\t");
-            if (!value)
-                break;
-            if (!strcmp(arg, "-b"))
-                backend = value;
-            else if (!strcmp(arg, "-C"))
-                cwd = value;
-            else if (!strcmp(arg, "-m"))
-                model = value;
-            else if (!strcmp(arg, "-e"))
-                effort = value;
-            else if (!strcmp(arg, "--session"))
-                id = value;
-        }
-        if (!backend || !*backend || !id || !*id)
-            continue;
-
-        struct session *s = workspace_prepare(backend, model, effort, cwd, id, NULL);
-        if (!s)
-            continue;
-        pending_tabs[npending_tabs].s = s;
-        pending_tabs[npending_tabs].screen = screen && *screen ? strdup(screen) : NULL;
-        npending_tabs++;
-    }
-    fclose(f);
-}
-
-static void tabs_drop(int at)
-{
-    session_free(pending_tabs[at].s);
-    if (pending_tabs[at].screen)
-        unlink(pending_tabs[at].screen);
-    free(pending_tabs[at].screen);
-    pending_tabs[at].s = NULL;
-    pending_tabs[at].screen = NULL;
-}
-
-/* the front session and the restored tabs boot their CLIs together, and only
-   the front one is waited for: a tab nobody is looking at yet opens when its
-   own CLI is up */
-static int tabs_start(struct session *front)
-{
-    struct session *batch[1 + WORKSPACE_MAX];
-    int             n = 0;
-
-    batch[n++] = front;
-    for (int i = 0; i < npending_tabs; i++)
-        batch[n++] = pending_tabs[i].s;
-
-    session_start_batch(batch, n);
-    return session_start_wait(front);
-}
-
-static void tabs_take(int at)
-{
-    struct session *front = workspace_current();
-    struct session *s = pending_tabs[at].s;
-
-    if (!session_start_wait(s)) {
-        tabs_drop(at);
-        return;
-    }
-
-    int index = workspace_open(s);
-    if (index < 0) {
-        tabs_drop(at);
-        return;
-    }
-    workspace_show(workspace_index_of(front));
-    workspace_render(index, replay_tab, pending_tabs[at].screen
-                                            ? pending_tabs[at].screen : (void *)"");
-    if (pending_tabs[at].screen)
-        unlink(pending_tabs[at].screen);
-    free(pending_tabs[at].screen);
-    pending_tabs[at].screen = NULL;
-    pending_tabs[at].s = NULL;
-}
-
-/* `all` waits for the connects still running, for a window on its way out */
-static void tabs_admit(int all)
-{
-    int taken = 0;
-    int left = 0;
-
-    if (!npending_tabs)
-        return;
-
-    session_start_drain();
-    for (int i = 0; i < npending_tabs; i++) {
-        if (!pending_tabs[i].s)
-            continue;
-        if (!all && !session_start_done(pending_tabs[i].s)) {
-            left = 1;
-            continue;
-        }
-        tabs_take(i);
-        taken = 1;
-    }
-    if (!left)
-        npending_tabs = 0;
-    if (taken) {
-        boardwork_reattach();
-        chrome_paint();
-    }
-}
-
 static void usage(void)
 {
     char choices[128];
@@ -229,6 +89,7 @@ static void usage(void)
             "  --telegram also answer over Telegram, in the same session\n"
             "  --connect telegram   the same thing, spelled out\n"
             "  -r         --resume: pick a past conversation to continue\n"
+            "  --reopen   bring back the sessions of a window that is gone\n"
             "  --session id  resume a specific conversation (used by the fork commands)\n"
             "  --fork     with --session: branch off it instead of writing back to it\n"
             "  --restore f  take over the screen from a restarting mux (used by /restart)\n"
@@ -243,7 +104,7 @@ static int idle_fds(void *ud, int *out, int max)
 {
     (void)ud;
     int n = workspace_fds(out, max);
-    if (npending_tabs && n < max) {
+    if (tabs_pending() && n < max) {
         int fd = session_start_fd();
         if (fd >= 0)
             out[n++] = fd;
@@ -543,6 +404,7 @@ int main(int argc, char **argv)
         {"fork",    no_argument,       NULL, 'F'},
         {"restore", required_argument, NULL, 'R'},
         {"tabs",    required_argument, NULL, 'B'},
+        {"reopen",  no_argument,       NULL, 'O'},
         {"card",    no_argument,       NULL, 'K'},
         {"tier",    required_argument, NULL, 1},
         {"telegram", no_argument,      NULL, 'T'},
@@ -559,6 +421,7 @@ int main(int argc, char **argv)
     const char *session_arg = NULL;
     const char *restore_arg = NULL;
     const char *tabs_arg = NULL;
+    int         reopen_arg = 0;
     int telegram = 0;
     int card = 0;
     int pin_backend = 0;
@@ -580,6 +443,7 @@ int main(int argc, char **argv)
         case 'F': fork_session = 1; break;
         case 'R': restore_arg = optarg; break;
         case 'B': tabs_arg = optarg; break;
+        case 'O': reopen_arg = 1; break;
         case 'K': card = 1; break;
         case 'T': telegram = 1; break;
         case 'N':
@@ -845,9 +709,7 @@ int main(int argc, char **argv)
         tabs_prepare(tabs_arg);
 
     if (!tabs_start(session)) {
-        for (int i = 0; i < npending_tabs; i++)
-            tabs_drop(i);
-        npending_tabs = 0;
+        tabs_drop_all();
         chrome_bind(NULL);
         prompt_free(prompt);
         workspace_end();
@@ -866,6 +728,9 @@ int main(int argc, char **argv)
     }
 
     boardwork_reattach();
+
+    if (reopen_arg)
+        reopen_run();
 
     if (!resume && session_arg && !restore_arg)
         sessionload_into(session);

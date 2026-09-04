@@ -35,6 +35,11 @@ void livelist_forget(const struct session *s);
 
 int livelist_load(struct live_session **out);
 
+/* The sessions of windows that are gone, newest first. A dead window's records
+   are kept so it can be reopened; livelist_closed_drop clears one out. */
+int livelist_closed_load(struct live_session **out);
+void livelist_closed_drop(long pid);
+
 int livelist_alive(long pid);
 
 /* Move the terminal to the tmux pane a session runs in. Returns 0 and fills
