@@ -114,10 +114,8 @@ static int reopen_window(const struct live_session *list, int n, long pid)
         queued++;
     }
 
-    if (queued) {
+    if (queued)
         tabs_start_queued();
-        livelist_closed_drop(pid);
-    }
     return queued;
 }
 

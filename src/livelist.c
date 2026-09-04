@@ -420,6 +420,31 @@ int livelist_load(struct live_session **out)
     return load_dir(where, 1, out);
 }
 
+/* A session that is live again has been reopened, so the record it was closed
+   with has done its job. Clearing them here rather than when a window is
+   picked is what makes a reopen that fails leave the window to try again. */
+static void forget_reopened(struct live_session *closed, int n,
+                            const struct live_session *live, int live_n)
+{
+    char where[4300];
+    if (!closed_dir(where, sizeof where))
+        return;
+
+    for (int i = 0; i < n; i++) {
+        int back = 0;
+        for (int j = 0; j < live_n && !back; j++)
+            back = closed[i].id[0] && !strcmp(closed[i].id, live[j].id);
+        if (!back)
+            continue;
+
+        char path[9000];
+        snprintf(path, sizeof path, "%s/%ld-%d.json", where, closed[i].pid,
+                 closed[i].slot);
+        unlink(path);
+        closed[i].id[0] = '\0';
+    }
+}
+
 int livelist_closed_load(struct live_session **out)
 {
     struct live_session *live = NULL;
@@ -428,32 +453,12 @@ int livelist_closed_load(struct live_session **out)
     *out = NULL;
     /* a window that has just gone still has its records in the live dir until
        something reads it: retire those before listing what is closed */
-    livelist_load(&live);
+    int live_n = livelist_load(&live);
+
+    int n = closed_dir(where, sizeof where) ? load_dir(where, 0, out) : 0;
+    if (n > 0)
+        forget_reopened(*out, n, live, live_n);
     free(live);
-
-    if (!closed_dir(where, sizeof where))
-        return 0;
-    return load_dir(where, 0, out);
+    return n;
 }
 
-void livelist_closed_drop(long pid)
-{
-    char where[4300];
-    if (!closed_dir(where, sizeof where))
-        return;
-
-    DIR *d = opendir(where);
-    if (!d)
-        return;
-
-    struct dirent *e;
-    while ((e = readdir(d))) {
-        long owner = strtol(e->d_name, NULL, 10);
-        if (owner != pid)
-            continue;
-        char path[9000];
-        snprintf(path, sizeof path, "%s/%s", where, e->d_name);
-        unlink(path);
-    }
-    closedir(d);
-}
