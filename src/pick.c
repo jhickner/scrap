@@ -239,6 +239,17 @@ static int visible_cap(const struct view *v)
     return rows < 5 ? 5 : rows;
 }
 
+/* a filtering pick holds the height it opened with: the list grows and shrinks
+   inside it, rather than the whole box walking up the screen as rows drop out */
+static int hold_rows(const struct view *v)
+{
+    if (!v->filter)
+        return 0;
+    int cap = visible_cap(v);
+    int rows = v->n < cap ? v->n : cap;
+    return 1 + rows + (v->n > rows ? 1 : 0);
+}
+
 static int cmp_rank(const void *a, const void *b)
 {
     long long x = *(const long long *)a, y = *(const long long *)b;
@@ -323,7 +334,7 @@ static void refilter(struct view *v)
 
 static int run(const char *title, const struct pick_item *items, int count,
                int initial, const struct pick_live *live, const char *shortcuts,
-               int *pressed, int filter, int slash);
+               int *pressed, int filter, int slash, const char *seed);
 
 static void paint_under(struct view *v, struct menu *box, int *box_row);
 
@@ -582,20 +593,27 @@ static void paint_under(struct view *v, struct menu *box, int *box_row)
         rows++;
     }
 
+    for (int hold = hold_rows(v); rows < hold; rows++)
+        ui_put("\n");
+
     if (v->live)
         chrome_foot_paint(v->live->ask, v->live->hint, columns);
-
-    (void)rows;
 }
 
 int pick_run(const char *title, const struct pick_item *items, int count, int initial)
 {
-    return run(title, items, count, initial, NULL, NULL, NULL, 0, 0);
+    return run(title, items, count, initial, NULL, NULL, NULL, 0, 0, NULL);
 }
 
 int pick_run_filter(const char *title, const struct pick_item *items, int count, int initial)
 {
-    return run(title, items, count, initial, NULL, NULL, NULL, 1, 0);
+    return run(title, items, count, initial, NULL, NULL, NULL, 1, 0, NULL);
+}
+
+int pick_run_query(const char *title, const struct pick_item *items, int count,
+                   int initial, const char *query)
+{
+    return run(title, items, count, initial, NULL, NULL, NULL, 1, 0, query);
 }
 
 int pick_run_live(const char *title, const struct pick_item *items, int count,
@@ -603,13 +621,13 @@ int pick_run_live(const char *title, const struct pick_item *items, int count,
                   enum pick_search search, const char *shortcuts, int *pressed)
 {
     return run(title, items, count, initial, live, shortcuts, pressed, 1,
-               search == PICK_SEARCH_SLASH);
+               search == PICK_SEARCH_SLASH, NULL);
 }
 
 int pick_run_keys(const char *title, const struct pick_item *items, int count,
                   int initial, const char *shortcuts, int *pressed)
 {
-    return run(title, items, count, initial, NULL, shortcuts, pressed, 0, 0);
+    return run(title, items, count, initial, NULL, shortcuts, pressed, 0, 0, NULL);
 }
 
 /* the length with any partial sequence at the end dropped: the query is
@@ -663,7 +681,7 @@ static int paste_into(struct view *v, const char *s, size_t n)
 
 static int run(const char *title, const struct pick_item *items, int count,
                int initial, const struct pick_live *live, const char *shortcuts,
-               int *pressed, int filter, int slash)
+               int *pressed, int filter, int slash, const char *seed)
 {
     if (pressed)
         *pressed = 0;
@@ -681,6 +699,10 @@ static int run(const char *title, const struct pick_item *items, int count,
     v.n = count;
     v.filter = filter;
     v.slash = slash;
+    if (filter && seed && *seed) {
+        snprintf(v.query, sizeof v.query, "%s", seed);
+        v.searching = 1;
+    }
     v.order = calloc((size_t)count, sizeof *v.order);
     v.score = calloc((size_t)count, sizeof *v.score);
     v.rank = calloc((size_t)count, sizeof *v.rank);

@@ -13,6 +13,7 @@
 
 #include "ask.h"
 #include "cmd.h"
+#include "dirpick.h"
 #include "handoff.h"
 #include "hud.h"
 #include "boardwork.h"
@@ -395,11 +396,13 @@ static void close_live(const struct live_session *v, const struct live_session *
     ui_flush();
 }
 
-static int spawn_new(const char *backend, const char *model, const char *prompt)
+static int spawn_new(const char *backend, const char *model, const char *cwd,
+                     const char *prompt)
 {
     struct session *here = workspace_current();
-    int at = workspace_spawn(backend, model, NULL, here ? session_cwd(here) : NULL,
-                             NULL);
+    if (!cwd)
+        cwd = here ? session_cwd(here) : NULL;
+    int at = workspace_spawn(backend, model, NULL, cwd, NULL);
     if (at < 0) {
         ui_error("could not start the %s CLI", backend);
         ui_put("\n");
@@ -415,7 +418,7 @@ static int spawn_new(const char *backend, const char *model, const char *prompt)
 
 static int new_default(void)
 {
-    return spawn_new(cmd_default_backend(), NULL, NULL);
+    return spawn_new(cmd_default_backend(), NULL, NULL, NULL);
 }
 
 static int new_custom(void)
@@ -443,10 +446,17 @@ static int new_custom(void)
             model = list[pickedm].label;
         }
 
-        char *line = ask_run("a prompt to start with, or nothing", NULL);
-        if (!line)
+        char *cwd = dirpick_run("a working directory", "~/working");
+        if (!cwd)
             continue;
-        int again = spawn_new(backend, model, line);
+
+        char *line = ask_run("a prompt to start with, or nothing", NULL);
+        if (!line) {
+            free(cwd);
+            continue;
+        }
+        int again = spawn_new(backend, model, cwd, line);
+        free(cwd);
         free(line);
         return again;
     }
@@ -458,7 +468,7 @@ static int open_new(void)
 {
     const struct pick_item how[] = {
         {"default", "the default backend and model"},
-        {"custom", "a backend, a model and a prompt"},
+        {"custom", "a backend, a model, a directory and a prompt"},
     };
 
     int which = pick_run("a new session", how, 2, 0);
