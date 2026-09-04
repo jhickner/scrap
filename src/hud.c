@@ -233,8 +233,8 @@ void hud_print(const struct session *s)
 
     /* a hud carried across a restart is rewritten in place, so a window
        restarted over and over keeps one block and one count */
-    struct hud *back = restored && restored == last && viewport_item_last(last)
-                           ? viewport_item_data(last) : NULL;
+    struct hud *back = restored && restored == last ? viewport_item_data(last)
+                                                    : NULL;
     restored = 0;
     if (back) {
         hud_fill(back, s);
@@ -252,8 +252,7 @@ void hud_print(const struct session *s)
 
 int hud_restarted(void)
 {
-    struct hud *h = last && viewport_item_last(last) ? viewport_item_data(last)
-                                                     : NULL;
+    struct hud *h = last ? viewport_item_data(last) : NULL;
     if (!h)
         return 0;
     h->restarts++;

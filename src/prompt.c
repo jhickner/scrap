@@ -910,8 +910,6 @@ static void restart_check(struct prompt *p)
         return;
     if (!p->restart_pending(p->restart_ud))
         return;
-    chrome_clear();
-    ui_flush();
     p->restart(p->restart_ud);
     repaint(p);
 }

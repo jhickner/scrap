@@ -14,6 +14,7 @@
 #include "settings.h"
 #include "status.h"
 #include "tabbar.h"
+#include "text.h"
 #include "tg.h"
 #include "ui.h"
 #include "viewport.h"
@@ -142,6 +143,25 @@ void workspace_end(void)
     base = NULL;
 }
 
+/* the tab bar and the session list read in the same order, so a tab lands
+   with its directory group rather than at the end */
+static int slot_for(const struct session *s)
+{
+    char mine[512];
+    path_home_relative(session_cwd(s), mine, sizeof mine);
+
+    int at = ntabs;
+    for (int i = 0; i < ntabs; i++) {
+        char dir[512];
+        path_home_relative(session_cwd(tabs[i].s), dir, sizeof dir);
+        if (strcmp(dir, mine) > 0) {
+            at = i;
+            break;
+        }
+    }
+    return at;
+}
+
 int workspace_open(struct session *s)
 {
     if (!s || ntabs >= WORKSPACE_MAX)
@@ -150,7 +170,13 @@ int workspace_open(struct session *s)
     if (!screen)
         return -1;
 
-    int at = ntabs++;
+    int at = slot_for(s);
+    for (int i = ntabs; i > at; i--)
+        tabs[i] = tabs[i - 1];
+    ntabs++;
+    if (at <= cur && ntabs > 1)
+        cur++;
+
     memset(&tabs[at], 0, sizeof tabs[at]);
     tabs[at].s = s;
     tabs[at].screen = screen;
@@ -165,11 +191,9 @@ int workspace_spawn(const char *backend, const char *model, const char *effort,
     return workspace_spawn_ex(backend, model, effort, cwd, id, NULL);
 }
 
-int workspace_spawn_ex(const char *backend, const char *model, const char *effort,
-                       const char *cwd, const char *id, const char *system)
+struct session *workspace_prepare(const char *backend, const char *model, const char *effort,
+                                 const char *cwd, const char *id, const char *system)
 {
-    if (ntabs >= WORKSPACE_MAX)
-        return -1;
     if (!model || !strcmp(model, "default"))
         model = session_saved_model(backend);
     if (!effort || !strcmp(effort, "default"))
@@ -177,7 +201,7 @@ int workspace_spawn_ex(const char *backend, const char *model, const char *effor
 
     struct session *s = session_new(backend, cwd, model, effort);
     if (!s)
-        return -1;
+        return NULL;
 
     session_set_customizations(s, !safe);
     session_set_thinking(s, settings_get_int(SETTING_THINKING, 1));
@@ -187,7 +211,18 @@ int workspace_spawn_ex(const char *backend, const char *model, const char *effor
     session_adopt_id(s, id);
     if (system && *system)
         session_set_system_extra(s, system);
+    return s;
+}
 
+int workspace_spawn_ex(const char *backend, const char *model, const char *effort,
+                       const char *cwd, const char *id, const char *system)
+{
+    if (ntabs >= WORKSPACE_MAX)
+        return -1;
+
+    struct session *s = workspace_prepare(backend, model, effort, cwd, id, system);
+    if (!s)
+        return -1;
     if (!session_start(s)) {
         session_free(s);
         return -1;

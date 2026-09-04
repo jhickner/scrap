@@ -36,6 +36,7 @@
 #define KEY_GO     'g'
 #define KEY_RENAME 'r'
 #define KEY_ASK    'p'
+#define KEY_HERE   'c'
 #define KEY_ALL    '*'
 
 static int show_all;
@@ -477,6 +478,20 @@ static int open_new(void)
     return which == 1 ? new_custom() : new_default();
 }
 
+/* the working directory of the selected row, or of the current session */
+static const char *row_cwd(const struct row *r, const struct live_session *live)
+{
+    if (r->kind == ROW_TAB) {
+        const struct session *s = workspace_at(r->at);
+        if (s)
+            return session_cwd(s);
+    } else if (r->kind == ROW_LIVE && r->at >= 0) {
+        return live[r->at].cwd;
+    }
+    const struct session *here = workspace_current();
+    return here ? session_cwd(here) : NULL;
+}
+
 static void ask_new(const struct row *r, const struct live_session *live)
 {
     const char *backend = NULL, *model = NULL, *cwd = NULL;
@@ -510,7 +525,7 @@ static void ask_new(const struct row *r, const struct live_session *live)
         return;
     }
 
-    int was = workspace_index();
+    struct session *was = workspace_current();
     int at = workspace_spawn(backend, model, NULL, cwd, NULL);
     if (at < 0) {
         ui_error("could not start the %s CLI", backend);
@@ -520,7 +535,7 @@ static void ask_new(const struct row *r, const struct live_session *live)
         return;
     }
 
-    workspace_show(was);
+    workspace_show(workspace_index_of(was));
     workspace_send(at, line, NULL);
     free(line);
 }
@@ -720,11 +735,11 @@ static int switch_once(void)
         items[i].detail = rows[i].detail;
     }
 
-    char shortcuts[16] = {KEY_CLOSE, KEY_NEW, KEY_ASK, KEY_GO, KEY_RENAME,
-                          KEY_ALL,
+    char shortcuts[24] = {KEY_CLOSE, KEY_NEW, KEY_ASK, KEY_GO, KEY_RENAME,
+                          KEY_ALL, KEY_HERE,
                           KEY_CTRL(KEY_CLOSE), KEY_CTRL(KEY_NEW), KEY_CTRL(KEY_ASK),
-                          KEY_CTRL(KEY_GO), KEY_CTRL(KEY_RENAME), '\n',
-                          PICK_KEY_RIGHT, '\t', 0};
+                          KEY_CTRL(KEY_GO), KEY_CTRL(KEY_RENAME),
+                          '\n', PICK_KEY_RIGHT, '\t', 0};
     int pressed = 0;
 
     char title[256];
@@ -801,6 +816,14 @@ static int switch_once(void)
 
     if (pressed == KEY_NEW) {
         int again = open_new();
+        resume_row = picked;
+        free(live);
+        return again;
+    }
+
+    if (pressed == KEY_HERE) {
+        const char *cwd = row_cwd(&chosen, live);
+        int again = cwd && *cwd ? spawn_new(cmd_default_backend(), NULL, cwd, NULL) : 1;
         resume_row = picked;
         free(live);
         return again;

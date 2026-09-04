@@ -81,16 +81,22 @@ static void replay_tab(struct session *s, void *ud)
     sessionload_into(s);
 }
 
-static void restore_tabs(const char *path)
+struct pending_tab {
+    char           *screen;
+    struct session *s;
+};
+
+static struct pending_tab pending_tabs[WORKSPACE_MAX];
+static int               npending_tabs;
+
+static void tabs_prepare(const char *path)
 {
     FILE *f = fopen(path, "r");
     if (!f)
         return;
 
-    int front = workspace_index();
-
     char line[6144];
-    while (fgets(line, sizeof line, f)) {
+    while (npending_tabs < WORKSPACE_MAX - 1 && fgets(line, sizeof line, f)) {
         line[strcspn(line, "\n")] = '\0';
         char       *rest = line;
         const char *screen = strsep(&rest, "\t");
@@ -116,15 +122,70 @@ static void restore_tabs(const char *path)
         if (!backend || !*backend || !id || !*id)
             continue;
 
-        int at = workspace_spawn(backend, model, effort, cwd, id);
-        if (at < 0)
+        struct session *s = workspace_prepare(backend, model, effort, cwd, id, NULL);
+        if (!s)
             continue;
-        workspace_show(front);
-        workspace_render(at, replay_tab, (void *)screen);
-        if (screen && *screen)
-            unlink(screen);
+        pending_tabs[npending_tabs].s = s;
+        pending_tabs[npending_tabs].screen = screen && *screen ? strdup(screen) : NULL;
+        npending_tabs++;
     }
     fclose(f);
+}
+
+static void tabs_drop(int at)
+{
+    session_free(pending_tabs[at].s);
+    if (pending_tabs[at].screen)
+        unlink(pending_tabs[at].screen);
+    free(pending_tabs[at].screen);
+    pending_tabs[at].s = NULL;
+    pending_tabs[at].screen = NULL;
+}
+
+/* the front session and the restored tabs boot their CLIs together: serially
+   the window waits for every resume in turn */
+static int tabs_start(struct session *front)
+{
+    struct session *batch[1 + WORKSPACE_MAX];
+    int             ok[1 + WORKSPACE_MAX] = {0};
+    int             n = 0;
+
+    batch[n++] = front;
+    for (int i = 0; i < npending_tabs; i++)
+        batch[n++] = pending_tabs[i].s;
+
+    session_start_many(batch, n, ok);
+
+    for (int i = 0; i < npending_tabs; i++)
+        if (!ok[i + 1])
+            tabs_drop(i);
+    return ok[0];
+}
+
+static void tabs_admit(void)
+{
+    struct session *front = workspace_current();
+
+    for (int i = 0; i < npending_tabs; i++) {
+        struct session *s = pending_tabs[i].s;
+        if (!s)
+            continue;
+
+        int at = workspace_open(s);
+        if (at < 0) {
+            tabs_drop(i);
+            continue;
+        }
+        workspace_show(workspace_index_of(front));
+        workspace_render(at, replay_tab, pending_tabs[i].screen
+                                            ? pending_tabs[i].screen : (void *)"");
+        if (pending_tabs[i].screen)
+            unlink(pending_tabs[i].screen);
+        free(pending_tabs[i].screen);
+        pending_tabs[i].screen = NULL;
+        pending_tabs[i].s = NULL;
+    }
+    npending_tabs = 0;
 }
 
 static void usage(void)
@@ -627,9 +688,11 @@ int main(int argc, char **argv)
         if (restore_arg) {
             view_collapse(settings_get_int(SETTING_COMPACT, 0));
             viewport_inherit();
-            /* so the restore paint keeps a prompt row under the hud */
-            char *row = "";
-            viewport_chrome(&row, 1, 0, 0);
+            char row[64];
+            snprintf(row, sizeof row, "%s\xe2\x9d\xaf%s ", ui_style(UI_ACCENT),
+                     ui_style(UI_RESET));
+            char *rows[] = { row };
+            viewport_chrome(rows, 1, 0, 2);
             scrollback_restore(restore_arg);
             unlink(restore_arg);
         } else {
@@ -657,14 +720,20 @@ int main(int argc, char **argv)
     if (telegram && session && !tg_start(session))
         telegram = 0;
 
-    if (!session || !session_start(session)) {
-        tty_raw_end();
+    if (!session) {
+        if (interactive)
+            tty_raw_end();
         fprintf(stderr, APP_NAME ": could not start the %s CLI — is it on PATH?\n", backend);
-        session_free(session);
         return 1;
     }
 
     if (!interactive) {
+        if (!session_start(session)) {
+            fprintf(stderr, APP_NAME ": could not start the %s CLI — is it on PATH?\n",
+                    backend);
+            session_free(session);
+            return 1;
+        }
         size_t need = 1;
         for (int i = optind; i < argc; i++)
             need += strlen(argv[i]) + 1;
@@ -742,11 +811,27 @@ int main(int argc, char **argv)
 
     chrome_paint();
 
+    if (tabs_arg)
+        tabs_prepare(tabs_arg);
+
+    if (!tabs_start(session)) {
+        for (int i = 0; i < npending_tabs; i++)
+            tabs_drop(i);
+        npending_tabs = 0;
+        chrome_bind(NULL);
+        prompt_free(prompt);
+        workspace_end();
+        tty_raw_end();
+        fprintf(stderr, APP_NAME ": could not start the %s CLI — is it on PATH?\n",
+                backend);
+        return 1;
+    }
+
     if (!resume || !cmd_resume(session))
         hud_print(session);
 
     if (tabs_arg) {
-        restore_tabs(tabs_arg);
+        tabs_admit();
         unlink(tabs_arg);
         chrome_paint();
     }

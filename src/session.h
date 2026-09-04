@@ -55,6 +55,10 @@ void session_set_fork(struct session *s, int on);
 
 int session_start(struct session *s);
 
+/* Starts every session at once and waits for the batch, filling ok[i] per
+   session. Returns how many started. */
+int session_start_many(struct session **list, int n, int *ok);
+
 int session_trust_project(struct session *s);
 int session_take_trust_request(struct session *s);
 

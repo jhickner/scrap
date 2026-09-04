@@ -23,6 +23,11 @@ int  workspace_spawn(const char *backend, const char *model, const char *effort,
 int  workspace_spawn_ex(const char *backend, const char *model, const char *effort,
                         const char *cwd, const char *id, const char *system);
 
+/* a configured session with no child yet, for a caller that starts a batch of
+   them at once before opening their tabs */
+struct session *workspace_prepare(const char *backend, const char *model, const char *effort,
+                                  const char *cwd, const char *id, const char *system);
+
 int  workspace_open(struct session *s);
 
 void workspace_show(int index);

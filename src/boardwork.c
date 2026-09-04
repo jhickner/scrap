@@ -771,14 +771,14 @@ static int start_on(const struct board_card *c, struct worker *onto, char *why,
         }
         take_slot(onto, c, job);
     } else {
-        int front = workspace_index();
+        struct session *front = workspace_current();
         at = workspace_spawn(backend, model[0] ? model : NULL,
                              effort[0] ? effort : NULL, cwd, NULL);
         if (at < 0) {
             snprintf(why, (size_t)size, "could not start a %s session", backend);
             return 0;
         }
-        workspace_show(front);
+        workspace_show(workspace_index_of(front));
         s = workspace_at(at);
         if (!hold(c->id, c->cwd, s, job)) {
             workspace_close(at);

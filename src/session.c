@@ -115,6 +115,7 @@ struct session {
 
     pthread_t       thread;
     int             running;
+    volatile int    connecting;
     volatile int    finished;
     volatile int    abort_request;
     pthread_mutex_t lock;
@@ -578,7 +579,7 @@ static void on_event(void *ud, const backend_event *ev)
 {
     struct session *s = ud;
     heard(s, ev);
-    if (s->running) {
+    if (s->running || s->connecting) {
         enqueue(s, ev);
         return;
     }
@@ -1339,15 +1340,82 @@ static int restart(struct session *s, const char *resume_id)
     return 1;
 }
 
-int session_start(struct session *s)
+static int connect_agent(struct session *s)
 {
     char next[4096];
     if (!dir_alive(s->cwd) && ground_target(s->cwd, next, sizeof next))
         replace(&s->cwd, next);
-    if (!restart(s, s->id[0] ? s->id : NULL))
+    return restart(s, s->id[0] ? s->id : NULL);
+}
+
+int session_start(struct session *s)
+{
+    if (!connect_agent(s))
         return 0;
     publish(s, "finished");
     return 1;
+}
+
+struct start_job {
+    struct session *s;
+    pthread_t       thread;
+    int             threaded;
+    int             ok;
+};
+
+static void *start_thread(void *ud)
+{
+    struct start_job *j = ud;
+    restart_shield_thread();
+    j->ok = connect_agent(j->s);
+    return NULL;
+}
+
+/* a CLI takes seconds to boot and resume, so a window coming back with tabs
+   waits for one batch rather than for each in turn. the connect runs off the
+   main thread: its events queue and the live list is written back here. */
+int session_start_many(struct session **list, int n, int *ok)
+{
+    if (!list || n <= 0)
+        return 0;
+
+    struct start_job *jobs = calloc((size_t)n, sizeof *jobs);
+    if (!jobs) {
+        int started = 0;
+        for (int i = 0; i < n; i++) {
+            int good = list[i] && session_start(list[i]);
+            if (ok)
+                ok[i] = good;
+            started += good;
+        }
+        return started;
+    }
+
+    for (int i = 0; i < n; i++) {
+        jobs[i].s = list[i];
+        if (!list[i])
+            continue;
+        list[i]->connecting = 1;
+        jobs[i].threaded = pthread_create(&jobs[i].thread, NULL, start_thread, &jobs[i]) == 0;
+        if (!jobs[i].threaded)
+            jobs[i].ok = connect_agent(list[i]);
+    }
+
+    int started = 0;
+    for (int i = 0; i < n; i++) {
+        if (jobs[i].threaded)
+            pthread_join(jobs[i].thread, NULL);
+        if (list[i])
+            list[i]->connecting = 0;
+        if (jobs[i].ok)
+            publish(list[i], "finished");
+        if (ok)
+            ok[i] = jobs[i].ok;
+        started += jobs[i].ok;
+    }
+
+    free(jobs);
+    return started;
 }
 
 int session_trust_project(struct session *s)

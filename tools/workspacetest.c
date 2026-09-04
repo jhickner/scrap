@@ -46,6 +46,7 @@ struct session {
     int running;
     int work;
     int busy;
+    const char *cwd;
 };
 
 int session_turn_running(const struct session *s) { return s && s->running; }
@@ -53,7 +54,7 @@ int session_work_count(const struct session *s) { return s ? s->work : 0; }
 int session_busy(const struct session *s) { return s && (s->busy || s->running); }
 int session_compact(const struct session *s) { (void)s; return 0; }
 const char *session_title(const struct session *s) { (void)s; return "tab"; }
-const char *session_cwd(const struct session *s) { (void)s; return "."; }
+const char *session_cwd(const struct session *s) { return s && s->cwd ? s->cwd : "."; }
 const char *session_id(const struct session *s) { (void)s; return NULL; }
 const char *session_backend(const struct session *s) { (void)s; return "grok"; }
 const char *session_model(const struct session *s) { (void)s; return "default"; }
@@ -189,6 +190,25 @@ int main(void)
         if (workspace_count() || workspace_current())
             fail("no tab remains");
     }
+
+    struct session z = {0, 0, 0, "/z"}, m = {0, 0, 0, "/m"}, q = {0, 0, 0, "/a"};
+    if (!workspace_begin(&z, 0))
+        fail("open the first tab of the sorted set");
+    else if (workspace_open(&m) != 0 || workspace_open(&q) != 0)
+        fail("a tab lands in its directory's place");
+    else {
+        if (workspace_at(0) != &q || workspace_at(1) != &m || workspace_at(2) != &z)
+            fail("tabs read in directory order");
+        if (workspace_current() != &q)
+            fail("the new tab is the current one");
+        workspace_show(workspace_index_of(&z));
+        if (workspace_open(&b) != 0 || workspace_current() != &b)
+            fail("opening ahead of the current tab keeps its place");
+        if (workspace_index_of(&z) != 3)
+            fail("the tab behind the new one moves along");
+    }
+    while (workspace_count())
+        workspace_close(0);
 
     workspace_end();
     chrome_bind(NULL);
