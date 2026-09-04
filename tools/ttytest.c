@@ -307,12 +307,81 @@ static void keys_from_pipe(void)
     close(w);
 }
 
+static int watch_fd = -1;
+
+static int busy_fds(void *ud, int *out, int max)
+{
+    (void)ud;
+    if (max < 1 || watch_fd < 0)
+        return 0;
+    out[0] = watch_fd;
+    return 1;
+}
+
+static void busy_ready(void *ud)
+{
+    (void)ud;
+    usleep(80 * 1000);
+}
+
+/* a watched fd that takes longer to serve than the 50ms a sequence waits for
+   its next byte: the tail must still arrive as one event */
+static void watch_keeps_a_sequence_whole(void)
+{
+    int sp[2], watch[2];
+    if (pipe(sp) != 0 || pipe(watch) != 0) {
+        fail("watch pipes");
+        return;
+    }
+    int oldin = dup(STDIN_FILENO);
+    if (oldin < 0 || dup2(sp[0], STDIN_FILENO) < 0) {
+        fail("watch dup2");
+        return;
+    }
+    close(sp[0]);
+
+    if (write(watch[1], "x", 1) != 1)
+        fail("watch prime");
+    watch_fd = watch[0];
+    tty_watch(busy_fds, busy_ready, NULL);
+
+    if (write(sp[1], "\x1b[<", 3) != 3)
+        fail("watch head");
+
+    pid_t child = fork();
+    if (child < 0) {
+        fail("watch fork");
+    } else if (child == 0) {
+        usleep(10 * 1000);
+        ssize_t put = write(sp[1], "0;5;5M", 6);
+        _exit(put == 6 ? 0 : 1);
+    }
+
+    tty_event ev;
+    if (!tty_read(&ev, 400) || ev.key != TK_MOUSE_DOWN)
+        fail("a watched fd cut a mouse sequence short");
+    if (ev.text)
+        free(ev.text);
+
+    int st;
+    while (child > 0 && waitpid(child, &st, 0) < 0 && errno == EINTR)
+        ;
+    tty_watch(NULL, NULL, NULL);
+    watch_fd = -1;
+    close(watch[0]);
+    close(watch[1]);
+    close(sp[1]);
+    dup2(oldin, STDIN_FILENO);
+    close(oldin);
+}
+
 int main(void)
 {
     handoff_keeps_alt_screen();
     if (restore_from_raw_pty() != 0)
         return 1;
     wake_unblocks_read();
+    watch_keeps_a_sequence_whole();
     keys_from_pipe();
     if (failures)
         return 1;

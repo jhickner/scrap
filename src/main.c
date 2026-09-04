@@ -142,50 +142,73 @@ static void tabs_drop(int at)
     pending_tabs[at].screen = NULL;
 }
 
-/* the front session and the restored tabs boot their CLIs together: serially
-   the window waits for every resume in turn */
+/* the front session and the restored tabs boot their CLIs together, and only
+   the front one is waited for: a tab nobody is looking at yet opens when its
+   own CLI is up */
 static int tabs_start(struct session *front)
 {
     struct session *batch[1 + WORKSPACE_MAX];
-    int             ok[1 + WORKSPACE_MAX] = {0};
     int             n = 0;
 
     batch[n++] = front;
     for (int i = 0; i < npending_tabs; i++)
         batch[n++] = pending_tabs[i].s;
 
-    session_start_many(batch, n, ok);
-
-    for (int i = 0; i < npending_tabs; i++)
-        if (!ok[i + 1])
-            tabs_drop(i);
-    return ok[0];
+    session_start_batch(batch, n);
+    return session_start_wait(front);
 }
 
-static void tabs_admit(void)
+static void tabs_take(int at)
 {
     struct session *front = workspace_current();
+    struct session *s = pending_tabs[at].s;
 
+    if (!session_start_wait(s)) {
+        tabs_drop(at);
+        return;
+    }
+
+    int index = workspace_open(s);
+    if (index < 0) {
+        tabs_drop(at);
+        return;
+    }
+    workspace_show(workspace_index_of(front));
+    workspace_render(index, replay_tab, pending_tabs[at].screen
+                                            ? pending_tabs[at].screen : (void *)"");
+    if (pending_tabs[at].screen)
+        unlink(pending_tabs[at].screen);
+    free(pending_tabs[at].screen);
+    pending_tabs[at].screen = NULL;
+    pending_tabs[at].s = NULL;
+}
+
+/* `all` waits for the connects still running, for a window on its way out */
+static void tabs_admit(int all)
+{
+    int taken = 0;
+    int left = 0;
+
+    if (!npending_tabs)
+        return;
+
+    session_start_drain();
     for (int i = 0; i < npending_tabs; i++) {
-        struct session *s = pending_tabs[i].s;
-        if (!s)
+        if (!pending_tabs[i].s)
             continue;
-
-        int at = workspace_open(s);
-        if (at < 0) {
-            tabs_drop(i);
+        if (!all && !session_start_done(pending_tabs[i].s)) {
+            left = 1;
             continue;
         }
-        workspace_show(workspace_index_of(front));
-        workspace_render(at, replay_tab, pending_tabs[i].screen
-                                            ? pending_tabs[i].screen : (void *)"");
-        if (pending_tabs[i].screen)
-            unlink(pending_tabs[i].screen);
-        free(pending_tabs[i].screen);
-        pending_tabs[i].screen = NULL;
-        pending_tabs[i].s = NULL;
+        tabs_take(i);
+        taken = 1;
     }
-    npending_tabs = 0;
+    if (!left)
+        npending_tabs = 0;
+    if (taken) {
+        boardwork_reattach();
+        chrome_paint();
+    }
 }
 
 static void usage(void)
@@ -220,6 +243,11 @@ static int idle_fds(void *ud, int *out, int max)
 {
     (void)ud;
     int n = workspace_fds(out, max);
+    if (npending_tabs && n < max) {
+        int fd = session_start_fd();
+        if (fd >= 0)
+            out[n++] = fd;
+    }
     n += sidechannel_fds(out + n, max - n);
     return n + tg_fds(out + n, max - n);
 }
@@ -265,6 +293,7 @@ static void offer_project_trust(struct session *s)
 static int idle_render(void *ud)
 {
     (void)ud;
+    tabs_admit(0);
     sidechannel_poll();
     sidechannel_tick();
     reap_children();
@@ -430,6 +459,7 @@ static int idle_restart(void *ud)
 
     sidechannel_close_all();
     child_close_all();
+    tabs_admit(1);
 
     if (!restart_exec(workspace_current())) {
         viewport_item_begin(VIEWPORT_ROWS(1, 1));
@@ -831,9 +861,8 @@ int main(int argc, char **argv)
         hud_print(session);
 
     if (tabs_arg) {
-        tabs_admit();
         unlink(tabs_arg);
-        chrome_paint();
+        tabs_admit(0);
     }
 
     boardwork_reattach();
@@ -906,6 +935,7 @@ int main(int argc, char **argv)
 
     sidechannel_close_all();
     child_close_all();
+    tabs_admit(1);
     tg_stop();
     session_set_typeahead(NULL, NULL);
     chrome_bind(NULL);

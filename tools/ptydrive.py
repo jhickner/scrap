@@ -7,9 +7,10 @@ over a terminal someone is using.
 
     ptydrive.py <seconds-per-step> -- ./mux -m model   << script on stdin
 
-Each stdin line is either `wait N` or `send <text>` with \\e, \\r escapes.
+Each stdin line is `wait N`, `send <text>` with \\e, \\r escapes, or `urg` to ask
+for a restart the way `make install` does.
 """
-import os, pty, select, subprocess, sys, time
+import os, pty, select, signal, subprocess, sys, time
 
 def main():
     args = sys.argv[1:]
@@ -47,6 +48,9 @@ def main():
         line = line.strip()
         if line.startswith("wait "):
             pump(float(line[5:]))
+        elif line == "urg":
+            os.kill(p.pid, signal.SIGURG)
+            pump(0.4)
         elif line.startswith("send "):
             text = line[5:].replace("\\e", "\x1b").replace("\\r", "\r").replace("\\t", "\t")
             os.write(master, text.encode())

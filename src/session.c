@@ -116,6 +116,10 @@ struct session {
     pthread_t       thread;
     int             running;
     volatile int    connecting;
+    pthread_t       start_th;
+    int             start_threaded;
+    volatile int    start_finished;
+    int             start_ok;
     volatile int    finished;
     volatile int    abort_request;
     pthread_mutex_t lock;
@@ -1066,6 +1070,10 @@ void session_free(struct session *s)
 {
     if (!s)
         return;
+    if (s->start_threaded) {
+        pthread_join(s->start_th, NULL);
+        s->start_threaded = 0;
+    }
     livelist_forget(s);
     agenttabs_forget(s);
 
@@ -1356,66 +1364,88 @@ int session_start(struct session *s)
     return 1;
 }
 
-struct start_job {
-    struct session *s;
-    pthread_t       thread;
-    int             threaded;
-    int             ok;
-};
+/* a CLI takes seconds to boot and resume, so the sessions a window comes back
+   with connect at once, off the main thread: their events queue, and the live
+   list is written back here when each is collected. */
+static int start_pipe[2] = {-1, -1};
+
+static void start_notify(void)
+{
+    if (start_pipe[1] < 0)
+        return;
+    char byte = 1;
+    ssize_t w = write(start_pipe[1], &byte, 1);
+    (void)w;
+}
 
 static void *start_thread(void *ud)
 {
-    struct start_job *j = ud;
+    struct session *s = ud;
     restart_shield_thread();
-    j->ok = connect_agent(j->s);
+    s->start_ok = connect_agent(s);
+    s->start_finished = 1;
+    start_notify();
     return NULL;
 }
 
-/* a CLI takes seconds to boot and resume, so a window coming back with tabs
-   waits for one batch rather than for each in turn. the connect runs off the
-   main thread: its events queue and the live list is written back here. */
-int session_start_many(struct session **list, int n, int *ok)
+int session_start_fd(void)
+{
+    if (start_pipe[0] < 0 && pipe(start_pipe) == 0) {
+        for (int i = 0; i < 2; i++) {
+            fcntl(start_pipe[i], F_SETFD, FD_CLOEXEC);
+            fcntl(start_pipe[i], F_SETFL, O_NONBLOCK);
+        }
+    }
+    return start_pipe[0];
+}
+
+void session_start_drain(void)
+{
+    if (start_pipe[0] < 0)
+        return;
+    char buf[256];
+    while (read(start_pipe[0], buf, sizeof buf) > 0)
+        ;
+}
+
+void session_start_batch(struct session **list, int n)
 {
     if (!list || n <= 0)
-        return 0;
+        return;
 
-    struct start_job *jobs = calloc((size_t)n, sizeof *jobs);
-    if (!jobs) {
-        int started = 0;
-        for (int i = 0; i < n; i++) {
-            int good = list[i] && session_start(list[i]);
-            if (ok)
-                ok[i] = good;
-            started += good;
-        }
-        return started;
-    }
-
+    session_start_fd();
     for (int i = 0; i < n; i++) {
-        jobs[i].s = list[i];
-        if (!list[i])
+        struct session *s = list[i];
+        if (!s)
             continue;
-        list[i]->connecting = 1;
-        jobs[i].threaded = pthread_create(&jobs[i].thread, NULL, start_thread, &jobs[i]) == 0;
-        if (!jobs[i].threaded)
-            jobs[i].ok = connect_agent(list[i]);
+        s->connecting = 1;
+        s->start_finished = 0;
+        s->start_ok = 0;
+        s->start_threaded = pthread_create(&s->start_th, NULL, start_thread, s) == 0;
+        if (!s->start_threaded) {
+            s->start_ok = connect_agent(s);
+            s->start_finished = 1;
+        }
     }
+}
 
-    int started = 0;
-    for (int i = 0; i < n; i++) {
-        if (jobs[i].threaded)
-            pthread_join(jobs[i].thread, NULL);
-        if (list[i])
-            list[i]->connecting = 0;
-        if (jobs[i].ok)
-            publish(list[i], "finished");
-        if (ok)
-            ok[i] = jobs[i].ok;
-        started += jobs[i].ok;
+int session_start_done(const struct session *s)
+{
+    return s && (!s->start_threaded || s->start_finished);
+}
+
+int session_start_wait(struct session *s)
+{
+    if (!s)
+        return 0;
+    if (s->start_threaded) {
+        pthread_join(s->start_th, NULL);
+        s->start_threaded = 0;
     }
-
-    free(jobs);
-    return started;
+    s->connecting = 0;
+    if (s->start_ok)
+        publish(s, "finished");
+    return s->start_ok;
 }
 
 int session_trust_project(struct session *s)

@@ -378,8 +378,11 @@ static int wait_readable(int timeout_ms)
         if (wake_latched())
             return 0;
 
+        /* the rest of a sequence is a byte or two behind, on a 50ms budget:
+           serving a watched fd here can outrun it, and the abandoned tail is
+           read back as text */
         int extra[TTY_WATCH_MAX];
-        int count = watch_fds ? watch_fds(watch_ud, extra, TTY_WATCH_MAX) : 0;
+        int count = watch_fds && !seq_depth ? watch_fds(watch_ud, extra, TTY_WATCH_MAX) : 0;
         if (count < 0)
             count = 0;
 

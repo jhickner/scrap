@@ -55,9 +55,16 @@ void session_set_fork(struct session *s, int on);
 
 int session_start(struct session *s);
 
-/* Starts every session at once and waits for the batch, filling ok[i] per
-   session. Returns how many started. */
-int session_start_many(struct session **list, int n, int *ok);
+/* Starts every session at once, off the main thread. Each is collected with
+   session_start_wait(), which joins its connect and returns whether it came up;
+   session_start_done() says whether that would return right away, and
+   session_start_fd() is readable once a connect has finished. A session is
+   untouchable until it has been collected. */
+void session_start_batch(struct session **list, int n);
+int  session_start_done(const struct session *s);
+int  session_start_wait(struct session *s);
+int  session_start_fd(void);
+void session_start_drain(void);
 
 int session_trust_project(struct session *s);
 int session_take_trust_request(struct session *s);
