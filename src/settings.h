@@ -19,6 +19,9 @@
 
 #define SETTING_BACKEND      "backend"
 
+/* claude only: pass --chrome, so the agent gets the Claude in Chrome tools */
+#define SETTING_CHROME       "chrome"
+
 #define SETTING_COLOR_INPUT    "color_input"
 #define SETTING_COLOR_EMPHASIS "color_emphasis"
 

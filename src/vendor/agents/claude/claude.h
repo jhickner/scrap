@@ -50,6 +50,8 @@ typedef struct {
                                     user's skills, CLAUDE.md, plugins, hooks, MCP
                                     servers, custom commands and agents. Zero (the
                                     {0} default) keeps the sandboxed behaviour.    */
+    int chrome;                  /* nonzero: pass --chrome, exposing the Claude in
+                                    Chrome extension's browser tools               */
 } claude_opts;
 
 /* Start a persistent headless claude process and prewarm it in the background.
@@ -477,7 +479,7 @@ claude_client *claude_start(const claude_opts *opts) {
         if (o.use_subscription) unsetenv("ANTHROPIC_API_KEY");
 
         /* Build argv: headless, streaming both directions. */
-        const char *argv[34];
+        const char *argv[36];
         int n = 0;
         argv[n++] = cli;
         argv[n++] = "--print";
@@ -486,6 +488,7 @@ claude_client *claude_start(const claude_opts *opts) {
         argv[n++] = "--verbose";
         if (!o.allow_customizations) argv[n++] = "--safe-mode";
         if (o.no_session_persistence) argv[n++] = "--no-session-persistence";
+        if (o.chrome) argv[n++] = "--chrome";
         if (o.session_name && *o.session_name) { argv[n++] = "--name"; argv[n++] = o.session_name; }
         if (o.model && *o.model)           { argv[n++] = "--model";           argv[n++] = o.model; }
         if (o.effort && *o.effort)         { argv[n++] = "--effort";          argv[n++] = o.effort; }

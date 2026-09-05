@@ -819,6 +819,7 @@ static Backend *agent(struct session *s)
     o.permission_mode = s->permission;
     o.fork_session = s->fork_session;
     o.no_browser_login = s->no_browser_login;
+    o.chrome = settings_get_int(SETTING_CHROME, 0);
 
     const char *note = image_available()
         ? "This conversation is displayed in a terminal that renders images inline. "
@@ -894,6 +895,7 @@ int session_switch_backend(struct session *s, const char *backend)
     o.allow_customizations = s->customizations;
     o.permission_mode = s->permission;
     o.no_browser_login = s->no_browser_login;
+    o.chrome = settings_get_int(SETTING_CHROME, 0);
     Backend *replacement = backend_open_ex(&o);
     free(handoff);
     if (!replacement)
