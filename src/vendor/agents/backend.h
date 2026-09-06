@@ -40,6 +40,8 @@ typedef struct {
     int no_browser_login;       /* claude: report expired auth instead of opening the
                                    browser, for runs with nobody watching it        */
     int chrome;                 /* claude: --chrome, Claude in Chrome browser tools */
+    const char *plugin_dir;     /* claude: --plugin-dir, one plugin for this session.
+                                   Needs allow_customizations for its hooks to run */
 } backend_opts;
 
 /* One interesting event from a turn's stream. Only the fields a kind documents
@@ -236,6 +238,7 @@ typedef struct {
     int   allow_customizations, ephemeral, disable_tools, fork_session;
     int   no_browser_login;
     int   chrome;
+    char *plugin_dir;
     void (*on_event)(void *ud, const backend_event *ev);
     void *event_ud;
     int (*abort)(void);
@@ -267,11 +270,13 @@ static void backend_state_init(backend_state *st, const backend_opts *o) {
     st->fork_session = o->fork_session;
     st->no_browser_login = o->no_browser_login;
     st->chrome = o->chrome;
+    st->plugin_dir = o->plugin_dir ? strdup(o->plugin_dir) : NULL;
 }
 
 static void backend_state_free(backend_state *st) {
     free(st->model); free(st->effort); free(st->system); free(st->cwd); free(st->resume);
     free(st->permission); free(st->session_name); free(st->pending);
+    free(st->plugin_dir);
 }
 
 static void backend_emit(backend_state *st, const backend_event *ev) {
@@ -367,6 +372,7 @@ static int backend_claude_start(Backend *b, const char *resume) {
     o.use_subscription = 1;
     o.allow_customizations = x->st.allow_customizations;
     o.chrome = x->st.chrome;
+    o.plugin_dir = x->st.plugin_dir;
     o.resume_session = resume;
     o.fork_session = x->st.fork_session;
     o.session_name = x->st.session_name;

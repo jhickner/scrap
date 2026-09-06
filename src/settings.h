@@ -22,6 +22,10 @@
 /* claude only: pass --chrome, so the agent gets the Claude in Chrome tools */
 #define SETTING_CHROME       "chrome"
 
+/* claude only: load ~/.config/mux/plugins/shunt, which blocks whole-file reads
+   over SHUNT_MIN_LINES and routes them to a cheap worker model instead */
+#define SETTING_SHUNT        "shunt"
+
 #define SETTING_COLOR_INPUT    "color_input"
 #define SETTING_COLOR_EMPHASIS "color_emphasis"
 

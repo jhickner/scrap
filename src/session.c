@@ -806,6 +806,23 @@ void session_free(struct session *s)
     free(s);
 }
 
+/* Path of the shunt plugin, or NULL when the setting is off or there is no
+   config dir. The plugin's hooks only run when customizations are on, since
+   --safe-mode loads a plugin but will not execute its hooks. */
+static const char *shunt_plugin_dir(const struct session *s)
+{
+    static char path[4300];
+
+    if (!s->customizations || !settings_get_int(SETTING_SHUNT, 0))
+        return NULL;
+
+    char config[4096];
+    if (!path_config_dir(config, sizeof config))
+        return NULL;
+    snprintf(path, sizeof path, "%s/plugins/shunt", config);
+    return path;
+}
+
 static Backend *agent(struct session *s)
 {
     if (s->agent)
@@ -820,6 +837,7 @@ static Backend *agent(struct session *s)
     o.fork_session = s->fork_session;
     o.no_browser_login = s->no_browser_login;
     o.chrome = settings_get_int(SETTING_CHROME, 0);
+    o.plugin_dir = shunt_plugin_dir(s);
 
     const char *note = image_available()
         ? "This conversation is displayed in a terminal that renders images inline. "
@@ -896,6 +914,7 @@ int session_switch_backend(struct session *s, const char *backend)
     o.permission_mode = s->permission;
     o.no_browser_login = s->no_browser_login;
     o.chrome = settings_get_int(SETTING_CHROME, 0);
+    o.plugin_dir = shunt_plugin_dir(s);
     Backend *replacement = backend_open_ex(&o);
     free(handoff);
     if (!replacement)
