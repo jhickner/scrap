@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 #define KVLOG_MAPS 4
-#define KVLOG_CAP  1024
+#define KVLOG_CAP  4096
 
 struct kvlog_ent {
     char *key;
@@ -42,6 +42,10 @@ static inline void kvlog_clear(struct kvlog_map *m)
     m->mtime = 0;
 }
 
+/* Entries sit in write order, oldest first, so a full map drops the key written
+   longest ago. The file is append-only and last-record-wins, so its tail is the
+   live part -- a map that refused new keys instead would go permanently blind to
+   every record past the cap. */
 static inline int kvlog_upsert(struct kvlog_map *m, const char *key,
                                const char *val)
 {
@@ -52,17 +56,24 @@ static inline int kvlog_upsert(struct kvlog_map *m, const char *key,
         if (!copy)
             return 0;
         free(m->ents[i].val);
-        m->ents[i].val = copy;
+        struct kvlog_ent ent = {m->ents[i].key, copy};
+        memmove(&m->ents[i], &m->ents[i + 1],
+                (size_t)(m->n - i - 1) * sizeof *m->ents);
+        m->ents[m->n - 1] = ent;
         return 1;
     }
-    if (m->n >= KVLOG_CAP)
-        return 0;
     char *k = strdup(key);
     char *v = strdup(val);
     if (!k || !v) {
         free(k);
         free(v);
         return 0;
+    }
+    if (m->n >= KVLOG_CAP) {
+        free(m->ents[0].key);
+        free(m->ents[0].val);
+        memmove(&m->ents[0], &m->ents[1], (size_t)(m->n - 1) * sizeof *m->ents);
+        m->n--;
     }
     m->ents[m->n].key = k;
     m->ents[m->n].val = v;
@@ -187,8 +198,12 @@ static inline int kvlog_append(const char *path, const char *key,
     if (left != 0 || n <= 0)
         return 0;
 
-    if (value && *value)
-        kvlog_upsert(m, key, value);
+    /* The row is on disk. If the map could not take it, leave the map stale so
+       the next read reloads the file rather than answering without it. */
+    if (value && *value && !kvlog_upsert(m, key, value)) {
+        m->loaded = 0;
+        return 1;
+    }
     struct stat st;
     if (stat(path, &st) == 0)
         m->mtime = st.st_mtime;
