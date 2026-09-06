@@ -64,6 +64,9 @@ struct sessionpresent_report {
     int turns;
     long context_tokens;
     long context_window;
+    long tokens_in;
+    long tokens_out;
+    long tokens_cached;
     double cost;
 };
 

@@ -503,6 +503,16 @@ void sessionpresent_report(const struct sessionpresent_report *r)
     ui_note("  turns    %d", r->turns);
     if (r->context_window > 0)
         ui_note("  context  %s / %s", used, window);
+    if (r->tokens_in > 0 || r->tokens_out > 0) {
+        char in[32], out[32], cached[32];
+        text_humanize(r->tokens_in, in, sizeof in);
+        text_humanize(r->tokens_out, out, sizeof out);
+        text_humanize(r->tokens_cached, cached, sizeof cached);
+        if (r->tokens_cached > 0)
+            ui_note("  tokens   %s in (%s cached) / %s out", in, cached, out);
+        else
+            ui_note("  tokens   %s in / %s out", in, out);
+    }
     if (r->cost > 0 || r->auth)
         ui_note("  cost     $%.4f%s", r->cost,
                 r->auth && !strcmp(r->auth, "subscription login")

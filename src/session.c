@@ -64,6 +64,9 @@ struct session {
     int      turns;
     double   cost_usd;
     long     tokens_in, tokens_out;
+    /* The cache-read share of tokens_in. Broken out because it is billed at a
+       fraction of fresh input, so the two move very differently. */
+    long     tokens_cached;
     long     context_tokens;
     long     context_window;
     int      quiet;
@@ -941,7 +944,7 @@ int session_switch_backend(struct session *s, const char *backend)
     }
     s->turns = 0;
     s->cost_usd = 0;
-    s->tokens_in = s->tokens_out = 0;
+    s->tokens_in = s->tokens_out = s->tokens_cached = 0;
     s->context_tokens = 0;
     s->context_window = 0;
     retire(previous);
@@ -1296,7 +1299,7 @@ static void reset_turns(struct session *s, int flags)
 {
     s->turns = 0;
     s->cost_usd = 0;
-    s->tokens_in = s->tokens_out = 0;
+    s->tokens_in = s->tokens_out = s->tokens_cached = 0;
     s->context_tokens = 0;
     if (flags & RESET_WORKDIR)
         replace(&s->workdir, NULL);
@@ -1650,6 +1653,7 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     charge_turn(s, &m);
     s->tokens_in += m.input_tokens + m.cache_read_tokens + m.cache_creation_tokens;
     s->tokens_out += m.output_tokens;
+    s->tokens_cached += m.cache_read_tokens;
 
     if (m.context_window > 0)
         s->context_window = m.context_window;
@@ -2079,6 +2083,9 @@ void session_report(const struct session *s)
         .turns = s->turns,
         .context_tokens = s->context_tokens,
         .context_window = s->context_window,
+        .tokens_in = s->tokens_in,
+        .tokens_out = s->tokens_out,
+        .tokens_cached = s->tokens_cached,
         .cost = s->cost_usd,
     };
     sessionpresent_report(&r);
