@@ -129,6 +129,14 @@ static void row_location(const struct session *s, struct row *r)
                 g->untracked ? "?" : "");
     if (percent >= 0)
         row_add(r, UI_DIM, " \xc2\xb7 %d%%", percent);
+
+    long in = session_tokens_in(s), out = session_tokens_out(s);
+    if (in > 0 || out > 0) {
+        char got[32], sent[32];
+        text_humanize(in, got, sizeof got);
+        text_humanize(out, sent, sizeof sent);
+        row_add(r, UI_DIM, " \xc2\xb7 %s in / %s out", got, sent);
+    }
 }
 
 static void hud_fill(struct hud *h, const struct session *s)
