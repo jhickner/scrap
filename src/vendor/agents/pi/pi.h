@@ -40,6 +40,7 @@ typedef struct {
     int no_session;            /* nonzero -> pass --no-session. Also the
                                   default when opts is NULL.                   */
     int no_tools;              /* nonzero -> pass --no-tools                   */
+    int no_extensions;         /* nonzero -> pass --no-extensions              */
 } pi_opts;
 
 /* Start a persistent `pi --mode rpc` process. Returns NULL only on a local
@@ -499,7 +500,7 @@ pi_client *pi_start(const pi_opts *opts) {
             argv[n++] = "--no-session";
         }
         if (o.no_tools) argv[n++] = "--no-tools";
-        argv[n++] = "--no-extensions";
+        if (o.no_extensions) argv[n++] = "--no-extensions";
         argv[n++] = "--no-prompt-templates";
         argv[n++] = "--no-themes";
         argv[n++] = "--no-context-files";
