@@ -2020,6 +2020,11 @@ long session_tokens_out(const struct session *s)
     return s ? s->tokens_out : 0;
 }
 
+long session_tokens_cached(const struct session *s)
+{
+    return s ? s->tokens_cached : 0;
+}
+
 int session_context_percent(const struct session *s)
 {
     long used = s->context_tokens, window = s->context_window;

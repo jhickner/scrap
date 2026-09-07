@@ -131,11 +131,17 @@ static void row_location(const struct session *s, struct row *r)
         row_add(r, UI_DIM, " \xc2\xb7 %d%%", percent);
 
     long in = session_tokens_in(s), out = session_tokens_out(s);
+    long cached = session_tokens_cached(s);
     if (in > 0 || out > 0) {
-        char got[32], sent[32];
+        char got[32], sent[32], hit[32];
         text_humanize(in, got, sizeof got);
         text_humanize(out, sent, sizeof sent);
-        row_add(r, UI_DIM, " \xc2\xb7 %s in / %s out", got, sent);
+        text_humanize(cached, hit, sizeof hit);
+        if (cached > 0)
+            row_add(r, UI_DIM, " \xc2\xb7 %s in (%s cached) / %s out",
+                    got, hit, sent);
+        else
+            row_add(r, UI_DIM, " \xc2\xb7 %s in / %s out", got, sent);
     }
 }
 
