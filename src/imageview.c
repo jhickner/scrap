@@ -122,12 +122,10 @@ int imageview_open(int at)
         int done = 0;
         switch (ev.key) {
         case TK_LEFT:
-        case TK_SCROLL_UP:
             step(&v, -1);
             break;
 
         case TK_RIGHT:
-        case TK_SCROLL_DOWN:
             step(&v, 1);
             break;
 
@@ -153,6 +151,10 @@ int imageview_open(int at)
         free(ev.text);
         if (done)
             break;
+        /* a held key queues more steps than the decoder can keep up with:
+           paint the one the last of them lands on */
+        if (tty_input_waiting())
+            continue;
         chrome_paint();
     }
 
