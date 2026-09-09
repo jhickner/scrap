@@ -34,6 +34,9 @@ void voice_turn_begin(struct session *s);
 void voice_turn_done(struct session *s);
 void voice_turn_cancel(struct session *s);
 void voice_refocus(void);
+/* send the in-progress utterance and anything queued to this session, so
+   leaving the pane does not drop what was already heard */
+void voice_commit(struct session *s);
 /* drop the in-progress utterance: clear the preview and do not submit it.
    1 if there was something to drop */
 int  voice_drop(void);

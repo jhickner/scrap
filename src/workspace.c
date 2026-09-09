@@ -249,6 +249,8 @@ void workspace_show(int index)
     if (index < 0 || index >= ntabs || index == cur)
         return;
 
+    voice_commit(tabs[cur].s);
+
     ui_flush();
     viewport_stash(tabs[cur].screen);
     viewport_adopt(tabs[index].screen);

@@ -1,5 +1,6 @@
 #include "voice.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,6 +8,7 @@
 #include <unistd.h>
 
 #include "app.h"
+#include "prompt.h"
 #include "session.h"
 #include "settings.h"
 #include "status.h"
@@ -120,6 +122,94 @@ static int is_stale(const char *text)
     return 1;
 }
 
+static int is_stop_command(const char *text)
+{
+    char words[256];
+    size_t n = 0;
+    int gap = 1;
+
+    if (!text)
+        return 0;
+    for (const unsigned char *p = (const unsigned char *)text; *p && n + 1 < sizeof words; p++) {
+        unsigned char c = *p;
+        if (c >= 'A' && c <= 'Z')
+            c = (unsigned char)(c - 'A' + 'a');
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+            if (gap && n)
+                words[n++] = ' ';
+            if (n + 1 >= sizeof words)
+                break;
+            words[n++] = (char)c;
+            gap = 0;
+        } else if (c != '\'') {
+            gap = 1;
+        }
+    }
+    words[n] = '\0';
+    if (!n)
+        return 0;
+
+    static const char *pad[] = {
+        "okay", "ok", "please", "now", "hey", "um", "uh", "just",
+    };
+    char *start = words;
+    for (;;) {
+        int matched = 0;
+        for (int i = 0; i < (int)(sizeof pad / sizeof pad[0]); i++) {
+            size_t len = strlen(pad[i]);
+            if (!strncmp(start, pad[i], len) && (start[len] == ' ' || !start[len])) {
+                start += len;
+                if (*start == ' ')
+                    start++;
+                matched = 1;
+                break;
+            }
+        }
+        if (!matched)
+            break;
+    }
+    char *end = start + strlen(start);
+    for (;;) {
+        int matched = 0;
+        while (end > start && end[-1] == ' ')
+            *--end = '\0';
+        for (int i = 0; i < (int)(sizeof pad / sizeof pad[0]); i++) {
+            size_t len = strlen(pad[i]);
+            if (end - start >= (ptrdiff_t)len && !memcmp(end - len, pad[i], len) &&
+                (end - start == (ptrdiff_t)len || end[-len - 1] == ' ')) {
+                end -= len;
+                *end = '\0';
+                matched = 1;
+                break;
+            }
+        }
+        if (!matched)
+            break;
+    }
+    if (!*start)
+        return 0;
+
+    static const char *stops[] = {
+        "stop", "wait", "quiet", "be quiet", "shush", "shh", "hush", "stop talking",
+        "stop it", "enough", "thats enough", "shut up", "silence", "hold on",
+        "one second",
+    };
+    for (int i = 0; i < (int)(sizeof stops / sizeof stops[0]); i++)
+        if (!strcmp(start, stops[i]))
+            return 1;
+    return 0;
+}
+
+static void send_line(struct session *s, const char *line)
+{
+    int tab = workspace_index_of(s);
+    if (tab < 0 || !line || !*line)
+        return;
+    if (!session_turn_running(s))
+        prompt_echo_message(line);
+    workspace_send(tab, line, NULL);
+}
+
 static void discard_speech(const char *text)
 {
     remember_stale(text);
@@ -169,6 +259,12 @@ static void on_event(void *ud, const char *kind, const char *text)
             return;
         }
         forget_stale();
+        if (text && *text && is_stop_command(text)) {
+            struct session *s = workspace_current();
+            if (s && session_turn_running(s))
+                session_interrupt(s);
+            return;
+        }
         if (text && *text)
             enqueue(text);
     } else if (!strcmp(kind, "interrupt")) {
@@ -459,6 +555,32 @@ void voice_refocus(void)
     macos_voice_busy(voice, s && session_turn_running(s));
 }
 
+void voice_commit(struct session *s)
+{
+    if (!voice || !s)
+        return;
+    drain();
+    if (draft[0] && !is_stale(draft)) {
+        remember_stale(draft);
+        if (is_stop_command(draft)) {
+            if (session_turn_running(s))
+                session_interrupt(s);
+        } else {
+            enqueue(draft);
+        }
+    }
+    hearing = 0;
+    heard("");
+    while (nqueue > 0) {
+        char *line = queue[0];
+        for (int i = 1; i < nqueue; i++)
+            queue[i - 1] = queue[i];
+        nqueue--;
+        send_line(s, line);
+        free(line);
+    }
+}
+
 int voice_drop(void)
 {
     if (!voice || !armed)
@@ -479,15 +601,14 @@ void voice_arm(int on)
     on = on ? 1 : 0;
     if (on == armed)
         return;
-    if (!on && draft[0])
-        remember_stale(draft);
+    if (!on)
+        voice_commit(workspace_current());
     armed = on;
     if (!voice)
         return;
     dropping = 0;
     drop_until = 0;
     hearing = 0;
-    clear_queue();
     heard("");
     macos_voice_focus(voice, armed);
     if (armed) {
