@@ -7,11 +7,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #define WSD_IMPLEMENTATION
 #include "vendor/wsd.h"
 #include "vendor/cJSON.h"
+#include "vendor/httpd.h"
 
 #include "app.h"
 #include "bash.h"
@@ -26,6 +29,7 @@
 #include "tasks.h"
 #include "text.h"
 #include "tgbridge.h"
+#include "transcript.h"
 #include "toolstyle.h"
 #include "tty.h"
 #include "ui.h"
@@ -35,6 +39,8 @@
 #define INBOX_MAX 32
 #define MENU_MAX  16
 #define PORT_DEFAULT 8790
+#define HISTORY_TURNS 6
+#define HISTORY_BYTES 6000
 
 enum { MIRROR_OFF = 0, MIRROR_REMOTE = 1, MIRROR_ALL = 2 };
 enum { ITEM_LINE = 0, ITEM_PICK = 1, ITEM_HELLO = 2 };
@@ -53,6 +59,9 @@ struct relay_menu {
 static struct {
     struct tgbridge bridge;
     wsd            *ws;
+    httpd          *files;
+    char            files_dir[4200];
+    char            files_base[160];
     int             active;
     int             mirror;
     int             wake[2];
@@ -219,6 +228,61 @@ static void send_busy(int on)
     send_json(o);
 }
 
+static void add_clipped(cJSON *o, const char *key, const char *text, size_t max)
+{
+    if (!text)
+        text = "";
+    if (strlen(text) <= max) {
+        cJSON_AddStringToObject(o, key, text);
+        return;
+    }
+    char *cut = malloc(max + 2);
+    if (!cut)
+        return;
+    snprintf(cut, max + 2, "%.*s\u2026", (int)max, text);
+    cJSON_AddStringToObject(o, key, cut);
+    free(cut);
+}
+
+static void send_history(struct session *s)
+{
+    const struct transcript *t = session_transcript(s);
+    cJSON *o = frame("history");
+    cJSON *turns = cJSON_AddArrayToObject(o, "turns");
+    size_t from = t && t->count > HISTORY_TURNS ? t->count - HISTORY_TURNS : 0;
+    for (size_t i = from; t && i < t->count; i++) {
+        cJSON *it = cJSON_CreateObject();
+        add_clipped(it, "user", t->turns[i].user, HISTORY_BYTES);
+        add_clipped(it, "assistant", t->turns[i].assistant, HISTORY_BYTES);
+        if (t->turns[i].interrupted)
+            cJSON_AddBoolToObject(it, "stopped", 1);
+        cJSON_AddItemToArray(turns, it);
+    }
+    send_json(o);
+}
+
+static void send_tabs(void)
+{
+    cJSON *o = frame("tabs");
+    cJSON *items = cJSON_AddArrayToObject(o, "items");
+    int n = workspace_count();
+    for (int i = 0; i < n; i++) {
+        struct session *s = workspace_at(i);
+        const char *title = session_title(s);
+        if (!title || !*title)
+            title = tgbridge_dir_name(session_cwd(s));
+        cJSON *it = cJSON_CreateObject();
+        cJSON_AddNumberToObject(it, "index", i + 1);
+        cJSON_AddStringToObject(it, "label", title);
+        cJSON_AddStringToObject(it, "cwd", session_cwd(s));
+        cJSON_AddBoolToObject(it, "current", s == current_session());
+        cJSON_AddBoolToObject(it, "busy", session_busy(s));
+        cJSON_AddBoolToObject(it, "unseen", session_unseen(s));
+        cJSON_AddItemToArray(items, it);
+    }
+    send_json(o);
+}
+
 static void send_hello(void)
 {
     struct session *s = current_session();
@@ -231,8 +295,46 @@ static void send_hello(void)
         cJSON_AddStringToObject(o, "backend", session_backend(s));
     }
     send_json(o);
+    if (s)
+        send_history(s);
+    send_tabs();
     rt.busy_sent = -1;
     send_busy(session_busy(s));
+}
+
+/* Images the reply points at (![](/abs/path)) are published as links: the
+   file is linked into a private directory the file server roots at. */
+static void send_images(const char *text)
+{
+    if (!rt.files || !text)
+        return;
+    for (const char *p = text; (p = strstr(p, "![")) != NULL;) {
+        const char *open = strstr(p, "](");
+        if (!open)
+            return;
+        open += 2;
+        const char *close = strchr(open, ')');
+        p = open;
+        if (!close || *open != '/' || close - open > 1023)
+            continue;
+        char path[1024];
+        snprintf(path, sizeof path, "%.*s", (int)(close - open), open);
+        if (access(path, R_OK) != 0)
+            continue;
+        const char *base = strrchr(path, '/');
+        base = base ? base + 1 : path;
+        char name[300], link[4600], url[5000];
+        snprintf(name, sizeof name, "%ld-%s", (long)time(NULL), base);
+        snprintf(link, sizeof link, "%s/%s", rt.files_dir, name);
+        if (symlink(path, link) != 0 && errno != EEXIST)
+            continue;
+        snprintf(url, sizeof url, "%s/%s", rt.files_base, name);
+        cJSON *o = frame("image");
+        cJSON_AddStringToObject(o, "url", url);
+        cJSON_AddStringToObject(o, "path", path);
+        send_json(o);
+        p = close;
+    }
 }
 
 /* ---- menus (tabs, resume) ----------------------------------------------- */
@@ -394,6 +496,7 @@ static void on_event(void *ud, struct session *s, const backend_event *ev)
         break;
     case BACKEND_EV_ASSISTANT:
         send_reply(ev->text);
+        send_images(ev->text);
         break;
     case BACKEND_EV_WARNING:
         send_note(ev->text);
@@ -663,11 +766,31 @@ static void note_up(const char *fmt, ...)
     ui_flush();
 }
 
+static void files_start(void)
+{
+    if (!path_config_subdir(rt.files_dir, sizeof rt.files_dir, "relay-files"))
+        return;
+    mkdir(rt.files_dir, 0700);
+    int port = atoi(cfg_get("files_port", "0"));
+    if (port <= 0)
+        port = rt.port + 1;
+    rt.files = httpd_start(rt.files_dir, rt.bind[0] ? rt.bind : NULL, port, rt.token);
+    if (!rt.files) {
+        note_up("relay: no file server on %s:%d (port taken?)", rt.bind[0] ? rt.bind : "*", port);
+        return;
+    }
+    snprintf(rt.files_base, sizeof rt.files_base, "http://%s:%d/%s",
+             rt.bind[0] ? rt.bind : "127.0.0.1", port, rt.token);
+}
+
 static void cleanup(void)
 {
     rt.active = 0;
     wsd_stop(rt.ws);
     rt.ws = NULL;
+    httpd_stop(rt.files);
+    rt.files = NULL;
+    rt.files_base[0] = '\0';
     session_remove_listener(on_event, NULL);
     if (rt.wake[0] >= 0)
         close(rt.wake[0]);
@@ -702,7 +825,8 @@ int relay_start(struct session *s)
         return 0;
     }
     snprintf(rt.token, sizeof rt.token, "%s", token);
-    rt.port = atoi(cfg_get("port", "0"));
+    const char *port_env = getenv("MUX_RELAY_PORT");
+    rt.port = atoi(port_env && *port_env ? port_env : cfg_get("port", "0"));
     if (rt.port <= 0)
         rt.port = PORT_DEFAULT;
     const char *bind = cfg_get("bind", NULL);
@@ -746,6 +870,7 @@ int relay_start(struct session *s)
                 rt.bind[0] ? rt.bind : "*", rt.port);
         goto fail;
     }
+    files_start();
     restart_flag("--relay");
     rt.active = 1;
     note_up("relay on ws://%s:%d", rt.bind[0] ? rt.bind : "*", rt.port);

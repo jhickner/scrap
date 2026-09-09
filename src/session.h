@@ -8,6 +8,7 @@
 #include "vendor/agents/backend.h"
 
 struct session;
+struct transcript;
 struct task;
 struct tasktab;
 
@@ -231,6 +232,7 @@ static inline int mux_argv(char **out, int max, unsigned what,
 
 int session_argv(const struct session *s, char **out, int max, unsigned what);
 const char *session_last_reply(const struct session *s);
+const struct transcript *session_transcript(const struct session *s);
 const char *session_last_error(const struct session *s);
 int         session_last_interrupted(const struct session *s);
 

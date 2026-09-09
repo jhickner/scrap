@@ -965,6 +965,11 @@ int session_switch_backend(struct session *s, const char *backend)
 
 void session_set_quiet(struct session *s, int quiet) { s->quiet = quiet; }
 
+const struct transcript *session_transcript(const struct session *s)
+{
+    return s ? &s->transcript : NULL;
+}
+
 int session_recent_seq(const struct session *s)
 {
     return s ? s->recent_n : 0;

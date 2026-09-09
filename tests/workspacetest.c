@@ -13,6 +13,7 @@
 #include "sessionview.h"
 #include "sidechannel.h"
 #include "status.h"
+#include "relay.h"
 #include "tg.h"
 #include "ui.h"
 #include "viewport.h"
