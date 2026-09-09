@@ -74,6 +74,7 @@ static struct {
     int             from_chat;
     int             repeat_task;
     int             busy_sent;
+    double          mirrored_turn;
     struct inbox_item inbox[INBOX_MAX];
     int             inbox_head;
     int             inbox_count;
@@ -452,7 +453,7 @@ static const char *short_path(const char *p)
 
 static void send_tool_line(const backend_event *ev)
 {
-    char label[48], raw[600], one[200];
+    char label[48], raw[600];
     toolstyle_label(label, sizeof label, ev->name ? ev->name : "tool");
     cJSON *in = ev->input_json ? cJSON_Parse(ev->input_json) : NULL;
     const char *v = in ? view_tool_arg_value(in) : ev->arg;
@@ -461,13 +462,9 @@ static void send_tool_line(const backend_event *ev)
         v = short_path(v);
     text_trunc(raw, sizeof raw, v ? v : "");
     cJSON_Delete(in);
-    text_trunc(one, sizeof one, raw);
-    for (size_t i = 0; one[i]; i++)
-        if (one[i] == '\n' || one[i] == '\r' || one[i] == '\t')
-            one[i] = ' ';
     cJSON *o = frame("tool");
     cJSON_AddStringToObject(o, "name", label);
-    cJSON_AddStringToObject(o, "text", one);
+    cJSON_AddStringToObject(o, "text", raw);
     send_json(o);
 }
 
@@ -506,12 +503,26 @@ static void on_event(void *ud, struct session *s, const backend_event *ev)
     }
 }
 
+/* A turn typed at the terminal shows on the phone as the line it was. */
+static void mirror_prompt(struct session *s)
+{
+    if (!s || rt.from_chat || !mirroring() || !session_busy(s))
+        return;
+    double started = session_turn_started(s);
+    if (started == rt.mirrored_turn)
+        return;
+    rt.mirrored_turn = started;
+    send_text("user", session_prompt(s));
+}
+
 int relay_poll(struct session *live)
 {
     if (!rt.active)
         return 0;
-    if (live == current_session() || !live)
+    if (live == current_session() || !live) {
+        mirror_prompt(current_session());
         send_busy(session_busy(current_session()));
+    }
     if (rt.stop_wanted && (!live || live == current_session())) {
         rt.stop_wanted = 0;
         return 1;
@@ -609,6 +620,7 @@ static int bridge_command(const char *line)
     }
     if ((arg = arg_of(line, "/close")) != NULL) {
         tgbridge_close_tab(&rt.bridge, *arg ? atoi(arg) - 1 : workspace_index());
+        send_tabs();
         return 1;
     }
     if ((arg = arg_of(line, "/resume")) != NULL) {
@@ -707,6 +719,7 @@ static void run_line(char *line)
 
 done:
     rt.from_chat = 0;
+    rt.mirrored_turn = session_turn_started(current_session());
     frontend_pop();
     free(line);
     relay_poll(NULL);

@@ -2036,6 +2036,8 @@ const char *session_last_error(const struct session *s)
     return s && s->agent ? s->agent->last_error(s->agent) : NULL;
 }
 const char *session_last_reply(const struct session *s) { return s->last_reply; }
+const char *session_prompt(const struct session *s) { return s ? s->prompt : NULL; }
+double session_turn_started(const struct session *s) { return s ? s->started : 0; }
 const char *session_failed_prompt(const struct session *s)
 {
     return s ? s->failed_prompt : NULL;
