@@ -1,10 +1,8 @@
 #include "voice.h"
 
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/file.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -23,44 +21,34 @@
 
 #define READY_WAIT_MS 30000
 #define LINE_MAX_QUEUE 16
+#define DROP_HOLD_MS 700
 
 static macos_voice *voice;
 static int          ready;
 static int          speaking;
+static int          speak = 1;
+static int          armed = 1;
+static int          dropping;
+static long         drop_until;
+static int          hearing;
+/* draft heard while unarmed or dropping; the helper can re-emit it after
+   focus, and that residue must not preview or send */
+static char         stale[512];
+static int          stale_hit;
+static char         draft[512];
 static char         failure[256];
 static char        *queue[LINE_MAX_QUEUE];
 static int          nqueue;
 static char         label[32];
-static int          lock_fd = -1;
-
-/* One microphone: a second mux would hear, and answer, the same words. */
-static int take_lock(void)
-{
-    char dir[4096], path[4200];
-    if (!path_config_dir(dir, sizeof dir))
-        return 1;
-    snprintf(path, sizeof path, "%s/voice.lock", dir);
-    lock_fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-    if (lock_fd < 0)
-        return 1;
-    if (flock(lock_fd, LOCK_EX | LOCK_NB) == 0)
-        return 1;
-    close(lock_fd);
-    lock_fd = -1;
-    return 0;
-}
-
-static void drop_lock(void)
-{
-    if (lock_fd >= 0)
-        close(lock_fd);
-    lock_fd = -1;
-}
 static void       (*heard_fn)(void *ud, const char *text);
 static void        *heard_ud;
 
 static void heard(const char *text)
 {
+    if (text && *text)
+        snprintf(draft, sizeof draft, "%s", text);
+    else
+        draft[0] = '\0';
     if (heard_fn)
         heard_fn(heard_ud, text);
 }
@@ -72,18 +60,123 @@ static void enqueue(const char *text)
     queue[nqueue++] = strdup(text);
 }
 
+static void clear_queue(void)
+{
+    for (int i = 0; i < nqueue; i++)
+        free(queue[i]);
+    nqueue = 0;
+}
+
+static long now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+}
+
+static void hold_drop(void)
+{
+    dropping = 1;
+    drop_until = now_ms() + DROP_HOLD_MS;
+}
+
+static int still_dropping(void)
+{
+    if (!dropping)
+        return 0;
+    if (now_ms() < drop_until)
+        return 1;
+    dropping = 0;
+    return 0;
+}
+
+static void remember_stale(const char *text)
+{
+    if (text && *text)
+        snprintf(stale, sizeof stale, "%s", text);
+}
+
+static void forget_stale(void)
+{
+    stale[0] = '\0';
+    stale_hit = 0;
+}
+
+static int same_draft(const char *a, const char *b)
+{
+    if (!a || !b || !*a || !*b)
+        return 0;
+    size_t na = strlen(a), nb = strlen(b);
+    if (na <= nb)
+        return strncmp(a, b, na) == 0;
+    return strncmp(b, a, nb) == 0;
+}
+
+static int is_stale(const char *text)
+{
+    if (!same_draft(stale, text))
+        return 0;
+    stale_hit = 1;
+    return 1;
+}
+
+static void discard_speech(const char *text)
+{
+    remember_stale(text);
+    hearing = 0;
+    if (armed)
+        heard("");
+}
+
 static void on_event(void *ud, const char *kind, const char *text)
 {
     (void)ud;
     if (!strcmp(kind, "ready")) {
         ready = 1;
     } else if (!strcmp(kind, "partial")) {
-        heard(text ? text : "");
-    } else if (!strcmp(kind, "final")) {
+        if (!armed) {
+            discard_speech(text);
+            return;
+        }
+        if (text && *text && (still_dropping() || is_stale(text))) {
+            if (still_dropping())
+                hold_drop();
+            discard_speech(text);
+            return;
+        }
+        if (text && *text) {
+            forget_stale();
+            hearing = 1;
+            heard(text);
+            return;
+        }
+        hearing = 0;
         heard("");
+        if (stale_hit)
+            forget_stale();
+    } else if (!strcmp(kind, "final")) {
+        if (!armed) {
+            discard_speech(text);
+            return;
+        }
+        hearing = 0;
+        heard("");
+        if (still_dropping() || is_stale(text)) {
+            if (still_dropping())
+                hold_drop();
+            discard_speech(text);
+            forget_stale();
+            return;
+        }
+        forget_stale();
         if (text && *text)
             enqueue(text);
     } else if (!strcmp(kind, "interrupt")) {
+        if (!armed)
+            return;
+        clear_queue();
+        hearing = 0;
+        heard("");
         struct session *s = workspace_current();
         if (s && session_turn_running(s))
             session_interrupt(s);
@@ -91,6 +184,8 @@ static void on_event(void *ud, const char *kind, const char *text)
         speaking = text && *text == '1';
         status_touch();
     } else if (!strcmp(kind, "error")) {
+        if (text && !strncmp(text, "unknown command:", 16))
+            return;
         snprintf(failure, sizeof failure, "%s", text ? text : "helper failed");
     }
 }
@@ -103,6 +198,8 @@ static void on_session_event(void *ud, struct session *s, const backend_event *e
     if (ev->parent && *ev->parent)
         return;
     if (s != workspace_current())
+        return;
+    if (!speak || !armed)
         return;
     macos_voice_say(voice, ev->text);
 }
@@ -124,13 +221,6 @@ static void drain(void)
     }
 }
 
-static long now_ms(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
-}
-
 static void wait_tick(void *ud)
 {
     (void)ud;
@@ -141,12 +231,14 @@ int voice_start(char *err, size_t size)
 {
     if (voice)
         return 1;
-    if (!take_lock()) {
-        snprintf(err, size, "already on in another mux");
-        return 0;
-    }
     ready = 0;
     speaking = 0;
+    armed = 1;
+    dropping = 0;
+    drop_until = 0;
+    hearing = 0;
+    forget_stale();
+    draft[0] = '\0';
     failure[0] = '\0';
 
     status_resume();
@@ -162,13 +254,13 @@ int voice_start(char *err, size_t size)
         .voice       = settings_get_str(SETTING_VOICE_NAME, NULL),
         .rate        = atof(settings_get_str(SETTING_VOICE_RATE, "0")),
         .silence     = atof(settings_get_str(SETTING_VOICE_SILENCE, "0")),
+        .volume      = voice_volume() / 100.0,
         .input       = settings_get_str(SETTING_VOICE_INPUT, NULL),
         .tick        = wait_tick,
     };
     voice = macos_voice_start(&opts, on_event, NULL);
     if (!voice) {
         snprintf(err, size, "could not launch %s", opts.helper_path);
-        drop_lock();
         if (owned)
             status_end();
         return 0;
@@ -194,9 +286,10 @@ int voice_start(char *err, size_t size)
         snprintf(err, size, "%s", failure[0] ? failure : "helper is still starting");
         macos_voice_stop(voice);
         voice = NULL;
-        drop_lock();
         return 0;
     }
+    macos_voice_focus(voice, armed);
+    macos_voice_volume(voice, voice_volume() / 100.0);
     session_set_listener(on_session_event, NULL);
     return 1;
 }
@@ -206,19 +299,71 @@ void voice_stop(void)
     if (!voice)
         return;
     session_set_listener(NULL, NULL);
+    macos_voice_focus(voice, 0);
     macos_voice_stop(voice);
     voice = NULL;
-    drop_lock();
     ready = 0;
     speaking = 0;
-    for (int i = 0; i < nqueue; i++)
-        free(queue[i]);
-    nqueue = 0;
+    armed = 1;
+    dropping = 0;
+    drop_until = 0;
+    hearing = 0;
+    forget_stale();
+    draft[0] = '\0';
+    clear_queue();
     heard("");
     status_touch();
 }
 
 int voice_on(void) { return voice != NULL; }
+
+void voice_set_speak(int on)
+{
+    speak = on ? 1 : 0;
+    if (voice && !speak)
+        macos_voice_mute(voice);
+    status_touch();
+}
+
+int voice_speak(void) { return speak; }
+
+static int clamp_volume(int n)
+{
+    if (n < 0)
+        return 0;
+    if (n > 100)
+        return 100;
+    return n;
+}
+
+int voice_volume(void)
+{
+    return clamp_volume(settings_get_int(SETTING_VOICE_VOLUME, VOICE_VOLUME_DEFAULT));
+}
+
+void voice_set_volume(int percent)
+{
+    percent = clamp_volume(percent);
+    settings_set_int(SETTING_VOICE_VOLUME, percent);
+    if (voice)
+        macos_voice_volume(voice, percent / 100.0);
+}
+
+int voice_apply(int on, int speak_on, char *err, size_t size)
+{
+    if (!on) {
+        if (voice)
+            voice_stop();
+        settings_set_int(SETTING_VOICE, 0);
+        return 1;
+    }
+    voice_set_speak(speak_on);
+    settings_set_int(SETTING_VOICE_SPEAK, speak);
+    if (!voice && !voice_start(err, size))
+        return 0;
+    settings_set_int(SETTING_VOICE, 1);
+    return 1;
+}
 
 void voice_on_heard(void (*fn)(void *ud, const char *text), void *ud)
 {
@@ -232,6 +377,10 @@ const char *voice_label(void)
         return NULL;
     if (!ready)
         snprintf(label, sizeof label, "voice starting");
+    else if (!armed)
+        snprintf(label, sizeof label, "voice paused");
+    else if (!speak)
+        snprintf(label, sizeof label, "voice listen");
     else
         snprintf(label, sizeof label, "voice%s", speaking ? " speaking" : "");
     return label;
@@ -251,6 +400,7 @@ int voice_pending(void)
     if (!voice)
         return 0;
     drain();
+    still_dropping();
     return nqueue > 0;
 }
 
@@ -276,10 +426,22 @@ void voice_turn_begin(struct session *s)
 
 void voice_turn_done(struct session *s)
 {
-    if (!voice || s != workspace_current())
+    if (!voice)
         return;
-    macos_voice_finish(voice);
-    macos_voice_busy(voice, 0);
+    if (s == workspace_current()) {
+        macos_voice_finish(voice);
+        macos_voice_busy(voice, 0);
+    }
+    if (armed || !s || session_last_interrupted(s))
+        return;
+    if (!settings_get_int(SETTING_VOICE_COMPLETE, 1))
+        return;
+    const char *name = session_title(s);
+    if (!name || !*name)
+        name = APP_NAME;
+    char line[192];
+    snprintf(line, sizeof line, "%s complete", name);
+    macos_voice_announce(voice, line);
 }
 
 void voice_turn_cancel(struct session *s)
@@ -295,6 +457,44 @@ void voice_refocus(void)
     macos_voice_cancel(voice);
     struct session *s = workspace_current();
     macos_voice_busy(voice, s && session_turn_running(s));
+}
+
+int voice_drop(void)
+{
+    if (!voice || !armed)
+        return 0;
+    int had = nqueue > 0 || hearing || dropping;
+    hold_drop();
+    clear_queue();
+    hearing = 0;
+    forget_stale();
+    heard("");
+    drain();
+    macos_voice_cancel(voice);
+    return had;
+}
+
+void voice_arm(int on)
+{
+    on = on ? 1 : 0;
+    if (on == armed)
+        return;
+    if (!on && draft[0])
+        remember_stale(draft);
+    armed = on;
+    if (!voice)
+        return;
+    dropping = 0;
+    drop_until = 0;
+    hearing = 0;
+    clear_queue();
+    heard("");
+    macos_voice_focus(voice, armed);
+    if (armed) {
+        struct session *s = workspace_current();
+        macos_voice_busy(voice, s && session_turn_running(s));
+    }
+    status_touch();
 }
 
 void voice_mute(void)

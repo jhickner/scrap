@@ -530,22 +530,71 @@ static void do_sticky(struct session *s, const char *arg)
 static void do_voice(struct session *s, const char *arg)
 {
     (void)s;
-    int on = toggle_arg(arg, "on", "off", voice_on(), "/voice");
-    if (on < 0)
-        return;
-    if (!on) {
-        voice_stop();
-        reply_note("voice off");
+    int want, speak;
+
+    if (arg && !strncmp(arg, "complete", 8) && (!arg[8] || arg[8] == ' ')) {
+        const char *rest = arg + 8;
+        while (*rest == ' ')
+            rest++;
+        int on = toggle_arg(*rest ? rest : NULL, "on", "off",
+                            settings_get_int(SETTING_VOICE_COMPLETE, 1),
+                            "/voice complete");
+        if (on < 0)
+            return;
+        settings_set_int(SETTING_VOICE_COMPLETE, on);
+        reply_note("voice complete %s", on ? "on" : "off");
         return;
     }
-    if (voice_on())
+
+    if (arg && !strncmp(arg, "volume", 6) && (!arg[6] || arg[6] == ' ')) {
+        const char *rest = arg + 6;
+        while (*rest == ' ')
+            rest++;
+        if (!*rest) {
+            reply_note("voice volume %d", voice_volume());
+            return;
+        }
+        char *end;
+        long n = strtol(rest, &end, 10);
+        if (*end == '%')
+            end++;
+        while (*end == ' ')
+            end++;
+        if (*end || n < 0 || n > 100) {
+            reply_error("/voice volume takes a number from 0 to 100");
+            return;
+        }
+        voice_set_volume((int)n);
+        reply_note("voice volume %d", (int)n);
         return;
+    }
+
+    if (!arg || !*arg) {
+        want = !voice_on();
+        speak = voice_speak();
+    } else if (!strcmp(arg, "off")) {
+        want = 0;
+        speak = voice_speak();
+    } else if (!strcmp(arg, "on")) {
+        want = 1;
+        speak = 1;
+    } else if (!strcmp(arg, "listen")) {
+        want = 1;
+        speak = 0;
+    } else {
+        reply_error("/voice takes on, off, listen, complete, volume, or nothing to flip it");
+        return;
+    }
+
     char err[300];
-    if (!voice_start(err, sizeof err)) {
+    if (!voice_apply(want, speak, err, sizeof err)) {
         reply_error("voice: %s", err);
         return;
     }
-    reply_note("voice on: listening");
+    if (!want)
+        reply_note("voice off");
+    else
+        reply_note(speak ? "voice on: listening" : "voice on: listen only");
 }
 
 static void do_image(struct session *s, const char *arg)
@@ -922,7 +971,7 @@ static const struct cmd COMMANDS[] = {
     {"/tools", "how much of each tool call to show", "[compact|full]", CMD_LIVE,
      do_tools},
     {"/sticky", "float the prompt above the spinner", "[on|off]", CMD_LIVE, do_sticky},
-    {"/voice", "talk instead of typing, and hear replies", "[on|off]", CMD_LIVE, do_voice},
+    {"/voice", "talk instead of typing", "[on|off|listen|complete|volume]", CMD_LIVE, do_voice},
     {"/image", "tallest an inline image may be drawn", "[rows]", CMD_LIVE, do_image},
     {"/permission", "how the CLI gates tool calls", "[mode]", 0, do_permission},
     {"/settings", "show and change every setting", NULL, 0, do_settings},

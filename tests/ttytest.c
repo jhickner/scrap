@@ -303,6 +303,8 @@ static void keys_from_pipe(void)
     expect_ctrl(w, "\x03", 1, 3, "ctrl-c");
     expect_ctrl(w, "\x1b[27;5;99~", 10, 3, "xterm ctrl-c");
     expect_ctrl(w, "\x1b[97;5u", 7, 1, "csi-u ctrl-a");
+    expect_key(w, "\x1b[I", 3, TK_FOCUS_IN, "focus in");
+    expect_key(w, "\x1b[O", 3, TK_FOCUS_OUT, "focus out");
 
     close(w);
 }

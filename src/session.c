@@ -39,6 +39,7 @@
 #include "vendor/agents/backend.h"
 #include "text.h"
 #include "vendor/cJSON.h"
+#include "voice.h"
 
 struct session {
     Backend *agent;
@@ -715,9 +716,13 @@ static int abort_check(void)
         sessionpresent_spin(live->backend, spin_effort(live), session_quiet(live),
                             SESSION_QUIET_SECONDS);
 
+    voice_pending();
+
     int interrupt = session_poll_input();
     if (live && live->abort_hook)
         interrupt |= live->abort_hook(live->abort_ud);
+    if (live && live->abort_request)
+        interrupt = 1;
 
     sidechannel_poll();
     sidechannel_tick();

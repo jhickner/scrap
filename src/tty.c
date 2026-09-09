@@ -15,6 +15,8 @@
 #include "viewport.h"
 
 #define BRACKETED_PASTE_ON  "\x1b[?2004h"
+#define FOCUS_ON            "\x1b[?1004h"
+#define FOCUS_OFF           "\x1b[?1004l"
 
 /* disambiguate + report-all, else the terminal keeps ctrl-tab for itself */
 #define KEYBOARD_PUSH "\x1b[>9u\x1b[>4;2m"
@@ -25,6 +27,7 @@
     "\x1b[?2026l" \
     "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" \
     "\x1b[?2004l" \
+    FOCUS_OFF \
     KEYBOARD_OFF \
     "\x1b[?25h" \
     "\x1b[?7h" \
@@ -216,11 +219,19 @@ int tty_raw_begin(void)
 
     signal(SIGPIPE, SIG_IGN);
 
-    fputs(BRACKETED_PASTE_ON KEYBOARD_PUSH, stdout);
+    fputs(BRACKETED_PASTE_ON FOCUS_ON KEYBOARD_PUSH, stdout);
     fflush(stdout);
     if (getenv("TMUX"))
-        (void)system("tmux set-option -p extended-keys on >/dev/null 2>&1");
+        (void)system("tmux set-option -p extended-keys on >/dev/null 2>&1; "
+                     "tmux set-option -p focus-events on >/dev/null 2>&1");
     return 0;
+}
+
+static void (*focus_fn)(int on);
+
+void tty_on_focus(void (*fn)(int on))
+{
+    focus_fn = fn;
 }
 
 void tty_keyboard_on(void)
@@ -502,6 +513,16 @@ static void decode_csi(tty_event *ev, const int *params, int nparams, int final,
     case 'D': emit(ev, ctrl_or_alt ? TK_WORD_LEFT : TK_LEFT); return;
     case 'H': emit(ev, TK_HOME); return;
     case 'F': emit(ev, TK_END); return;
+    case 'I':
+        if (focus_fn)
+            focus_fn(1);
+        emit(ev, TK_FOCUS_IN);
+        return;
+    case 'O':
+        if (focus_fn)
+            focus_fn(0);
+        emit(ev, TK_FOCUS_OUT);
+        return;
     case 'Z': emit(ev, TK_PREV_TAB); return;
     case 'u':
 

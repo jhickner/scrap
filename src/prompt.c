@@ -46,6 +46,8 @@ struct prompt {
     char      *(*external)(void *ud);
     void        *external_ud;
     int          external_taken;
+    int        (*listen)(void *ud);
+    void        *listen_ud;
     int        (*idle_fds)(void *ud, int *out, int max);
     int        (*idle_render)(void *ud);
     int        (*idle_poll)(void *ud);
@@ -238,7 +240,10 @@ static void emit_input(struct prompt *p, int rows)
             uint32_t cp = c->cp;
             const char *seq = replframe_style(c->style);
 
-            if (c->style == REPL_STYLE_PROMPT && x == 0 && cp == '>') {
+            if (c->style == REPL_STYLE_PROMPT && cp == '*') {
+                cp = 0x23FA;
+                seq = ui_style(UI_ERROR);
+            } else if (c->style == REPL_STYLE_PROMPT && cp == '>') {
                 cp = 0x276F;
                 seq = ui_style(UI_ACCENT);
             }
@@ -263,6 +268,11 @@ int prompt_input_rows(struct prompt *p, int cols)
 {
     if (!p)
         return 1;
+    int gutter = p->listen && p->listen(p->listen_ud) ? 4 : 2;
+    if (p->repl.gutter != gutter) {
+        p->repl.gutter = gutter;
+        p->frame_ok = 0;
+    }
     if (p->frame_ok && cols == p->painted_cols && p->frame.cells && p->frame.rows > 0)
         return p->frame.rows;
 
@@ -634,7 +644,7 @@ static const struct prompt_key SHORTCUTS[] = {
     {"@", "complete a file path from the working directory"},
     {"up / down", "move through the completion list, else browse history"},
     {"ctrl-r", "search history"},
-    {"esc", "close the completion, else interrupt the model or a tool"},
+    {"esc", "close the completion, else drop voice input, else interrupt the model"},
     {"ctrl-c", "clear the prompt line, or interrupt a running turn"},
     {"ctrl-d (empty)", "close the session (quit on the last one)"},
     {"left (empty)", "open the list of every session"},
@@ -782,10 +792,10 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
 
     case TK_ESCAPE:
 
-        if (live && !overlay_open(p))
-            return KEY_CANCEL;
         if (!overlay_open(p) && p->repl.len == 0 && p->cancel && p->cancel(p->cancel_ud))
             return KEY_OK;
+        if (live && !overlay_open(p))
+            return KEY_CANCEL;
         feed(p, REPL_KEY_ESCAPE, 0, NULL);
         return KEY_OK;
 
@@ -1092,6 +1102,34 @@ void prompt_set_placeholder(struct prompt *p, const char *text)
     p->frame_ok = 0;
     if (!chrome_modal_active())
         repaint(p);
+}
+
+void prompt_insert(struct prompt *p, const char *text)
+{
+    if (!p || !text || !*text)
+        return;
+    int at = p->repl.cursor;
+    if (at > 0) {
+        unsigned char prev = (unsigned char)p->repl.buf[at - 1];
+        if (prev != ' ' && prev != '\n' && text[0] != ' ')
+            repl_insert_text(&p->repl, " ");
+    }
+    repl_insert_text(&p->repl, text);
+    repl_set_placeholder(&p->repl, "");
+    p->frame_ok = 0;
+    if (!chrome_modal_active())
+        repaint(p);
+}
+
+const char *prompt_line(struct prompt *p)
+{
+    return p ? repl_line(&p->repl) : NULL;
+}
+
+void prompt_set_listen(struct prompt *p, int (*fn)(void *ud), void *ud)
+{
+    p->listen = fn;
+    p->listen_ud = ud;
 }
 
 void prompt_set_external(struct prompt *p, char *(*fn)(void *ud), void *ud)

@@ -15,6 +15,7 @@
 #include "status.h"
 #include "text.h"
 #include "ui.h"
+#include "voice.h"
 
 enum kind { S_FLAG, S_PERMISSION, S_ROWS, S_COLOR, S_MATRIX, S_BACKEND };
 
@@ -47,6 +48,18 @@ static const struct entry ENTRIES[] = {
     {.name = "floating prompt", .kind = S_FLAG,
      .about = "keep what you typed above the spinner",
      .off = "off", .on = "on"},
+    {.name = "voice", .kind = S_FLAG,
+     .about = "talk instead of typing, and hear replies",
+     .off = "off", .on = "on",
+     .key = SETTING_VOICE, .def = 0},
+    {.name = "voice complete", .kind = S_FLAG,
+     .about = "say the session name when a turn ends unfocused",
+     .off = "off", .on = "on",
+     .key = SETTING_VOICE_COMPLETE, .def = 1},
+    {.name = "voice volume", .kind = S_ROWS,
+     .about = "how loud spoken replies are, as a percent",
+     .low = 0, .high = 100,
+     .key = SETTING_VOICE_VOLUME, .def = VOICE_VOLUME_DEFAULT},
     {.name = "image rows", .kind = S_ROWS,
      .about = "tallest an inline image may be drawn",
      .low = IMAGE_ROWS_MIN, .high = IMAGE_ROWS_MAX},
@@ -72,6 +85,12 @@ static const struct entry ENTRIES[] = {
 
 static int flag_of(const struct session *s, int at)
 {
+    const struct entry *e = &ENTRIES[at];
+    if (e->key) {
+        if (!strcmp(e->key, SETTING_VOICE))
+            return voice_on();
+        return settings_get_int(e->key, e->def);
+    }
     switch (at) {
     case 0:
         return session_thinking(s);
@@ -84,6 +103,17 @@ static int flag_of(const struct session *s, int at)
 
 static void flag_set(struct session *s, int at, int on)
 {
+    const struct entry *e = &ENTRIES[at];
+    if (e->key) {
+        if (!strcmp(e->key, SETTING_VOICE)) {
+            char err[300];
+            if (!voice_apply(on, voice_speak(), err, sizeof err) && on)
+                status_set_alert(err);
+            return;
+        }
+        settings_set_int(e->key, on);
+        return;
+    }
     switch (at) {
     case 0:
         session_set_thinking(s, on);
@@ -110,6 +140,10 @@ static void rows_set(const struct entry *e, int rows)
     if (!e->key) {
         image_set_rows(rows);
         settings_set_int(SETTING_IMAGE_ROWS, image_rows());
+        return;
+    }
+    if (!strcmp(e->key, SETTING_VOICE_VOLUME)) {
+        voice_set_volume(rows);
         return;
     }
     settings_set_int(e->key, rows);

@@ -6,11 +6,17 @@
 struct session;
 
 /* Hands-free voice: the helper app listens, finished turns arrive as prompt
-   lines, and the current session's replies are read back. */
+   lines. Replies are read back unless speak is off. */
 
 int  voice_start(char *err, size_t size);
 void voice_stop(void);
 int  voice_on(void);
+void voice_set_speak(int on);
+int  voice_speak(void);
+/* start or stop and remember it so later sessions and restarts match */
+int  voice_apply(int on, int speak, char *err, size_t size);
+void voice_set_volume(int percent);
+int  voice_volume(void);
 
 /* what has been heard so far this turn; "" once it is sent or dropped */
 void voice_on_heard(void (*fn)(void *ud, const char *text), void *ud);
@@ -28,6 +34,11 @@ void voice_turn_begin(struct session *s);
 void voice_turn_done(struct session *s);
 void voice_turn_cancel(struct session *s);
 void voice_refocus(void);
+/* drop the in-progress utterance: clear the preview and do not submit it.
+   1 if there was something to drop */
+int  voice_drop(void);
+/* 0 while this pane is not focused: speech is discarded rather than submitted */
+void voice_arm(int on);
 /* stop reading the current reply aloud */
 void voice_mute(void);
 

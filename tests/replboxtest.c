@@ -89,11 +89,27 @@ static void line_out(void)
     replbox_free(&b);
 }
 
+static void ghost_wraps(void)
+{
+    Repl r;
+    repl_init(&r, NULL, 0);
+    repl_set_placeholder(&r, "one two three four five six seven eight nine ten");
+    int wide = repl_input_rows(&r, 80);
+    int narrow = repl_input_rows(&r, 16);
+    eq("ghost fits on a wide line", wide, 1);
+    if (narrow <= wide) {
+        fprintf(stderr, "ghost_wraps: %d rows narrow, %d wide\n", narrow, wide);
+        fails++;
+    }
+    repl_free(&r);
+}
+
 int main(void)
 {
     scroll_window();
     wrapping();
     line_out();
+    ghost_wraps();
 
     if (fails) {
         fprintf(stderr, "replboxtest: %d failed\n", fails);

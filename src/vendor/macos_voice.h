@@ -1,16 +1,15 @@
 #ifndef MACOS_VOICE_H
 #define MACOS_VOICE_H
 
-/* Hands-free voice conversation for a terminal program: the signed helper app listens
- * through the microphone, decides when a turn is finished, and reads back whatever text the
- * client sends. The helper is a separate .app because processes started under a terminal or
- * tmux are denied the microphone by TCC.
+/* Hands-free voice conversation for terminal programs. One signed helper per user owns the
+ * microphone and speech engine. Any number of clients may connect; the most recently focused
+ * client receives transcripts and controls spoken output.
  *
  * Events, in the callback's `kind`:
- *   ready      listening for the first time (text NULL)
+ *   ready      helper is listening (text NULL)
  *   partial    the running hypothesis for the current turn
  *   final      a finished turn, ready to send
- *   interrupt  the user talked over the reply; cancel the turn in flight
+ *   interrupt  the stop word; cancel the turn in flight
  *   speaking   "1" while a reply is being read aloud, "0" when it stops
  *   mode       idle | starting | listening | answering | speaking
  *   error      the helper failed; it is stopping
@@ -18,13 +17,14 @@
 
 typedef struct macos_voice macos_voice;
 typedef struct {
-    const char *helper_path; /* path to VoiceHelper.app                       */
+    const char *helper_path; /* path to VoiceHelper.app                         */
     const char *voice;       /* voice name or identifier; NULL -> helper default */
-    double      rate;        /* AVSpeechUtterance rate, 0 -> default          */
-    double      silence;     /* baseline end-of-turn silence, 0 -> default    */
-    const char *input;       /* input device name substring; NULL -> default  */
-    int         timeout_ms;  /* wait for the helper to connect; 0 -> 15000    */
-    void      (*tick)(void *ud); /* while waiting for the helper to connect   */
+    double      rate;        /* AVSpeechUtterance rate, 0 -> default            */
+    double      silence;     /* baseline end-of-turn silence, 0 -> default      */
+    double      volume;      /* 0-1; 0 leaves the helper default (full)         */
+    const char *input;       /* input device name substring; NULL -> default    */
+    int         timeout_ms;  /* wait for the helper to connect; 0 -> 15000      */
+    void      (*tick)(void *ud); /* while waiting for the helper to connect     */
     void       *tick_ud;
 } macos_voice_opts;
 typedef void (*macos_voice_cb)(void *ud, const char *kind, const char *text);
@@ -32,17 +32,17 @@ typedef void (*macos_voice_cb)(void *ud, const char *kind, const char *text);
 macos_voice *macos_voice_start(const macos_voice_opts *opts, macos_voice_cb cb, void *ud);
 int  macos_voice_fd(const macos_voice *v);
 int  macos_voice_poll(macos_voice *v, int timeout_ms);
-
-/* Reply text as it arrives; the helper speaks it sentence by sentence. */
 int  macos_voice_say(macos_voice *v, const char *text);
-/* The reply is complete: flush what is left and listen again. */
+/* Speak without taking focus, so an unfocused client can cue without the mic. */
+int  macos_voice_announce(macos_voice *v, const char *text);
 int  macos_voice_finish(macos_voice *v);
-/* The turn was abandoned: drop anything unspoken. */
 int  macos_voice_cancel(macos_voice *v);
-/* Silence the rest of this reply without abandoning the turn. */
 int  macos_voice_mute(macos_voice *v);
-/* While busy, a turn spoken mid-answer is held until the answer completes. */
 int  macos_voice_busy(macos_voice *v, int busy);
+int  macos_voice_volume(macos_voice *v, double volume);
+/* Only the focused client receives microphone events or controls output. */
+int  macos_voice_focus(macos_voice *v, int focused);
+/* Disconnect this client. The helper exits when the last client leaves. */
 void macos_voice_stop(macos_voice *v);
 #endif
 
@@ -60,7 +60,7 @@ void macos_voice_stop(macos_voice *v);
 #include <unistd.h>
 
 struct macos_voice {
-    int server, fd;
+    int fd;
     char path[104];
     char *buf; size_t len, cap;
     macos_voice_cb cb; void *ud;
@@ -88,6 +88,15 @@ static int mv_write(macos_voice *v, const char *verb, const char *text) {
     free(line); return rc;
 }
 
+static int mv_connect(const char *path) {
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0); if (fd < 0) return -1;
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    struct sockaddr_un sa = {0}; sa.sun_family = AF_UNIX;
+    snprintf(sa.sun_path, sizeof sa.sun_path, "%s", path);
+    if (connect(fd, (struct sockaddr *)&sa, sizeof sa)) { close(fd); return -1; }
+    return fd;
+}
+
 static void mv_unescape(char *s) {
     char *d = s;
     for (; *s; s++) {
@@ -110,50 +119,42 @@ static void mv_emit(macos_voice *v, char *line) {
 macos_voice *macos_voice_start(const macos_voice_opts *o, macos_voice_cb cb, void *ud) {
     if (!o || !o->helper_path || !*o->helper_path || !cb) return NULL;
     macos_voice *v = calloc(1, sizeof *v); if (!v) return NULL;
-    v->server = v->fd = -1; v->cb = cb; v->ud = ud;
-    snprintf(v->path, sizeof v->path, "/tmp/macos-voice-%d.sock", (int)getpid()); unlink(v->path);
-    v->server = socket(AF_UNIX, SOCK_STREAM, 0); if (v->server < 0) { free(v); return NULL; }
-    /* the helper quits on EOF, which children that inherit the socket would hold open */
-    fcntl(v->server, F_SETFD, FD_CLOEXEC);
-    struct sockaddr_un sa = {0}; sa.sun_family = AF_UNIX;
-    snprintf(sa.sun_path, sizeof sa.sun_path, "%s", v->path);
-    if (bind(v->server, (struct sockaddr *)&sa, sizeof sa) || listen(v->server, 1)) {
-        close(v->server); unlink(v->path); free(v); return NULL;
-    }
-    char rate[32] = "", silence[32] = "";
+    v->fd = -1; v->cb = cb; v->ud = ud;
+    snprintf(v->path, sizeof v->path, "/tmp/macos-voice-%u.sock", (unsigned)getuid());
+    v->fd = mv_connect(v->path);
+
+    char rate[32] = "", silence[32] = "", volume[32] = "";
     if (o->rate > 0) snprintf(rate, sizeof rate, "%g", o->rate);
     if (o->silence > 0) snprintf(silence, sizeof silence, "%g", o->silence);
-    pid_t pid = fork();
-    if (!pid) {
-        const char *av[24]; int n = 0;
-        av[n++] = "open"; av[n++] = "-gn"; av[n++] = o->helper_path; av[n++] = "--args";
-        av[n++] = "--socket"; av[n++] = v->path;
-        if (o->voice && *o->voice) { av[n++] = "--voice"; av[n++] = o->voice; }
-        if (*rate)    { av[n++] = "--rate"; av[n++] = rate; }
-        if (*silence) { av[n++] = "--silence"; av[n++] = silence; }
-        if (o->input && *o->input) { av[n++] = "--input"; av[n++] = o->input; }
-        av[n] = NULL;
-        execvp("open", (char *const *)av); _exit(127);
-    }
-    if (pid < 0) { macos_voice_stop(v); return NULL; }
-    int status = 0; waitpid(pid, &status, 0);
-    if (!WIFEXITED(status) || WEXITSTATUS(status)) { macos_voice_stop(v); return NULL; }
-    int left = o->timeout_ms > 0 ? o->timeout_ms : 15000;
-    for (;;) {
-        int slice = o->tick && left > 90 ? 90 : left;
-        struct pollfd p = { v->server, POLLIN, 0 };
-        int r = poll(&p, 1, slice);
-        if (r > 0) break;
-        if (r < 0 && errno != EINTR) { macos_voice_stop(v); return NULL; }
-        if (r == 0) {
-            left -= slice;
-            if (left <= 0) { macos_voice_stop(v); return NULL; }
+    if (o->volume > 0) snprintf(volume, sizeof volume, "%g", o->volume);
+    if (v->fd < 0) {
+        pid_t pid = fork();
+        if (!pid) {
+            const char *av[24]; int n = 0;
+            av[n++] = "open"; av[n++] = "-gn"; av[n++] = o->helper_path; av[n++] = "--args";
+            av[n++] = "--socket"; av[n++] = v->path;
+            if (o->voice && *o->voice) { av[n++] = "--voice"; av[n++] = o->voice; }
+            if (*rate)    { av[n++] = "--rate"; av[n++] = rate; }
+            if (*silence) { av[n++] = "--silence"; av[n++] = silence; }
+            if (*volume)  { av[n++] = "--volume"; av[n++] = volume; }
+            if (o->input && *o->input) { av[n++] = "--input"; av[n++] = o->input; }
+            av[n] = NULL;
+            execvp("open", (char *const *)av); _exit(127);
         }
+        if (pid < 0) { macos_voice_stop(v); return NULL; }
+        int status = 0; waitpid(pid, &status, 0);
+        if (!WIFEXITED(status) || WEXITSTATUS(status)) { macos_voice_stop(v); return NULL; }
+    }
+
+    int left = o->timeout_ms > 0 ? o->timeout_ms : 15000;
+    while (v->fd < 0) {
+        int slice = left > 90 ? 90 : left;
+        poll(NULL, 0, slice);
+        left -= slice;
+        if (left <= 0) { macos_voice_stop(v); return NULL; }
+        v->fd = mv_connect(v->path);
         if (o->tick) o->tick(o->tick_ud);
     }
-    v->fd = accept(v->server, NULL, NULL);
-    if (v->fd < 0) { macos_voice_stop(v); return NULL; }
-    fcntl(v->fd, F_SETFD, FD_CLOEXEC);
     signal(SIGPIPE, SIG_IGN);
     return v;
 }
@@ -182,16 +183,24 @@ int macos_voice_poll(macos_voice *v, int timeout_ms) {
     return count;
 }
 
-int  macos_voice_say(macos_voice *v, const char *text) { return text && *text ? mv_write(v, "SAY", text) : 0; }
-int  macos_voice_finish(macos_voice *v) { return mv_write(v, "FINISH", NULL); }
-int  macos_voice_cancel(macos_voice *v) { return mv_write(v, "CANCEL", NULL); }
-int  macos_voice_mute(macos_voice *v)   { return mv_write(v, "MUTE", NULL); }
-int  macos_voice_busy(macos_voice *v, int busy) { return mv_write(v, "BUSY", busy ? "1" : "0"); }
+int macos_voice_say(macos_voice *v, const char *text) { return text && *text ? mv_write(v, "SAY", text) : 0; }
+int macos_voice_announce(macos_voice *v, const char *text) { return text && *text ? mv_write(v, "ANNOUNCE", text) : 0; }
+int macos_voice_finish(macos_voice *v) { return mv_write(v, "FINISH", NULL); }
+int macos_voice_cancel(macos_voice *v) { return mv_write(v, "CANCEL", NULL); }
+int macos_voice_mute(macos_voice *v) { return mv_write(v, "MUTE", NULL); }
+int macos_voice_busy(macos_voice *v, int busy) { return mv_write(v, "BUSY", busy ? "1" : "0"); }
+int macos_voice_volume(macos_voice *v, double volume) {
+    if (volume < 0) volume = 0;
+    if (volume > 1) volume = 1;
+    char text[32];
+    snprintf(text, sizeof text, "%g", volume);
+    return mv_write(v, "VOLUME", text);
+}
+int macos_voice_focus(macos_voice *v, int focused) { return mv_write(v, "FOCUS", focused ? "1" : "0"); }
 
 void macos_voice_stop(macos_voice *v) {
     if (!v) return;
     if (v->fd >= 0) { mv_write(v, "QUIT", NULL); close(v->fd); }
-    if (v->server >= 0) close(v->server);
-    unlink(v->path); free(v->buf); free(v);
+    free(v->buf); free(v);
 }
 #endif

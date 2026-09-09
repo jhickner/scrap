@@ -34,6 +34,8 @@ typedef enum {
     TK_SCROLL_UP,
     TK_SCROLL_DOWN,
     TK_MOUSE_DOWN,
+    TK_FOCUS_IN,
+    TK_FOCUS_OUT,
 
     TK_NONE,
 } tty_key;
@@ -55,6 +57,9 @@ void tty_raw_end(void);
 void tty_raw_handoff(void);
 
 void tty_keyboard_on(void);
+
+/* terminal / tmux pane focus; 1 when this pane is current */
+void tty_on_focus(void (*fn)(int on));
 
 int  tty_read(tty_event *ev, int timeout_ms);
 

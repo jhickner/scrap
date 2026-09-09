@@ -134,7 +134,8 @@ typedef struct {
     int   sel;                   // index into cands[]; -1 = nothing highlighted
     bool  dropdown_open;
     bool  suggest_off;           // suppress the inline history autosuggestion
-    char  placeholder[512];      // ghost text shown while the line is empty
+    char  placeholder[512];      // ghost text shown after the caret
+    int   gutter;                // prompt prefix columns; 0/2 -> "> ", 4 -> mark + "> "
 
     // Reverse-incremental history search (Ctrl-R). While active, input edits the
     // query and the matched history entry is previewed; Enter/motion accepts it,
@@ -173,7 +174,7 @@ const char *repl_arg_hint(const Repl *r);
 // The inline history autosuggestion (the unmatched tail of a prior entry), or
 // NULL. repl_render draws it as ghost text; Right-arrow at end-of-line accepts it.
 const char *repl_suggestion(const Repl *r);
-// Ghost text shown after the caret while the line is empty; NULL/"" clears it.
+// Ghost text shown after the caret; NULL/"" clears it.
 void        repl_set_placeholder(Repl *r, const char *text);
 void        repl_reset(Repl *r);              // clear line/cursor/dropdown, keep history
 
@@ -703,6 +704,11 @@ static int disp_width(const char *buf, int from, int to) {
 // entries). Returns the row count (always >= 1). A '\n' forces a new row; an
 // over-long line breaks after the last space, or mid-word when a single word
 // exceeds the width.
+static int repl_gutter(const Repl *r)
+{
+    return r->gutter >= 4 ? 4 : 2;
+}
+
 static int wrap_segments(const Repl *r, int text_cols, int *seg, int seg_cap) {
     if (text_cols < 1) text_cols = 1;
     int n = 0;
@@ -755,7 +761,7 @@ static bool caret_owns_row(const Repl *r, int text_cols) {
 // Falls back to logical lines when the render width is unknown. Returns false
 // when already on the first/last row (caller falls back to history).
 static bool cursor_row_move(Repl *r, int dir) {   // dir: -1 up, +1 down
-    int text_cols = r->width - 2;
+    int text_cols = r->width - repl_gutter(r);
     if (text_cols < 1) return cursor_line_move(r, dir);
     int n = wrap_segments(r, text_cols, NULL, 0);
     if (n <= 1) return false;
@@ -1237,10 +1243,35 @@ static void put_str(ReplDraw draw, void *ctx, int x, int y, int max_x,
     }
 }
 
+static int ghost_wrap_rows(const Repl *r, int text_cols, int used)
+{
+    if (!r->placeholder[0] || text_cols < 1)
+        return 0;
+    int w = disp_width(r->placeholder, 0, (int)strlen(r->placeholder));
+    int first = text_cols - used;
+    if (first < 0)
+        first = 0;
+    if (w <= first)
+        return 0;
+    return (w - first + text_cols - 1) / text_cols;
+}
+
 int repl_input_rows(const Repl *r, int width) {
     if (r->searching) return 1;                    // the single search prompt row
-    int text_cols = width - 2;                     // width minus the 2-char prefix
-    return wrap_segments(r, text_cols, NULL, 0) + (caret_owns_row(r, text_cols) ? 1 : 0);
+    int text_cols = width - repl_gutter(r);
+    if (text_cols < 1) text_cols = 1;
+    int n = wrap_segments(r, text_cols, NULL, 0);
+    int extra = caret_owns_row(r, text_cols) ? 1 : 0;
+    if (!r->placeholder[0])
+        return n + extra;
+    int *seg = malloc(sizeof(int) * (size_t)(n + 1));
+    if (!seg)
+        return n + extra;
+    wrap_segments(r, text_cols, seg, n + 1);
+    int used = extra ? 1 : disp_width(r->buf, seg[n - 1], r->len) + (r->cursor >= r->len ? 1 : 0);
+    int ghost = ghost_wrap_rows(r, text_cols, used);
+    free(seg);
+    return n + extra + ghost;
 }
 
 // Render the reverse-search prompt: (reverse-i-search)`query`: <match>
@@ -1281,8 +1312,9 @@ static void render_row(const Repl *r, ReplDraw draw, void *ctx, int x, int row_y
                        bool cursor_here, int ls, int le) {
     int max_x = x + width;
     int px = x;
-    if (px < max_x) draw(ctx, px++, row_y, (unsigned char)prefix[0], REPL_STYLE_PROMPT);
-    if (px < max_x) draw(ctx, px++, row_y, (unsigned char)prefix[1], REPL_STYLE_PROMPT);
+    int g = repl_gutter(r);
+    for (int i = 0; i < g && prefix[i] && px < max_x; i++)
+        draw(ctx, px++, row_y, (unsigned char)prefix[i], REPL_STYLE_PROMPT);
 
     int text_cols = max_x - px;
     if (text_cols < 1) return;
@@ -1321,11 +1353,16 @@ void repl_render(const Repl *r, int x, int y, int width, bool focused,
     if (r->searching) { render_search(r, draw, ctx, x, y, width); return; }
 
     // --- Input rows (word-wrapped) ---
-    int row_count = wrap_segments(r, width - 2, NULL, 0);
+    int g = repl_gutter(r);
+    int text_cols = width - g;
+    if (text_cols < 1) text_cols = 1;
+    const char *head = g >= 4 ? "* > " : "> ";
+    const char *cont = g >= 4 ? "    " : "  ";
+    int row_count = wrap_segments(r, text_cols, NULL, 0);
     int *seg = malloc(sizeof(int) * (size_t)(row_count + 1));
     if (!seg) return;
-    wrap_segments(r, width - 2, seg, row_count + 1);
-    bool caret_row = caret_owns_row(r, width - 2);
+    wrap_segments(r, text_cols, seg, row_count + 1);
+    bool caret_row = caret_owns_row(r, text_cols);
 
     for (int li = 0; li < row_count; li++) {
         int ls  = seg[li];
@@ -1338,22 +1375,42 @@ void repl_render(const Repl *r, int x, int y, int width, bool focused,
         bool cursor_here =
             focused && !caret_row && r->cursor >= ls && r->cursor < next;
         render_row(r, draw, ctx, x, y + li, width,
-                   li == 0 ? "> " : "  ", focused, cursor_here, ls, end);
+                   li == 0 ? head : cont, focused, cursor_here, ls, end);
     }
-    int input_rows = row_count + (caret_row ? 1 : 0);
+    int body_rows = row_count + (caret_row ? 1 : 0);
     if (caret_row)
-        render_row(r, draw, ctx, x, y + row_count, width, "  ", focused, true,
+        render_row(r, draw, ctx, x, y + row_count, width, cont, focused, true,
                    r->len, r->len);
 
-    // --- Ghost text after the prompt: history autosuggestion wins over the
-    // command usage hint. The suggestion's first cell shows the cursor (so the
-    // tail reads as a continuation of the word); the usage hint trails the caret.
+    // --- Ghost text after the prompt: a live placeholder (voice) wins, then
+    // the history autosuggestion, then the command usage hint.
+    int input_rows = body_rows;
     if (focused && row_count > 0) {
         const char *sugg = repl_suggestion(r);
-        int li = input_rows - 1;
-        int col = caret_row ? 0 : disp_width(r->buf, seg[li], r->len);
-        if (sugg && sugg[0]) {
-            int px = x + 2 + col;
+        int li = body_rows - 1;
+        int col = caret_row ? 0 : disp_width(r->buf, seg[li < row_count ? li : row_count - 1], r->len);
+        int text_x = x + g;
+        if (r->placeholder[0]) {
+            int px = text_x + col + (r->cursor >= r->len ? 1 : 0);
+            int hlen = (int)strlen(r->placeholder), hi = 0;
+            int gy = y + li;
+            while (r->placeholder[hi]) {
+                uint32_t cp = utf8_decode(r->placeholder, hlen, &hi);
+                int w = glyph_cols(cp);
+                if (px + w > max_x && px > text_x) {
+                    gy++;
+                    px = text_x;
+                    input_rows++;
+                    for (int i = 0; i < g && cont[i] && px < max_x; i++)
+                        draw(ctx, x + i, gy, (unsigned char)cont[i], REPL_STYLE_PROMPT);
+                    px = text_x;
+                }
+                if (px + w <= max_x)
+                    draw(ctx, px, gy, cp, REPL_STYLE_DIM);
+                px += w;
+            }
+        } else if (sugg && sugg[0]) {
+            int px = text_x + col;
             int slen = (int)strlen(sugg), si = 0;
             bool first = true;
             while (sugg[si] && px < max_x) {
@@ -1364,9 +1421,8 @@ void repl_render(const Repl *r, int x, int y, int width, bool focused,
             }
         } else {
             const char *hint = repl_arg_hint(r);
-            if (!hint && r->len == 0 && r->placeholder[0]) hint = r->placeholder;
             if (hint && hint[0]) {
-                int px = x + 2 + col + 1;                 // +1 to clear the caret
+                int px = text_x + col + 1;                 // +1 to clear the caret
                 int hlen = (int)strlen(hint), hi = 0;
                 while (hint[hi] && px < max_x) {
                     uint32_t cp = utf8_decode(hint, hlen, &hi);

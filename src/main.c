@@ -178,12 +178,27 @@ static void voice_heard(void *ud, const char *text)
     prompt_set_placeholder(ud, text);
 }
 
-static char *chat_line(void *ud)
+static int voice_listening(void *ud)
 {
     (void)ud;
+    return voice_on();
+}
+
+static char *chat_line(void *ud)
+{
+    struct prompt *p = ud;
     char *line = voice_take_line();
     voice_took = line != NULL;
-    return line ? line : tg_take_line();
+    if (line) {
+        const char *cur = prompt_line(p);
+        if (cur && *cur) {
+            prompt_insert(p, line);
+            free(line);
+            return NULL;
+        }
+        return line;
+    }
+    return tg_take_line();
 }
 
 static int side_busy(void *ud)  { (void)ud; return sidechannel_busy() || workspace_busy(); }
@@ -360,6 +375,8 @@ static int echo_filter(void *ud, const char *line)
 static int cancel_turn(void *ud)
 {
     (void)ud;
+    if (voice_drop())
+        return 1;
     struct session *s = workspace_current();
     if (!session_turn_running(s))
         return 0;
@@ -720,8 +737,20 @@ int main(int argc, char **argv)
     prompt_set_replay(prompt, replay, NULL);
     prompt_set_blank(prompt, blank_line, NULL);
     prompt_set_animate(prompt, side_busy, side_tick, NULL);
-    prompt_set_external(prompt, chat_line, NULL);
+    prompt_set_external(prompt, chat_line, prompt);
+    prompt_set_listen(prompt, voice_listening, NULL);
     voice_on_heard(voice_heard, prompt);
+    tty_on_focus(voice_arm);
+
+    voice_set_speak(settings_get_int(SETTING_VOICE_SPEAK, 1));
+    if (settings_get_int(SETTING_VOICE, 0)) {
+        char err[300];
+        if (!voice_start(err, sizeof err)) {
+            char text[320];
+            snprintf(text, sizeof text, "voice: %s", err);
+            status_set_alert(text);
+        }
+    }
 
     chrome_paint();
 

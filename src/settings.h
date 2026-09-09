@@ -26,13 +26,21 @@
    over SHUNT_MIN_LINES and routes them to a cheap worker model instead */
 #define SETTING_SHUNT        "shunt"
 
-/* hands-free voice: the helper app, the voice name, its rate, the
-   end-of-turn silence in seconds, and the input device name to prefer */
-#define SETTING_VOICE_HELPER  "voice_helper"
-#define SETTING_VOICE_NAME    "voice_name"
-#define SETTING_VOICE_RATE    "voice_rate"
-#define SETTING_VOICE_SILENCE "voice_silence"
-#define SETTING_VOICE_INPUT   "voice_input"
+/* hands-free voice: on/off, whether replies are spoken, output volume,
+   the helper app, the voice name, its rate, the end-of-turn silence in
+   seconds, and the input device name to prefer */
+#define SETTING_VOICE          "voice"
+#define SETTING_VOICE_SPEAK    "voice_speak"
+#define SETTING_VOICE_VOLUME   "voice_volume"
+#define SETTING_VOICE_HELPER   "voice_helper"
+#define SETTING_VOICE_NAME     "voice_name"
+#define SETTING_VOICE_RATE     "voice_rate"
+#define SETTING_VOICE_SILENCE  "voice_silence"
+#define SETTING_VOICE_INPUT    "voice_input"
+
+#define VOICE_VOLUME_DEFAULT 100
+/* say the session name when a turn ends while this pane is unfocused */
+#define SETTING_VOICE_COMPLETE "voice_complete"
 
 #define SETTING_COLOR_INPUT    "color_input"
 #define SETTING_COLOR_EMPHASIS "color_emphasis"
