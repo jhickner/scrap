@@ -11,6 +11,7 @@
 #include "scrollback.h"
 #include "session.h"
 #include "tg.h"
+#include "relay.h"
 #include "voice.h"
 #include "ui.h"
 #include "viewport.h"
@@ -103,6 +104,8 @@ static void row_identity(const struct session *s, struct row *r)
         row_add(r, UI_ACCENT, SEP "session %d/%d", workspace_index() + 1, count);
     if (chat)
         row_add(r, UI_OK, SEP "%s", chat);
+    if (relay_label())
+        row_add(r, UI_OK, SEP "%s", relay_label());
     if (voice_label())
         row_add(r, UI_OK, SEP "%s", voice_label());
 }

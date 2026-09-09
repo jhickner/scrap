@@ -34,6 +34,8 @@ void tg_refocus(void) {}
 void voice_refocus(void) {}
 void voice_commit(struct session *s) { (void)s; }
 void tg_forget_session(struct session *s) { (void)s; }
+void relay_refocus(void) {}
+void relay_forget_session(struct session *s) { (void)s; }
 void cmd_forget_session(struct session *s) { (void)s; }
 void view_collapse(int on) { (void)on; }
 

@@ -27,9 +27,10 @@ void session_set_quiet(struct session *s, int quiet);
 typedef void (*session_event_fn)(void *ud, const backend_event *ev);
 void session_set_observer(struct session *s, session_event_fn fn, void *ud);
 
-/* one process-wide hook, called after the observer for every session's events */
+/* process-wide hooks, called after the observer for every session's events */
 typedef void (*session_listener_fn)(void *ud, struct session *s, const backend_event *ev);
-void session_set_listener(session_listener_fn fn, void *ud);
+int  session_add_listener(session_listener_fn fn, void *ud);
+void session_remove_listener(session_listener_fn fn, void *ud);
 
 #define SESSION_RECENT     4
 #define SESSION_RECENT_MAX 160

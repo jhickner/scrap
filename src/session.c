@@ -33,6 +33,7 @@
 #include "tasks.h"
 #include "title.h"
 #include "tg.h"
+#include "relay.h"
 #include "transcript.h"
 #include "tty.h"
 #include "ui.h"
@@ -148,8 +149,8 @@ struct session *session_set_drawing(struct session *s)
     return was;
 }
 
-static session_listener_fn listener;
-static void *listener_ud;
+#define LISTENERS_MAX 4
+static struct { session_listener_fn fn; void *ud; } listeners[LISTENERS_MAX];
 static void remember_model(const struct session *s);
 static void charge_turn(struct session *s, const backend_result *m);
 static void retire(Backend *b);
@@ -239,8 +240,9 @@ static void render_event(struct session *s, const backend_event *ev)
 
     if (s->observer)
         s->observer(s->observer_ud, ev);
-    if (listener)
-        listener(listener_ud, s, ev);
+    for (int i = 0; i < LISTENERS_MAX; i++)
+        if (listeners[i].fn)
+            listeners[i].fn(listeners[i].ud, s, ev);
 
     if (s->quiet || live != s)
         return;
@@ -721,6 +723,7 @@ static int abort_check(void)
     int interrupt = session_poll_input();
     if (live && live->abort_hook)
         interrupt |= live->abort_hook(live->abort_ud);
+    interrupt |= relay_poll(live);
     if (live && live->abort_request)
         interrupt = 1;
 
@@ -981,10 +984,23 @@ int session_recent(const struct session *s, const char **out, int max)
     return n;
 }
 
-void session_set_listener(session_listener_fn fn, void *ud)
+int session_add_listener(session_listener_fn fn, void *ud)
 {
-    listener = fn;
-    listener_ud = ud;
+    for (int i = 0; i < LISTENERS_MAX; i++) {
+        if (!listeners[i].fn) {
+            listeners[i].fn = fn;
+            listeners[i].ud = ud;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void session_remove_listener(session_listener_fn fn, void *ud)
+{
+    for (int i = 0; i < LISTENERS_MAX; i++)
+        if (listeners[i].fn == fn && listeners[i].ud == ud)
+            listeners[i].fn = NULL;
 }
 
 void session_set_observer(struct session *s, session_event_fn fn, void *ud)
@@ -2088,13 +2104,19 @@ void session_report(const struct session *s)
         }
     }
 
+    char chat[160] = "";
+    if (tg_label() || relay_label())
+        snprintf(chat, sizeof chat, "%s%s%s", tg_label() ? tg_label() : "",
+                 tg_label() && relay_label() ? ", " : "",
+                 relay_label() ? relay_label() : "");
+
     struct sessionpresent_report r = {
         .backend = s->backend,
         .model = session_model(s),
         .effort = session_can_set_effort(s) ? session_effort(s) : NULL,
         .auth = auth,
         .permission = !strcmp(s->backend, "claude") ? session_permission(s) : NULL,
-        .chat = tg_label(),
+        .chat = chat[0] ? chat : NULL,
         .id = s->id[0] ? s->id : NULL,
         .parent = parent[0] ? parent : NULL,
         .cwd = s->cwd,

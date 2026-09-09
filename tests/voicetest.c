@@ -106,7 +106,8 @@ int  session_turn_running(const struct session *s) { return s && s->running; }
 void session_interrupt(struct session *s) { if (s) s->abort = 1; }
 int  session_last_interrupted(const struct session *s) { (void)s; return 0; }
 const char *session_title(const struct session *s) { (void)s; return "tab"; }
-void session_set_listener(session_listener_fn fn, void *ud) { (void)fn; (void)ud; }
+int  session_add_listener(session_listener_fn fn, void *ud) { (void)fn; (void)ud; return 1; }
+void session_remove_listener(session_listener_fn fn, void *ud) { (void)fn; (void)ud; }
 
 void prompt_echo_message(const char *text) { (void)text; }
 

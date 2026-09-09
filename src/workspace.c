@@ -16,6 +16,7 @@
 #include "tabbar.h"
 #include "text.h"
 #include "tg.h"
+#include "relay.h"
 #include "ui.h"
 #include "viewport.h"
 #include "voice.h"
@@ -266,6 +267,7 @@ void workspace_show(int index)
     view_collapse(session_compact(tabs[cur].s));
 
     tg_refocus();
+    relay_refocus();
     voice_refocus();
 }
 
@@ -387,6 +389,7 @@ static void drop(int index, const struct session *fallback)
     if (tabs[index].s == base)
         base = NULL;
     tg_forget_session(tabs[index].s);
+    relay_forget_session(tabs[index].s);
     cmd_forget_session(tabs[index].s);
 
     if (index == cur)
@@ -424,6 +427,8 @@ static void drop(int index, const struct session *fallback)
         spin_follow();
         viewport_forget();
         tg_refocus();
+        relay_refocus();
+    relay_refocus();
         voice_refocus();
     }
 }

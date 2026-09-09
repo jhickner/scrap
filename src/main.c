@@ -37,6 +37,7 @@
 #include "tabs.h"
 #include "status.h"
 #include "tg.h"
+#include "relay.h"
 #include "voice.h"
 #include "tty.h"
 #include "ui.h"
@@ -88,7 +89,8 @@ static void usage(void)
             "             -b and --tier pin the worker; a card id retargets it\n"
             "  --tier     with --card: low, med or high\n"
             "  --telegram also answer over Telegram, in the same session\n"
-            "  --connect telegram   the same thing, spelled out\n"
+            "  --relay    also answer a phone over WebSocket, in the same session\n"
+            "  --connect telegram|relay   the same thing, spelled out\n"
             "  -r         --resume: pick a past conversation to continue\n"
             "  --reopen   bring back the sessions of a window that is gone\n"
             "  --session id  resume a specific conversation (used by the fork commands)\n"
@@ -112,6 +114,7 @@ static int idle_fds(void *ud, int *out, int max)
     }
     n += sidechannel_fds(out + n, max - n);
     n += voice_fds(out + n, max - n);
+    n += relay_fds(out + n, max - n);
     return n + tg_fds(out + n, max - n);
 }
 
@@ -161,8 +164,9 @@ static int idle_render(void *ud)
     sidechannel_tick();
     reap_children();
 
-    if (tg_pending() || voice_pending())
+    if (tg_pending() || relay_pending() || voice_pending())
         tty_wake();
+    relay_poll(NULL);
     struct session *drew = session_set_drawing(workspace_current());
     image_poll();
     session_set_drawing(drew);
@@ -172,6 +176,7 @@ static int idle_render(void *ud)
 }
 
 static int voice_took;
+static int relay_took;
 
 static void voice_heard(void *ud, const char *text)
 {
@@ -198,6 +203,10 @@ static char *chat_line(void *ud)
         }
         return line;
     }
+    line = relay_take_line();
+    relay_took = line != NULL;
+    if (line)
+        return line;
     return tg_take_line();
 }
 
@@ -445,6 +454,7 @@ int main(int argc, char **argv)
         {"card",    no_argument,       NULL, 'K'},
         {"tier",    required_argument, NULL, 1},
         {"telegram", no_argument,      NULL, 'T'},
+        {"relay",    no_argument,      NULL, 'W'},
         {"connect", required_argument, NULL, 'N'},
         {"help",    no_argument,       NULL, 'h'},
         {NULL,      0,                 NULL, 0},
@@ -460,6 +470,7 @@ int main(int argc, char **argv)
     const char *tabs_arg = NULL;
     int         reopen_arg = 0;
     int telegram = 0;
+    int relay = 0;
     int card = 0;
     int pin_backend = 0;
     int fork_session = 0;
@@ -483,9 +494,14 @@ int main(int argc, char **argv)
         case 'O': reopen_arg = 1; break;
         case 'K': card = 1; break;
         case 'T': telegram = 1; break;
+        case 'W': relay = 1; break;
         case 'N':
+            if (!strcmp(optarg, "relay")) {
+                relay = 1;
+                break;
+            }
             if (strcmp(optarg, "telegram")) {
-                fprintf(stderr, APP_NAME ": --connect takes 'telegram'\n");
+                fprintf(stderr, APP_NAME ": --connect takes 'telegram' or 'relay'\n");
                 return 2;
             }
             telegram = 1;
@@ -593,8 +609,8 @@ int main(int argc, char **argv)
 
     int interactive = optind >= argc;
 
-    if (telegram && !interactive) {
-        fprintf(stderr, APP_NAME ": --telegram takes no prompt\n");
+    if ((telegram || relay) && !interactive) {
+        fprintf(stderr, APP_NAME ": --%s takes no prompt\n", telegram ? "telegram" : "relay");
         return 2;
     }
 
@@ -650,6 +666,8 @@ int main(int argc, char **argv)
 
     if (telegram && session && !tg_start(session))
         telegram = 0;
+    if (relay && session && !relay_start(session))
+        relay = 0;
 
     if (!session) {
         if (interactive)
@@ -832,8 +850,13 @@ int main(int argc, char **argv)
         }
 
         if (prompt_line_was_external(prompt) && !voice_took) {
-            workspace_settle(tg_session());
-            tg_run_line(line);
+            if (relay_took) {
+                workspace_settle(relay_session());
+                relay_run_line(line);
+            } else {
+                workspace_settle(tg_session());
+                tg_run_line(line);
+            }
             prompt_restart_check(prompt);
             continue;
         }
@@ -852,6 +875,7 @@ int main(int argc, char **argv)
     tabs_admit(1);
     voice_stop();
     tg_stop();
+    relay_stop();
     session_set_typeahead(NULL, NULL);
     chrome_bind(NULL);
     prompt_free(prompt);

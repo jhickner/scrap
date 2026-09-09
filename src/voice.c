@@ -386,7 +386,7 @@ int voice_start(char *err, size_t size)
     }
     macos_voice_focus(voice, armed);
     macos_voice_volume(voice, voice_volume() / 100.0);
-    session_set_listener(on_session_event, NULL);
+    session_add_listener(on_session_event, NULL);
     return 1;
 }
 
@@ -394,7 +394,7 @@ void voice_stop(void)
 {
     if (!voice)
         return;
-    session_set_listener(NULL, NULL);
+    session_remove_listener(on_session_event, NULL);
     macos_voice_focus(voice, 0);
     macos_voice_stop(voice);
     voice = NULL;
