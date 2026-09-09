@@ -16,6 +16,7 @@
 #include "tg.h"
 #include "ui.h"
 #include "viewport.h"
+#include "voice.h"
 #include "workspace.h"
 
 void restart_shield_thread(void) {}
@@ -30,6 +31,7 @@ int  sidechannel_fds(int *out, int max) { (void)out; (void)max; return 0; }
 
 void gitinfo_forget(void) {}
 void tg_refocus(void) {}
+void voice_refocus(void) {}
 void tg_forget_session(struct session *s) { (void)s; }
 void cmd_forget_session(struct session *s) { (void)s; }
 void view_collapse(int on) { (void)on; }

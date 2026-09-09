@@ -37,6 +37,7 @@
 #include "tabs.h"
 #include "status.h"
 #include "tg.h"
+#include "voice.h"
 #include "tty.h"
 #include "ui.h"
 #include "viewport.h"
@@ -110,6 +111,7 @@ static int idle_fds(void *ud, int *out, int max)
             out[n++] = fd;
     }
     n += sidechannel_fds(out + n, max - n);
+    n += voice_fds(out + n, max - n);
     return n + tg_fds(out + n, max - n);
 }
 
@@ -159,7 +161,7 @@ static int idle_render(void *ud)
     sidechannel_tick();
     reap_children();
 
-    if (tg_pending())
+    if (tg_pending() || voice_pending())
         tty_wake();
     struct session *drew = session_set_drawing(workspace_current());
     image_poll();
@@ -169,10 +171,19 @@ static int idle_render(void *ud)
     return busy;
 }
 
+static int voice_took;
+
+static void voice_heard(void *ud, const char *text)
+{
+    prompt_set_placeholder(ud, text);
+}
+
 static char *chat_line(void *ud)
 {
     (void)ud;
-    return tg_take_line();
+    char *line = voice_take_line();
+    voice_took = line != NULL;
+    return line ? line : tg_take_line();
 }
 
 static int side_busy(void *ud)  { (void)ud; return sidechannel_busy() || workspace_busy(); }
@@ -321,6 +332,7 @@ static int idle_restart(void *ud)
     sidechannel_close_all();
     child_close_all();
     tabs_admit(1);
+    voice_stop();
 
     if (!restart_exec(workspace_current())) {
         viewport_item_begin(VIEWPORT_ROWS(1, 1));
@@ -351,13 +363,21 @@ static int cancel_turn(void *ud)
     struct session *s = workspace_current();
     if (!session_turn_running(s))
         return 0;
+    voice_turn_cancel(s);
     session_interrupt(s);
     return 1;
 }
 
 static void turn_done(struct session *s)
 {
+    voice_turn_done(s);
     cmd_run_deferred(s);
+}
+
+static void turn_begin(struct session *s)
+{
+    voice_turn_begin(s);
+    boardwork_spoke_to(s);
 }
 
 static int tab_queued(void *ud)
@@ -695,13 +715,13 @@ int main(int argc, char **argv)
     workspace_on_finish(turn_done);
 
     workspace_on_settled(boardwork_finished);
-    workspace_on_turn(boardwork_spoke_to);
+    workspace_on_turn(turn_begin);
     livelist_on_card(boardwork_card_of);
     prompt_set_replay(prompt, replay, NULL);
     prompt_set_blank(prompt, blank_line, NULL);
     prompt_set_animate(prompt, side_busy, side_tick, NULL);
-    if (telegram)
-        prompt_set_external(prompt, chat_line, NULL);
+    prompt_set_external(prompt, chat_line, NULL);
+    voice_on_heard(voice_heard, prompt);
 
     chrome_paint();
 
@@ -782,7 +802,7 @@ int main(int argc, char **argv)
             continue;
         }
 
-        if (prompt_line_was_external(prompt)) {
+        if (prompt_line_was_external(prompt) && !voice_took) {
             workspace_settle(tg_session());
             tg_run_line(line);
             prompt_restart_check(prompt);
@@ -801,6 +821,7 @@ int main(int argc, char **argv)
     sidechannel_close_all();
     child_close_all();
     tabs_admit(1);
+    voice_stop();
     tg_stop();
     session_set_typeahead(NULL, NULL);
     chrome_bind(NULL);

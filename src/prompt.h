@@ -93,6 +93,8 @@ void prompt_set_idle(struct prompt *p, int (*fds)(void *ud, int *out, int max),
 char *prompt_take_queued(struct prompt *p);
 
 void prompt_set_external(struct prompt *p, char *(*fn)(void *ud), void *ud);
+/* ghost text after the caret while nothing is typed */
+void prompt_set_placeholder(struct prompt *p, const char *text);
 
 int  prompt_line_was_external(struct prompt *p);
 

@@ -147,6 +147,8 @@ struct session *session_set_drawing(struct session *s)
     return was;
 }
 
+static session_listener_fn listener;
+static void *listener_ud;
 static void remember_model(const struct session *s);
 static void charge_turn(struct session *s, const backend_result *m);
 static void retire(Backend *b);
@@ -236,6 +238,8 @@ static void render_event(struct session *s, const backend_event *ev)
 
     if (s->observer)
         s->observer(s->observer_ud, ev);
+    if (listener)
+        listener(listener_ud, s, ev);
 
     if (s->quiet || live != s)
         return;
@@ -970,6 +974,12 @@ int session_recent(const struct session *s, const char **out, int max)
     for (int i = have; i > 0; i--)
         out[n++] = s->recent[(s->recent_n - i) % SESSION_RECENT];
     return n;
+}
+
+void session_set_listener(session_listener_fn fn, void *ud)
+{
+    listener = fn;
+    listener_ud = ud;
 }
 
 void session_set_observer(struct session *s, session_event_fn fn, void *ud)

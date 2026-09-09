@@ -18,6 +18,7 @@
 #include "tg.h"
 #include "ui.h"
 #include "viewport.h"
+#include "voice.h"
 
 #define PENDING_MAX 8
 
@@ -263,6 +264,7 @@ void workspace_show(int index)
     view_collapse(session_compact(tabs[cur].s));
 
     tg_refocus();
+    voice_refocus();
 }
 
 void workspace_cycle(int delta)
@@ -420,6 +422,7 @@ static void drop(int index, const struct session *fallback)
         spin_follow();
         viewport_forget();
         tg_refocus();
+        voice_refocus();
     }
 }
 

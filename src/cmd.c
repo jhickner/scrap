@@ -38,6 +38,7 @@
 #include "status.h"
 #include "ui.h"
 #include "vendor/agents/backend.h"
+#include "voice.h"
 
 static const struct pick_item CLAUDE_EFFORTS[] = {
     {"default", "auto: use the model's default effort"},
@@ -526,6 +527,27 @@ static void do_sticky(struct session *s, const char *arg)
     reply_note("floating prompt %s", on ? "on" : "off");
 }
 
+static void do_voice(struct session *s, const char *arg)
+{
+    (void)s;
+    int on = toggle_arg(arg, "on", "off", voice_on(), "/voice");
+    if (on < 0)
+        return;
+    if (!on) {
+        voice_stop();
+        reply_note("voice off");
+        return;
+    }
+    if (voice_on())
+        return;
+    char err[300];
+    if (!voice_start(err, sizeof err)) {
+        reply_error("voice: %s", err);
+        return;
+    }
+    reply_note("voice on: listening");
+}
+
 static void do_image(struct session *s, const char *arg)
 {
     (void)s;
@@ -900,6 +922,7 @@ static const struct cmd COMMANDS[] = {
     {"/tools", "how much of each tool call to show", "[compact|full]", CMD_LIVE,
      do_tools},
     {"/sticky", "float the prompt above the spinner", "[on|off]", CMD_LIVE, do_sticky},
+    {"/voice", "talk instead of typing, and hear replies", "[on|off]", CMD_LIVE, do_voice},
     {"/image", "tallest an inline image may be drawn", "[rows]", CMD_LIVE, do_image},
     {"/permission", "how the CLI gates tool calls", "[mode]", 0, do_permission},
     {"/settings", "show and change every setting", NULL, 0, do_settings},

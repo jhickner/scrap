@@ -14,6 +14,13 @@ ALL_CFLAGS := -std=gnu11 $(WARNINGS) $(CFLAGS) -Isrc -Isrc/vendor
 BIN     := mux
 BUILD   := build
 
+# The signed Swift helper that /voice talks to. Built from the vendored source
+# in libs/c and installed beside the binary; voice_helper in settings overrides.
+VOICE_HELPER     := $(BUILD)/VoiceHelper.app
+VOICE_HELPER_DIR := $(PREFIX)/libexec/mux
+VOICE_SRC        := $(HOME)/working/libs/c/media/macos-voice/helper
+ALL_CFLAGS += -DVOICE_HELPER_PATH='"$(VOICE_HELPER_DIR)/VoiceHelper.app"'
+
 CHECK_NAMES  := $(patsubst tests/%.c,%,$(wildcard tests/*.c))
 MANUAL_NAMES := $(patsubst tools/%.c,%,$(wildcard tools/*.c))
 CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
@@ -200,6 +207,17 @@ check: $(CHECK_BINS)
 install: $(BIN)
 	install -d $(PREFIX)/bin
 	install -m 755 $(BIN) $(PREFIX)/bin/$(BIN)
+	@if [ -d $(VOICE_HELPER) ]; then \
+	  install -d $(VOICE_HELPER_DIR); \
+	  rm -rf $(VOICE_HELPER_DIR)/VoiceHelper.app; \
+	  cp -R $(VOICE_HELPER) $(VOICE_HELPER_DIR)/; \
+	fi
+
+# The helper is opt-in: it needs swift and macOS 26.
+voice-helper: | $(BUILD)
+	$(VOICE_SRC)/build.sh $(abspath $(VOICE_HELPER))
+
+.PHONY: voice-helper
 	@# -URG would parse as -U RG, a user. -a because the mux running this is an
 	@# ancestor of pkill, and ancestors are excluded by default.
 	@pkill -SIGURG -a -x $(BIN) || true

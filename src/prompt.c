@@ -1086,6 +1086,14 @@ char *prompt_read(struct prompt *p)
     return out;
 }
 
+void prompt_set_placeholder(struct prompt *p, const char *text)
+{
+    repl_set_placeholder(&p->repl, text);
+    p->frame_ok = 0;
+    if (!chrome_modal_active())
+        repaint(p);
+}
+
 void prompt_set_external(struct prompt *p, char *(*fn)(void *ud), void *ud)
 {
     p->external = fn;

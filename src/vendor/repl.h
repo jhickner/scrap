@@ -134,6 +134,7 @@ typedef struct {
     int   sel;                   // index into cands[]; -1 = nothing highlighted
     bool  dropdown_open;
     bool  suggest_off;           // suppress the inline history autosuggestion
+    char  placeholder[512];      // ghost text shown while the line is empty
 
     // Reverse-incremental history search (Ctrl-R). While active, input edits the
     // query and the matched history entry is previewed; Enter/motion accepts it,
@@ -172,6 +173,8 @@ const char *repl_arg_hint(const Repl *r);
 // The inline history autosuggestion (the unmatched tail of a prior entry), or
 // NULL. repl_render draws it as ghost text; Right-arrow at end-of-line accepts it.
 const char *repl_suggestion(const Repl *r);
+// Ghost text shown after the caret while the line is empty; NULL/"" clears it.
+void        repl_set_placeholder(Repl *r, const char *text);
 void        repl_reset(Repl *r);              // clear line/cursor/dropdown, keep history
 
 // Append a line to the command history (as if submitted) — for restoring a saved
@@ -347,6 +350,10 @@ void repl_free(Repl *r) {
     for (int i = 0; i < r->hist_count; i++) free(r->history[i]);
     for (int i = 0; i < r->undo_count; i++) free(r->undo[i].text);
     memset(r, 0, sizeof(*r));
+}
+
+void repl_set_placeholder(Repl *r, const char *text) {
+    snprintf(r->placeholder, sizeof r->placeholder, "%s", text ? text : "");
 }
 
 void repl_reset(Repl *r) {
@@ -1357,6 +1364,7 @@ void repl_render(const Repl *r, int x, int y, int width, bool focused,
             }
         } else {
             const char *hint = repl_arg_hint(r);
+            if (!hint && r->len == 0 && r->placeholder[0]) hint = r->placeholder;
             if (hint && hint[0]) {
                 int px = x + 2 + col + 1;                 // +1 to clear the caret
                 int hlen = (int)strlen(hint), hi = 0;
