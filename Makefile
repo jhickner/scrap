@@ -217,15 +217,15 @@ install: $(BIN)
 	  rm -rf $(VOICE_HELPER_DIR)/VoiceHelper.app; \
 	  cp -R $(VOICE_HELPER) $(VOICE_HELPER_DIR)/; \
 	fi
+	@# -URG would parse as -U RG, a user. -a because the mux running this is an
+	@# ancestor of pkill, and ancestors are excluded by default.
+	@pkill -SIGURG -a -x $(BIN) || true
 
 # The helper is opt-in: it needs swift and macOS 26.
 voice-helper: | $(BUILD)
 	$(VOICE_SRC)/build.sh $(abspath $(VOICE_HELPER))
 
 .PHONY: voice-helper
-	@# -URG would parse as -U RG, a user. -a because the mux running this is an
-	@# ancestor of pkill, and ancestors are excluded by default.
-	@pkill -SIGURG -a -x $(BIN) || true
 
 $(BUILD) $(BUILD)/vendor:
 	@mkdir -p $(BUILD)/vendor
