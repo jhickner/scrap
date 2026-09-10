@@ -33,7 +33,11 @@ final class AppleVoiceOutput: VoiceOutput {
     static let directUtteranceLimit = 120
     private var isRendering = false
     private var renderDeadline: TimeInterval?
-    static let renderTimeout: TimeInterval = 8
+    private var didRender = false
+    /* a render lands in tens of milliseconds once the voice is loaded; the
+       first one also pays for loading it */
+    static let renderTimeout: TimeInterval = 1
+    static let firstRenderTimeout: TimeInterval = 5
     private var generation = 0
 
     var onMissingVoice: ((String) -> Void)?
@@ -196,7 +200,8 @@ final class AppleVoiceOutput: VoiceOutput {
             text = queued
         }
         isRendering = true
-        renderDeadline = Date.timeIntervalSinceReferenceDate + Self.renderTimeout
+        renderDeadline = Date.timeIntervalSinceReferenceDate +
+            (didRender ? Self.renderTimeout : Self.firstRenderTimeout)
         let expected = generation
         let clock = ContinuousClock.now
 
@@ -218,6 +223,7 @@ final class AppleVoiceOutput: VoiceOutput {
     private func finish(text: String, render: Render, expected: Int) {
         isRendering = false
         renderDeadline = nil
+        didRender = true
         let buffers = render.buffers
         render.buffers = []
 
