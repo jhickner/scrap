@@ -1421,6 +1421,8 @@ void viewport_paint(void)
     batch_begin();
     if (sync)
         direct_str("\x1b[?2026h");
+    /* The prompt carries a painted caret. Keep the terminal's own cursor
+       hidden between frames so it cannot flash or travel during a redraw. */
     direct_str(UI_CURSOR_HIDE);
     direct_str("\x1b[?7l");
 
@@ -1465,7 +1467,6 @@ void viewport_paint(void)
         if (col > W)
             col = W;
         cup(body + 1 + chrome_caret_row, col);
-        direct_str(UI_CURSOR_SHOW);
     }
 
     if (sync)

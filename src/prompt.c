@@ -247,6 +247,8 @@ static void emit_input(struct prompt *p, int rows)
             const struct replframe_cell *c = replframe_at(&p->frame, y, x);
             uint32_t cp = c->cp;
             const char *seq = replframe_style(c->style);
+            int caret = c->style == REPL_STYLE_CURSOR && p->frame.have_cursor &&
+                        p->frame.cursor_x == x && p->frame.cursor_y == y;
 
             if (c->style == REPL_STYLE_PROMPT && cp == '*') {
                 cp = 0x23FA;
@@ -263,7 +265,14 @@ static void emit_input(struct prompt *p, int rows)
                 ui_esc(seq);
                 open = seq;
             }
+            /* The terminal cursor has to move through every changed row while
+               the viewport paints. Draw the caret into this row so it stays
+               put while a spinner elsewhere is arriving in pieces. */
+            if (caret)
+                ui_esc("\x1b[7m");
             put_codepoint(cp);
+            if (caret)
+                ui_esc("\x1b[27m");
         }
         if (*open)
             ui_esc(ui_style(UI_RESET));

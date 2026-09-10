@@ -187,6 +187,8 @@ int main(void)
         fail("the sticky prompt sits above the spinner");
     if (btw >= 0 && spin >= 0 && !row_blank(&s, spin - 1))
         fail("a blank row separates what is pinned above from the spinner");
+    if (s.cursor_visible)
+        fail("the painted input keeps the terminal cursor hidden");
 
     pending = 0;
     repaint(&s);

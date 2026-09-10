@@ -32,6 +32,20 @@ static void eq_line(struct prompt *p, const char *what, const char *want)
     failures++;
 }
 
+static void check_drawn_cursor(struct prompt *p)
+{
+    int rows = prompt_input_rows(p, 80);
+    int caret_row = 0, caret_col = 0;
+    ui_capture_begin(80);
+    prompt_paint_input(p, rows, &caret_row, &caret_col);
+    char *painted = ui_capture_end();
+    if (!painted || !strstr(painted, "\x1b[7m") || !strstr(painted, "\x1b[27m")) {
+        fprintf(stderr, "FAIL the input paints its cursor into the row\n");
+        failures++;
+    }
+    free(painted);
+}
+
 int main(void)
 {
     setenv("COLUMNS", "80", 1);
@@ -48,6 +62,8 @@ int main(void)
     ui_init();
     struct prompt *p = prompt_new(NULL, 0);
     chrome_bind(p);
+
+    check_drawn_cursor(p);
 
     prompt_set_preview(p, "hello");
     eq_line(p, "the preview is the line text", "hello");
