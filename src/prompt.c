@@ -865,15 +865,21 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
     }
 }
 
+static void record_line(struct prompt *p, const char *line)
+{
+    if (!line || !*line)
+        return;
+    repl_history_add(&p->repl, line);
+    history_append(p, line);
+}
+
 static char *take_line(struct prompt *p)
 {
     const char *line = repl_line(&p->repl);
     char *out = line && *line ? strdup(line) : NULL;
     p->frame_ok = 0;
-    if (out) {
-        repl_history_add(&p->repl, out);
-        history_append(p, out);
-    }
+    if (out)
+        record_line(p, out);
     p->preview_taken = out && p->preview[0];
     repl_reset(&p->repl);
     preview_forget(p);
@@ -1030,6 +1036,7 @@ static char *read_loop(struct prompt *p)
                     continue;
                 }
                 p->external_taken = 1;
+                record_line(p, line);
                 chrome_clear();
                 if (prompt_echoes(p, line))
                     prompt_echo_message(line);
@@ -1217,6 +1224,7 @@ char *prompt_take_queued(struct prompt *p)
         return NULL;
     char *line = p->queued[0];
     memmove(p->queued, p->queued + 1, (size_t)(--p->queued_count) * sizeof *p->queued);
+    record_line(p, line);
     return line;
 }
 
