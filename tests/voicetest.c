@@ -132,10 +132,27 @@ void prompt_echo_message(const char *text) { (void)text; }
 /* stands in for the input box: the preview is the whole line there */
 static char box[1024];
 
+static int box_released;
+
 static void box_heard(void *ud, const char *text)
 {
     (void)ud;
+    if (box_released) {
+        /* the prompt keeps what is there and writes the next words beside it */
+        if (!text || !*text)
+            return;
+        box_released = 0;
+        size_t n = strlen(box);
+        snprintf(box + n, sizeof box - n, "%s%s", n ? " " : "", text);
+        return;
+    }
     snprintf(box, sizeof box, "%s", text ? text : "");
+}
+
+static void box_release(void *ud)
+{
+    (void)ud;
+    box_released = 1;
 }
 
 static const char *box_line(void *ud)
@@ -309,6 +326,7 @@ int main(void)
 
     voice_on_heard(box_heard, NULL);
     voice_on_draft(box_line, NULL);
+    voice_on_release(box_release, NULL);
 
     fire("final", "listen show each project");
     eq_str("the dictation shows in the box", box, "listen show each project");
@@ -331,8 +349,55 @@ int main(void)
     clear_sent();
     clear_chimes();
 
+    /* out of the hold left by the hand-submits above */
+    voice_set_mic(0);
+    voice_set_mic(1);
+    box[0] = '\0';
+    box_released = 0;
+    clear_chimes();
+
+    fire("partial", "ok so you should");
+    eq_str("an utterance shows in the box", box, "ok so you should");
+    box[0] = '\0';
+    fire("partial", "ok so you should hear this");
+    if (box[0])
+        fail("erasing an utterance keeps it out of the box");
+    fire("final", "ok so you should hear this");
+    if (voice_take_line())
+        fail("an erased utterance is not sent");
+    if (box[0])
+        fail("an erased utterance stays out of the box");
+
+    fire("partial", "the next one still lands");
+    eq_str("a later utterance shows again", box, "the next one still lands");
+    fire("final", "the next one still lands");
+    line = voice_take_line();
+    eq_str("a later utterance is sent", line, "the next one still lands");
+    free(line);
+    clear_sent();
+    clear_chimes();
+
+    fire("final", "listen show each project");
+    fire("partial", "as a card");
+    eq_str("a dictation turn shows as it is spoken", box,
+           "listen show each project as a card");
+    snprintf(box, sizeof box, "%s", "listen show each");
+    fire("partial", "as a card in the");
+    eq_str("erasing a dictation turn stops it typing back", box,
+           "listen show each");
+    fire("final", "as a card in the corner");
+    eq_str("an erased dictation turn is dropped", box, "listen show each");
+    fire("final", "with a label ok done");
+    line = voice_take_line();
+    eq_str("the dictation carries on from what was kept", line,
+           "listen show each with a label");
+    free(line);
+    clear_sent();
+    clear_chimes();
+
     voice_on_heard(NULL, NULL);
     voice_on_draft(NULL, NULL);
+    voice_on_release(NULL, NULL);
 
     voice_stop();
     if (fails)

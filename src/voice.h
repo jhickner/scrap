@@ -37,6 +37,9 @@ void voice_on_heard(void (*fn)(void *ud, const char *text), void *ud);
 /* reads the input box back: an edit made there to the words heard is adopted,
    so what is sent is what the box shows */
 void voice_on_draft(const char *(*fn)(void *ud), void *ud);
+/* the line was edited by hand and is the user's now: stop writing to it and
+   leave what is there alone */
+void voice_on_release(void (*fn)(void *ud), void *ud);
 
 /* the hud label, NULL when off */
 const char *voice_label(void);

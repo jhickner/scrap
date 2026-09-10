@@ -1173,6 +1173,12 @@ static void preview_forget(struct prompt *p)
     p->preview_at = 0;
 }
 
+void prompt_release_preview(struct prompt *p)
+{
+    if (p)
+        preview_forget(p);
+}
+
 void prompt_insert(struct prompt *p, const char *text)
 {
     if (!p || !text || !*text)

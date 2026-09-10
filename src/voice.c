@@ -67,6 +67,11 @@ static void       (*heard_fn)(void *ud, const char *text);
 static void        *heard_ud;
 static const char *(*draft_fn)(void *ud);
 static void        *draft_ud;
+static void       (*release_fn)(void *ud);
+static void        *release_ud;
+/* the words heard for this utterance were erased in the box; what is left of
+   it keeps arriving and is dropped rather than typed back in */
+static int          erased;
 /* the words last put in the input box; what is there now is measured against
    this to see whether they were changed by hand */
 static char         shown[LISTEN_MAX];
@@ -101,9 +106,16 @@ static int take_edit(char *out, size_t n)
     if (!cur)
         return 0;
     snprintf(out, n, "%s", cur);
+    /* the words of an utterance still arriving must not be typed back over what
+       is being erased, so that utterance is dropped. An edit made between two of
+       them takes nothing with it: the dictation carries on from what is kept */
+    erased = draft[0] != 0;
     if (listen_mode) {
         listen_buf[0] = '\0';
         listen_append(out);
+    } else if (release_fn) {
+        /* the line is theirs now, and what they kept is left to send by hand */
+        release_fn(release_ud);
     }
     shown[0] = '\0';
     return 1;
@@ -111,16 +123,20 @@ static int take_edit(char *out, size_t n)
 
 static void heard(const char *text)
 {
+    char edit[LISTEN_MAX];
+    if (heard_fn)
+        take_edit(edit, sizeof edit);
     if (text && *text)
         snprintf(draft, sizeof draft, "%s", text);
     else
         draft[0] = '\0';
     if (!heard_fn)
         return;
-    char edit[LISTEN_MAX];
-    take_edit(edit, sizeof edit);
-    if (listen_mode && listen_buf[0]) {
-        char *joined = text_dsprintf("%s%s%s", listen_buf, draft[0] ? " " : "", draft);
+    if (erased && !listen_mode)
+        return;
+    const char *tail = erased ? "" : draft;
+    if (listen_mode && (listen_buf[0] || erased)) {
+        char *joined = text_dsprintf("%s%s%s", listen_buf, tail[0] ? " " : "", tail);
         show(joined ? joined : listen_buf);
         free(joined);
         return;
@@ -431,6 +447,10 @@ static void on_event(void *ud, const char *kind, const char *text)
             discard_speech(text);
             return;
         }
+        if (erased) {
+            hearing = 0;
+            return;
+        }
         if (text && *text && (still_dropping() || is_stale(text))) {
             discard_speech(text);
             return;
@@ -451,9 +471,22 @@ static void on_event(void *ud, const char *kind, const char *text)
             return;
         }
         char edit[LISTEN_MAX];
-        int  edited = take_edit(edit, sizeof edit);
+        take_edit(edit, sizeof edit);
         hearing = 0;
         heard("");
+        if (erased) {
+            erased = 0;
+            /* the turn being erased is gone, but a terminator in it still ends
+               the dictation and sends what was kept */
+            if (listen_mode) {
+                char rest[sizeof draft];
+                snprintf(rest, sizeof rest, "%s", text ? text : "");
+                if (listen_end(rest))
+                    listen_flush(NULL);
+                heard("");
+            }
+            return;
+        }
         /* a dictation outranks the hold, which is there to swallow the tail of
            a line already sent, not the words held for one */
         if (text && *text && !is_stale(text) &&
@@ -476,9 +509,8 @@ static void on_event(void *ud, const char *kind, const char *text)
             chime("interrupted");
             return;
         }
-        const char *out = edited ? edit : text;
-        if (out && *out)
-            enqueue(out);
+        if (text && *text)
+            enqueue(text);
     } else if (!strcmp(kind, "interrupt")) {
         if (!listening())
             return;
@@ -551,6 +583,7 @@ int voice_start(char *err, size_t size)
     dropping = 0;
     drop_until = 0;
     hearing = 0;
+    erased = 0;
     forget_stale();
     listen_clear();
     draft[0] = '\0';
@@ -634,6 +667,7 @@ static void teardown(int end_helper)
     dropping = 0;
     drop_until = 0;
     hearing = 0;
+    erased = 0;
     forget_stale();
     listen_clear();
     draft[0] = '\0';
@@ -774,6 +808,7 @@ void voice_set_mic(int on)
     dropping = 0;
     drop_until = 0;
     hearing = 0;
+    erased = 0;
     listen_clear();
     heard("");
     if (voice) {
@@ -793,6 +828,12 @@ void voice_on_draft(const char *(*fn)(void *ud), void *ud)
 {
     draft_fn = fn;
     draft_ud = ud;
+}
+
+void voice_on_release(void (*fn)(void *ud), void *ud)
+{
+    release_fn = fn;
+    release_ud = ud;
 }
 
 const char *voice_label(void)
@@ -894,17 +935,16 @@ void voice_commit(struct session *s)
         return;
     drain();
     char edit[LISTEN_MAX];
-    int  edited = take_edit(edit, sizeof edit);
+    take_edit(edit, sizeof edit);
     if (listen_mode) {
         const char *tail = draft[0] && !is_stale(draft) ? draft : NULL;
         if (tail)
             remember_stale(tail);
         listen_flush(tail);
-    } else if (edited) {
+    } else if (erased) {
+        erased = 0;
         if (draft[0])
             remember_stale(draft);
-        if (edit[0])
-            enqueue(edit);
     } else if (draft[0] && !is_stale(draft)) {
         remember_stale(draft);
         if (is_stop_command(draft)) {
@@ -935,6 +975,7 @@ void voice_draft_sent(void)
        them so that copy is dropped instead of sent again */
     if (draft[0])
         remember_stale(draft);
+    erased = 0;
     listen_clear();
     hold_drop_for(SENT_HOLD_MS);
     hearing = 0;
@@ -950,6 +991,7 @@ int voice_drop(void)
     int had = nqueue > 0 || hearing || dropping || listen_mode;
     hold_drop();
     clear_queue();
+    erased = 0;
     listen_clear();
     hearing = 0;
     forget_stale();
