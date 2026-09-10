@@ -108,8 +108,17 @@ static int mock_cli(int argc, char **argv)
             result("Effort level set to auto");
         else if (text && !strcmp(text, "/effort bogus"))
             result("Invalid argument: bogus");
-        else if (text && !strcmp(text, "continue"))
+        else if (text && !strcmp(text, "continue")) {
+            printf("{\"type\":\"rate_limit_event\",\"rate_limit_info\":{"
+                   "\"status\":\"allowed\",\"resetsAt\":1789089600,"
+                   "\"rateLimitType\":\"five_hour\",\"overageStatus\":\"rejected\","
+                   "\"isUsingOverage\":false,\"unifiedWindows\":{"
+                   "\"five_hour\":{\"utilization\":0.51,\"resetsAt\":1789089600},"
+                   "\"seven_day\":{\"utilization\":0.46,\"resetsAt\":1789138800}}},"
+                   "\"session_id\":\"session-1\"}\n");
+            fflush(stdout);
             result("done");
+        }
 
         else if (text && !strcmp(text, "reauth")) {
             const char *marker = getenv("CLAUDETEST_AUTH_MARKER");
@@ -141,6 +150,12 @@ static int mock_cli(int argc, char **argv)
         }
 
         else if (text && !strcmp(text, "race")) {
+            printf("{\"type\":\"rate_limit_event\",\"rate_limit_info\":{"
+                   "\"status\":\"allowed_warning\",\"resetsAt\":1789138800,"
+                   "\"rateLimitType\":\"seven_day\",\"utilization\":0.905,"
+                   "\"unifiedWindows\":{"
+                   "\"five_hour\":{\"utilization\":0.6,\"resetsAt\":1789089600}}}}\n");
+            fflush(stdout);
             stray_turn("background task finished");
             turn("answered");
         }
@@ -181,6 +196,13 @@ int main(int argc, char **argv)
         claude_stop(client);
         return 1;
     }
+    claude_rate_limit rate = {0};
+    claude_get_rate_limit(client, &rate);
+    if (rate.available) {
+        fputs("claudetest: rate limit reported before any rate_limit_event\n", stderr);
+        claude_stop(client);
+        return 1;
+    }
     char *reply = claude_send(client, "continue");
     if (!reply || strcmp(reply, "done")) {
         fputs("claudetest: process was not reusable after effort changes\n", stderr);
@@ -189,6 +211,14 @@ int main(int argc, char **argv)
         return 1;
     }
     free(reply);
+    claude_get_rate_limit(client, &rate);
+    if (!rate.available || rate.used_percent != 51 ||
+        rate.resets_at != 1789089600L || rate.window_minutes != 300) {
+        fprintf(stderr, "claudetest: five-hour rate limit was not retained (%d, %ld, %ld)\n",
+                rate.used_percent, rate.resets_at, rate.window_minutes);
+        claude_stop(client);
+        return 1;
+    }
 
     claude_result meta = {0};
     reply = claude_send_ex(client, "race", &meta);
@@ -200,6 +230,14 @@ int main(int argc, char **argv)
         return 1;
     }
     free(reply);
+    claude_get_rate_limit(client, &rate);
+    if (!rate.available || rate.used_percent != 91 ||
+        rate.resets_at != 1789138800L || rate.window_minutes != 10080) {
+        fprintf(stderr, "claudetest: named rate-limit window was not preferred (%d, %ld, %ld)\n",
+                rate.used_percent, rate.resets_at, rate.window_minutes);
+        claude_stop(client);
+        return 1;
+    }
 
     char auth_root[] = "/tmp/claudetest.XXXXXX";
     if (!mkdtemp(auth_root)) {

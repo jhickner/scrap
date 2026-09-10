@@ -92,6 +92,20 @@ typedef struct {
  * `meta` may be NULL. */
 char *claude_send_ex(claude_client *c, const char *user_text, claude_result *meta);
 
+/* Subscription rate-limit window from the CLI's `rate_limit_event`, taken from
+ * the window its rateLimitType names (the five-hour window when it names none
+ * that carries a reading). used_percent is utilization * 100, clamped to 100;
+ * resets_at is epoch seconds. */
+typedef struct {
+    int  available;
+    int  used_percent;
+    long resets_at;
+    long window_minutes;
+} claude_rate_limit;
+
+/* Latest reading; zeroed when none has arrived. */
+void claude_get_rate_limit(claude_client *c, claude_rate_limit *out);
+
 /* Change the live session's effort with Claude Code's /effort command. NULL
  * selects "auto", Claude's model-default mode. */
 int claude_set_effort(claude_client *c, const char *effort);
@@ -266,6 +280,7 @@ struct claude_client {
     int   turn_open;          /* an init has arrived with no result yet        */
     int   notified;           /* task notifications still owed a turn each     */
     int   bg_tasks;           /* background tasks the CLI last reported open   */
+    claude_rate_limit rate_limit; /* latest rate_limit_event reading           */
     int   awaiting;           /* a send is out and has not been given its turn */
     int   turn_mine;          /* the open turn answers this client's send      */
     char  stall[160];         /* why a send came back with no turn of its own  */
@@ -550,6 +565,15 @@ const char *claude_session_id(claude_client *c) {
     return c->session_id[0] ? c->session_id : NULL;
 }
 
+void claude_get_rate_limit(claude_client *c, claude_rate_limit *out) {
+    if (!out) return;
+    if (!c || atomic_load_explicit(&c->warm_state, memory_order_acquire) != 1) {
+        *out = (claude_rate_limit){0};
+        return;
+    }
+    *out = c->rate_limit;
+}
+
 /* Capture session_id from any event that carries one. */
 static void cl_note_session(claude_client *c, cJSON *ev) {
     cJSON *sid = cJSON_GetObjectItemCaseSensitive(ev, "session_id");
@@ -719,6 +743,45 @@ static long cl_context_window(claude_client *c, cJSON *ev) {
     return best;
 }
 
+/* rate_limit_info carries utilization per window in unifiedWindows (a 0-1
+ * fraction that can exceed 1 in overage); the top-level utilization is only
+ * present for the window named by rateLimitType. */
+static long cl_window_minutes(const char *name) {
+    if (!name) return 0;
+    if (!strcmp(name, "five_hour")) return 300;
+    if (!strncmp(name, "seven_day", 9)) return 10080;
+    return 0;
+}
+
+static void cl_note_rate_limit(claude_client *c, cJSON *ev) {
+    cJSON *info = cJSON_GetObjectItemCaseSensitive(ev, "rate_limit_info");
+    if (!cJSON_IsObject(info)) return;
+    const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(info, "rateLimitType"));
+    cJSON *unified = cJSON_GetObjectItemCaseSensitive(info, "unifiedWindows");
+    long minutes = cl_window_minutes(kind);
+    cJSON *window = minutes ? cJSON_GetObjectItemCaseSensitive(unified, kind) : NULL;
+    cJSON *used = cJSON_GetObjectItemCaseSensitive(window, "utilization");
+    if (minutes && !cJSON_IsNumber(used)) {
+        window = info;
+        used = cJSON_GetObjectItemCaseSensitive(info, "utilization");
+    }
+    if (!cJSON_IsNumber(used)) {
+        minutes = 300;
+        window = cJSON_GetObjectItemCaseSensitive(unified, "five_hour");
+        used = cJSON_GetObjectItemCaseSensitive(window, "utilization");
+    }
+    if (!cJSON_IsNumber(used)) return;
+    cJSON *resets = cJSON_GetObjectItemCaseSensitive(window, "resetsAt");
+    int percent = (int)(used->valuedouble * 100.0 + 0.5);
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    c->rate_limit.used_percent = percent;
+    c->rate_limit.resets_at = (cJSON_IsNumber(resets) && resets->valuedouble > 0) ?
+        (long)resets->valuedouble : 0;
+    c->rate_limit.window_minutes = minutes;
+    c->rate_limit.available = 1;
+}
+
 static void cl_fill_result(claude_client *c, cJSON *ev) {
     claude_result *m = c->meta;
     if (!m) return;
@@ -796,6 +859,7 @@ static int cl_handle_line(claude_client *c, const char *line, char **out) {
             cl_sink(c, &out);
         }
     }
+    if (strcmp(ts, "rate_limit_event") == 0) cl_note_rate_limit(c, ev);
     cl_note_context(c, ev, ts);
     if ((c->verbose || c->on_event) && *ts) cl_emit(c, ev, ts);
     int is_result = strcmp(ts, "result") == 0;

@@ -471,6 +471,18 @@ static void backend_claude_usage(Backend *b, long *tokens, long *window) {
     *window = x->live.context_window;
 }
 
+static void backend_claude_rate_limit(Backend *b, backend_rate_limit *out) {
+    if (!out) return;
+    backend_claude *x = b->ctx;
+    claude_rate_limit limit = {0};
+    memset(out, 0, sizeof *out);
+    claude_get_rate_limit(x->client, &limit);
+    out->available = limit.available;
+    out->used_percent = limit.used_percent;
+    out->resets_at = limit.resets_at;
+    out->window_minutes = limit.window_minutes;
+}
+
 static char *backend_claude_ask(Backend *b, const char *user) {
     return backend_claude_ask_ex(b, user, NULL);
 }
@@ -565,6 +577,7 @@ static Backend *backend_claude_open(const backend_opts *o) {
     b->start = backend_claude_start;
     b->ask_ex = backend_claude_ask_ex;
     b->usage = backend_claude_usage;
+    b->rate_limit = backend_claude_rate_limit;
     b->set_model = backend_set_model_generic;
     b->set_effort = backend_claude_set_effort;
     b->set_permission = backend_set_permission_generic;
