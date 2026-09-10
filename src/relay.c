@@ -77,6 +77,7 @@ static struct {
     volatile int    stop_wanted;
     int             from_chat;
     int             queued_told;
+    int             draining;
     char            system_note[900];
     char            want_id[80];
     int             want_tab;
@@ -236,8 +237,27 @@ static void send_text(const char *t, const char *text)
 }
 
 static void send_note(const char *text)  { send_text("note", text); }
-static void send_reply(const char *text) { send_text("reply", text); }
 static void send_pre(const char *text)   { send_text("pre", text); }
+
+/* Send time and how long the event waited in the session queue, so the client
+   can attribute the delay before a reply is spoken. */
+static void stamp_timing(cJSON *o)
+{
+    double now = now_seconds();
+    double queued = session_event_queued_at();
+    cJSON_AddNumberToObject(o, "ts", now);
+    cJSON_AddNumberToObject(o, "queue", queued > 0 ? now - queued : 0);
+}
+
+static void send_reply(const char *text)
+{
+    if (!text || !*text)
+        return;
+    cJSON *o = frame("reply");
+    cJSON_AddStringToObject(o, "text", text);
+    stamp_timing(o);
+    send_json(o);
+}
 
 /* Every line or pick the phone sends ends with one of these, so the client can
    drop its pending spinner even when the reply was only a tabs refresh. */
@@ -515,6 +535,7 @@ static void send_tool_line(const backend_event *ev)
     cJSON *o = frame("tool");
     cJSON_AddStringToObject(o, "name", label);
     cJSON_AddStringToObject(o, "text", raw);
+    stamp_timing(o);
     send_json(o);
 }
 
@@ -607,6 +628,9 @@ static void run_live(char *line)
    message on the phone. */
 static void drain_mid_turn(void)
 {
+    if (rt.draining)
+        return;
+    rt.draining = 1;
     for (;;) {
         int   kind = 0;
         char *line = inbox_take_if(&kind, runs_mid_turn);
@@ -629,17 +653,21 @@ static void drain_mid_turn(void)
         rt.queued_told = 1;
         send_note("queued until this turn finishes");
     }
+    rt.draining = 0;
 }
 
+/* `live` is the session being drawn, which is the running turn's -- not the tab
+   the phone is on, since switching tabs mid-turn leaves the turn drawing where
+   it was.  The prompt and the spinner follow the phone's tab; the drain follows
+   the pump, which is the only thing running and so the only thing that can
+   service the inbox at all. */
 int relay_poll(struct session *live)
 {
     if (!rt.active)
         return 0;
-    if (live == current_session() || !live) {
-        mirror_prompt(current_session());
-        send_busy(session_busy(current_session()));
-    }
-    if (live && live == current_session())
+    mirror_prompt(current_session());
+    send_busy(session_busy(current_session()));
+    if (live)
         drain_mid_turn();
     if (rt.stop_wanted && (!live || live == current_session())) {
         rt.stop_wanted = 0;

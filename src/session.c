@@ -126,8 +126,18 @@ struct session {
 struct evcopy {
     backend_event  ev;
     char          *text, *name, *input_json, *arg, *diff, *id, *parent;
+    double         queued_at;
     struct evcopy *next;
 };
+
+/* The enqueue time of the event being rendered, so a listener can report how
+   long the event sat between the backend thread and the main loop. */
+static double rendering_queued_at;
+
+double session_event_queued_at(void)
+{
+    return rendering_queued_at;
+}
 
 static void replace(char **slot, const char *value)
 {
@@ -282,6 +292,7 @@ static void enqueue(struct session *s, const backend_event *ev)
     e->ev.diff = e->diff = dup_or_null(ev->diff);
     e->ev.id = e->id = dup_or_null(ev->id);
     e->ev.parent = e->parent = dup_or_null(ev->parent);
+    e->queued_at = now_seconds();
 
     pthread_mutex_lock(&s->lock);
     if (s->tail)
@@ -1838,7 +1849,9 @@ static void drain_events(struct session *s)
     struct evcopy *e;
     struct session *was = session_set_drawing(s);
     while ((e = dequeue(s))) {
+        rendering_queued_at = e->queued_at;
         render_event(s, &e->ev);
+        rendering_queued_at = 0;
         evcopy_free(e);
     }
     image_poll();

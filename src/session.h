@@ -235,6 +235,10 @@ const char *session_last_reply(const struct session *s);
 /* the prompt of the running or most recent turn, and when it began */
 const char *session_prompt(const struct session *s);
 double      session_turn_started(const struct session *s);
+
+/* When the event now being rendered was enqueued on the backend thread, or 0
+   if it is being rendered inline. */
+double      session_event_queued_at(void);
 const struct transcript *session_transcript(const struct session *s);
 const char *session_last_error(const struct session *s);
 int         session_last_interrupted(const struct session *s);
