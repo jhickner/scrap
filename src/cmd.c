@@ -344,33 +344,18 @@ static void do_backend(struct session *s, const char *arg)
     }
 
     char *from = strdup(session_backend(s));
-    const char *failed = session_failed_prompt(s);
-    char *retry = failed ? strdup(failed) : NULL;
-    if (!from || (failed && !retry)) {
-        free(from);
-        free(retry);
+    if (!from) {
         reply_error("could not prepare the backend handoff");
         return;
     }
     if (!session_switch_backend(s, arg)) {
         reply_error("could not start %s; still using %s", arg, from);
         free(from);
-        free(retry);
         return;
     }
 
     hud_print(s);
     free(from);
-
-    if (retry) {
-        reply_note("retrying the failed turn with %s", arg);
-        int tab = workspace_index_of(s);
-        if (tab >= 0)
-            workspace_send(tab, retry, NULL);
-        else
-            session_turn(s, retry);
-        free(retry);
-    }
 }
 
 static void do_default(struct session *s, const char *arg)
