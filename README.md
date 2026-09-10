@@ -7,6 +7,7 @@ subscription use.
 - can switch backends at runtime, preserving context
 - can run multiple sessions with different backends in one window and switch
 between them
+- voice control
 - kitty image support, useful for iterating on graphical projects
 - kanban-based software factory
 
