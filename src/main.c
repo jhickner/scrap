@@ -832,6 +832,9 @@ int main(int argc, char **argv)
         if (!line)
             break;
 
+        if (prompt_line_had_preview(prompt))
+            voice_draft_sent();
+
         session = workspace_current();
         if (!session) {
             free(line);

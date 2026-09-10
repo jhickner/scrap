@@ -41,6 +41,9 @@ void voice_refocus(void);
 /* send the in-progress utterance and anything queued to this session, so
    leaving the pane does not drop what was already heard */
 void voice_commit(struct session *s);
+/* the in-progress utterance was submitted by hand: keep it out of the queue so
+   it is not sent a second time when the turn endpoints */
+void voice_draft_sent(void);
 /* drop the in-progress utterance: clear the preview and do not submit it.
    1 if there was something to drop */
 int  voice_drop(void);

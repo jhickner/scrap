@@ -102,6 +102,8 @@ const char *prompt_line(struct prompt *p);
 void prompt_set_listen(struct prompt *p, int (*fn)(void *ud), void *ud);
 
 int  prompt_line_was_external(struct prompt *p);
+/* 1 when the submitted line held the transcription preview */
+int  prompt_line_had_preview(struct prompt *p);
 
 void prompt_echo_message(const char *text);
 

@@ -86,6 +86,7 @@ struct prompt {
     /* the live transcription span in the buffer: its text and byte offset */
     char         preview[544];
     int          preview_at;
+    int          preview_taken;
 };
 
 static int prompt_echoes(struct prompt *p, const char *line);
@@ -873,6 +874,7 @@ static char *take_line(struct prompt *p)
         repl_history_add(&p->repl, out);
         history_append(p, out);
     }
+    p->preview_taken = out && p->preview[0];
     repl_reset(&p->repl);
     preview_forget(p);
     return out;
@@ -1185,6 +1187,11 @@ int prompt_line_was_external(struct prompt *p)
     return p && p->external_taken;
 }
 
+int prompt_line_had_preview(struct prompt *p)
+{
+    return p && p->preview_taken;
+}
+
 static void queue_push(struct prompt *p, char *line)
 {
     if (!line)
@@ -1205,6 +1212,7 @@ static void queue_push(struct prompt *p, char *line)
 
 char *prompt_take_queued(struct prompt *p)
 {
+    p->preview_taken = 0;
     if (p->queued_count == 0)
         return NULL;
     char *line = p->queued[0];

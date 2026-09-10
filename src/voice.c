@@ -24,6 +24,9 @@
 #define READY_WAIT_MS 30000
 #define LINE_MAX_QUEUE 16
 #define DROP_HOLD_MS 700
+/* the hold after the draft is submitted by hand, where only the tail of the
+   utterance already sent has to be swallowed */
+#define SENT_HOLD_MS 200
 /* AVSpeechUtteranceDefaultSpeechRate, what 100 percent means */
 #define AV_RATE_DEFAULT 0.5
 
@@ -34,6 +37,7 @@ static int          speak = 1;
 static int          armed = 1;
 static int          dropping;
 static long         drop_until;
+static int          drop_hold_ms = DROP_HOLD_MS;
 static int          hearing;
 /* draft heard while unarmed or dropping; the helper can re-emit it after
    focus, and that residue must not preview or send */
@@ -78,10 +82,22 @@ static long now_ms(void)
     return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
 }
 
-static void hold_drop(void)
+static void hold_drop_for(int ms)
 {
     dropping = 1;
-    drop_until = now_ms() + DROP_HOLD_MS;
+    drop_hold_ms = ms;
+    drop_until = now_ms() + ms;
+}
+
+static void hold_drop(void)
+{
+    hold_drop_for(DROP_HOLD_MS);
+}
+
+/* keep the hold running at whatever length it started with */
+static void hold_again(void)
+{
+    hold_drop_for(drop_hold_ms);
 }
 
 static int still_dropping(void)
@@ -232,7 +248,7 @@ static void on_event(void *ud, const char *kind, const char *text)
         }
         if (text && *text && (still_dropping() || is_stale(text))) {
             if (still_dropping())
-                hold_drop();
+                hold_again();
             discard_speech(text);
             return;
         }
@@ -255,7 +271,7 @@ static void on_event(void *ud, const char *kind, const char *text)
         heard("");
         if (still_dropping() || is_stale(text)) {
             if (still_dropping())
-                hold_drop();
+                hold_again();
             discard_speech(text);
             forget_stale();
             return;
@@ -604,6 +620,21 @@ void voice_commit(struct session *s)
         send_line(s, line);
         free(line);
     }
+}
+
+void voice_draft_sent(void)
+{
+    if (!voice || !armed)
+        return;
+    /* the same words come back as a final once the turn endpoints; remember
+       them so that copy is dropped instead of sent again */
+    if (draft[0])
+        remember_stale(draft);
+    hold_drop_for(SENT_HOLD_MS);
+    hearing = 0;
+    heard("");
+    drain();
+    macos_voice_cancel(voice);
 }
 
 int voice_drop(void)

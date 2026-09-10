@@ -183,6 +183,14 @@ int main(void)
         eq_str("focus-out draft", sent[0], "left in the other window");
     clear_sent();
 
+    voice_arm(1);
+    fire("partial", "sent by hand");
+    voice_draft_sent();
+    fire("final", "sent by hand");
+    if (voice_take_line())
+        fail("a hand-submitted draft is not queued again");
+    clear_sent();
+
     voice_stop();
     if (fails)
         return 1;
