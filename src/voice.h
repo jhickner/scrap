@@ -46,6 +46,8 @@ void voice_commit(struct session *s);
 int  voice_drop(void);
 /* 0 while this pane is not focused: speech is discarded rather than submitted */
 void voice_arm(int on);
+/* 1 while a reply is being read aloud */
+int  voice_speaking(void);
 /* stop reading the current reply aloud */
 void voice_mute(void);
 

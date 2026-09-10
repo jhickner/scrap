@@ -384,6 +384,10 @@ static int echo_filter(void *ud, const char *line)
 static int cancel_turn(void *ud)
 {
     (void)ud;
+    if (voice_speaking()) {
+        voice_mute();
+        return 1;
+    }
     if (voice_drop())
         return 1;
     struct session *s = workspace_current();

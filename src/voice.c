@@ -643,8 +643,13 @@ void voice_arm(int on)
     status_touch();
 }
 
+int voice_speaking(void) { return voice && speaking; }
+
 void voice_mute(void)
 {
-    if (voice)
-        macos_voice_mute(voice);
+    if (!voice)
+        return;
+    macos_voice_mute(voice);
+    speaking = 0;
+    status_touch();
 }
