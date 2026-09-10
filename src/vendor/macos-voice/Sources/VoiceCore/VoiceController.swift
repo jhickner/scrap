@@ -34,6 +34,10 @@ public final class VoiceController {
 
     static let silentSpeechTimeout: TimeInterval = 0.5
 
+    /* beyond the silence threshold, how long a volatile may sit with no final
+       before the recognizer is treated as stalled */
+    static let volatileStallTimeout: TimeInterval = 2.0
+
     public private(set) var mode: Mode = .idle {
         didSet { if mode != oldValue { onMode?(mode) } }
     }
@@ -74,6 +78,8 @@ public final class VoiceController {
     private var pollTask: Task<Void, Never>?
 
     private var volatileText = ""
+    private var volatileAt: TimeInterval?
+    private var promotedFinal: String?
     private var gateUntil: TimeInterval = 0
     private var isBusy = false
     private var heldUtterance: String?
@@ -146,6 +152,8 @@ public final class VoiceController {
         isConversing = false
         mode = .idle
         volatileText = ""
+        volatileAt = nil
+        promotedFinal = nil
         heardDraft = ""
         heldUtterance = nil
         suppressCurrentTurn = false
@@ -241,14 +249,25 @@ public final class VoiceController {
             }
             endpointer.noteVolatile(text, at: now)
             volatileText = text
+            volatileAt = now
             updateHeardDraft()
         case let .final(text, confidence):
+            volatileAt = nil
             if suppressCurrentTurn {
                 suppressCurrentTurn = false
+                promotedFinal = nil
                 endpointer.reset()
                 volatileText = ""
                 heardDraft = ""
                 return
+            }
+            if let promoted = promotedFinal {
+                promotedFinal = nil
+                if text.hasPrefix(promoted) || promoted.hasPrefix(text) {
+                    VoiceLog.note("dropped final already promoted: \(text)")
+                    volatileText = ""
+                    return
+                }
             }
             let now = Date.timeIntervalSinceReferenceDate
             if considerInterrupting(text, isFinal: true, confidence: confidence) { return }
@@ -350,6 +369,7 @@ public final class VoiceController {
     private func poll() {
         guard isConversing, mode != .idle, mode != .starting else { return }
         pollSilentSpeech()
+        pollStalledVolatile()
 
         let completion = endpointer.completion
         let threshold = endpointer.silenceThreshold
@@ -362,6 +382,29 @@ public final class VoiceController {
         volatileText = ""
         heardDraft = ""
         deliver(utterance)
+    }
+
+    /* The recognizer sometimes stops after volatile results without ever
+       delivering the final, leaving the last partial standing forever. Once a
+       volatile has sat past the silence threshold plus a margin, promote it to
+       the final it never got; its real final, should it still come, is dropped
+       as a duplicate. */
+    private func pollStalledVolatile() {
+        guard !volatileText.isEmpty, let since = volatileAt else { return }
+        let now = Date.timeIntervalSinceReferenceDate
+        guard now - since >= endpointer.silenceThreshold + Self.volatileStallTimeout
+        else { return }
+        let text = volatileText
+        VoiceLog.problem("recognizer stalled; promoting volatile to final: \(text)")
+        promotedFinal = text
+        volatileAt = nil
+        volatileText = ""
+        switch endpointer.noteFinal(text, at: since) {
+        case .cancelled:
+            heardDraft = ""
+        case .send, .waiting:
+            updateHeardDraft()
+        }
     }
 
     private func pollSilentSpeech() {
