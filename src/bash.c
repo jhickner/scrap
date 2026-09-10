@@ -500,7 +500,7 @@ void bash_run(const char *line)
     sigaction(SIGINT, &old_int, NULL);
     sigaction(SIGQUIT, &old_quit, NULL);
 
-    if (handed && mark) {
+    if (handed) {
         if (was_raw) {
             ui_esc("\x1b[?2004h");
             ui_raw(1);

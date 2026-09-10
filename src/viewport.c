@@ -67,6 +67,7 @@ static int    chrome_top = -1;
 
 static int held;
 static int active;
+static int home_row, home_col;   /* main-screen cursor when the alt screen went up */
 static int handed;
 static int suspended;
 static int scrolled;
@@ -1557,11 +1558,39 @@ void viewport_scroll_end(void)
     viewport_paint();
 }
 
+/* The terminal keeps one saved-cursor slot for the alternate screen, and any
+   child that switches screens itself overwrites it, so the position it hands
+   back on the way out can be somewhere up the page. Remember where the shell
+   left the cursor and go back there explicitly. */
+static void home_mark(void)
+{
+    int row = 0, col = 0;
+    if (tty_cursor_position(&row, &col)) {
+        home_row = row;
+        home_col = col;
+        char env[32];
+        snprintf(env, sizeof env, "%d;%d", row, col);
+        setenv("MUX_HOME_CURSOR", env, 1);
+    } else {
+        home_row = home_col = 0;
+    }
+}
+
+static void home_return(void)
+{
+    if (home_row <= 0 || home_col <= 0)
+        return;
+    char esc[32];
+    snprintf(esc, sizeof esc, "\x1b[%d;%dH", home_row, home_col);
+    direct_str(esc);
+}
+
 void viewport_begin(void)
 {
     if (active)
         return;
     active = 1;
+    home_mark();
     direct_str(UI_ALT_ON);
     direct_str(MOUSE_ON);
     tty_keyboard_on();
@@ -1573,13 +1602,19 @@ void viewport_end(void)
 {
     if (!active && !handed)
         return;
+    int was_suspended = suspended;
     active = 0;
     deferred = 0;
     handed = 0;
     suspended = 0;
     direct_str(MOUSE_OFF);
     direct_str(UI_CURSOR_SHOW);
-    direct_str(UI_ALT_OFF);
+    /* while suspended the screen is already the main one, with whatever the
+       external command printed below the home row */
+    if (!was_suspended) {
+        direct_str(UI_ALT_OFF);
+        home_return();
+    }
     fflush(stdout);
 }
 
@@ -1601,6 +1636,12 @@ void viewport_inherit(void)
     if (active)
         return;
     active = 1;
+    const char *env = getenv("MUX_HOME_CURSOR");
+    int         row = 0, col = 0;
+    if (env && sscanf(env, "%d;%d", &row, &col) == 2 && row > 0 && col > 0) {
+        home_row = row;
+        home_col = col;
+    }
     direct_str(MOUSE_ON);
     fflush(stdout);
     viewport_forget();
@@ -1662,6 +1703,7 @@ void viewport_suspend(void)
     direct_str(MOUSE_OFF);
     direct_str(UI_CURSOR_SHOW);
     direct_str(UI_ALT_OFF);
+    home_return();
     fflush(stdout);
 }
 
@@ -1670,6 +1712,7 @@ void viewport_resume(void)
     if (!active || !suspended)
         return;
     suspended = 0;
+    home_mark();
     direct_str(UI_ALT_ON);
     direct_str(MOUSE_ON);
     tty_keyboard_on();

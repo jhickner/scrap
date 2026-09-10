@@ -74,6 +74,10 @@ int  tty_watch_fds(int *out, int max);
 
 void tty_watch_ready(void);
 
+/* ask the terminal where the cursor is; 0 if it did not answer in time.
+   bytes that arrive alongside the reply are kept for the reader. */
+int  tty_cursor_position(int *row, int *col);
+
 int  tty_is_raw(void);
 
 int  tty_quit_requested(void);

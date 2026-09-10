@@ -15,6 +15,8 @@
 #endif
 
 #include "tty.h"
+#include "ui.h"
+#include "viewport.h"
 
 static int failures;
 
@@ -377,6 +379,124 @@ static void watch_keeps_a_sequence_whole(void)
     close(oldin);
 }
 
+static void cursor_report(void)
+{
+    int master, slave;
+    if (openpty(&master, &slave, NULL, NULL, NULL) < 0) {
+        fail("cursor openpty");
+        return;
+    }
+
+    int oldin = dup(STDIN_FILENO), oldout = dup(STDOUT_FILENO);
+    if (oldin < 0 || oldout < 0 || dup2(slave, STDIN_FILENO) < 0 ||
+        dup2(slave, STDOUT_FILENO) < 0) {
+        fail("cursor dup2");
+        close(master);
+        close(slave);
+        return;
+    }
+    set_echo(0);
+    if (tty_raw_begin() != 0)
+        fail("cursor raw begin");
+
+    /* the reply, with typeahead on either side of it */
+    const char reply[] = "x\x1b[12;34Ry";
+    if (write(master, reply, sizeof reply - 1) != (ssize_t)(sizeof reply - 1))
+        fail("cursor reply write");
+
+    int row = 0, col = 0;
+    if (!tty_cursor_position(&row, &col))
+        fail("cursor position not reported");
+    else if (row != 12 || col != 34)
+        fprintf(stderr, "FAIL cursor position: %d;%d want 12;34\n", row, col), failures++;
+
+    expect_ctrl(master, "", 0, 'x', "cursor keeps typeahead before the reply");
+    expect_ctrl(master, "", 0, 'y', "cursor keeps typeahead after the reply");
+
+    /* a terminal that never answers gives up and keeps what did arrive */
+    if (write(master, "z", 1) != 1)
+        fail("cursor quiet write");
+    row = col = 0;
+    if (tty_cursor_position(&row, &col))
+        fail("cursor position reported without a reply");
+    expect_ctrl(master, "", 0, 'z', "cursor keeps typeahead with no reply");
+
+    tty_raw_end();
+    dup2(oldin, STDIN_FILENO);
+    dup2(oldout, STDOUT_FILENO);
+    close(oldin);
+    close(oldout);
+    close(slave);
+    close(master);
+}
+
+static size_t drain(int fd, char *out, size_t max)
+{
+    size_t n = 0;
+    for (;;) {
+        ssize_t got = read(fd, out + n, max - n);
+        if (got <= 0)
+            return n;
+        n += (size_t)got;
+        if (n >= max)
+            return n;
+    }
+}
+
+/* the alternate screen goes back to the spot the shell left the cursor on,
+   whatever the terminal kept in its own saved-cursor slot */
+static void exit_returns_home(void)
+{
+    struct winsize ws = {24, 80, 0, 0};
+    int            master, slave;
+    if (openpty(&master, &slave, NULL, NULL, &ws) < 0) {
+        fail("home openpty");
+        return;
+    }
+
+    int oldin = dup(STDIN_FILENO), oldout = dup(STDOUT_FILENO);
+    if (oldin < 0 || oldout < 0 || dup2(slave, STDIN_FILENO) < 0 ||
+        dup2(slave, STDOUT_FILENO) < 0) {
+        fail("home dup2");
+        close(master);
+        close(slave);
+        return;
+    }
+    set_echo(0);
+    if (tty_raw_begin() != 0)
+        fail("home raw begin");
+
+    const char reply[] = "\x1b[7;3R";
+    if (write(master, reply, sizeof reply - 1) != (ssize_t)(sizeof reply - 1))
+        fail("home reply write");
+
+    static char out[1 << 16];
+    size_t      n = 0;
+    fcntl(master, F_SETFL, O_NONBLOCK);
+
+    ui_init();
+    viewport_begin();
+    /* the pty holds only a few kilobytes; keep it drained while painting */
+    n += drain(master, out + n, sizeof out - n - 1);
+    viewport_end();
+    fflush(stdout);
+    n += drain(master, out + n, sizeof out - n - 1);
+    out[n] = '\0';
+    tty_raw_end();
+
+    dup2(oldin, STDIN_FILENO);
+    dup2(oldout, STDOUT_FILENO);
+    close(oldin);
+    close(oldout);
+    close(slave);
+    close(master);
+    const char *off = strstr(out, "\x1b[?1049l");
+    if (!off)
+        fail("home never left the alternate screen");
+    else if (!strstr(off, "\x1b[7;3H"))
+        fail("home did not put the cursor back where the shell left it");
+}
+
 int main(void)
 {
     handoff_keeps_alt_screen();
@@ -385,6 +505,8 @@ int main(void)
     wake_unblocks_read();
     watch_keeps_a_sequence_whole();
     keys_from_pipe();
+    cursor_report();
+    exit_returns_home();
     if (failures)
         return 1;
     puts("ttytest: ok");

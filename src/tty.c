@@ -366,6 +366,115 @@ static int wait_readable(int timeout_ms)
     }
 }
 
+/* stash bytes that arrived while waiting on a reply, ahead of the reader */
+static void pending_push(const unsigned char *p, size_t n)
+{
+    size_t have = pending_len - pending_pos;
+    memmove(pending, pending + pending_pos, have);
+    pending_pos = 0;
+    pending_len = have;
+    if (n > sizeof pending - pending_len)
+        n = sizeof pending - pending_len;
+    memcpy(pending + pending_len, p, n);
+    pending_len += n;
+}
+
+#define DSR_WAIT_MS 150
+
+int tty_cursor_position(int *row, int *col)
+{
+    if (!in_raw)
+        return 0;
+
+    fflush(stdout);
+    if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4)
+        return 0;
+
+    unsigned char keep[sizeof pending];
+    size_t        nkeep = 0;
+    unsigned char seq[32];
+    size_t        nseq = 0;
+    int           in_seq = 0, ok = 0;
+    long          deadline = clock_ms() + DSR_WAIT_MS;
+
+#define KEEP(p, n)                                       \
+    do {                                                 \
+        for (size_t k_ = 0; k_ < (n); k_++)              \
+            if (nkeep < sizeof keep)                     \
+                keep[nkeep++] = (p)[k_];                 \
+    } while (0)
+
+    while (!ok) {
+        long left = deadline - clock_ms();
+        if (left <= 0)
+            break;
+        struct pollfd pfd = {STDIN_FILENO, POLLIN, 0};
+        int           r = poll(&pfd, 1, (int)left);
+        if (r < 0) {
+            if (errno == EINTR)
+                continue;
+            break;
+        }
+        if (r == 0)
+            break;
+
+        unsigned char buf[256];
+        ssize_t       n = read(STDIN_FILENO, buf, sizeof buf);
+        if (n <= 0) {
+            if (n < 0 && errno == EINTR)
+                continue;
+            break;
+        }
+
+        ssize_t i = 0;
+        for (; i < n && !ok; i++) {
+            unsigned char c = buf[i];
+            if (!in_seq) {
+                if (c == 0x1b) {
+                    in_seq = 1;
+                    nseq = 0;
+                    seq[nseq++] = c;
+                } else if (nkeep < sizeof keep) {
+                    keep[nkeep++] = c;
+                }
+                continue;
+            }
+            if (nseq < sizeof seq - 1)
+                seq[nseq++] = c;
+            if (nseq == 2 && c != '[') {
+                KEEP(seq, nseq);
+                in_seq = 0;
+                continue;
+            }
+            if (nseq < 3 || c == ';' || (c >= '0' && c <= '9'))
+                continue;
+            if (c == 'R') {
+                int r0 = 0, c0 = 0;
+                seq[nseq] = 0;
+                if (sscanf((char *)seq + 2, "%d;%d", &r0, &c0) == 2 && r0 > 0 && c0 > 0) {
+                    if (row)
+                        *row = r0;
+                    if (col)
+                        *col = c0;
+                    ok = 1;
+                }
+            } else {
+                KEEP(seq, nseq);
+            }
+            in_seq = 0;
+        }
+        if (i < n)
+            KEEP(buf + i, (size_t)(n - i));
+    }
+    if (in_seq)
+        KEEP(seq, nseq);
+#undef KEEP
+
+    if (nkeep)
+        pending_push(keep, nkeep);
+    return ok;
+}
+
 static int refill(int timeout_ms)
 {
     if (pending_pos < pending_len)
