@@ -26,6 +26,11 @@ static char    alert[64];
 static char    note[128];
 
 static int              painted;
+/* when the last full repaint went out, so a burst of changes coalesces */
+static double           painted_at;
+/* a change from an event stream rather than from status's own state; held to
+   the spin frame so a burst of them does not repaint per event */
+static int              touched;
 static int              spin_width;
 static int              dirty;
 
@@ -47,7 +52,7 @@ double status_elapsed(void)
     return now_seconds() - started;
 }
 
-void status_touch(void) { dirty = 1; }
+void status_touch(void) { touched = 1; }
 
 void status_set_word(const char *text)
 {
@@ -212,7 +217,9 @@ static void paint(void)
 {
     chrome_paint();
     painted = 1;
+    painted_at = now_seconds();
     dirty = 0;
+    touched = 0;
 }
 
 static int paint_spin_only(void)
@@ -246,9 +253,17 @@ void status_tick(void)
         return;
     }
     int advanced = spin_advance(&frame, &frame_at);
-    if (dirty)
+    if (dirty) {
         paint();
-    else if (advanced && !paint_spin_only())
+        return;
+    }
+    if (touched) {
+        if (painted && (now_seconds() - painted_at) * 1000.0 < SPIN_FRAME_MS)
+            return;
+        paint();
+        return;
+    }
+    if (advanced && !paint_spin_only())
         paint();
 }
 

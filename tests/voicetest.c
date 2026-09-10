@@ -73,6 +73,7 @@ int  macos_voice_mute(macos_voice *v) { (void)v; return 0; }
 int  macos_voice_busy(macos_voice *v, int busy) { (void)v; (void)busy; return 0; }
 int  macos_voice_volume(macos_voice *v, double volume) { (void)v; (void)volume; return 0; }
 int  macos_voice_rate(macos_voice *v, double rate) { (void)v; (void)rate; return 0; }
+int  macos_voice_silence(macos_voice *v, double seconds) { (void)v; (void)seconds; return 0; }
 int  macos_voice_focus(macos_voice *v, int focused) { (void)v; (void)focused; return 0; }
 void macos_voice_stop(macos_voice *v) { (void)v; }
 void macos_voice_shutdown(macos_voice *v) { (void)v; }
@@ -84,6 +85,7 @@ const char *settings_get_str(const char *key, const char *fallback)
     return fallback;
 }
 void settings_set_int(const char *key, int value) { (void)key; (void)value; }
+void settings_set_str(const char *key, const char *value) { (void)key; (void)value; }
 
 void status_resume(void) {}
 int  status_spinning(void) { return 0; }
