@@ -962,6 +962,13 @@ void voice_commit(struct session *s)
     }
     hearing = 0;
     heard("");
+    /* A focus or workspace edge can commit speech before the prompt loop gets
+       to take it.  If the box already has a typed draft, leave the speech in
+       the queue so chat_line can merge it into that draft; sending here would
+       bypass the box and make the model answer the speech on its own. */
+    const char *composing = draft_fn ? draft_fn(draft_ud) : NULL;
+    if (composing && *composing)
+        return;
     while (nqueue > 0) {
         char *line = queue[0];
         for (int i = 1; i < nqueue; i++)

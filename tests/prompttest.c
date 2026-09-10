@@ -84,9 +84,13 @@ int main(void)
 
     prompt_set_preview(p, "spoken");
     prompt_insert(p, "more");
+    eq_line(p, "a line inserted under a preview goes before it",
+            "typed more spoken");
     prompt_set_preview(p, "spoken again");
-    eq_line(p, "a moved preview is found and replaced",
-            "typed spoken again more");
+    eq_line(p, "the moved preview is still replaced",
+            "typed more spoken again");
+    prompt_set_preview(p, "");
+    eq_line(p, "and removed", "typed more");
 
     prompt_free(p);
 

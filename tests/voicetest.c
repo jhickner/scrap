@@ -164,6 +164,12 @@ static const char *box_line(void *ud)
     return box;
 }
 
+static const char *typed_box_line(void *ud)
+{
+    (void)ud;
+    return "typed first";
+}
+
 static void fire(const char *kind, const char *text)
 {
     if (cb)
@@ -401,6 +407,17 @@ int main(void)
     voice_on_heard(NULL, NULL);
     voice_on_draft(NULL, NULL);
     voice_on_release(NULL, NULL);
+
+    fire("final", "dictated after it");
+    voice_on_draft(typed_box_line, NULL);
+    voice_commit(&sess);
+    if (nsent)
+        fail("a voice commit does not bypass a typed draft");
+    line = voice_take_line();
+    eq_str("speech beside a typed draft stays queued", line,
+           "dictated after it");
+    free(line);
+    voice_on_draft(NULL, NULL);
 
     voice_stop();
     clear_chimes();
