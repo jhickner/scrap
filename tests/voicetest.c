@@ -208,6 +208,15 @@ int main(void)
     if (!start_voice())
         return 1;
 
+    if (voice_drop())
+        fail("dropping an empty voice input is not handled");
+    if (voice_drop())
+        fail("a drop hold is not fresh voice input");
+    /* Clear the residue hold before testing recognition below. */
+    voice_set_mic(0);
+    voice_set_mic(1);
+    clear_chimes();
+
     sess.running = 1;
     fire("final", "and then do this");
     char *line = voice_take_line();

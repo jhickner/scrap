@@ -1018,7 +1018,10 @@ int voice_drop(void)
 {
     if (!voice || !listening())
         return 0;
-    int had = nqueue > 0 || hearing || dropping || listen_mode;
+    /* The drop hold only swallows recognition residue after a cancellation; it
+       is not itself voice input.  Reporting it as something dropped makes a
+       quick second Escape renew the hold instead of reaching the active turn. */
+    int had = nqueue > 0 || hearing || listen_mode;
     hold_drop();
     clear_queue();
     erased = 0;
