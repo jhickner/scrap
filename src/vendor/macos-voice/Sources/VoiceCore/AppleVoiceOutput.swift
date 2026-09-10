@@ -72,7 +72,19 @@ final class AppleVoiceOutput: VoiceOutput {
         var onIdle: (() -> Void)?
         private(set) var pending = 0
 
-        func note(_ utterance: AVSpeechUtterance) { pending += 1 }
+        func note(_ utterance: AVSpeechUtterance) {
+            pending += 1
+            queuedAt[ObjectIdentifier(utterance)] = ContinuousClock.now
+        }
+
+        private var queuedAt: [ObjectIdentifier: ContinuousClock.Instant] = [:]
+
+        func speechSynthesizer(
+            _ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance
+        ) {
+            guard let queued = queuedAt.removeValue(forKey: ObjectIdentifier(utterance)) else { return }
+            VoiceLog.note("speech started \(queued.elapsedMilliseconds)ms after queueing, \(utterance.speechString.count) chars")
+        }
 
         /// After a stop the synthesizer does not reliably report every utterance it drops. A
         /// count left above zero would swallow the idle callback for every later reply, so a
@@ -117,6 +129,7 @@ final class AppleVoiceOutput: VoiceOutput {
                 utterance.preUtteranceDelay = owedDelay
                 owedDelay = 0
                 speakerDelegate.note(utterance)
+                VoiceLog.note("queueing utterance \(index + 1)/\(parts.count), \(part.count) chars")
                 speaker.speak(utterance)
                 onSpoken?(part)
             }
@@ -197,6 +210,7 @@ final class AppleVoiceOutput: VoiceOutput {
         }
         isRendering = true
         let expected = generation
+        let clock = ContinuousClock.now
 
         let render = Render()
         // `@Sendable` for the same reason as the audio tap: the synthesizer renders on its own
@@ -206,6 +220,7 @@ final class AppleVoiceOutput: VoiceOutput {
             guard let pcm = buffer as? AVAudioPCMBuffer else { return }
             guard pcm.frameLength > 0 else {
                 Task { @MainActor [weak self] in
+                    VoiceLog.note("rendered \(text.count) chars in \(clock.elapsedMilliseconds)ms")
                     self?.finish(text: text, render: render, expected: expected)
                 }
                 return

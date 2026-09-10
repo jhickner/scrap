@@ -54,12 +54,26 @@ double status_elapsed(void)
 
 void status_touch(void) { touched = 1; }
 
+/* TEMP: trace who rewrites the spin line (MUX_STATUS_TRACE=<path>) */
+static void trace_set(const char *field, const char *from, const char *to)
+{
+    const char *path = getenv("MUX_STATUS_TRACE");
+    if (!path || !*path)
+        return;
+    FILE *f = fopen(path, "a");
+    if (!f)
+        return;
+    fprintf(f, "%.3f %s \"%s\" -> \"%s\"\n", now_seconds(), field, from, to);
+    fclose(f);
+}
+
 void status_set_word(const char *text)
 {
     char next[sizeof word];
     snprintf(next, sizeof next, "%s", text && *text ? text : "working");
     if (strcmp(next, word) == 0)
         return;
+    trace_set("word", word, next);
     memcpy(word, next, sizeof word);
     dirty = 1;
 }
@@ -70,6 +84,7 @@ void status_set_alert(const char *text)
     snprintf(next, sizeof next, "%s", text ? text : "");
     if (strcmp(next, alert) == 0)
         return;
+    trace_set("alert", alert, next);
     memcpy(alert, next, sizeof alert);
     dirty = 1;
 }
@@ -80,6 +95,7 @@ void status_set_note(const char *text)
     snprintf(next, sizeof next, "%s", text ? text : "");
     if (strcmp(next, note) == 0)
         return;
+    trace_set("note", note, next);
     memcpy(note, next, sizeof note);
     dirty = 1;
 }

@@ -572,6 +572,7 @@ public final class VoiceController {
     public func appendReply(_ delta: String) {
         guard isConversing, !isReplyMuted else { return }
         let utterances = chunker.append(delta)
+        VoiceLog.note("reply delta \(delta.count) chars -> \(utterances.count) utterances")
         guard !utterances.isEmpty else { return }
         speak(utterances)
     }
