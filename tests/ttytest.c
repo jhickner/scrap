@@ -54,6 +54,39 @@ static int send(int wfd, const char *bytes, size_t n, tty_event *ev)
     return tty_read(ev, 200);
 }
 
+/* tty_read hands back a decoded-to-nothing sequence as no event, so a caller
+   waiting for one keeps reading until the deadline */
+static int read_until(tty_event *ev, int ms)
+{
+    for (int left = ms;;) {
+        if (tty_read(ev, left > 50 ? 50 : left))
+            return 1;
+        left -= 50;
+        if (left <= 0)
+            return 0;
+    }
+}
+
+/* focus changes are held until the state stops moving, so they outlast the
+   settle window rather than arriving with the byte */
+static void expect_focus(int wfd, const char *bytes, tty_key want, const char *what)
+{
+    tty_event ev;
+    if (write(wfd, bytes, 3) != 3) {
+        fail(what);
+        return;
+    }
+    if (read_until(&ev, 100)) {
+        fprintf(stderr, "FAIL %s: fired before it settled\n", what);
+        failures++;
+        return;
+    }
+    if (!read_until(&ev, 600) || ev.key != want) {
+        fprintf(stderr, "FAIL %s: key %d want %d\n", what, (int)ev.key, (int)want);
+        failures++;
+    }
+}
+
 static void handoff_keeps_alt_screen(void)
 {
     int master, slave;
@@ -305,8 +338,15 @@ static void keys_from_pipe(void)
     expect_ctrl(w, "\x03", 1, 3, "ctrl-c");
     expect_ctrl(w, "\x1b[27;5;99~", 10, 3, "xterm ctrl-c");
     expect_ctrl(w, "\x1b[97;5u", 7, 1, "csi-u ctrl-a");
-    expect_key(w, "\x1b[I", 3, TK_FOCUS_IN, "focus in");
-    expect_key(w, "\x1b[O", 3, TK_FOCUS_OUT, "focus out");
+    expect_focus(w, "\x1b[O", TK_FOCUS_OUT, "focus out");
+    expect_focus(w, "\x1b[I", TK_FOCUS_IN, "focus in");
+    /* a dialog opening over the terminal bounces focus and settles where it
+       started, which is not a change */
+    if (write(w, "\x1b[O\x1b[I", 6) != 6)
+        fail("focus bounce write");
+    tty_event ev;
+    if (read_until(&ev, 600))
+        fprintf(stderr, "FAIL focus bounce: key %d want none\n", (int)ev.key), failures++;
 
     close(w);
 }

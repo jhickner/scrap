@@ -228,6 +228,13 @@ int tty_raw_begin(void)
 }
 
 static void (*focus_fn)(int on);
+/* A macOS permission dialog opening over the terminal bounces focus out and
+   back, and acting on each edge repaints the chrome and re-arms voice. Hold a
+   change until the state has been still this long. */
+#define FOCUS_SETTLE_MS 250
+static int  focused = 1;
+static int  focus_next = -1;
+static long focus_next_at;
 
 void tty_on_focus(void (*fn)(int on))
 {
@@ -605,6 +612,34 @@ static void emit_modified_tab(tty_event *ev, int mods)
         emit(ev, TK_TAB);
 }
 
+static void focus_change(tty_event *ev, int on)
+{
+    focus_next = on == focused ? -1 : on;
+    focus_next_at = clock_ms();
+    emit(ev, TK_NONE);
+}
+
+/* milliseconds until a held focus change is due, or -1 with none held */
+static int focus_due_in(void)
+{
+    if (focus_next < 0)
+        return -1;
+    long left = focus_next_at + FOCUS_SETTLE_MS - clock_ms();
+    return left > 0 ? (int)left : 0;
+}
+
+static int focus_settled(tty_event *ev)
+{
+    if (focus_due_in() != 0)
+        return 0;
+    focused = focus_next;
+    focus_next = -1;
+    if (focus_fn)
+        focus_fn(focused);
+    emit(ev, focused ? TK_FOCUS_IN : TK_FOCUS_OUT);
+    return 1;
+}
+
 static void decode_csi(tty_event *ev, const int *params, int nparams, int final,
                        int event)
 {
@@ -622,16 +657,8 @@ static void decode_csi(tty_event *ev, const int *params, int nparams, int final,
     case 'D': emit(ev, ctrl_or_alt ? TK_WORD_LEFT : TK_LEFT); return;
     case 'H': emit(ev, TK_HOME); return;
     case 'F': emit(ev, TK_END); return;
-    case 'I':
-        if (focus_fn)
-            focus_fn(1);
-        emit(ev, TK_FOCUS_IN);
-        return;
-    case 'O':
-        if (focus_fn)
-            focus_fn(0);
-        emit(ev, TK_FOCUS_OUT);
-        return;
+    case 'I': focus_change(ev, 1); return;
+    case 'O': focus_change(ev, 0); return;
     case 'Z': emit(ev, TK_PREV_TAB); return;
     case 'u':
 
@@ -861,8 +888,17 @@ int tty_read(tty_event *ev, int timeout_ms)
         return 1;
     }
 
+    if (focus_settled(ev))
+        return 1;
+
+    int held = focus_due_in();
+    if (held >= 0 && (timeout_ms < 0 || timeout_ms > held))
+        timeout_ms = held;
+
     int avail = refill(timeout_ms);
     if (avail == 0) {
+        if (focus_settled(ev))
+            return 1;
         if (got_winch) {
             got_winch = 0;
             emit(ev, TK_RESIZE);
