@@ -180,7 +180,7 @@ static int relay_took;
 
 static void voice_heard(void *ud, const char *text)
 {
-    prompt_set_placeholder(ud, text);
+    prompt_set_preview(ud, text);
 }
 
 static int voice_listening(void *ud)

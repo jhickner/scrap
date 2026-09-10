@@ -189,6 +189,11 @@ const char *repl_line(const Repl *r);
 // dropped. The buffer grows to fit.
 void        repl_insert_text(Repl *r, const char *s);
 
+// Replace the byte range [from, to) with `text`, leaving the cursor after it.
+// Same filtering as repl_insert_text. For a host that maintains a span of
+// machine-written text in the buffer (e.g. a live transcription).
+void        repl_replace_range(Repl *r, int from, int to, const char *text);
+
 // Accept the highlighted dropdown candidate — or the first one when nothing is
 // highlighted — replacing the active token. Returns false with the dropdown
 // closed. For hosts that bind Tab to completion; Right does the same at
@@ -619,6 +624,15 @@ static void delete_range(Repl *r, int from, int to) {
     r->buf[r->len] = '\0';
     undo_anchor_here(r);
     after_edit(r);
+}
+
+void repl_replace_range(Repl *r, int from, int to, const char *text) {
+    if (from < 0) from = 0;
+    if (to > r->len) to = r->len;
+    if (from > to) return;
+    delete_range(r, from, to);
+    r->cursor = from;
+    repl_insert_text(r, text);
 }
 
 // Scan left from cursor over trailing separators then a run of non-separators.
@@ -1382,7 +1396,7 @@ void repl_render(const Repl *r, int x, int y, int width, bool focused,
         render_row(r, draw, ctx, x, y + row_count, width, cont, focused, true,
                    r->len, r->len);
 
-    // --- Ghost text after the prompt: a live placeholder (voice) wins, then
+    // --- Ghost text after the prompt: a host placeholder wins, then
     // the history autosuggestion, then the command usage hint.
     int input_rows = body_rows;
     if (focused && row_count > 0) {

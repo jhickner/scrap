@@ -93,8 +93,9 @@ void prompt_set_idle(struct prompt *p, int (*fds)(void *ud, int *out, int max),
 char *prompt_take_queued(struct prompt *p);
 
 void prompt_set_external(struct prompt *p, char *(*fn)(void *ud), void *ud);
-/* ghost text after the caret */
-void prompt_set_placeholder(struct prompt *p, const char *text);
+/* the live transcription in the input, edited and submitted like typed text;
+   "" removes it */
+void prompt_set_preview(struct prompt *p, const char *text);
 void prompt_insert(struct prompt *p, const char *text);
 const char *prompt_line(struct prompt *p);
 /* 1 when the prompt should show the listen mark */

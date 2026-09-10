@@ -29,7 +29,7 @@ CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           sessionviewtest sessionloadtest highlighttest muxcfgtest telegramtest \
           boardtest modelstest boardgridtest boardtiletest viewstest sessionpresenttest \
           workspacetest replboxtest ttytest gitinfotest sidechannelviewtest \
-          sidechannelcmdtest taskstest voicetest filelocktest
+          sidechannelcmdtest taskstest voicetest filelocktest prompttest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,
@@ -126,6 +126,8 @@ $(BUILD)/palette: tools/palette.c src/vendor/colors.h | $(BUILD)
 $(BUILD)/spintest: tools/spintest.c tests/stubs/tabbar.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
 $(BUILD)/statustest: tests/statustest.c tests/stubs/tabbar.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/bash.o $(BUILD)/block.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
+
+$(BUILD)/prompttest: tests/prompttest.c tests/stubs/tabbar.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/bash.o $(BUILD)/block.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
 $(BUILD)/chrometest: tests/chrometest.c tests/stubs/tabbar.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 

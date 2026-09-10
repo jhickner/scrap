@@ -83,9 +83,13 @@ struct prompt {
     void        *cancel_ud;
     int          stopped;
     int          frame_ok;
+    /* the live transcription span in the buffer: its text and byte offset */
+    char         preview[544];
+    int          preview_at;
 };
 
 static int prompt_echoes(struct prompt *p, const char *line);
+static void preview_forget(struct prompt *p);
 
 static void history_append(struct prompt *p, const char *line)
 {
@@ -577,6 +581,7 @@ static void edit_in_editor(struct prompt *p, int live)
         if (text) {
             p->frame_ok = 0;
             repl_reset(&p->repl);
+            preview_forget(p);
             if (*text)
                 repl_insert_text(&p->repl, text);
             free(text);
@@ -869,6 +874,7 @@ static char *take_line(struct prompt *p)
         history_append(p, out);
     }
     repl_reset(&p->repl);
+    preview_forget(p);
     return out;
 }
 
@@ -1096,12 +1102,49 @@ char *prompt_read(struct prompt *p)
     return out;
 }
 
-void prompt_set_placeholder(struct prompt *p, const char *text)
+void prompt_set_preview(struct prompt *p, const char *text)
 {
-    repl_set_placeholder(&p->repl, text);
+    if (!p)
+        return;
+    const char *line = repl_line(&p->repl);
+    int len = (int)strlen(p->preview);
+    int at = p->preview_at;
+    if (len) {
+        if (at < 0 || at + len > (int)strlen(line) ||
+            memcmp(line + at, p->preview, (size_t)len)) {
+            const char *found = strstr(line, p->preview);
+            if (found) {
+                at = (int)(found - line);
+            } else {
+                at = p->repl.cursor;
+                len = 0;
+            }
+        }
+    } else {
+        at = p->repl.cursor;
+    }
+
+    char next[sizeof p->preview];
+    next[0] = '\0';
+    if (text && *text) {
+        int sep = at > 0 && line[at - 1] != ' ' && line[at - 1] != '\n';
+        snprintf(next, sizeof next, "%s%s", sep ? " " : "", text);
+    }
+    if (!len && !next[0])
+        return;
+
+    repl_replace_range(&p->repl, at, at + len, next);
+    snprintf(p->preview, sizeof p->preview, "%s", next);
+    p->preview_at = next[0] ? at : 0;
     p->frame_ok = 0;
     if (!chrome_modal_active())
         repaint(p);
+}
+
+static void preview_forget(struct prompt *p)
+{
+    p->preview[0] = '\0';
+    p->preview_at = 0;
 }
 
 void prompt_insert(struct prompt *p, const char *text)
@@ -1115,7 +1158,6 @@ void prompt_insert(struct prompt *p, const char *text)
             repl_insert_text(&p->repl, " ");
     }
     repl_insert_text(&p->repl, text);
-    repl_set_placeholder(&p->repl, "");
     p->frame_ok = 0;
     if (!chrome_modal_active())
         repaint(p);
@@ -1183,6 +1225,7 @@ static int recall_queued(struct prompt *p)
         return 0;
     p->frame_ok = 0;
     repl_reset(&p->repl);
+    preview_forget(p);
     repl_insert_text(&p->repl, line);
     free(line);
     return 1;
