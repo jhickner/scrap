@@ -60,6 +60,9 @@ void tty_keyboard_on(void);
 
 /* terminal / tmux pane focus; 1 when this pane is current */
 void tty_on_focus(void (*fn)(int on));
+/* Every focus edge, before the settle hold: for state that must follow focus at
+   once, such as releasing a claim on a shared resource. */
+void tty_on_focus_edge(void (*fn)(int on));
 
 int  tty_read(tty_event *ev, int timeout_ms);
 

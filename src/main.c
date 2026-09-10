@@ -783,6 +783,7 @@ int main(int argc, char **argv)
     prompt_set_mic(prompt, toggle_mic, NULL);
     voice_on_heard(voice_heard, prompt);
     tty_on_focus(voice_arm);
+    tty_on_focus_edge(voice_claim);
 
     voice_set_speak(settings_get_int(SETTING_VOICE_SPEAK, 1));
     if (settings_get_int(SETTING_VOICE, 0)) {

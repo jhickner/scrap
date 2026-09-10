@@ -318,6 +318,9 @@ static void on_event(void *ud, const char *kind, const char *text)
     } else if (!strcmp(kind, "speaking")) {
         speaking = text && *text == '1';
         status_touch();
+    } else if (!strcmp(kind, "notice")) {
+        if (text && *text)
+            status_set_alert(text);
     } else if (!strcmp(kind, "error")) {
         if (text && !strncmp(text, "unknown command:", 16))
             return;
@@ -750,6 +753,15 @@ int voice_drop(void)
     return had;
 }
 
+/* The armed state waits for the focus change to settle, but the helper's claim
+   cannot: until this client releases it, speech meant for the window now in
+   focus is still routed here. */
+void voice_claim(int on)
+{
+    if (voice)
+        macos_voice_focus(voice, on ? 1 : 0);
+}
+
 void voice_arm(int on)
 {
     on = on ? 1 : 0;
@@ -768,7 +780,6 @@ void voice_arm(int on)
     if (armed) {
         struct session *s = workspace_current();
         macos_voice_busy(voice, s && session_turn_running(s));
-        chime("listening");
     }
     status_touch();
 }

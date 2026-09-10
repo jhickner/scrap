@@ -12,6 +12,7 @@
  *   interrupt  the stop word; cancel the turn in flight
  *   speaking   "1" while a reply is being read aloud, "0" when it stops
  *   mode       idle | starting | listening | answering | speaking
+ *   notice     something to show the user; the helper keeps running
  *   error      the helper failed; it is stopping
  */
 
@@ -124,6 +125,7 @@ static void mv_emit(macos_voice *v, char *line) {
     else if (!strcmp(line, "INTERRUPT")) v->cb(v->ud, "interrupt", NULL);
     else if (!strncmp(line, "SPEAKING ", 9)) v->cb(v->ud, "speaking", line + 9);
     else if (!strncmp(line, "MODE ", 5)) v->cb(v->ud, "mode", line + 5);
+    else if (!strncmp(line, "NOTE ", 5)) v->cb(v->ud, "notice", line + 5);
     else if (!strncmp(line, "ERR ", 4)) v->cb(v->ud, "error", line + 4);
 }
 

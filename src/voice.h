@@ -59,6 +59,8 @@ void voice_draft_sent(void);
 int  voice_drop(void);
 /* 0 while this pane is not focused: speech is discarded rather than submitted */
 void voice_arm(int on);
+/* Follows every focus edge at once, ahead of voice_arm's settled state. */
+void voice_claim(int on);
 /* line with the spoken-reply preamble prefixed, so the answer is shaped for
    the ear; NULL when voice is off or replies are not read aloud. caller frees */
 char *voice_with_preamble(const char *line);

@@ -89,6 +89,9 @@ func unescape(_ text: String) -> String {
 final class Session {
     let voice = VoiceController(settings: settings)
     var clients = Set<Int32>()
+    /// Clients that have asked for the microphone off. The device is shared, so it is
+    /// released only once no connected client still wants it.
+    var micOff = Set<Int32>()
     var active: Int32?
     var announced = false
     var emptyGeneration = 0
@@ -101,6 +104,7 @@ final class Session {
             self?.sendActive("SPEAKING " + (speaking ? "1" : "0"))
         }
         voice.onError = { [weak self] message in self?.broadcast("ERR " + message) }
+        voice.onNotice = { [weak self] message in self?.broadcast("NOTE " + message) }
         voice.onMode = { [weak self] mode in
             guard let self else { return }
             sendActive("MODE \(mode)")
@@ -114,17 +118,22 @@ final class Session {
     func add(_ fd: Int32) {
         emptyGeneration += 1
         clients.insert(fd)
+        updateMic()
         if announced { send("READY", to: fd) }
     }
 
     func remove(_ fd: Int32) {
         guard clients.remove(fd) != nil else { return }
+        micOff.remove(fd)
         if active == fd {
             if let leftover = voice.handoff() { send("T " + leftover, to: fd) }
             send("P ", to: fd)
             active = nil
         }
         close(fd)
+        // An empty helper keeps the engine up for its grace period, in case a client
+        // is reconnecting across a restart.
+        if !clients.isEmpty { updateMic() }
         if clients.isEmpty {
             emptyGeneration += 1
             let generation = emptyGeneration
@@ -133,6 +142,10 @@ final class Session {
                 quit()
             }
         }
+    }
+
+    func updateMic() {
+        voice.setMic(clients.contains { !micOff.contains($0) })
     }
 
     func broadcast(_ line: String) {
@@ -168,6 +181,9 @@ final class Session {
         let rest = parts.count > 1 ? String(parts[1]) : ""
         switch verb {
         case "FOCUS": focus(fd, rest == "1")
+        case "MIC":
+            if rest == "1" { micOff.remove(fd) } else { micOff.insert(fd) }
+            updateMic()
         case "QUIT": remove(fd)
         // Ends the helper for every client, so a new build replaces a running one.
         case "SHUTDOWN": quit()
@@ -187,7 +203,6 @@ final class Session {
             case "CANCEL": voice.cancelReply()
             case "MUTE": voice.stopSpeaking()
             case "BUSY": voice.setBusy(rest == "1")
-            case "MIC": voice.setMic(rest == "1")
             case "CHIME":
                 if let chime = VoiceChime(rawValue: rest) { voice.play(chime) }
             default: send("ERR unknown command: \(verb)", to: fd)

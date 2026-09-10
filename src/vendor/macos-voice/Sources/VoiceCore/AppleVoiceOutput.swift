@@ -51,6 +51,10 @@ final class AppleVoiceOutput: VoiceOutput {
     static let directUtteranceLimit = 120
     private var isRendering = false
     private var generation = 0
+    /// Reports a configured voice that is not installed. Nothing is spoken in its place —
+    /// a stock voice reading the reply is worse than silence and a message on screen.
+    var onMissingVoice: ((String) -> Void)?
+    private var reportedMissingVoice = false
 
     init(engine: VoiceEngine, voiceIdentifier: String?, rate: Float, volume: Float) {
         self.engine = engine
@@ -94,6 +98,12 @@ final class AppleVoiceOutput: VoiceOutput {
     func speak(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        guard currentVoice() != nil else {
+            guard !reportedMissingVoice else { return }
+            reportedMissingVoice = true
+            onMissingVoice?(voiceIdentifier ?? "")
+            return
+        }
         guard engine.isRunning, !isPersonalVoice else {
             // The synthesizer keeps its own queue and speaks in order, so with no engine to
             // schedule against there is nothing here to manage. Utterances are cut shorter
@@ -144,9 +154,13 @@ final class AppleVoiceOutput: VoiceOutput {
     private func currentVoice() -> AVSpeechSynthesisVoice? {
         if let resolvedVoice { return resolvedVoice }
         guard let named = Self.namedVoice(matching: voiceIdentifier) else {
-            let fallback = Self.bestEnglishVoice()
-            VoiceLog.note("voice \(voiceIdentifier ?? "unset") not installed, using \(fallback?.name ?? "none")")
-            return fallback
+            // With no voice configured there is nothing to be wrong about, so the best
+            // installed English voice stands in.
+            guard let voiceIdentifier, !voiceIdentifier.isEmpty else {
+                return Self.bestEnglishVoice()
+            }
+            VoiceLog.note("voice \(voiceIdentifier) not installed")
+            return nil
         }
         resolvedVoice = named
         VoiceLog.note("voice: \(named.name) (\(named.identifier), personal: \(named.voiceTraits.contains(.isPersonalVoice)))")

@@ -76,6 +76,8 @@ public final class VoiceController {
     public var onHeard: ((String) -> Void)?
     public var onSpeaking: ((Bool) -> Void)?
     public var onError: ((String) -> Void)?
+    /// Something the user should read but which does not end the conversation.
+    public var onNotice: ((String) -> Void)?
 
     private let settings: VoiceSettings
     private var volume: Float
@@ -550,6 +552,9 @@ public final class VoiceController {
             volume: volume
         )
         output.onSpoken = { [weak self] text in self?.echo.noteSpoken(text) }
+        output.onMissingVoice = { [weak self] name in
+            self?.onNotice?("voice \(name) is not installed; the reply was not spoken")
+        }
         // The direct route has no engine playback to drain, so the synthesizer going idle is
         // the only signal that the reply is over. Without it the mode never leaves .speaking
         // and every later turn is held instead of sent. Nothing cancels this audio, so it

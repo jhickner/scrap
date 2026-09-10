@@ -228,6 +228,7 @@ int tty_raw_begin(void)
 }
 
 static void (*focus_fn)(int on);
+static void (*focus_edge_fn)(int on);
 /* A macOS permission dialog opening over the terminal bounces focus out and
    back, and acting on each edge repaints the chrome and re-arms voice. Hold a
    change until the state has been still this long. */
@@ -239,6 +240,11 @@ static long focus_next_at;
 void tty_on_focus(void (*fn)(int on))
 {
     focus_fn = fn;
+}
+
+void tty_on_focus_edge(void (*fn)(int on))
+{
+    focus_edge_fn = fn;
 }
 
 void tty_keyboard_on(void)
@@ -614,8 +620,11 @@ static void emit_modified_tab(tty_event *ev, int mods)
 
 static void focus_change(tty_event *ev, int on)
 {
+    int was = focus_next < 0 ? focused : focus_next;
     focus_next = on == focused ? -1 : on;
     focus_next_at = clock_ms();
+    if (focus_edge_fn && on != was)
+        focus_edge_fn(on);
     emit(ev, TK_NONE);
 }
 
