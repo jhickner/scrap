@@ -345,14 +345,27 @@ public final class VoiceController {
             VoiceLog.note("\(isFinal ? "final" : "volatile") gated (mode \(mode)): \(text)")
             return false
         }
-        if let prefix = rejectedEchoPrefix, Self.words(text).starts(with: Self.words(prefix)) {
-            VoiceLog.note("ignored own voice (grown from rejected prefix): \(text)")
-            return false
+        // The recognizer keeps growing a hypothesis already judged to be a leak, and the
+        // leaked prefix would otherwise reject every later version of it — including the one
+        // where the child has started talking over the reply. The prefix is settled; only the
+        // words added since it was rejected decide whether this is now a turn.
+        var judged = text
+        if let prefix = rejectedEchoPrefix {
+            let heardWords = Self.words(text)
+            let prefixWords = Self.words(prefix)
+            if heardWords.starts(with: prefixWords) {
+                let tail = Array(heardWords.dropFirst(prefixWords.count)).joined(separator: " ")
+                guard Self.isBargeIn(tail) else {
+                    VoiceLog.note("ignored own voice (grown from rejected prefix): \(text)")
+                    return false
+                }
+                judged = tail
+            }
         }
         let speaking = replyInTheAir
         let floor = speaking ? Self.echoWordsWhileSpeaking : nil
         let ratio = speaking ? EchoRejector.matchRatioWhileSpeaking : EchoRejector.matchRatio
-        if echo.shouldReject(text, minimumWords: floor, ratio: ratio) {
+        if echo.shouldReject(judged, minimumWords: floor, ratio: ratio) {
             VoiceLog.note("\(isFinal ? "final" : "volatile") rejected as echo: \(text)")
             if speaking { rejectedEchoPrefix = text }
             return false

@@ -287,7 +287,7 @@ int main(void)
     fire("final", "as a card ok done");
     line = voice_take_line();
     eq_str("dictation joins its turns", line,
-           "I want to show each project as a card");
+           "listen I want to show each project as a card");
     free(line);
     clear_sent();
     clear_chimes();

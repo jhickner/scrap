@@ -241,7 +241,7 @@ static void chime(const char *name)
         macos_voice_chime(voice, name);
 }
 
-/* the text after the word "listen", or NULL when the turn does not carry it.
+/* the word "listen" where it starts, or NULL when the turn does not carry it.
    The word is looked for anywhere, not just at the front: the microphone gate
    closes while a reply is read back, so a dictation opened over the tail of one
    reaches here with its first words already missing */
@@ -252,9 +252,6 @@ static const char *listen_wake(const char *text)
             continue;
         if (strncasecmp(p, "listen", 6) || isalnum((unsigned char)p[6]))
             continue;
-        p += 6;
-        while (*p && !isalnum((unsigned char)*p))
-            p++;
         return p;
     }
     return NULL;
@@ -345,6 +342,9 @@ static int listen_take(const char *text)
         listen_buf[0] = '\0';
         chime("listening");
     }
+    /* the dictation starts at the wake word rather than after it: the entry then shows
+       the words as they were said, and an opening turn carrying nothing else leaves the
+       word standing instead of an empty entry. What precedes it is gate residue and goes */
     char rest[sizeof draft];
     snprintf(rest, sizeof rest, "%s", body);
     if (listen_end(rest)) {
@@ -600,8 +600,12 @@ int voice_restart(char *err, size_t size)
 {
     int was_on = voice != NULL, was_speaking = speak;
     teardown(1);
-    if (!was_on)
+    if (!was_on) {
+        /* no client here to shut the helper down through, but one started by another
+           client is still holding the microphone and the socket */
+        macos_voice_reap(settings_get_str(SETTING_VOICE_HELPER, VOICE_HELPER_PATH));
         return 1;
+    }
     if (!voice_start(err, size))
         return 0;
     voice_set_speak(was_speaking);
