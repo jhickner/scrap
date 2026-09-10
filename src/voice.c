@@ -447,9 +447,11 @@ static void send_line(struct session *s, const char *line)
     chime("sent");
 }
 
-static void discard_speech(const char *text)
+/* Discarded speech is not remembered as stale: remembering each partial would
+   fold every longer partial into the stale prefix, and an utterance whose
+   first words landed in a drop hold would then be swallowed whole. */
+static void discard_speech(void)
 {
-    remember_stale(text);
     hearing = 0;
     if (listening())
         heard("");
@@ -462,7 +464,8 @@ static void on_event(void *ud, const char *kind, const char *text)
         ready = 1;
     } else if (!strcmp(kind, "partial")) {
         if (!listening()) {
-            discard_speech(text);
+            remember_stale(text);
+            discard_speech();
             return;
         }
         if (erased) {
@@ -470,7 +473,7 @@ static void on_event(void *ud, const char *kind, const char *text)
             return;
         }
         if (text && *text && (still_dropping() || is_stale(text))) {
-            discard_speech(text);
+            discard_speech();
             return;
         }
         if (text && *text) {
@@ -485,7 +488,8 @@ static void on_event(void *ud, const char *kind, const char *text)
             forget_stale();
     } else if (!strcmp(kind, "final")) {
         if (!listening()) {
-            discard_speech(text);
+            remember_stale(text);
+            discard_speech();
             return;
         }
         char edit[LISTEN_MAX];
@@ -515,7 +519,7 @@ static void on_event(void *ud, const char *kind, const char *text)
             return;
         }
         if (still_dropping() || is_stale(text)) {
-            discard_speech(text);
+            discard_speech();
             forget_stale();
             return;
         }
@@ -1041,7 +1045,10 @@ int voice_drop(void)
     erased = 0;
     listen_clear();
     hearing = 0;
+    /* the cancelled utterance keeps arriving as ever-longer partials and a
+       final; its words so far are the prefix that marks them stale */
     forget_stale();
+    remember_stale(draft);
     heard("");
     drain();
     macos_voice_cancel(voice);
