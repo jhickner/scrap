@@ -15,6 +15,7 @@
 #include "tty.h"
 #include "ui.h"
 #include "viewport.h"
+#include "voice.h"
 #include "workspace.h"
 
 #define RESTART_SIGNAL SIGURG
@@ -250,6 +251,7 @@ int restart_exec(struct session *s)
     ui_raw(0);
     tty_raw_handoff();
 
+    voice_handoff();
     execvp(argv[0], argv);
 
     if (carried) {

@@ -657,9 +657,15 @@ int voice_start(char *err, size_t size)
         voice = NULL;
         return 0;
     }
-    macos_voice_focus(voice, armed);
-    if (armed)
-        chime("listening");
+    armed = tty_focused();
+    /* An inherited connection already has the correct helper-side ownership.
+       Reasserting remembered terminal focus here would let restart order
+       decide which instance gets the microphone. Only real focus edges claim it. */
+    if (!macos_voice_resumed(voice)) {
+        macos_voice_focus(voice, armed);
+        if (armed)
+            chime("listening");
+    }
     macos_voice_volume(voice, voice_volume() / 100.0);
     macos_voice_rate(voice, voice_rate() / 100.0 * AV_RATE_DEFAULT);
     /* the helper may already be running for another client, with its silence */
@@ -699,6 +705,14 @@ static void teardown(int end_helper)
 }
 
 void voice_stop(void) { teardown(0); }
+
+void voice_protect_handoff(void) { macos_voice_protect_handoff(); }
+
+void voice_handoff(void)
+{
+    if (voice && macos_voice_handoff(voice) != 0)
+        voice_stop();
+}
 
 int voice_restart(char *err, size_t size)
 {

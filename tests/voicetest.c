@@ -22,6 +22,11 @@ static macos_voice fake;
 static macos_voice_cb cb;
 static void *cb_ud;
 static int need_ready;
+static int helper_focus = -1;
+static int focused_window = 1;
+static int focus_when_ready = -1;
+static int resumed;
+static int focus_calls;
 
 static char *chimes[8];
 static int nchimes;
@@ -62,6 +67,8 @@ int  macos_voice_poll(macos_voice *v, int timeout_ms)
     (void)timeout_ms;
     if (need_ready && cb) {
         need_ready = 0;
+        if (focus_when_ready >= 0)
+            focused_window = focus_when_ready;
         cb(cb_ud, "ready", NULL);
         return 1;
     }
@@ -84,7 +91,10 @@ int  macos_voice_busy(macos_voice *v, int busy) { (void)v; (void)busy; return 0;
 int  macos_voice_volume(macos_voice *v, double volume) { (void)v; (void)volume; return 0; }
 int  macos_voice_rate(macos_voice *v, double rate) { (void)v; (void)rate; return 0; }
 int  macos_voice_silence(macos_voice *v, double seconds) { (void)v; (void)seconds; return 0; }
-int  macos_voice_focus(macos_voice *v, int focused) { (void)v; (void)focused; return 0; }
+int  macos_voice_focus(macos_voice *v, int focused) { (void)v; focus_calls++; helper_focus = focused; return 0; }
+int  macos_voice_resumed(const macos_voice *v) { (void)v; return resumed; }
+int  macos_voice_handoff(macos_voice *v) { (void)v; return 0; }
+void macos_voice_protect_handoff(void) {}
 void macos_voice_stop(macos_voice *v) { (void)v; }
 void macos_voice_shutdown(macos_voice *v) { (void)v; }
 int  macos_voice_reap(const char *helper_path) { (void)helper_path; return 0; }
@@ -129,7 +139,6 @@ void session_remove_listener(session_listener_fn fn, void *ud) { (void)fn; (void
 
 void prompt_echo_message(const char *text) { (void)text; }
 
-static int focused_window = 1;
 int tty_focused(void) { return focused_window; }
 
 /* stands in for the input box: the preview is the whole line there */
@@ -467,9 +476,51 @@ int main(void)
         return 1;
     if (nchimes)
         fail("starting out of front does not chime");
+    if (helper_focus != 0)
+        fail("background startup must not claim helper focus");
     fire("final", "meant for the other window");
     if (voice_take_line())
         fail("speech is not taken by a window out of front");
+    voice_stop();
+
+    focused_window = 1;
+    focus_when_ready = 0;
+    if (!start_voice())
+        return 1;
+    if (helper_focus != 0 || nchimes)
+        fail("focus lost while helper starts must not claim the microphone");
+    voice_stop();
+
+    focused_window = 0;
+    focus_when_ready = 1;
+    if (!start_voice())
+        return 1;
+    if (helper_focus != 1)
+        fail("focus gained while helper starts claims the microphone");
+    voice_stop();
+
+    clear_chimes();
+    resumed = 1;
+    focus_when_ready = -1;
+    focused_window = 1;
+    helper_focus = 0;
+    focus_calls = 0;
+    if (!start_voice())
+        return 1;
+    if (focus_calls || helper_focus != 0 || nchimes)
+        fail("resumed background connection must not steal focus or chime");
+    voice_claim(1);
+    if (helper_focus != 1 || focus_calls != 1)
+        fail("real focus edge still claims a resumed connection");
+    voice_stop();
+
+    helper_focus = 1;
+    focus_calls = 0;
+    focused_window = 0;
+    if (!start_voice())
+        return 1;
+    if (focus_calls || helper_focus != 1)
+        fail("resuming must also preserve the current helper owner");
     voice_stop();
 
     if (fails)

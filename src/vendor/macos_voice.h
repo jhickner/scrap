@@ -52,6 +52,11 @@ int  macos_voice_rate(macos_voice *v, double rate);
 int  macos_voice_silence(macos_voice *v, double seconds);
 /* Only the focused client receives microphone events or controls output. */
 int  macos_voice_focus(macos_voice *v, int focused);
+/* Preserve the connection and its helper-side focus across exec. */
+int  macos_voice_handoff(macos_voice *v);
+/* Call at process entry, before spawning children, to protect an inherited fd. */
+void macos_voice_protect_handoff(void);
+int  macos_voice_resumed(const macos_voice *v);
 /* Disconnect this client. The helper exits when the last client leaves. */
 void macos_voice_stop(macos_voice *v);
 /* End the helper for every client, then disconnect. */
@@ -78,10 +83,51 @@ int  macos_voice_reap(const char *helper_path);
 
 struct macos_voice {
     int fd;
+    int resumed;
     char path[104];
     char *buf; size_t len, cap;
     macos_voice_cb cb; void *ud;
 };
+
+#define MV_HANDOFF_FD "MUX_VOICE_FD"
+#define MV_HANDOFF_BUF "MUX_VOICE_PENDING"
+
+static int mv_handoff_fd(void) {
+    const char *s = getenv(MV_HANDOFF_FD);
+    if (!s || !*s) return -1;
+    char *end;
+    long fd = strtol(s, &end, 10);
+    if (*end || fd < 3 || fd > 0x7fffffff) return -1;
+    struct sockaddr_un peer = {0};
+    socklen_t size = sizeof peer;
+    char path[104];
+    snprintf(path, sizeof path, "/tmp/macos-voice-%u.sock", (unsigned)getuid());
+    if (getpeername((int)fd, (struct sockaddr *)&peer, &size) != 0 ||
+        peer.sun_family != AF_UNIX || strcmp(peer.sun_path, path)) return -1;
+    return (int)fd;
+}
+
+void macos_voice_protect_handoff(void) {
+    int fd = mv_handoff_fd();
+    if (fd >= 0) fcntl(fd, F_SETFD, FD_CLOEXEC);
+}
+
+int macos_voice_handoff(macos_voice *v) {
+    if (!v || v->fd < 0) return -1;
+    char fd[32];
+    snprintf(fd, sizeof fd, "%d", v->fd);
+    if (v->buf) v->buf[v->len] = 0;
+    if (setenv(MV_HANDOFF_BUF, v->buf ? v->buf : "", 1) != 0 ||
+        setenv(MV_HANDOFF_FD, fd, 1) != 0 ||
+        fcntl(v->fd, F_SETFD, 0) != 0) {
+        unsetenv(MV_HANDOFF_FD);
+        unsetenv(MV_HANDOFF_BUF);
+        return -1;
+    }
+    return 0;
+}
+
+int macos_voice_resumed(const macos_voice *v) { return v && v->resumed; }
 
 static int mv_write(macos_voice *v, const char *verb, const char *text) {
     if (!v || v->fd < 0) return -1;
@@ -147,6 +193,24 @@ macos_voice *macos_voice_start(const macos_voice_opts *o, macos_voice_cb cb, voi
     macos_voice *v = calloc(1, sizeof *v); if (!v) return NULL;
     v->fd = -1; v->cb = cb; v->ud = ud;
     snprintf(v->path, sizeof v->path, "/tmp/macos-voice-%u.sock", (unsigned)getuid());
+    v->fd = mv_handoff_fd();
+    unsetenv(MV_HANDOFF_FD);
+    if (v->fd >= 0) {
+        fcntl(v->fd, F_SETFD, FD_CLOEXEC);
+        const char *pending = getenv(MV_HANDOFF_BUF);
+        if (pending && *pending) {
+            v->buf = strdup(pending);
+            if (!v->buf) { unsetenv(MV_HANDOFF_BUF); macos_voice_stop(v); return NULL; }
+            v->len = strlen(v->buf);
+            v->cap = v->len + 1;
+        }
+        unsetenv(MV_HANDOFF_BUF);
+        v->resumed = 1;
+        signal(SIGPIPE, SIG_IGN);
+        cb(ud, "ready", NULL);
+        return v;
+    }
+    unsetenv(MV_HANDOFF_BUF);
     v->fd = mv_connect(v->path);
 
     char rate[32] = "", silence[32] = "", volume[32] = "";

@@ -385,7 +385,6 @@ static int idle_restart(void *ud)
     sidechannel_close_all();
     child_close_all();
     tabs_admit(1);
-    voice_stop();
 
     if (!restart_exec(workspace_current())) {
         viewport_item_begin(VIEWPORT_ROWS(1, 1));
@@ -472,6 +471,7 @@ static int live_command(void *ud, const char *line)
 
 int main(int argc, char **argv)
 {
+    voice_protect_handoff();
     static const struct option LONG_OPTS[] = {
         {"backend", required_argument, NULL, 'b'},
         {"model",   required_argument, NULL, 'm'},

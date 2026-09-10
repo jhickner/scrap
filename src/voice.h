@@ -10,6 +10,8 @@ struct session;
 
 int  voice_start(char *err, size_t size);
 void voice_stop(void);
+void voice_handoff(void);
+void voice_protect_handoff(void);
 /* Ends the shared helper process and reconnects, so a new build takes effect. */
 int  voice_restart(char *err, size_t size);
 int  voice_on(void);
