@@ -362,6 +362,7 @@ int session_idle_fd(const struct session *s)
 
 static const char *tabs_provider(const struct session *s)
 {
+    static char buf[32];
     const char *model = NULL;
 
     if (!s || !s->backend || strcmp(s->backend, "pi") != 0)
@@ -370,9 +371,17 @@ static const char *tabs_provider(const struct session *s)
         model = s->resolved;
     else if (s->model && *s->model)
         model = s->model;
-    if (model && !strncmp(model, "openrouter/", 11))
-        return "openrouter";
-    return NULL;
+    if (!model)
+        return NULL;
+    const char *slash = strchr(model, '/');
+    if (!slash || slash == model)
+        return NULL;
+    size_t n = (size_t)(slash - model);
+    if (n >= sizeof buf)
+        return NULL;
+    memcpy(buf, model, n);
+    buf[n] = '\0';
+    return buf;
 }
 
 static void publish(const struct session *s, const char *status)

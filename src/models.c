@@ -1,5 +1,6 @@
 #include "models.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,12 +86,75 @@ static time_t home_stamp(const char *rest)
     return stat(path, &st) ? 0 : st.st_mtime;
 }
 
+static int env_set(const char *name)
+{
+    const char *v = getenv(name);
+    return v && *v;
+}
+
+/* google and huggingface use names that are not PROVIDER_API_KEY. */
+static int pi_env_name(const char *provider, char *out, size_t cap)
+{
+    if (!provider || !*provider || !out || cap < 12)
+        return 0;
+    if (!strcmp(provider, "google"))
+        return snprintf(out, cap, "GEMINI_API_KEY") < (int)cap;
+    if (!strcmp(provider, "huggingface"))
+        return snprintf(out, cap, "HF_TOKEN") < (int)cap;
+
+    size_t n = 0;
+    for (const char *p = provider; *p && n + 9 < cap; p++) {
+        unsigned char c = (unsigned char)*p;
+        out[n++] = c == '-' ? '_' : (char)toupper(c);
+    }
+    out[n] = '\0';
+    return snprintf(out + n, cap - n, "_API_KEY") < (int)(cap - n);
+}
+
+static int pi_key_from_auth(cJSON *auth, const char *provider)
+{
+    cJSON *entry = auth ? cJSON_GetObjectItem(auth, provider) : NULL;
+    if (!entry || !cJSON_IsObject(entry))
+        return 0;
+    const char *key = cJSON_GetStringValue(cJSON_GetObjectItem(entry, "key"));
+    if (key && *key)
+        return 1;
+    const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(entry, "type"));
+    return type && *type && strcmp(type, "api_key") != 0;
+}
+
+static int pi_has_key(cJSON *auth, const char *provider)
+{
+    char var[80];
+    if (pi_env_name(provider, var, sizeof var) && env_set(var))
+        return 1;
+    return pi_key_from_auth(auth, provider);
+}
+
+static time_t pi_env_stamp(void)
+{
+    static const char *const vars[] = {
+        "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY",
+        "CEREBRAS_API_KEY", "GROQ_API_KEY", "DEEPSEEK_API_KEY", "HF_TOKEN",
+        "MISTRAL_API_KEY", "FIREWORKS_API_KEY", "TOGETHER_API_KEY",
+        "NVIDIA_API_KEY", NULL
+    };
+    time_t t = 0;
+    for (int i = 0; vars[i]; i++)
+        if (env_set(vars[i]))
+            t |= (time_t)1 << i;
+    return t;
+}
+
 /* A backend that reads its models off disk rebuilds its list when the file
    moves, or an edited config waits for the next mux. */
 static time_t backend_stamp(const char *backend)
 {
     if (!strcmp(backend, "pi"))
-        return home_stamp(".pi/agent/models.json") + home_stamp(".pi/agent/models-store.json");
+        return home_stamp(".pi/agent/models.json")
+             + home_stamp(".pi/agent/models-store.json")
+             + home_stamp(".pi/agent/auth.json")
+             + pi_env_stamp();
     if (!strcmp(backend, "codex"))
         return home_stamp(".codex/models_cache.json");
     return 0;
@@ -155,6 +219,29 @@ static void pi_model_id(char *out, size_t cap, const char *id)
         snprintf(out, cap, "%s", id);
     else
         snprintf(out, cap, "openrouter/%s", id);
+}
+
+/* pi takes provider/id. The id is already prefixed when the catalog listed it
+   that way. */
+static void push_pi_model(struct list *l, const char *provider, const char *id,
+                          const char *name, double context)
+{
+    if (!id || !*id)
+        return;
+
+    char        label[LABEL_BYTES];
+    const char *at = provider ? provider : "";
+    size_t      len = strlen(at);
+    if (len && !strncmp(id, at, len) && id[len] == '/')
+        snprintf(label, sizeof label, "%s", id);
+    else if (len)
+        snprintf(label, sizeof label, "%s/%s", at, id);
+    else
+        snprintf(label, sizeof label, "%s", id);
+
+    char detail[DETAIL_BYTES];
+    describe(detail, sizeof detail, name, context);
+    push(l, label, detail);
 }
 
 static void push_openrouter(struct list *l, const char *id, const char *name, double context)
@@ -294,6 +381,45 @@ static time_t catalog_stamp(void)
     return st.st_mtime;
 }
 
+static int store_rates(const char *model, struct model_rates *out)
+{
+    if (!model || !strncmp(model, "openrouter/", 11))
+        return 0;
+    const char *slash = strchr(model, '/');
+    if (!slash || slash == model)
+        return 0;
+
+    char provider[64];
+    size_t n = (size_t)(slash - model);
+    if (n >= sizeof provider)
+        return 0;
+    memcpy(provider, model, n);
+    provider[n] = '\0';
+
+    char *text = home_slurp(".pi/agent/models-store.json");
+    if (!text)
+        return 0;
+
+    cJSON *root = cJSON_Parse(text);
+    cJSON *block = root ? cJSON_GetObjectItem(root, provider) : NULL;
+    int    ok = 0;
+    cJSON *m;
+    cJSON_ArrayForEach(m, cJSON_GetObjectItem(block, "models")) {
+        const char *have = cJSON_GetStringValue(cJSON_GetObjectItem(m, "id"));
+        if (!have || strcmp(have, slash + 1))
+            continue;
+        cJSON *cost = cJSON_GetObjectItem(m, "cost");
+        out->input = cJSON_GetNumberValue(cJSON_GetObjectItem(cost, "input"));
+        out->output = cJSON_GetNumberValue(cJSON_GetObjectItem(cost, "output"));
+        out->cache_read = cJSON_GetNumberValue(cJSON_GetObjectItem(cost, "cacheRead"));
+        ok = out->input > 0 || out->output > 0;
+        break;
+    }
+    cJSON_Delete(root);
+    free(text);
+    return ok;
+}
+
 int models_rates(const char *backend, const char *model, struct model_rates *out)
 {
     if (!out || !model || !*model)
@@ -314,7 +440,7 @@ int models_rates(const char *backend, const char *model, struct model_rates *out
     static int    n, at;
     static time_t stamp;
 
-    time_t now = catalog_stamp();
+    time_t now = catalog_stamp() + home_stamp(".pi/agent/models-store.json");
     if (now != stamp) {
         stamp = now;
         n = at = 0;
@@ -342,15 +468,17 @@ int models_rates(const char *backend, const char *model, struct model_rates *out
     else
         snprintf(filed, sizeof filed, "%s%s", catalog_vendor(backend), id);
 
+    int ok = 0;
     char *text = catalog_text();
-    if (!text)
-        return 0;
-
-    cJSON *root = cJSON_Parse(text);
-    cJSON *models = root ? cJSON_GetObjectItem(root, "data") : NULL;
-    int ok = models && (rates_of(models, filed, out) || rates_of(models, id, out));
-    cJSON_Delete(root);
-    free(text);
+    if (text) {
+        cJSON *root = cJSON_Parse(text);
+        cJSON *models = root ? cJSON_GetObjectItem(root, "data") : NULL;
+        ok = models && (rates_of(models, filed, out) || rates_of(models, id, out));
+        cJSON_Delete(root);
+        free(text);
+    }
+    if (!ok)
+        ok = store_rates(model, out);
 
     if (!ok)
         memset(out, 0, sizeof *out);
@@ -393,35 +521,49 @@ static void fill_pi_configured(struct list *l)
     cJSON *provider;
     cJSON_ArrayForEach(provider, providers) {
         cJSON *m;
-        cJSON_ArrayForEach(m, cJSON_GetObjectItem(provider, "models")) {
-            const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(m, "id"));
-            const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(m, "name"));
-            if (!id || !*id)
-                continue;
-
-            /* pi takes provider/id, and the provider is what the list is
-               filtered by. */
-            char        label[LABEL_BYTES];
-            const char *at = provider->string ? provider->string : "";
-            size_t      len = strlen(at);
-            if (len && !strncmp(id, at, len) && id[len] == '/')
-                snprintf(label, sizeof label, "%s", id);
-            else
-                snprintf(label, sizeof label, "%s/%s", at, id);
-
-            char detail[DETAIL_BYTES];
-            describe(detail, sizeof detail, name,
-                     cJSON_GetNumberValue(cJSON_GetObjectItem(m, "contextWindow")));
-            push(l, label, detail);
-        }
+        cJSON_ArrayForEach(m, cJSON_GetObjectItem(provider, "models"))
+            push_pi_model(l, provider->string,
+                          cJSON_GetStringValue(cJSON_GetObjectItem(m, "id")),
+                          cJSON_GetStringValue(cJSON_GetObjectItem(m, "name")),
+                          cJSON_GetNumberValue(cJSON_GetObjectItem(m, "contextWindow")));
     }
     cJSON_Delete(root);
+    free(text);
+}
+
+static void fill_pi_native(struct list *l)
+{
+    char *text = home_slurp(".pi/agent/models-store.json");
+    if (!text)
+        return;
+
+    char *auth_text = home_slurp(".pi/agent/auth.json");
+    cJSON *root = cJSON_Parse(text);
+    cJSON *auth = auth_text ? cJSON_Parse(auth_text) : NULL;
+    cJSON *provider;
+    cJSON_ArrayForEach(provider, root) {
+        const char *at = provider->string;
+        if (!at || !strcmp(at, "openrouter"))
+            continue;
+        if (!pi_has_key(auth, at))
+            continue;
+        cJSON *m;
+        cJSON_ArrayForEach(m, cJSON_GetObjectItem(provider, "models"))
+            push_pi_model(l, at,
+                          cJSON_GetStringValue(cJSON_GetObjectItem(m, "id")),
+                          cJSON_GetStringValue(cJSON_GetObjectItem(m, "name")),
+                          cJSON_GetNumberValue(cJSON_GetObjectItem(m, "contextWindow")));
+    }
+    cJSON_Delete(auth);
+    cJSON_Delete(root);
+    free(auth_text);
     free(text);
 }
 
 static void fill_pi(struct list *l)
 {
     fill_pi_configured(l);
+    fill_pi_native(l);
     if (!fill_openrouter_catalog(l))
         fill_pi_store(l);
 }
