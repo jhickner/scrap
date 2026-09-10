@@ -533,6 +533,13 @@ int main(void)
     voice_arm(1);
     if (helper_focus != 1 || focus_calls != 2)
         fail("real focus edge still claims a resumed connection");
+    /* a window that missed its focus-out is already armed, and still has to ask
+       for the helper back */
+    focus_calls = 0;
+    helper_focus = 0;
+    voice_arm(1);
+    if (helper_focus != 1 || focus_calls != 1)
+        fail("a repeated focus-in reclaims the helper");
     voice_stop();
 
     helper_focus = 1;

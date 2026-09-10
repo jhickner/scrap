@@ -177,6 +177,30 @@ int tty_rows(void)
 
 static int focused = 1;
 
+/* tmux knows which pane is in front; asking beats assuming for a window that
+   starts in the background and is never sent a focus-out. */
+static int tmux_pane_focused(void)
+{
+    const char *pane = getenv("TMUX_PANE");
+    if (!pane || !*pane)
+        return 1;
+    char cmd[256];
+    snprintf(cmd, sizeof cmd,
+             "tmux display-message -p -t '%s' "
+             "'#{&&:#{pane_active},#{window_active}}' 2>/dev/null",
+             pane);
+    FILE *f = popen(cmd, "r");
+    if (!f)
+        return 1;
+    char out[8] = {0};
+    if (!fgets(out, sizeof out, f)) {
+        pclose(f);
+        return 1;
+    }
+    pclose(f);
+    return out[0] == '1';
+}
+
 int tty_raw_begin(void)
 {
     if (in_raw)
@@ -228,6 +252,8 @@ int tty_raw_begin(void)
     if (carried) {
         focused = *carried != '0';
         unsetenv(FOCUS_ENV);
+    } else if (getenv("TMUX")) {
+        focused = tmux_pane_focused();
     }
 
     fputs(BRACKETED_PASTE_ON FOCUS_ON KEYBOARD_PUSH, stdout);
@@ -621,12 +647,12 @@ static void emit_modified_tab(tty_event *ev, int mods)
         emit(ev, TK_TAB);
 }
 
+/* Focus is only ever reported as a change, so a window that started in the
+   background and was never told believes it is in front. Report every edge the
+   terminal sends rather than filtering it against that guess: a listener owning
+   a shared resource has to be able to reclaim it on the way in. */
 static void focus_change(tty_event *ev, int on)
 {
-    if (on == focused) {
-        emit(ev, TK_NONE);
-        return;
-    }
     focused = on;
     if (focus_fn)
         focus_fn(focused);

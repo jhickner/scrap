@@ -333,12 +333,9 @@ static void keys_from_pipe(void)
     expect_ctrl(w, "\x1b[97;5u", 7, 1, "csi-u ctrl-a");
     expect_focus(w, "\x1b[O", TK_FOCUS_OUT, "focus out");
     expect_focus(w, "\x1b[I", TK_FOCUS_IN, "focus in");
-    /* a repeat of the state already held is not a change */
-    if (write(w, "\x1b[I", 3) != 3)
-        fail("focus repeat write");
-    tty_event ev;
-    if (read_until(&ev, 300))
-        fprintf(stderr, "FAIL focus repeat: key %d want none\n", (int)ev.key), failures++;
+    /* a window that missed its focus-out still has to report the edge, so a
+       repeat is reported rather than filtered */
+    expect_focus(w, "\x1b[I", TK_FOCUS_IN, "focus repeat");
 
     close(w);
 }

@@ -1064,8 +1064,10 @@ static void await_handoff(void)
 void voice_arm(int on)
 {
     on = on ? 1 : 0;
-    if (on == armed)
-        return;
+    int changed = on != armed;
+    /* Every edge reasserts the claim, whether or not this window thought it had
+       focus: the helper routes speech to the client that asked for it last, and
+       a window that missed its focus-out would otherwise never ask again. */
     if (on) {
         armed = 1;
         if (voice)
@@ -1073,11 +1075,13 @@ void voice_arm(int on)
     } else {
         if (voice)
             macos_voice_focus(voice, 0);
-        await_handoff();
-        voice_commit(workspace_current());
+        if (changed) {
+            await_handoff();
+            voice_commit(workspace_current());
+        }
         armed = 0;
     }
-    if (!voice)
+    if (!voice || !changed)
         return;
     dropping = 0;
     drop_until = 0;
