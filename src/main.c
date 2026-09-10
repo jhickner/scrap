@@ -186,7 +186,26 @@ static void voice_heard(void *ud, const char *text)
 static int voice_listening(void *ud)
 {
     (void)ud;
-    return voice_on();
+    return voice_mic();
+}
+
+static void toggle_mic(void *ud)
+{
+    (void)ud;
+    if (!voice_on()) {
+        char err[300];
+        if (!voice_apply(1, voice_speak(), err, sizeof err)) {
+            char text[320];
+            snprintf(text, sizeof text, "voice: %s", err);
+            status_set_alert(text);
+            return;
+        }
+        status_set_note("mic on");
+        return;
+    }
+    int on = !voice_mic();
+    voice_set_mic(on);
+    status_set_note(on ? "mic on" : "mic off");
 }
 
 static char *chat_line(void *ud)
@@ -761,6 +780,7 @@ int main(int argc, char **argv)
     prompt_set_animate(prompt, side_busy, side_tick, NULL);
     prompt_set_external(prompt, chat_line, prompt);
     prompt_set_listen(prompt, voice_listening, NULL);
+    prompt_set_mic(prompt, toggle_mic, NULL);
     voice_on_heard(voice_heard, prompt);
     tty_on_focus(voice_arm);
 

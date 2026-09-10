@@ -71,6 +71,8 @@ struct prompt {
     void        *click_ud;
     void       (*board)(void *ud);
     void        *board_ud;
+    void       (*mic)(void *ud);
+    void        *mic_ud;
     void       (*split)(void *ud, int quiet);
     void        *split_ud;
     void       (*another)(void *ud);
@@ -646,6 +648,7 @@ static const struct prompt_key SHORTCUTS[] = {
     {"ctrl-_", "undo the last edit"},
     {"ctrl-g", "edit the prompt in $EDITOR"},
     {"ctrl-v", "paste text, or a clipboard image as a file path"},
+    {"space (empty)", "turn the microphone on or off"},
     {"tab", "accept the completion, else open the board"},
     {"@", "complete a file path from the working directory"},
     {"up / down", "move through the completion list, else browse history"},
@@ -713,6 +716,10 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
 
             if (p->cancel && p->cancel(p->cancel_ud))
                 return KEY_OK;
+        }
+        if (ev->cp == ' ' && p->mic && p->repl.len == 0 && !overlay_open(p)) {
+            p->mic(p->mic_ud);
+            return KEY_OK;
         }
         if (ev->cp == KEY_CTRL('V')) {
             paste_clipboard(p, live);
@@ -960,6 +967,12 @@ void prompt_set_board(struct prompt *p, void (*fn)(void *ud), void *ud)
 {
     p->board = fn;
     p->board_ud = ud;
+}
+
+void prompt_set_mic(struct prompt *p, void (*fn)(void *ud), void *ud)
+{
+    p->mic = fn;
+    p->mic_ud = ud;
 }
 
 void prompt_set_another(struct prompt *p, void (*fn)(void *ud), void *ud)

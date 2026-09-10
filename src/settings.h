@@ -41,6 +41,11 @@
 
 #define VOICE_VOLUME_DEFAULT 100
 #define VOICE_RATE_DEFAULT   100
+/* seconds of quiet that end a spoken turn */
+#define VOICE_SILENCE_DEFAULT 2.0
+#define VOICE_SILENCE_MIN     0.4
+#define VOICE_SILENCE_MAX     10.0
+
 #define VOICE_RATE_MIN        20
 #define VOICE_RATE_MAX       200
 /* say the session name when a turn ends while this pane is unfocused */

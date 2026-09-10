@@ -42,6 +42,7 @@ static int          ready;
 static int          speaking;
 static int          speak = 1;
 static int          armed = 1;
+static int          mic = 1;
 static int          dropping;
 static long         drop_until;
 static int          drop_hold_ms = DROP_HOLD_MS;
@@ -237,11 +238,13 @@ static void send_line(struct session *s, const char *line)
     free(full);
 }
 
+static int listening(void) { return armed && mic; }
+
 static void discard_speech(const char *text)
 {
     remember_stale(text);
     hearing = 0;
-    if (armed)
+    if (listening())
         heard("");
 }
 
@@ -251,7 +254,7 @@ static void on_event(void *ud, const char *kind, const char *text)
     if (!strcmp(kind, "ready")) {
         ready = 1;
     } else if (!strcmp(kind, "partial")) {
-        if (!armed) {
+        if (!listening()) {
             discard_speech(text);
             return;
         }
@@ -272,7 +275,7 @@ static void on_event(void *ud, const char *kind, const char *text)
         if (stale_hit)
             forget_stale();
     } else if (!strcmp(kind, "final")) {
-        if (!armed) {
+        if (!listening()) {
             discard_speech(text);
             return;
         }
@@ -295,7 +298,7 @@ static void on_event(void *ud, const char *kind, const char *text)
         if (text && *text)
             enqueue(text);
     } else if (!strcmp(kind, "interrupt")) {
-        if (!armed)
+        if (!listening())
             return;
         clear_queue();
         hearing = 0;
@@ -357,6 +360,7 @@ int voice_start(char *err, size_t size)
     ready = 0;
     speaking = 0;
     armed = 1;
+    mic = 1;
     dropping = 0;
     drop_until = 0;
     hearing = 0;
@@ -376,7 +380,7 @@ int voice_start(char *err, size_t size)
         .helper_path = settings_get_str(SETTING_VOICE_HELPER, VOICE_HELPER_PATH),
         .voice       = settings_get_str(SETTING_VOICE_NAME, NULL),
         .rate        = voice_rate() / 100.0 * AV_RATE_DEFAULT,
-        .silence     = atof(settings_get_str(SETTING_VOICE_SILENCE, "0")),
+        .silence     = voice_silence(),
         .volume      = voice_volume() / 100.0,
         .input       = settings_get_str(SETTING_VOICE_INPUT, NULL),
         .tick        = wait_tick,
@@ -414,6 +418,8 @@ int voice_start(char *err, size_t size)
     macos_voice_focus(voice, armed);
     macos_voice_volume(voice, voice_volume() / 100.0);
     macos_voice_rate(voice, voice_rate() / 100.0 * AV_RATE_DEFAULT);
+    /* the helper may already be running for another client, with its silence */
+    macos_voice_silence(voice, voice_silence());
     session_add_listener(on_session_event, NULL);
     return 1;
 }
@@ -433,6 +439,7 @@ static void teardown(int end_helper)
     ready = 0;
     speaking = 0;
     armed = 1;
+    mic = 1;
     dropping = 0;
     drop_until = 0;
     hearing = 0;
@@ -513,6 +520,31 @@ void voice_set_rate(int percent)
         macos_voice_rate(voice, percent / 100.0 * AV_RATE_DEFAULT);
 }
 
+static double clamp_silence(double n)
+{
+    if (n < VOICE_SILENCE_MIN)
+        return VOICE_SILENCE_MIN;
+    if (n > VOICE_SILENCE_MAX)
+        return VOICE_SILENCE_MAX;
+    return n;
+}
+
+double voice_silence(void)
+{
+    double n = atof(settings_get_str(SETTING_VOICE_SILENCE, ""));
+    return clamp_silence(n > 0 ? n : VOICE_SILENCE_DEFAULT);
+}
+
+void voice_set_silence(double seconds)
+{
+    seconds = clamp_silence(seconds);
+    char text[32];
+    snprintf(text, sizeof text, "%g", seconds);
+    settings_set_str(SETTING_VOICE_SILENCE, text);
+    if (voice)
+        macos_voice_silence(voice, seconds);
+}
+
 int voice_apply(int on, int speak_on, char *err, size_t size)
 {
     if (!on) {
@@ -529,6 +561,27 @@ int voice_apply(int on, int speak_on, char *err, size_t size)
     return 1;
 }
 
+int voice_mic(void) { return voice && mic; }
+
+void voice_set_mic(int on)
+{
+    on = on ? 1 : 0;
+    if (on == mic)
+        return;
+    if (!on)
+        voice_commit(workspace_current());
+    mic = on;
+    dropping = 0;
+    drop_until = 0;
+    hearing = 0;
+    heard("");
+    if (voice) {
+        drain();
+        macos_voice_cancel(voice);
+    }
+    status_touch();
+}
+
 void voice_on_heard(void (*fn)(void *ud, const char *text), void *ud)
 {
     heard_fn = fn;
@@ -541,6 +594,8 @@ const char *voice_label(void)
         return NULL;
     if (!ready)
         snprintf(label, sizeof label, "voice starting");
+    else if (!mic)
+        snprintf(label, sizeof label, "voice mic off");
     else if (!armed)
         snprintf(label, sizeof label, "voice paused");
     else if (!speak)
@@ -651,7 +706,7 @@ void voice_commit(struct session *s)
 
 void voice_draft_sent(void)
 {
-    if (!voice || !armed)
+    if (!voice || !listening())
         return;
     /* the same words come back as a final once the turn endpoints; remember
        them so that copy is dropped instead of sent again */
@@ -666,7 +721,7 @@ void voice_draft_sent(void)
 
 int voice_drop(void)
 {
-    if (!voice || !armed)
+    if (!voice || !listening())
         return 0;
     int had = nqueue > 0 || hearing || dropping;
     hold_drop();

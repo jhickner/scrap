@@ -39,7 +39,7 @@ struct TurnEndpointer: Sendable {
         case send(String)
     }
 
-    let silence: TimeInterval
+    var silence: TimeInterval
     private(set) var segments: [String] = []
     private var lastActivity: TimeInterval?
 

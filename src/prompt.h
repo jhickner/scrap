@@ -64,6 +64,9 @@ void prompt_set_click(struct prompt *p, int (*fn)(void *ud, int row, int col),
 
 void prompt_set_board(struct prompt *p, void (*fn)(void *ud), void *ud);
 
+/* space on an empty prompt */
+void prompt_set_mic(struct prompt *p, void (*fn)(void *ud), void *ud);
+
 void prompt_set_another(struct prompt *p, void (*fn)(void *ud), void *ud);
 
 void prompt_set_cycle(struct prompt *p, void (*fn)(void *ud, int delta), void *ud);

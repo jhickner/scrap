@@ -636,6 +636,30 @@ static void do_voice(struct session *s, const char *arg)
         return;
     }
 
+    if (arg && !strncmp(arg, "silence", 7) && (!arg[7] || arg[7] == ' ')) {
+        const char *rest = arg + 7;
+        while (*rest == ' ')
+            rest++;
+        if (!*rest) {
+            reply_note("voice silence %gs", voice_silence());
+            return;
+        }
+        char  *end;
+        double n = strtod(rest, &end);
+        if (*end == 's')
+            end++;
+        while (*end == ' ')
+            end++;
+        if (*end || n < VOICE_SILENCE_MIN || n > VOICE_SILENCE_MAX) {
+            reply_error("/voice silence takes seconds from %g to %g",
+                        VOICE_SILENCE_MIN, VOICE_SILENCE_MAX);
+            return;
+        }
+        voice_set_silence(n);
+        reply_note("voice silence %gs", voice_silence());
+        return;
+    }
+
     if (arg && !strcmp(arg, "restart")) {
         char err[300];
         int was_on = voice_on();
@@ -660,7 +684,7 @@ static void do_voice(struct session *s, const char *arg)
         want = 1;
         speak = 0;
     } else {
-        reply_error("/voice takes on, off, listen, restart, complete, volume, rate, or nothing to flip it");
+        reply_error("/voice takes on, off, listen, restart, complete, volume, rate, silence, or nothing to flip it");
         return;
     }
 
@@ -1053,7 +1077,7 @@ static const struct cmd COMMANDS[] = {
     {"/sticky", "float the prompt above the spinner", "[on|off]", CMD_LIVE, do_sticky},
     {"/relay", "answer over the phone relay", "[on|off]", CMD_LIVE, do_relay},
     {"/telegram", "answer over Telegram", "[on|off]", CMD_LIVE, do_telegram},
-    {"/voice", "talk instead of typing", "[on|off|listen|restart|complete|volume|rate]", CMD_LIVE, do_voice},
+    {"/voice", "talk instead of typing", "[on|off|listen|restart|complete|volume|rate|silence]", CMD_LIVE, do_voice},
     {"/image", "tallest an inline image may be drawn", "[rows]", CMD_LIVE, do_image},
     {"/permission", "how the CLI gates tool calls", "[mode]", 0, do_permission},
     {"/settings", "show and change every setting", NULL, 0, do_settings},

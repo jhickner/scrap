@@ -17,12 +17,20 @@ void voice_set_speak(int on);
 int  voice_speak(void);
 /* start or stop and remember it so later sessions and restarts match */
 int  voice_apply(int on, int speak, char *err, size_t size);
+/* the microphone, while replies keep being read aloud */
+int  voice_mic(void);
+void voice_set_mic(int on);
 void voice_set_volume(int percent);
 int  voice_volume(void);
 /* speaking rate as a percent of normal speed; a reply already being spoken
    keeps the rate it started at */
 void voice_set_rate(int percent);
 int  voice_rate(void);
+
+/* seconds of quiet that end a spoken turn; longer leaves more room to pause
+   mid-sentence. The wait is scaled from this by how finished the turn sounds */
+void   voice_set_silence(double seconds);
+double voice_silence(void);
 
 /* what has been heard so far this turn; "" once it is sent or dropped */
 void voice_on_heard(void (*fn)(void *ud, const char *text), void *ud);

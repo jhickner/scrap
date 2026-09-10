@@ -175,6 +175,8 @@ final class Session {
             if let n = Float(rest) { voice.setVolume(n) }
         case "RATE":
             if let n = Float(rest) { voice.setRate(n) }
+        case "SILENCE":
+            if let n = Double(rest) { voice.setSilence(n) }
         case "ANNOUNCE":
             if !rest.isEmpty { voice.announce(unescape(rest)) }
         default:

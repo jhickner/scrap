@@ -139,6 +139,12 @@ public final class VoiceController {
         output?.rate = self.rate
     }
 
+    /// The baseline end-of-turn silence. Takes effect on the next pause; what is already
+    /// accumulated this turn is kept.
+    public func setSilence(_ seconds: TimeInterval) {
+        endpointer.silence = min(max(seconds, 0.4), 10)
+    }
+
     public var isAvailable: Bool {
         if #available(macOS 26.0, *) { return true }
         return false
