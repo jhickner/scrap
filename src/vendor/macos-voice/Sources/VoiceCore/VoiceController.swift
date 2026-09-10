@@ -365,6 +365,11 @@ public final class VoiceController {
     }
 
     private func pollSilentSpeech() {
+        if output?.sweepStalledRender() == true {
+            silentSince = nil
+            handlePlaybackDrained(echoCancelled: engine.isEchoCancelled)
+            return
+        }
         guard mode == .speaking || isSpeaking, !engine.isSpeaking,
               !(output?.hasPendingSpeech ?? false)
         else {

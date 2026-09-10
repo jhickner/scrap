@@ -18,4 +18,11 @@ protocol VoiceOutput: AnyObject {
     var onFinished: (() -> Void)? { get set }
 
     var hasPendingSpeech: Bool { get }
+
+    /* drop a render whose completion never arrived; true when one was dropped */
+    func sweepStalledRender() -> Bool
+}
+
+extension VoiceOutput {
+    func sweepStalledRender() -> Bool { false }
 }

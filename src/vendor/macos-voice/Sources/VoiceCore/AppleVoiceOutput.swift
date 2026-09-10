@@ -32,6 +32,8 @@ final class AppleVoiceOutput: VoiceOutput {
 
     static let directUtteranceLimit = 120
     private var isRendering = false
+    private var renderDeadline: TimeInterval?
+    static let renderTimeout: TimeInterval = 8
     private var generation = 0
 
     var onMissingVoice: ((String) -> Void)?
@@ -126,6 +128,7 @@ final class AppleVoiceOutput: VoiceOutput {
         queue = []
         owedDelay = 0
         isRendering = false
+        renderDeadline = nil
         speaker.stopSpeaking(at: .immediate)
         speakerDelegate.reset()
         engine.stopPlayback()
@@ -133,6 +136,23 @@ final class AppleVoiceOutput: VoiceOutput {
 
     var hasPendingSpeech: Bool {
         isRendering || !queue.isEmpty || speakerDelegate.pending > 0 || speaker.isSpeaking
+    }
+
+    /* A render whose completion never arrives pins hasPendingSpeech, and the
+       controller's silent-speech watchdog waits on that: the reply is never
+       heard and listening never resumes. Drop a render that is past due so the
+       watchdog can see an idle output again. */
+    func sweepStalledRender() -> Bool {
+        guard isRendering, let deadline = renderDeadline,
+              Date.timeIntervalSinceReferenceDate >= deadline
+        else { return false }
+        VoiceLog.problem("speech render stalled; dropping it")
+        generation &+= 1
+        isRendering = false
+        renderDeadline = nil
+        queue = []
+        owedDelay = 0
+        return true
     }
 
     private func currentVoice() -> AVSpeechSynthesisVoice? {
@@ -176,6 +196,7 @@ final class AppleVoiceOutput: VoiceOutput {
             text = queued
         }
         isRendering = true
+        renderDeadline = Date.timeIntervalSinceReferenceDate + Self.renderTimeout
         let expected = generation
         let clock = ContinuousClock.now
 
@@ -196,6 +217,7 @@ final class AppleVoiceOutput: VoiceOutput {
 
     private func finish(text: String, render: Render, expected: Int) {
         isRendering = false
+        renderDeadline = nil
         let buffers = render.buffers
         render.buffers = []
 
