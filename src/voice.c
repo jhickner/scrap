@@ -1,9 +1,11 @@
 #include "voice.h"
 
+#include <ctype.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -23,6 +25,8 @@
 
 #define READY_WAIT_MS 30000
 #define LINE_MAX_QUEUE 16
+/* room for a dictation held across many turns */
+#define LISTEN_MAX 8192
 #define DROP_HOLD_MS 700
 /* the hold after the draft is submitted by hand, where only the tail of the
    utterance already sent has to be swallowed */
@@ -52,6 +56,10 @@ static int          hearing;
 static char         stale[512];
 static int          stale_hit;
 static char         draft[512];
+/* dictation opened by the wake word: every turn is held here until the
+   terminator, so a long input is not cut up by pauses */
+static int          listen_mode;
+static char         listen_buf[LISTEN_MAX];
 static char         failure[256];
 static char        *queue[LINE_MAX_QUEUE];
 static int          nqueue;
@@ -65,8 +73,15 @@ static void heard(const char *text)
         snprintf(draft, sizeof draft, "%s", text);
     else
         draft[0] = '\0';
-    if (heard_fn)
-        heard_fn(heard_ud, text);
+    if (!heard_fn)
+        return;
+    if (listen_mode && listen_buf[0]) {
+        char *joined = text_dsprintf("%s%s%s", listen_buf, draft[0] ? " " : "", draft);
+        heard_fn(heard_ud, joined ? joined : listen_buf);
+        free(joined);
+        return;
+    }
+    heard_fn(heard_ud, text);
 }
 
 static void enqueue(const char *text)
@@ -234,6 +249,115 @@ static void chime(const char *name)
         macos_voice_chime(voice, name);
 }
 
+/* the text after a leading "listen", or NULL when the turn does not open with it */
+static const char *listen_wake(const char *text)
+{
+    const char *p = text;
+    while (*p && !isalnum((unsigned char)*p))
+        p++;
+    if (strncasecmp(p, "listen", 6) || isalnum((unsigned char)p[6]))
+        return NULL;
+    p += 6;
+    while (*p && !isalnum((unsigned char)*p))
+        p++;
+    return p;
+}
+
+/* the offset where word ends at end, or -1 */
+static ptrdiff_t word_ends_at(const char *text, size_t end, const char *word)
+{
+    size_t len = strlen(word);
+    if (end < len)
+        return -1;
+    size_t start = end - len;
+    if (strncasecmp(text + start, word, len))
+        return -1;
+    if (start && isalnum((unsigned char)text[start - 1]))
+        return -1;
+    return (ptrdiff_t)start;
+}
+
+/* strips a closing "ok done"; 1 when it was there. Only the very end counts,
+   so "okay, done with that" mid-thought does not cut the dictation short */
+static int listen_end(char *text)
+{
+    size_t n = strlen(text);
+    while (n && !isalnum((unsigned char)text[n - 1]))
+        n--;
+    ptrdiff_t done = word_ends_at(text, n, "done");
+    if (done < 0)
+        return 0;
+    size_t e = (size_t)done;
+    while (e && !isalnum((unsigned char)text[e - 1]))
+        e--;
+    ptrdiff_t start = word_ends_at(text, e, "ok");
+    if (start < 0)
+        start = word_ends_at(text, e, "okay");
+    if (start < 0)
+        return 0;
+    text[start] = '\0';
+    return 1;
+}
+
+static void listen_append(const char *text)
+{
+    while (*text == ' ')
+        text++;
+    size_t len = strlen(text);
+    while (len && (text[len - 1] == ' ' || text[len - 1] == '\n'))
+        len--;
+    if (!len)
+        return;
+    size_t n = strlen(listen_buf);
+    if (n + len + 2 > sizeof listen_buf)
+        return;
+    snprintf(listen_buf + n, sizeof listen_buf - n, "%s%.*s", n ? " " : "", (int)len, text);
+}
+
+static void listen_clear(void)
+{
+    listen_mode = 0;
+    listen_buf[0] = '\0';
+}
+
+/* end the dictation with tail as its last utterance and queue the whole thing */
+static void listen_flush(const char *tail)
+{
+    char body[sizeof draft];
+    if (tail && *tail) {
+        snprintf(body, sizeof body, "%s", tail);
+        listen_end(body);
+        listen_append(body);
+    }
+    listen_mode = 0;
+    if (listen_buf[0])
+        enqueue(listen_buf);
+    listen_buf[0] = '\0';
+}
+
+/* holds a finished turn in the dictation; 0 when this turn is not one */
+static int listen_take(const char *text)
+{
+    const char *body = text;
+
+    if (!listen_mode) {
+        body = listen_wake(text);
+        if (!body)
+            return 0;
+        listen_mode = 1;
+        listen_buf[0] = '\0';
+        chime("listening");
+    }
+    char rest[sizeof draft];
+    snprintf(rest, sizeof rest, "%s", body);
+    if (listen_end(rest)) {
+        listen_flush(rest);
+        return 1;
+    }
+    listen_append(rest);
+    return 1;
+}
+
 static void send_line(struct session *s, const char *line)
 {
     int tab = workspace_index_of(s);
@@ -296,6 +420,10 @@ static void on_event(void *ud, const char *kind, const char *text)
             return;
         }
         forget_stale();
+        if (text && *text && listen_take(text)) {
+            heard("");
+            return;
+        }
         if (text && *text && is_stop_command(text)) {
             struct session *s = workspace_current();
             if (s && session_turn_running(s))
@@ -309,6 +437,7 @@ static void on_event(void *ud, const char *kind, const char *text)
         if (!listening())
             return;
         clear_queue();
+        listen_clear();
         hearing = 0;
         heard("");
         struct session *s = workspace_current();
@@ -377,6 +506,7 @@ int voice_start(char *err, size_t size)
     drop_until = 0;
     hearing = 0;
     forget_stale();
+    listen_clear();
     draft[0] = '\0';
     failure[0] = '\0';
 
@@ -457,6 +587,7 @@ static void teardown(int end_helper)
     drop_until = 0;
     hearing = 0;
     forget_stale();
+    listen_clear();
     draft[0] = '\0';
     clear_queue();
     heard("");
@@ -591,6 +722,7 @@ void voice_set_mic(int on)
     dropping = 0;
     drop_until = 0;
     hearing = 0;
+    listen_clear();
     heard("");
     if (voice) {
         drain();
@@ -615,6 +747,8 @@ const char *voice_label(void)
         snprintf(label, sizeof label, "voice mic off");
     else if (!armed)
         snprintf(label, sizeof label, "voice paused");
+    else if (listen_mode)
+        snprintf(label, sizeof label, "voice dictation");
     else if (!speak)
         snprintf(label, sizeof label, "voice listen");
     else
@@ -701,7 +835,12 @@ void voice_commit(struct session *s)
     if (!voice || !s)
         return;
     drain();
-    if (draft[0] && !is_stale(draft)) {
+    if (listen_mode) {
+        const char *tail = draft[0] && !is_stale(draft) ? draft : NULL;
+        if (tail)
+            remember_stale(tail);
+        listen_flush(tail);
+    } else if (draft[0] && !is_stale(draft)) {
         remember_stale(draft);
         if (is_stop_command(draft)) {
             if (session_turn_running(s))
@@ -731,6 +870,7 @@ void voice_draft_sent(void)
        them so that copy is dropped instead of sent again */
     if (draft[0])
         remember_stale(draft);
+    listen_clear();
     hold_drop_for(SENT_HOLD_MS);
     hearing = 0;
     heard("");
@@ -742,9 +882,10 @@ int voice_drop(void)
 {
     if (!voice || !listening())
         return 0;
-    int had = nqueue > 0 || hearing || dropping;
+    int had = nqueue > 0 || hearing || dropping || listen_mode;
     hold_drop();
     clear_queue();
+    listen_clear();
     hearing = 0;
     forget_stale();
     heard("");
