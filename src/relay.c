@@ -20,6 +20,7 @@
 #include "bash.h"
 #include "cmd.h"
 #include "frontend.h"
+#include "filelock.h"
 #include "gitinfo.h"
 #include "restart.h"
 #include "session.h"
@@ -28,6 +29,7 @@
 #include "status.h"
 #include "tasks.h"
 #include "text.h"
+#include "tg.h"
 #include "tgbridge.h"
 #include "transcript.h"
 #include "toolstyle.h"
@@ -95,6 +97,30 @@ static struct {
 };
 
 static struct settings cfg;
+static int             owner_lock = -1;
+static char            start_error[256];
+
+const char *relay_start_error(void)
+{
+    return start_error[0] ? start_error : NULL;
+}
+
+static int claim_relay(void)
+{
+    char path[128];
+    snprintf(path, sizeof path, "/tmp/" APP_NAME "-%lu-relay", (unsigned long)getuid());
+    owner_lock = filelock_acquire(path, LOCK_EX | LOCK_NB);
+    if (owner_lock >= 0)
+        return 1;
+    if (errno == EWOULDBLOCK || errno == EAGAIN)
+        snprintf(start_error, sizeof start_error,
+                 "relay is already enabled by another mux instance");
+    else
+        snprintf(start_error, sizeof start_error,
+                 "could not claim relay for this mux instance: %s", strerror(errno));
+    fprintf(stderr, APP_NAME ": %s\n", start_error);
+    return 0;
+}
 
 static const char *cfg_get(const char *key, const char *dflt)
 {
@@ -354,7 +380,7 @@ static void send_hello(void)
 
 /* What the model is told about the phone on the other end: replies land there
    as chat messages, so terminal-width answers read badly. */
-static const char *relay_system_note(void)
+const char *relay_system_note(void)
 {
     size_t n = snprintf(rt.system_note, sizeof rt.system_note,
         "## This session is also on a phone\n\n"
@@ -718,17 +744,6 @@ static void on_state(void *ud, int connected)
 
 /* ---- lines from the phone ----------------------------------------------- */
 
-static const char HELP[] =
-    "Anything you say is one turn in a live mux session, including slash "
-    "commands.\n\n"
-    "/tabs        the conversations open here, to switch between\n"
-    "/open [dir]  another conversation, here or somewhere else\n"
-    "/close [n]   close one\n"
-    "/resume      reopen a past conversation from this directory\n"
-    "/stop        abandon the turn in flight\n"
-    "/relay       the bridge's own settings, and this\n\n"
-    "Settings live in ~/.config/mux/relay.";
-
 static const char *arg_of(const char *line, const char *cmd)
 {
     size_t n = strlen(cmd);
@@ -740,23 +755,11 @@ static const char *arg_of(const char *line, const char *cmd)
     return arg;
 }
 
-static void send_status(void)
-{
-    char msg[600];
-    snprintf(msg, sizeof msg,
-             "%-8s %s\n%-8s %s:%d\n%-8s %s\n%-8s %s\n%-8s %d of %d",
-             "bridge", rt.label, "listen", rt.bind[0] ? rt.bind : "*", rt.port,
-             "client", rt.client[0] ? rt.client : "none", "mirror",
-             rt.mirror == MIRROR_OFF ? "off" : rt.mirror == MIRROR_REMOTE ? "remote" : "all",
-             "tab", workspace_index() + 1, workspace_count());
-    send_pre(msg);
-}
-
 /* Whether the bridge owns this line, without running it. */
 static int bridge_command_name(const char *line)
 {
     static const char *CMDS[] = {"/tabs", "/tab",    "/sessions", "/open",
-                                 "/close", "/resume", "/relay",    "/stop"};
+                                 "/close", "/resume", "/stop"};
     for (int i = 0; i < COUNT(CMDS); i++)
         if (arg_of(line, CMDS[i]))
             return 1;
@@ -793,11 +796,6 @@ static int bridge_command(const char *line)
         } else {
             tgbridge_send_resume(&rt.bridge, MENU_MAX);
         }
-        return 1;
-    }
-    if (!strcmp(line, "/relay")) {
-        send_status();
-        send_pre(HELP);
         return 1;
     }
     if (!strcmp(line, "/stop"))
@@ -1015,6 +1013,7 @@ static void files_start(void)
 
 static void cleanup(void)
 {
+    struct session *s = current_session();
     rt.active = 0;
     wsd_stop(rt.ws);
     rt.ws = NULL;
@@ -1028,19 +1027,24 @@ static void cleanup(void)
         close(rt.wake[1]);
     rt.wake[0] = rt.wake[1] = -1;
     inbox_clear();
-    if (current_session())
-        session_set_system_extra(current_session(), NULL);
+    if (s)
+        session_set_system_extra(s, tg_label() && tg_session() == s
+                                      ? tg_system_note() : NULL);
     cJSON_Delete(menu_items);
     menu_items = NULL;
-    tgbridge_forget(&rt.bridge, current_session());
+    tgbridge_forget(&rt.bridge, s);
     rt.label[0] = rt.client[0] = '\0';
     rt.from_chat = rt.repeat_task = rt.stop_wanted = 0;
     rt.busy_sent = -1;
     rt.menu = (struct relay_menu){0};
+    restart_unflag("--relay");
+    filelock_release(owner_lock);
+    owner_lock = -1;
 }
 
 int relay_start(struct session *s)
 {
+    start_error[0] = '\0';
     if (rt.active)
         return 0;
     char cfgpath[4200];
@@ -1074,6 +1078,9 @@ int relay_start(struct session *s)
     rt.mirror = !strcmp(m, "off") ? MIRROR_OFF : !strcmp(m, "remote") ? MIRROR_REMOTE
                                                                     : MIRROR_ALL;
     snprintf(rt.label, sizeof rt.label, "relay");
+
+    if (!claim_relay())
+        return 0;
 
     if (pipe(rt.wake) != 0) {
         fprintf(stderr, APP_NAME ": relay wake pipe: %s\n", strerror(errno));
@@ -1116,7 +1123,7 @@ fail:
 
 void relay_stop(void)
 {
-    if (!rt.active && !rt.ws && rt.wake[0] < 0)
+    if (!rt.active && !rt.ws && rt.wake[0] < 0 && owner_lock < 0)
         return;
     cleanup();
 }

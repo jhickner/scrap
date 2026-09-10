@@ -8,6 +8,7 @@ void restart_arm(void);
 void restart_shield_thread(void);
 
 void restart_flag(const char *flag);
+void restart_unflag(const char *flag);
 
 void restart_request(void);
 

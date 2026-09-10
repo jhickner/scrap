@@ -5,6 +5,7 @@ struct session;
 
 int tg_start(struct session *s);
 void tg_stop(void);
+const char *tg_start_error(void);
 
 const char *tg_label(void);
 

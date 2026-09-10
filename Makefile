@@ -29,7 +29,7 @@ CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           sessionviewtest sessionloadtest highlighttest muxcfgtest telegramtest \
           boardtest modelstest boardgridtest boardtiletest viewstest sessionpresenttest \
           workspacetest replboxtest ttytest gitinfotest sidechannelviewtest \
-          sidechannelcmdtest taskstest voicetest
+          sidechannelcmdtest taskstest voicetest filelocktest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,

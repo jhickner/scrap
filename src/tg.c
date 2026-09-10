@@ -25,8 +25,10 @@
 #include "bash.h"
 #include "cmd.h"
 #include "frontend.h"
+#include "filelock.h"
 #include "gitinfo.h"
 #include "prompt.h"
+#include "relay.h"
 #include "reminders.h"
 #include "handoff.h"
 #include "restart.h"
@@ -159,6 +161,31 @@ static struct session *current_session(void)
 static void tg_cleanup(void);
 
 static struct settings tgcfg;
+static int             owner_lock = -1;
+static char            start_error[256];
+
+const char *tg_start_error(void)
+{
+    return start_error[0] ? start_error : NULL;
+}
+
+static int claim_telegram(void)
+{
+    char path[128];
+    snprintf(path, sizeof path, "/tmp/" APP_NAME "-%lu-telegram",
+             (unsigned long)getuid());
+    owner_lock = filelock_acquire(path, LOCK_EX | LOCK_NB);
+    if (owner_lock >= 0)
+        return 1;
+    if (errno == EWOULDBLOCK || errno == EAGAIN)
+        snprintf(start_error, sizeof start_error,
+                 "telegram is already enabled by another mux instance");
+    else
+        snprintf(start_error, sizeof start_error,
+                 "could not claim telegram for this mux instance: %s", strerror(errno));
+    fprintf(stderr, APP_NAME ": %s\n", start_error);
+    return 0;
+}
 
 static const char *cfg_get(const char *key, const char *dflt)
 {
@@ -1435,6 +1462,7 @@ static const char *bot_token(void)
 
 int tg_start(struct session *s)
 {
+    start_error[0] = '\0';
     if (running)
         return 0;
 
@@ -1466,6 +1494,9 @@ int tg_start(struct session *s)
                 path);
         return 0;
     }
+
+    if (!claim_telegram())
+        return 0;
 
     const char *m = cfg_get("mirror", "remote");
     mirror = !strcmp(m, "off") ? MIRROR_OFF : !strcmp(m, "remote") ? MIRROR_REMOTE
@@ -1609,7 +1640,8 @@ static void tg_cleanup(void)
     if (s) {
         session_set_observer(s, NULL, NULL);
         session_set_abort_hook(s, NULL, NULL);
-        session_set_system_extra(s, NULL);
+        session_set_system_extra(s, relay_label() && relay_session() == s
+                                      ? relay_system_note() : NULL);
     }
     tgbridge_forget(&runtime.bridge, s);
     runtime.chat_id = 0;
@@ -1623,12 +1655,15 @@ static void tg_cleanup(void)
     runtime.dispatching_live = 0;
     menu = (struct tg_menu){0};
     receipt = (struct tg_receipt){0};
+    restart_unflag("--telegram");
+    filelock_release(owner_lock);
+    owner_lock = -1;
 }
 
 void tg_stop(void)
 {
     if (!running && !rx && !tx && wake[0] < 0 && wake[1] < 0 && !sendq &&
-        !poller_live && !artifacts)
+        !poller_live && !artifacts && owner_lock < 0)
         return;
     tg_cleanup();
 }

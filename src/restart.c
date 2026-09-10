@@ -56,8 +56,23 @@ static int         extra_n;
 
 void restart_flag(const char *flag)
 {
+    for (int i = 0; i < extra_n; i++)
+        if (!strcmp(extra[i], flag))
+            return;
     if (extra_n < RESTART_FLAGS)
         extra[extra_n++] = flag;
+}
+
+void restart_unflag(const char *flag)
+{
+    for (int i = 0; i < extra_n; i++) {
+        if (strcmp(extra[i], flag))
+            continue;
+        for (int j = i + 1; j < extra_n; j++)
+            extra[j - 1] = extra[j];
+        extra_n--;
+        return;
+    }
 }
 
 void restart_request(void)

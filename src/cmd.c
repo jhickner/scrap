@@ -15,6 +15,7 @@
 #include "matrix.h"
 #include "frontend.h"
 #include "hud.h"
+#include "relay.h"
 #include "models.h"
 #include "muxcfg.h"
 #include "muxmake.h"
@@ -35,6 +36,7 @@
 #include "settings.h"
 #include "settingsui.h"
 #include "text.h"
+#include "tg.h"
 #include "status.h"
 #include "ui.h"
 #include "vendor/agents/backend.h"
@@ -527,6 +529,46 @@ static void do_sticky(struct session *s, const char *arg)
     reply_note("floating prompt %s", on ? "on" : "off");
 }
 
+static void do_relay(struct session *s, const char *arg)
+{
+    int current = relay_label() != NULL;
+    int on = toggle_arg(arg, "on", "off", current, "/relay");
+    if (on < 0)
+        return;
+    if (on == current) {
+        reply_note("relay already %s", on ? "on" : "off");
+        return;
+    }
+    if (on) {
+        if (!relay_start(s))
+            reply_error("%s", relay_start_error() ? relay_start_error()
+                                                   : "could not enable relay");
+        return;
+    }
+    relay_stop();
+    reply_note("relay off");
+}
+
+static void do_telegram(struct session *s, const char *arg)
+{
+    int current = tg_label() != NULL;
+    int on = toggle_arg(arg, "on", "off", current, "/telegram");
+    if (on < 0)
+        return;
+    if (on == current) {
+        reply_note("telegram already %s", on ? "on" : "off");
+        return;
+    }
+    if (on) {
+        if (!tg_start(s))
+            reply_error("%s", tg_start_error() ? tg_start_error()
+                                                : "could not enable telegram");
+        return;
+    }
+    tg_stop();
+    reply_note("telegram off");
+}
+
 static void do_voice(struct session *s, const char *arg)
 {
     (void)s;
@@ -971,6 +1013,8 @@ static const struct cmd COMMANDS[] = {
     {"/tools", "how much of each tool call to show", "[compact|full]", CMD_LIVE,
      do_tools},
     {"/sticky", "float the prompt above the spinner", "[on|off]", CMD_LIVE, do_sticky},
+    {"/relay", "answer over the phone relay", "[on|off]", CMD_LIVE, do_relay},
+    {"/telegram", "answer over Telegram", "[on|off]", CMD_LIVE, do_telegram},
     {"/voice", "talk instead of typing", "[on|off|listen|complete|volume]", CMD_LIVE, do_voice},
     {"/image", "tallest an inline image may be drawn", "[rows]", CMD_LIVE, do_image},
     {"/permission", "how the CLI gates tool calls", "[mode]", 0, do_permission},
