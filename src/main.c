@@ -795,7 +795,6 @@ int main(int argc, char **argv)
     voice_on_draft(voice_draft, prompt);
     voice_on_release(voice_release, prompt);
     tty_on_focus(voice_arm);
-    tty_on_focus_edge(voice_claim);
 
     voice_set_speak(settings_get_int(SETTING_VOICE_SPEAK, 1));
     if (settings_get_int(SETTING_VOICE, 0)) {

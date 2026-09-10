@@ -61,10 +61,19 @@ macos_voice *macos_voice_start(const macos_voice_opts *opts, macos_voice_cb fn, 
 }
 
 int  macos_voice_fd(const macos_voice *v) { (void)v; return -1; }
+/* what the helper hands back on the next poll, as it does when ownership is
+   released */
+static const char *handoff_text;
 int  macos_voice_poll(macos_voice *v, int timeout_ms)
 {
     (void)v;
     (void)timeout_ms;
+    if (handoff_text && cb) {
+        const char *text = handoff_text;
+        handoff_text = NULL;
+        cb(cb_ud, "final", text);
+        return 1;
+    }
     if (need_ready && cb) {
         need_ready = 0;
         if (focus_when_ready >= 0)
@@ -266,6 +275,17 @@ int main(void)
         fail("leaving the window commits the draft");
     else
         eq_str("focus-out draft", sent[0], "left in the other window");
+    clear_sent();
+
+    /* releasing the helper makes it hand back what it had heard; that answer
+       belongs to the window being left */
+    voice_arm(1);
+    handoff_text = "handed back on the way out";
+    voice_arm(0);
+    if (nsent != 1)
+        fail("the helper's handoff commits to the window being left");
+    else
+        eq_str("handoff final", sent[0], "handed back on the way out");
     clear_sent();
 
     voice_arm(1);
@@ -509,8 +529,9 @@ int main(void)
         return 1;
     if (focus_calls || helper_focus != 0 || nchimes)
         fail("resumed background connection must not steal focus or chime");
-    voice_claim(1);
-    if (helper_focus != 1 || focus_calls != 1)
+    voice_arm(0);
+    voice_arm(1);
+    if (helper_focus != 1 || focus_calls != 2)
         fail("real focus edge still claims a resumed connection");
     voice_stop();
 

@@ -1048,13 +1048,17 @@ int voice_drop(void)
     return had;
 }
 
-/* The armed state waits for the focus change to settle, but the helper's claim
-   cannot: until this client releases it, speech meant for the window now in
-   focus is still routed here. */
-void voice_claim(int on)
+/* Releasing ownership makes the helper hand back whatever it had heard. Wait
+   for that answer, while this window is still armed to take it, so the words
+   land in the window they were spoken in rather than the one being switched
+   to. */
+#define HANDOFF_WAIT_MS 40
+static void await_handoff(void)
 {
-    if (voice)
-        macos_voice_focus(voice, on ? 1 : 0);
+    if (!voice)
+        return;
+    if (macos_voice_poll(voice, HANDOFF_WAIT_MS) > 0)
+        drain();
 }
 
 void voice_arm(int on)
@@ -1062,16 +1066,23 @@ void voice_arm(int on)
     on = on ? 1 : 0;
     if (on == armed)
         return;
-    if (!on)
+    if (on) {
+        armed = 1;
+        if (voice)
+            macos_voice_focus(voice, 1);
+    } else {
+        if (voice)
+            macos_voice_focus(voice, 0);
+        await_handoff();
         voice_commit(workspace_current());
-    armed = on;
+        armed = 0;
+    }
     if (!voice)
         return;
     dropping = 0;
     drop_until = 0;
     hearing = 0;
     heard("");
-    macos_voice_focus(voice, armed);
     if (armed) {
         struct session *s = workspace_current();
         macos_voice_busy(voice, s && session_turn_running(s));

@@ -67,18 +67,11 @@ static int read_until(tty_event *ev, int ms)
     }
 }
 
-/* focus changes are held until the state stops moving, so they outlast the
-   settle window rather than arriving with the byte */
 static void expect_focus(int wfd, const char *bytes, tty_key want, const char *what)
 {
     tty_event ev;
     if (write(wfd, bytes, 3) != 3) {
         fail(what);
-        return;
-    }
-    if (read_until(&ev, 100)) {
-        fprintf(stderr, "FAIL %s: fired before it settled\n", what);
-        failures++;
         return;
     }
     if (!read_until(&ev, 600) || ev.key != want) {
@@ -340,13 +333,12 @@ static void keys_from_pipe(void)
     expect_ctrl(w, "\x1b[97;5u", 7, 1, "csi-u ctrl-a");
     expect_focus(w, "\x1b[O", TK_FOCUS_OUT, "focus out");
     expect_focus(w, "\x1b[I", TK_FOCUS_IN, "focus in");
-    /* a dialog opening over the terminal bounces focus and settles where it
-       started, which is not a change */
-    if (write(w, "\x1b[O\x1b[I", 6) != 6)
-        fail("focus bounce write");
+    /* a repeat of the state already held is not a change */
+    if (write(w, "\x1b[I", 3) != 3)
+        fail("focus repeat write");
     tty_event ev;
-    if (read_until(&ev, 600))
-        fprintf(stderr, "FAIL focus bounce: key %d want none\n", (int)ev.key), failures++;
+    if (read_until(&ev, 300))
+        fprintf(stderr, "FAIL focus repeat: key %d want none\n", (int)ev.key), failures++;
 
     close(w);
 }

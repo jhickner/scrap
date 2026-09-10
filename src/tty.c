@@ -175,13 +175,7 @@ int tty_rows(void)
     return n < 3 ? 3 : n;
 }
 
-/* A macOS permission dialog opening over the terminal bounces focus out and
-   back, and acting on each edge repaints the chrome and re-arms voice. Hold a
-   change until the state has been still this long. */
-#define FOCUS_SETTLE_MS 250
-static int  focused = 1;
-static int  focus_next = -1;
-static long focus_next_at;
+static int focused = 1;
 
 int tty_raw_begin(void)
 {
@@ -245,20 +239,14 @@ int tty_raw_begin(void)
 }
 
 static void (*focus_fn)(int on);
-static void (*focus_edge_fn)(int on);
 int tty_focused(void)
 {
-    return focus_next < 0 ? focused : focus_next;
+    return focused;
 }
 
 void tty_on_focus(void (*fn)(int on))
 {
     focus_fn = fn;
-}
-
-void tty_on_focus_edge(void (*fn)(int on))
-{
-    focus_edge_fn = fn;
 }
 
 void tty_keyboard_on(void)
@@ -635,33 +623,14 @@ static void emit_modified_tab(tty_event *ev, int mods)
 
 static void focus_change(tty_event *ev, int on)
 {
-    int was = focus_next < 0 ? focused : focus_next;
-    focus_next = on == focused ? -1 : on;
-    focus_next_at = clock_ms();
-    if (focus_edge_fn && on != was)
-        focus_edge_fn(on);
-    emit(ev, TK_NONE);
-}
-
-/* milliseconds until a held focus change is due, or -1 with none held */
-static int focus_due_in(void)
-{
-    if (focus_next < 0)
-        return -1;
-    long left = focus_next_at + FOCUS_SETTLE_MS - clock_ms();
-    return left > 0 ? (int)left : 0;
-}
-
-static int focus_settled(tty_event *ev)
-{
-    if (focus_due_in() != 0)
-        return 0;
-    focused = focus_next;
-    focus_next = -1;
+    if (on == focused) {
+        emit(ev, TK_NONE);
+        return;
+    }
+    focused = on;
     if (focus_fn)
         focus_fn(focused);
     emit(ev, focused ? TK_FOCUS_IN : TK_FOCUS_OUT);
-    return 1;
 }
 
 static void decode_csi(tty_event *ev, const int *params, int nparams, int final,
@@ -912,17 +881,8 @@ int tty_read(tty_event *ev, int timeout_ms)
         return 1;
     }
 
-    if (focus_settled(ev))
-        return 1;
-
-    int held = focus_due_in();
-    if (held >= 0 && (timeout_ms < 0 || timeout_ms > held))
-        timeout_ms = held;
-
     int avail = refill(timeout_ms);
     if (avail == 0) {
-        if (focus_settled(ev))
-            return 1;
         if (got_winch) {
             got_winch = 0;
             emit(ev, TK_RESIZE);
