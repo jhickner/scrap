@@ -9,3 +9,4 @@ TODO.md
 .claude/worktrees
 testimages/
 .build/
+src/vendor/VoiceHelper.app/
