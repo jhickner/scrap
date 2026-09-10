@@ -23,6 +23,8 @@ static macos_voice_cb cb;
 static void *cb_ud;
 static int need_ready;
 
+static char *chimes[8];
+static int nchimes;
 static char *sent[8];
 static char *sent_full[8];
 static int nsent;
@@ -70,6 +72,13 @@ int  macos_voice_announce(macos_voice *v, const char *text) { (void)v; (void)tex
 int  macos_voice_finish(macos_voice *v) { (void)v; return 0; }
 int  macos_voice_cancel(macos_voice *v) { (void)v; return 0; }
 int  macos_voice_mute(macos_voice *v) { (void)v; return 0; }
+int  macos_voice_chime(macos_voice *v, const char *name)
+{
+    (void)v;
+    if (nchimes < (int)(sizeof chimes / sizeof chimes[0]))
+        chimes[nchimes++] = strdup(name);
+    return 0;
+}
 int  macos_voice_busy(macos_voice *v, int busy) { (void)v; (void)busy; return 0; }
 int  macos_voice_volume(macos_voice *v, double volume) { (void)v; (void)volume; return 0; }
 int  macos_voice_rate(macos_voice *v, double rate) { (void)v; (void)rate; return 0; }
@@ -122,6 +131,13 @@ static void fire(const char *kind, const char *text)
 {
     if (cb)
         cb(cb_ud, kind, text);
+}
+
+static void clear_chimes(void)
+{
+    for (int i = 0; i < nchimes; i++)
+        free(chimes[i]);
+    nchimes = 0;
 }
 
 static void clear_sent(void)
@@ -209,6 +225,43 @@ int main(void)
         eq_str("listen-only draft", sent_full[0], "no preamble here");
     clear_sent();
     voice_set_speak(1);
+
+    clear_chimes();
+    sess.running = 0;
+    fire("final", "a finished turn");
+    char *taken = voice_take_line();
+    if (nchimes != 1)
+        fail("a finished utterance chimes when it is taken");
+    else
+        eq_str("chime on take", chimes[0], "sent");
+    free(taken);
+    clear_chimes();
+
+    fire("partial", "one more thing");
+    voice_commit(&sess);
+    if (nchimes != 1)
+        fail("sending a spoken line chimes once");
+    else
+        eq_str("chime on send", chimes[0], "sent");
+    clear_sent();
+    clear_chimes();
+
+    voice_set_mic(0);
+    if (nchimes)
+        fail("turning the mic off does not chime");
+    fire("final", "heard with the mic off");
+    fire("interrupt", NULL);
+    if (nchimes)
+        fail("speech with the mic off does not chime");
+    clear_chimes();
+    voice_set_mic(1);
+    if (nchimes != 1)
+        fail("turning the mic on chimes once");
+    else
+        eq_str("chime on mic", chimes[0], "listening");
+    clear_chimes();
+    clear_sent();
+
 
     fire("partial", "sent by hand");
     voice_draft_sent();

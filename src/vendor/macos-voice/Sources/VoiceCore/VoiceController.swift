@@ -233,7 +233,6 @@ public final class VoiceController {
         output = makeOutput()
         mode = .listening
         startPolling()
-        engine.play(.listening)
         VoiceLog.note("listening (echo cancellation: \(engine.isEchoCancelled))")
         await recognizer.run(buffers: buffers) { [weak self] event in
             self?.handle(event)
@@ -426,7 +425,6 @@ public final class VoiceController {
             return
         }
         mode = .answering
-        engine.play(.sent)
         onSend?(utterance)
     }
 
@@ -518,7 +516,6 @@ public final class VoiceController {
             ? 0 : Date.timeIntervalSinceReferenceDate + Self.echoGate
         isSpeaking = false
         mode = .listening
-        engine.play(.interrupted)
         onInterrupt?()
     }
 
@@ -667,6 +664,12 @@ public final class VoiceController {
 
     /// Mirrors a streaming turn: stop aborts it, and other speech is sent so the client
     /// can queue it rather than interrupting.
+    /// Acknowledgement tones are the client's to place: only it knows whether the transcript
+    /// of this turn is being used, so only it knows whether a tone would mean anything.
+    public func play(_ chime: VoiceChime) {
+        engine.play(chime)
+    }
+
     public func setBusy(_ busy: Bool) {
         isBusy = busy
         if busy { isReplyMuted = false }

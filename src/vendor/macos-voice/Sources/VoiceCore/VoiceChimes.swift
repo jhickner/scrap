@@ -7,7 +7,7 @@ import Foundation
 /// message left, the Primer is working on it — have to be marked some other way. A tone does it
 /// in a tenth of a second and does not interrupt the reading of the reply the way spoken words
 /// would. Borrowed from voiceclaude, which needs the same acknowledgements for the same reason.
-enum VoiceChime {
+public enum VoiceChime: String {
     /// The turn has been sent and an answer is coming. Rising, because something is starting.
     case sent
     /// The turn was interrupted and the Primer is listening again.

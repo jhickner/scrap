@@ -226,6 +226,14 @@ static int is_stop_command(const char *text)
     return 0;
 }
 
+static int listening(void) { return armed && mic; }
+
+static void chime(const char *name)
+{
+    if (voice && listening())
+        macos_voice_chime(voice, name);
+}
+
 static void send_line(struct session *s, const char *line)
 {
     int tab = workspace_index_of(s);
@@ -236,9 +244,8 @@ static void send_line(struct session *s, const char *line)
     char *full = voice_with_preamble(line);
     workspace_send(tab, full ? full : line, full ? line : NULL);
     free(full);
+    chime("sent");
 }
-
-static int listening(void) { return armed && mic; }
 
 static void discard_speech(const char *text)
 {
@@ -293,6 +300,7 @@ static void on_event(void *ud, const char *kind, const char *text)
             struct session *s = workspace_current();
             if (s && session_turn_running(s))
                 session_interrupt(s);
+            chime("interrupted");
             return;
         }
         if (text && *text)
@@ -306,6 +314,7 @@ static void on_event(void *ud, const char *kind, const char *text)
         struct session *s = workspace_current();
         if (s && session_turn_running(s))
             session_interrupt(s);
+        chime("interrupted");
     } else if (!strcmp(kind, "speaking")) {
         speaking = text && *text == '1';
         status_touch();
@@ -416,6 +425,7 @@ int voice_start(char *err, size_t size)
         return 0;
     }
     macos_voice_focus(voice, armed);
+    chime("listening");
     macos_voice_volume(voice, voice_volume() / 100.0);
     macos_voice_rate(voice, voice_rate() / 100.0 * AV_RATE_DEFAULT);
     /* the helper may already be running for another client, with its silence */
@@ -571,6 +581,8 @@ void voice_set_mic(int on)
     if (!on)
         voice_commit(workspace_current());
     mic = on;
+    if (on)
+        chime("listening");
     dropping = 0;
     drop_until = 0;
     hearing = 0;
@@ -634,6 +646,7 @@ char *voice_take_line(void)
     for (int i = 1; i < nqueue; i++)
         queue[i - 1] = queue[i];
     nqueue--;
+    chime("sent");
     return line;
 }
 
@@ -688,6 +701,7 @@ void voice_commit(struct session *s)
         if (is_stop_command(draft)) {
             if (session_turn_running(s))
                 session_interrupt(s);
+            chime("interrupted");
         } else {
             enqueue(draft);
         }
@@ -752,6 +766,7 @@ void voice_arm(int on)
     if (armed) {
         struct session *s = workspace_current();
         macos_voice_busy(voice, s && session_turn_running(s));
+        chime("listening");
     }
     status_touch();
 }
