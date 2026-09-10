@@ -238,6 +238,7 @@ void prompt_paint_queued(struct prompt *p, int room)
 static void emit_input(struct prompt *p, int rows)
 {
     int synthetic = caret_is_synthetic(&p->repl);
+    int focused = tty_focused();
 
     for (int y = 0; y < rows; y++) {
         ui_esc(UI_ERASE_EOL);
@@ -248,7 +249,7 @@ static void emit_input(struct prompt *p, int rows)
             uint32_t cp = c->cp;
             const char *seq = replframe_style(c->style);
             int caret = c->style == REPL_STYLE_CURSOR && p->frame.have_cursor &&
-                        p->frame.cursor_x == x && p->frame.cursor_y == y;
+                        p->frame.cursor_x == x && p->frame.cursor_y == y && focused;
 
             if (c->style == REPL_STYLE_PROMPT && cp == '*') {
                 cp = 0x23FA;
