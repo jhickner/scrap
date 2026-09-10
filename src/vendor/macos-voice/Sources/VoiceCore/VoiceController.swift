@@ -112,7 +112,10 @@ public final class VoiceController {
         self.endpointer = TurnEndpointer(silence: settings.silence)
         engine.playbackVolume = settings.volume
         engine.onConfigurationChange = { [weak self] in self?.handleRouteChange() }
-        engine.onPlaybackDrained = { [weak self] in self?.handlePlaybackDrained() }
+        engine.onPlaybackDrained = { [weak self] in
+            guard let self else { return }
+            handlePlaybackDrained(echoCancelled: engine.isEchoCancelled)
+        }
     }
 
     public func setVolume(_ volume: Float) {
@@ -493,9 +496,13 @@ public final class VoiceController {
             volume: volume
         )
         output.onSpoken = { [weak self] text in self?.echo.noteSpoken(text) }
+        // The direct route has no engine playback to drain, so the synthesizer going idle is
+        // the only signal that the reply is over. Without it the mode never leaves .speaking
+        // and every later turn is held instead of sent. Nothing cancels this audio, so it
+        // takes the longer gate.
         output.onFinished = { [weak self] in
             guard let self, !engine.isSpeaking else { return }
-            isSpeaking = false
+            handlePlaybackDrained(echoCancelled: false)
         }
         return output
     }
@@ -588,10 +595,10 @@ public final class VoiceController {
         output = makeOutput()
     }
 
-    private func handlePlaybackDrained() {
+    private func handlePlaybackDrained(echoCancelled: Bool) {
         // With no cancellation the tail of the reply is still in the room, and the recognizer
         // is still finalizing segments from it. Wait longer before trusting the microphone.
-        let gate = engine.isEchoCancelled ? Self.echoGate : Self.uncancelledEchoGate
+        let gate = echoCancelled ? Self.echoGate : Self.uncancelledEchoGate
         gateUntil = Date.timeIntervalSinceReferenceDate + gate
         isSpeaking = false
         guard isConversing, mode == .speaking else { return }

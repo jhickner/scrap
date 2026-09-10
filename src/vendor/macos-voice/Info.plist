@@ -8,5 +8,6 @@
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>LSUIElement</key><true/>
   <key>NSMicrophoneUsageDescription</key><string>Hands-free voice conversation listens through the microphone.</string>
+  <key>NSPersonalVoiceUsageDescription</key><string>Replies are spoken in your Personal Voice when one is selected.</string>
   <key>NSSpeechRecognitionUsageDescription</key><string>On-device speech recognition transcribes what is said.</string>
 </dict></plist>

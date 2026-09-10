@@ -28,7 +28,11 @@ final class AppleVoiceOutput: VoiceOutput {
     private let renderer = AVSpeechSynthesizer()
     private let speaker = AVSpeechSynthesizer()
     private unowned let engine: VoiceEngine
-    private let voice: AVSpeechSynthesisVoice?
+    private let voiceIdentifier: String?
+    /// The resolved voice, held once found. Personal Voice is absent from `speechVoices()`
+    /// until the user authorizes this bundle, which can land after this object is built, so
+    /// a miss is retried on the next utterance instead of being cached as the fallback.
+    private var resolvedVoice: AVSpeechSynthesisVoice?
     var rate: Float
     var volume: Float
     private let speakerDelegate = SpeakerDelegate()
@@ -48,7 +52,7 @@ final class AppleVoiceOutput: VoiceOutput {
 
     init(engine: VoiceEngine, voiceIdentifier: String?, rate: Float, volume: Float) {
         self.engine = engine
-        self.voice = Self.voice(matching: voiceIdentifier)
+        self.voiceIdentifier = voiceIdentifier
         self.rate = rate
         self.volume = volume
         speaker.delegate = speakerDelegate
@@ -83,7 +87,7 @@ final class AppleVoiceOutput: VoiceOutput {
     func speak(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        guard engine.isRunning else {
+        guard engine.isRunning, !isPersonalVoice else {
             // The synthesizer keeps its own queue and speaks in order, so with no engine to
             // schedule against there is nothing here to manage.
             let utterance = utterance(for: trimmed)
@@ -100,7 +104,7 @@ final class AppleVoiceOutput: VoiceOutput {
 
     func pause(_ duration: TimeInterval) {
         guard duration > 0 else { return }
-        guard engine.isRunning else {
+        guard engine.isRunning, !isPersonalVoice else {
             owedDelay += duration
             return
         }
@@ -117,9 +121,29 @@ final class AppleVoiceOutput: VoiceOutput {
         engine.stopPlayback()
     }
 
+    /// Resolves the configured voice, retrying while the named one is still missing.
+    private func currentVoice() -> AVSpeechSynthesisVoice? {
+        if let resolvedVoice { return resolvedVoice }
+        guard let named = Self.namedVoice(matching: voiceIdentifier) else {
+            let fallback = Self.bestEnglishVoice()
+            VoiceLog.note("voice \(voiceIdentifier ?? "unset") not installed, using \(fallback?.name ?? "none")")
+            return fallback
+        }
+        resolvedVoice = named
+        VoiceLog.note("voice: \(named.name) (\(named.identifier), personal: \(named.voiceTraits.contains(.isPersonalVoice)))")
+        return named
+    }
+
+    /// Personal Voice renders only to the output device: the synthesizer will not hand that
+    /// audio to an app, so `write(_:toBufferCallback:)` yields nothing and the engine route
+    /// is silent. Speak it directly and give up echo cancellation for it.
+    private var isPersonalVoice: Bool {
+        currentVoice()?.voiceTraits.contains(.isPersonalVoice) ?? false
+    }
+
     private func utterance(for text: String) -> AVSpeechUtterance {
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = voice
+        utterance.voice = currentVoice()
         utterance.rate = rate
         utterance.volume = volume
         // A beat between sentences; without it a streamed reply runs together into one breath.
@@ -189,16 +213,18 @@ final class AppleVoiceOutput: VoiceOutput {
     /// The best English voice installed. Premium and enhanced voices are separate downloads,
     /// so this degrades to the compact system voice rather than failing when they are absent.
     static func voice(matching identifier: String?) -> AVSpeechSynthesisVoice? {
-        if let identifier, !identifier.isEmpty {
-            if let exact = AVSpeechSynthesisVoice(identifier: identifier) { return exact }
-            // Voices are named "Jamie (Premium)" and "Jamie (Enhanced)", and the same name can
-            // be installed at several qualities. Take the best one that matches.
-            let named = AVSpeechSynthesisVoice.speechVoices()
-                .filter { $0.name.localizedCaseInsensitiveContains(identifier) }
-                .max { $0.quality.rawValue < $1.quality.rawValue }
-            if let named { return named }
-        }
-        return bestEnglishVoice()
+        namedVoice(matching: identifier) ?? bestEnglishVoice()
+    }
+
+    /// The configured voice, or nil when nothing installed matches it.
+    static func namedVoice(matching identifier: String?) -> AVSpeechSynthesisVoice? {
+        guard let identifier, !identifier.isEmpty else { return nil }
+        if let exact = AVSpeechSynthesisVoice(identifier: identifier) { return exact }
+        // Voices are named "Jamie (Premium)" and "Jamie (Enhanced)", and the same name can
+        // be installed at several qualities. Take the best one that matches.
+        return AVSpeechSynthesisVoice.speechVoices()
+            .filter { $0.name.localizedCaseInsensitiveContains(identifier) }
+            .max { $0.quality.rawValue < $1.quality.rawValue }
     }
 
     static func bestEnglishVoice() -> AVSpeechSynthesisVoice? {
