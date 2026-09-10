@@ -183,6 +183,11 @@ static void voice_heard(void *ud, const char *text)
     prompt_set_preview(ud, text);
 }
 
+static const char *voice_draft(void *ud)
+{
+    return prompt_line(ud);
+}
+
 static int voice_listening(void *ud)
 {
     (void)ud;
@@ -782,6 +787,7 @@ int main(int argc, char **argv)
     prompt_set_listen(prompt, voice_listening, NULL);
     prompt_set_mic(prompt, toggle_mic, NULL);
     voice_on_heard(voice_heard, prompt);
+    voice_on_draft(voice_draft, prompt);
     tty_on_focus(voice_arm);
     tty_on_focus_edge(voice_claim);
 

@@ -65,6 +65,49 @@ static int          nqueue;
 static char         label[32];
 static void       (*heard_fn)(void *ud, const char *text);
 static void        *heard_ud;
+static const char *(*draft_fn)(void *ud);
+static void        *draft_ud;
+/* the words last put in the input box; what is there now is measured against
+   this to see whether they were changed by hand */
+static char         shown[LISTEN_MAX];
+
+static void listen_append(const char *text);
+
+static void show(const char *text)
+{
+    snprintf(shown, sizeof shown, "%s", text ? text : "");
+    heard_fn(heard_ud, text);
+}
+
+/* the box when it no longer holds the words put there; NULL while they are
+   still in it. Text typed around them leaves them whole, and the prompt keeps
+   that text beside the words on its own */
+static const char *box_edit(void)
+{
+    if (!draft_fn || !shown[0])
+        return NULL;
+    const char *cur = draft_fn(draft_ud);
+    if (!cur || strstr(cur, shown))
+        return NULL;
+    return cur;
+}
+
+/* adopt an edit made in the box, which is what gets sent: a word deleted there
+   is gone from the dictation, and an emptied box leaves nothing to send.
+   1 when there was one, with the box copied to out */
+static int take_edit(char *out, size_t n)
+{
+    const char *cur = box_edit();
+    if (!cur)
+        return 0;
+    snprintf(out, n, "%s", cur);
+    if (listen_mode) {
+        listen_buf[0] = '\0';
+        listen_append(out);
+    }
+    shown[0] = '\0';
+    return 1;
+}
 
 static void heard(const char *text)
 {
@@ -74,13 +117,15 @@ static void heard(const char *text)
         draft[0] = '\0';
     if (!heard_fn)
         return;
+    char edit[LISTEN_MAX];
+    take_edit(edit, sizeof edit);
     if (listen_mode && listen_buf[0]) {
         char *joined = text_dsprintf("%s%s%s", listen_buf, draft[0] ? " " : "", draft);
-        heard_fn(heard_ud, joined ? joined : listen_buf);
+        show(joined ? joined : listen_buf);
         free(joined);
         return;
     }
-    heard_fn(heard_ud, text);
+    show(text);
 }
 
 static void enqueue(const char *text)
@@ -405,6 +450,8 @@ static void on_event(void *ud, const char *kind, const char *text)
             discard_speech(text);
             return;
         }
+        char edit[LISTEN_MAX];
+        int  edited = take_edit(edit, sizeof edit);
         hearing = 0;
         heard("");
         /* a dictation outranks the hold, which is there to swallow the tail of
@@ -429,8 +476,9 @@ static void on_event(void *ud, const char *kind, const char *text)
             chime("interrupted");
             return;
         }
-        if (text && *text)
-            enqueue(text);
+        const char *out = edited ? edit : text;
+        if (out && *out)
+            enqueue(out);
     } else if (!strcmp(kind, "interrupt")) {
         if (!listening())
             return;
@@ -741,6 +789,12 @@ void voice_on_heard(void (*fn)(void *ud, const char *text), void *ud)
     heard_ud = ud;
 }
 
+void voice_on_draft(const char *(*fn)(void *ud), void *ud)
+{
+    draft_fn = fn;
+    draft_ud = ud;
+}
+
 const char *voice_label(void)
 {
     if (!voice)
@@ -839,11 +893,18 @@ void voice_commit(struct session *s)
     if (!voice || !s)
         return;
     drain();
+    char edit[LISTEN_MAX];
+    int  edited = take_edit(edit, sizeof edit);
     if (listen_mode) {
         const char *tail = draft[0] && !is_stale(draft) ? draft : NULL;
         if (tail)
             remember_stale(tail);
         listen_flush(tail);
+    } else if (edited) {
+        if (draft[0])
+            remember_stale(draft);
+        if (edit[0])
+            enqueue(edit);
     } else if (draft[0] && !is_stale(draft)) {
         remember_stale(draft);
         if (is_stop_command(draft)) {

@@ -1139,8 +1139,11 @@ void prompt_set_preview(struct prompt *p, const char *text)
             if (found) {
                 at = (int)(found - line);
             } else {
-                at = p->repl.cursor;
-                len = 0;
+                /* the words were edited by hand; that edit comes back folded
+                   into this text, so it replaces the line rather than landing
+                   beside what is left of them */
+                at = 0;
+                len = (int)strlen(line);
             }
         }
     } else {

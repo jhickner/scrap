@@ -34,6 +34,9 @@ double voice_silence(void);
 
 /* what has been heard so far this turn; "" once it is sent or dropped */
 void voice_on_heard(void (*fn)(void *ud, const char *text), void *ud);
+/* reads the input box back: an edit made there to the words heard is adopted,
+   so what is sent is what the box shows */
+void voice_on_draft(const char *(*fn)(void *ud), void *ud);
 
 /* the hud label, NULL when off */
 const char *voice_label(void);

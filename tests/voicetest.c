@@ -129,6 +129,21 @@ void session_remove_listener(session_listener_fn fn, void *ud) { (void)fn; (void
 
 void prompt_echo_message(const char *text) { (void)text; }
 
+/* stands in for the input box: the preview is the whole line there */
+static char box[1024];
+
+static void box_heard(void *ud, const char *text)
+{
+    (void)ud;
+    snprintf(box, sizeof box, "%s", text ? text : "");
+}
+
+static const char *box_line(void *ud)
+{
+    (void)ud;
+    return box;
+}
+
 static void fire(const char *kind, const char *text)
 {
     if (cb)
@@ -291,6 +306,33 @@ int main(void)
     free(line);
     clear_sent();
     clear_chimes();
+
+    voice_on_heard(box_heard, NULL);
+    voice_on_draft(box_line, NULL);
+
+    fire("final", "listen show each project");
+    eq_str("the dictation shows in the box", box, "listen show each project");
+    snprintf(box, sizeof box, "%s", "listen show each");
+    fire("final", "as a card ok done");
+    line = voice_take_line();
+    eq_str("a word deleted in the box is not sent", line,
+           "listen show each as a card");
+    free(line);
+    clear_sent();
+    clear_chimes();
+
+    fire("final", "listen show each project");
+    box[0] = '\0';
+    fire("final", "ok done");
+    if (voice_take_line())
+        fail("an emptied box sends nothing");
+    if (box[0])
+        fail("an emptied box stays empty");
+    clear_sent();
+    clear_chimes();
+
+    voice_on_heard(NULL, NULL);
+    voice_on_draft(NULL, NULL);
 
     voice_stop();
     if (fails)
