@@ -49,7 +49,6 @@ static int          armed = 1;
 static int          mic = 1;
 static int          dropping;
 static long         drop_until;
-static int          drop_hold_ms = DROP_HOLD_MS;
 static int          hearing;
 /* draft heard while unarmed or dropping; the helper can re-emit it after
    focus, and that residue must not preview or send */
@@ -108,19 +107,12 @@ static long now_ms(void)
 static void hold_drop_for(int ms)
 {
     dropping = 1;
-    drop_hold_ms = ms;
     drop_until = now_ms() + ms;
 }
 
 static void hold_drop(void)
 {
     hold_drop_for(DROP_HOLD_MS);
-}
-
-/* keep the hold running at whatever length it started with */
-static void hold_again(void)
-{
-    hold_drop_for(drop_hold_ms);
 }
 
 static int still_dropping(void)
@@ -249,18 +241,23 @@ static void chime(const char *name)
         macos_voice_chime(voice, name);
 }
 
-/* the text after a leading "listen", or NULL when the turn does not open with it */
+/* the text after the word "listen", or NULL when the turn does not carry it.
+   The word is looked for anywhere, not just at the front: the microphone gate
+   closes while a reply is read back, so a dictation opened over the tail of one
+   reaches here with its first words already missing */
 static const char *listen_wake(const char *text)
 {
-    const char *p = text;
-    while (*p && !isalnum((unsigned char)*p))
-        p++;
-    if (strncasecmp(p, "listen", 6) || isalnum((unsigned char)p[6]))
-        return NULL;
-    p += 6;
-    while (*p && !isalnum((unsigned char)*p))
-        p++;
-    return p;
+    for (const char *p = text; *p; p++) {
+        if (p != text && isalnum((unsigned char)p[-1]))
+            continue;
+        if (strncasecmp(p, "listen", 6) || isalnum((unsigned char)p[6]))
+            continue;
+        p += 6;
+        while (*p && !isalnum((unsigned char)*p))
+            p++;
+        return p;
+    }
+    return NULL;
 }
 
 /* the offset where word ends at end, or -1 */
@@ -390,8 +387,6 @@ static void on_event(void *ud, const char *kind, const char *text)
             return;
         }
         if (text && *text && (still_dropping() || is_stale(text))) {
-            if (still_dropping())
-                hold_again();
             discard_speech(text);
             return;
         }
@@ -412,18 +407,21 @@ static void on_event(void *ud, const char *kind, const char *text)
         }
         hearing = 0;
         heard("");
+        /* a dictation outranks the hold, which is there to swallow the tail of
+           a line already sent, not the words held for one */
+        if (text && *text && !is_stale(text) &&
+            (listen_mode || listen_wake(text))) {
+            forget_stale();
+            listen_take(text);
+            heard("");
+            return;
+        }
         if (still_dropping() || is_stale(text)) {
-            if (still_dropping())
-                hold_again();
             discard_speech(text);
             forget_stale();
             return;
         }
         forget_stale();
-        if (text && *text && listen_take(text)) {
-            heard("");
-            return;
-        }
         if (text && *text && is_stop_command(text)) {
             struct session *s = workspace_current();
             if (s && session_turn_running(s))

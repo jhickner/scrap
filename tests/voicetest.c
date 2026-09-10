@@ -87,6 +87,7 @@ int  macos_voice_silence(macos_voice *v, double seconds) { (void)v; (void)second
 int  macos_voice_focus(macos_voice *v, int focused) { (void)v; (void)focused; return 0; }
 void macos_voice_stop(macos_voice *v) { (void)v; }
 void macos_voice_shutdown(macos_voice *v) { (void)v; }
+int  macos_voice_reap(const char *helper_path) { (void)helper_path; return 0; }
 
 int settings_get_int(const char *key, int fallback) { (void)key; return fallback; }
 const char *settings_get_str(const char *key, const char *fallback)
@@ -270,6 +271,26 @@ int main(void)
     if (voice_take_line())
         fail("a hand-submitted draft is not queued again");
     clear_sent();
+
+    clear_chimes();
+    fire("partial", "sent by hand again");
+    voice_draft_sent();
+    /* the wake word arrives inside the hold that follows a hand-submit, and
+       with its first words clipped by the gate that closes while speaking */
+    fire("final", "up listen I want to show each project");
+    if (nsent || voice_take_line())
+        fail("a turn that opens a dictation is not sent on its own");
+    if (nchimes != 1)
+        fail("opening a dictation chimes once");
+    else
+        eq_str("chime on dictation", chimes[0], "listening");
+    fire("final", "as a card ok done");
+    line = voice_take_line();
+    eq_str("dictation joins its turns", line,
+           "I want to show each project as a card");
+    free(line);
+    clear_sent();
+    clear_chimes();
 
     voice_stop();
     if (fails)
