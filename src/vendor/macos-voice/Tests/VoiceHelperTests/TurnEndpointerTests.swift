@@ -29,8 +29,8 @@ struct TurnEndpointerTests {
         _ = endpointer.noteFinal("what is a volcano?", at: 10)
         #expect(endpointer.poll(at: 10.5) == .waiting)
         endpointer.noteVolatile("actually wait", at: 10.6)
-        #expect(endpointer.poll(at: 11.5) == .waiting)
-        #expect(endpointer.poll(at: 11.8) == .send("what is a volcano?"))
+        #expect(endpointer.poll(at: 11.2) == .waiting)
+        #expect(endpointer.poll(at: 11.4) == .send("what is a volcano?"))
     }
 
     @Test("says nothing when nothing has been said")
@@ -78,8 +78,8 @@ struct TurnEndpointerTests {
     func sendsSoonerOnCompleteSpeech() {
         var endpointer = TurnEndpointer(silence: 1.4)
         _ = endpointer.noteFinal("what is a volcano?", at: 10)
-        #expect(endpointer.poll(at: 11.0) == .waiting)
-        #expect(endpointer.poll(at: 11.2) == .send("what is a volcano?"))
+        #expect(endpointer.poll(at: 10.6) == .waiting)
+        #expect(endpointer.poll(at: 10.8) == .send("what is a volcano?"))
     }
 
     @Test("a bare stop is an instruction to be quiet, not a question")

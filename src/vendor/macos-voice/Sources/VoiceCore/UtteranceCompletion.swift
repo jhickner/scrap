@@ -20,15 +20,16 @@ enum UtteranceCompletion: Equatable, Sendable {
     /// No strong signal either way.
     case neutral
 
-    /// How much of the base silence to wait for. A complete question needs a little over a
-    /// second of quiet; a dangling "and then" gets closer to three.
+    /// How much of the base silence to wait for. A finished question waits about a second; a
+    /// dangling "and then" gets closer to four.
     ///
-    /// The floor is set by the recognizer, not the child: it delivers running hypotheses in
+    /// The floor is set by the recognizer, not the speaker: it delivers running hypotheses in
     /// bursts up to a second apart, and a wait shorter than that reads the gap between two
-    /// bursts as silence and sends half a sentence.
+    /// bursts as silence and sends half a sentence. "Yes" and "what time is it?" are already
+    /// whole, so they sit on that floor rather than scaling with the base.
     var silenceFactor: Double {
         switch self {
-        case .complete: return 0.8
+        case .complete: return 0.5
         case .neutral: return 1
         case .incomplete: return 1.9
         }
