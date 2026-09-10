@@ -1322,6 +1322,25 @@ void viewport_flush(void)
         viewport_paint();
 }
 
+/* The bytes of a frame can reach the terminal in pieces, and tmux draws each
+   piece as it comes, so a row erased ahead of its text shows as a blank one
+   in between. Write the text over what is there and erase the tail after.
+   A row that erases on its own, to fill a background, or that spans the
+   width, where the cursor would be left on its last cell, keeps the erase
+   in front. */
+static void put_row(const char *row, int W)
+{
+    size_t n = strlen(row);
+    if (strstr(row, "\x1b[K") || ui_cells_visible(row, n) >= (size_t)W) {
+        direct_str("\x1b[0m\x1b[K");
+        direct_str(row);
+        return;
+    }
+    direct_str("\x1b[0m");
+    direct_str(row);
+    direct_str("\x1b[0m\x1b[K");
+}
+
 void viewport_paint(void)
 {
     if (!active || suspended || held || in_render || deferred || painting)
@@ -1435,8 +1454,7 @@ void viewport_paint(void)
             strcmp(shown.row[i], built.row[i]) == 0)
             continue;
         cup(i + 1, 1);
-        direct_str("\x1b[0m\x1b[K");
-        direct_str(built.row[i]);
+        put_row(built.row[i], W);
     }
 
     direct_str("\x1b[?7h");
