@@ -48,6 +48,10 @@ enum { ITEM_LINE = 0, ITEM_PICK = 1, ITEM_HELLO = 2 };
 struct inbox_item {
     char *text;
     int   kind;
+    /* the tab the phone was showing when it sent this: the session id when it
+       has one, the 1-based index either way */
+    char  tab_id[80];
+    int   tab;
 };
 
 struct relay_menu {
@@ -72,6 +76,10 @@ static struct {
     char            bind[64];
     volatile int    stop_wanted;
     int             from_chat;
+    int             queued_told;
+    char            system_note[900];
+    char            want_id[80];
+    int             want_tab;
     int             repeat_task;
     int             busy_sent;
     double          mirrored_turn;
@@ -116,7 +124,7 @@ static void wake_drain(void)
         ;
 }
 
-static int inbox_push(char *text, int kind)
+static int inbox_push(char *text, int kind, const char *tab_id, int tab)
 {
     if (!text)
         return 0;
@@ -126,6 +134,9 @@ static int inbox_push(char *text, int kind)
         int at = (rt.inbox_head + rt.inbox_count) % INBOX_MAX;
         rt.inbox[at].text = text;
         rt.inbox[at].kind = kind;
+        snprintf(rt.inbox[at].tab_id, sizeof rt.inbox[at].tab_id, "%s",
+                 tab_id ? tab_id : "");
+        rt.inbox[at].tab = tab;
         rt.inbox_count++;
     }
     pthread_mutex_unlock(&rt.inbox_lock);
@@ -136,13 +147,18 @@ static int inbox_push(char *text, int kind)
     return ok;
 }
 
-static char *inbox_take(int *kind)
+/* Takes the head item only, so order is kept: `want` refuses the ones that
+   cannot run yet. */
+static char *inbox_take_if(int *kind, int (*want)(const struct inbox_item *))
 {
     pthread_mutex_lock(&rt.inbox_lock);
     char *text = NULL;
-    if (rt.inbox_count > 0) {
-        text = rt.inbox[rt.inbox_head].text;
-        *kind = rt.inbox[rt.inbox_head].kind;
+    if (rt.inbox_count > 0 && (!want || want(&rt.inbox[rt.inbox_head]))) {
+        struct inbox_item *it = &rt.inbox[rt.inbox_head];
+        text = it->text;
+        *kind = it->kind;
+        snprintf(rt.want_id, sizeof rt.want_id, "%s", it->tab_id);
+        rt.want_tab = it->tab;
         rt.inbox_head = (rt.inbox_head + 1) % INBOX_MAX;
         rt.inbox_count--;
     }
@@ -154,6 +170,11 @@ static char *inbox_take(int *kind)
             wake_up();
     }
     return text;
+}
+
+static char *inbox_take(int *kind)
+{
+    return inbox_take_if(kind, NULL);
 }
 
 static void inbox_clear(void)
@@ -218,6 +239,13 @@ static void send_note(const char *text)  { send_text("note", text); }
 static void send_reply(const char *text) { send_text("reply", text); }
 static void send_pre(const char *text)   { send_text("pre", text); }
 
+/* Every line or pick the phone sends ends with one of these, so the client can
+   drop its pending spinner even when the reply was only a tabs refresh. */
+static void send_idle(void)
+{
+    send_json(frame("idle"));
+}
+
 static void send_busy(int on)
 {
     on = on ? 1 : 0;
@@ -274,6 +302,7 @@ static void send_tabs(void)
             title = tgbridge_dir_name(session_cwd(s));
         cJSON *it = cJSON_CreateObject();
         cJSON_AddNumberToObject(it, "index", i + 1);
+        cJSON_AddStringToObject(it, "id", session_id(s) ? session_id(s) : "");
         cJSON_AddStringToObject(it, "label", title);
         cJSON_AddStringToObject(it, "cwd", session_cwd(s));
         cJSON_AddBoolToObject(it, "current", s == current_session());
@@ -301,6 +330,27 @@ static void send_hello(void)
     send_tabs();
     rt.busy_sent = -1;
     send_busy(session_busy(s));
+}
+
+/* What the model is told about the phone on the other end: replies land there
+   as chat messages, so terminal-width answers read badly. */
+static const char *relay_system_note(void)
+{
+    size_t n = snprintf(rt.system_note, sizeof rt.system_note,
+        "## This session is also on a phone\n\n"
+        "The user is at a terminal, but the same session is served to a phone "
+        "client over the relay, where replies show as chat messages. Markdown "
+        "renders; wide tables and long code listings do not. Keep answers short "
+        "and say the answer first.\n");
+
+    if (rt.files_base[0] && n < sizeof rt.system_note)
+        snprintf(rt.system_note + n, sizeof rt.system_note - n,
+            "\nA markdown image with an absolute local path, "
+            "![alt](/abs/path.png), is published as a link the phone can open; "
+            "the file has to be on this machine. That only sends it to them; it "
+            "does not show it to you.\n");
+
+    return rt.system_note;
 }
 
 /* Images the reply points at (![](/abs/path)) are published as links: the
@@ -515,6 +565,72 @@ static void mirror_prompt(struct session *s)
     send_text("user", session_prompt(s));
 }
 
+static int  bridge_command(const char *line);
+static int  bridge_command_name(const char *line);
+static int  stamped_tab(void);
+
+/* What the phone can have while a turn is running: the tab commands, and any
+   command the terminal would also take mid-turn.  A prompt line has to wait --
+   running one here would start a second turn inside this one. */
+static int runs_mid_turn(const struct inbox_item *it)
+{
+    if (it->kind == ITEM_HELLO)
+        return 1;
+    if (it->kind != ITEM_LINE)
+        return 0;
+    return bridge_command_name(it->text) || cmd_runs_mid_turn(it->text);
+}
+
+static void run_live(char *line)
+{
+    rt.from_chat = 1;
+    status_pause();
+    if (!bridge_command(line)) {
+        ui_sink_begin_tee();
+        cmd_dispatch_live(current_session(), line);
+        char *raw = ui_sink_end();
+        char *shown = ui_plain(raw, 1);
+        free(raw);
+        if (shown && *shown)
+            send_pre(shown);
+        else
+            send_note("ok");
+        free(shown);
+    }
+    status_resume();
+    rt.from_chat = 0;
+    send_idle();
+}
+
+/* A turn is in flight and the main loop is not reading the inbox, so drain what
+   can run now and say so about what cannot -- silence here reads as a dropped
+   message on the phone. */
+static void drain_mid_turn(void)
+{
+    for (;;) {
+        int   kind = 0;
+        char *line = inbox_take_if(&kind, runs_mid_turn);
+        if (!line)
+            break;
+        if (kind == ITEM_HELLO) {
+            send_hello();
+            free(line);
+            continue;
+        }
+        int at = stamped_tab();
+        rt.want_id[0] = '\0';
+        rt.want_tab = 0;
+        if (at >= 0 && workspace_at(at) != current_session())
+            tgbridge_switch(&rt.bridge, at);
+        run_live(line);
+        free(line);
+    }
+    if (relay_pending() && !rt.queued_told) {
+        rt.queued_told = 1;
+        send_note("queued until this turn finishes");
+    }
+}
+
 int relay_poll(struct session *live)
 {
     if (!rt.active)
@@ -523,6 +639,8 @@ int relay_poll(struct session *live)
         mirror_prompt(current_session());
         send_busy(session_busy(current_session()));
     }
+    if (live && live == current_session())
+        drain_mid_turn();
     if (rt.stop_wanted && (!live || live == current_session())) {
         rt.stop_wanted = 0;
         return 1;
@@ -547,15 +665,18 @@ static void on_text(void *ud, const char *text, size_t n)
         cJSON_Delete(o);
         return;
     }
+    const char *tab_id = cJSON_GetStringValue(cJSON_GetObjectItem(o, "id"));
+    cJSON *tab = cJSON_GetObjectItem(o, "tab");
+    int at = cJSON_IsNumber(tab) ? (int)cJSON_GetNumberValue(tab) : 0;
     if (!strcmp(t, "line") && v && *v) {
-        inbox_push(strdup(v), ITEM_LINE);
+        inbox_push(strdup(v), ITEM_LINE, tab_id, at);
     } else if (!strcmp(t, "pick") && payload) {
-        inbox_push(strdup(payload), ITEM_PICK);
+        inbox_push(strdup(payload), ITEM_PICK, tab_id, at);
     } else if (!strcmp(t, "stop")) {
         rt.stop_wanted = 1;
     } else if (!strcmp(t, "hello")) {
         snprintf(rt.client, sizeof rt.client, "%s", name ? name : "client");
-        inbox_push(strdup(""), ITEM_HELLO);
+        inbox_push(strdup(""), ITEM_HELLO, NULL, 0);
     }
     cJSON_Delete(o);
 }
@@ -603,6 +724,17 @@ static void send_status(void)
     send_pre(msg);
 }
 
+/* Whether the bridge owns this line, without running it. */
+static int bridge_command_name(const char *line)
+{
+    static const char *CMDS[] = {"/tabs", "/tab",    "/sessions", "/open",
+                                 "/close", "/resume", "/relay",    "/stop"};
+    for (int i = 0; i < COUNT(CMDS); i++)
+        if (arg_of(line, CMDS[i]))
+            return 1;
+    return 0;
+}
+
 static int bridge_command(const char *line)
 {
     const char *arg;
@@ -645,9 +777,8 @@ static int bridge_command(const char *line)
     return 0;
 }
 
-static void send_turn_reply(int ok)
+static void send_turn_reply(struct session *s, int ok)
 {
-    struct session *s = current_session();
     cJSON *o = frame("done");
     cJSON_AddBoolToObject(o, "ok", ok);
     if (!ok) {
@@ -662,8 +793,29 @@ static void send_turn_reply(int ok)
     send_json(o);
 }
 
-static void run_line(char *line)
+/* The tab the phone meant, or -1 for "it did not say".  A stamp that no longer
+   resolves is refused rather than run somewhere else. */
+static int stamped_tab(void)
 {
+    if (rt.want_id[0]) {
+        int at = workspace_find_id(rt.want_id);
+        return at >= 0 ? at : -2;
+    }
+    if (rt.want_tab >= 1)
+        return rt.want_tab <= workspace_count() ? rt.want_tab - 1 : -2;
+    return -1;
+}
+
+struct run_ctx {
+    char *line;
+    int   ran;
+};
+
+static void run_body(struct session *s, void *ud)
+{
+    struct run_ctx *c = ud;
+    char *line = c->line;
+
     rt.from_chat = 1;
     rt.repeat_task = 0;
     rt.stop_wanted = 0;
@@ -671,13 +823,6 @@ static void run_line(char *line)
 
     if (bridge_command(line))
         goto done;
-
-    if (!current_session())
-        tgbridge_refocus(&rt.bridge);
-    if (!current_session()) {
-        send_note("that session is gone — start a new one at the terminal");
-        goto done;
-    }
 
     if (bash_is_command(line)) {
         tty_watch(tgbridge_workspace_fds, tgbridge_workspace_ready, NULL);
@@ -687,15 +832,15 @@ static void run_line(char *line)
         char *context = bash_take_context();
         if (context) {
             send_pre(context);
-            send_turn_reply(session_turn(current_session(), context));
-            cmd_run_deferred(current_session());
+            send_turn_reply(s, session_turn(s, context));
+            cmd_run_deferred(s);
             free(context);
         }
         goto done;
     }
 
     ui_sink_begin_tee();
-    enum cmd_result r = cmd_dispatch(current_session(), line);
+    enum cmd_result r = cmd_dispatch(s, line);
     char *raw = ui_sink_end();
     char *shown = ui_plain(raw, 1);
     free(raw);
@@ -713,16 +858,59 @@ static void run_line(char *line)
     }
     if (r == CMD_NOT_A_COMMAND) {
         status_sticky_prompt(line);
-        send_turn_reply(session_turn(current_session(), line));
-        cmd_run_deferred(current_session());
+        send_turn_reply(s, session_turn(s, line));
+        cmd_run_deferred(s);
     }
 
 done:
     rt.from_chat = 0;
-    rt.mirrored_turn = session_turn_started(current_session());
+    rt.mirrored_turn = session_turn_started(s);
     frontend_pop();
+    c->ran = 1;
+}
+
+/* The session is settled before the line runs and held for the whole of it: a
+   tab switch part way through must not move the turn, its deferred commands or
+   its reply to another conversation. */
+static void run_line(char *line)
+{
+    int at = stamped_tab();
+    if (at == -2) {
+        send_note("that conversation is gone; the tab list has moved");
+        free(line);
+        rt.want_id[0] = '\0';
+        rt.want_tab = 0;
+        relay_poll(NULL);
+        send_idle();
+        return;
+    }
+    rt.want_id[0] = '\0';
+    rt.want_tab = 0;
+
+    if (at >= 0 && workspace_at(at) != current_session())
+        tgbridge_switch(&rt.bridge, at);
+
+    if (!current_session())
+        tgbridge_refocus(&rt.bridge);
+    if (!current_session()) {
+        send_note("that session is gone — start a new one at the terminal");
+        free(line);
+        send_idle();
+        return;
+    }
+
+    struct session *s = current_session();
+    struct run_ctx c = {.line = line};
+    int tab = workspace_index_of(s);
+    if (tab >= 0)
+        workspace_render(tab, run_body, &c);
+    if (!c.ran)
+        run_body(s, &c);
+
     free(line);
+    rt.queued_told = 0;
     relay_poll(NULL);
+    send_idle();
 }
 
 void relay_run_line(char *line)
@@ -750,6 +938,7 @@ char *relay_take_line(void)
         free(line);
         if (cmd)
             return cmd;
+        send_idle();
     }
 }
 
@@ -757,8 +946,8 @@ char *relay_take_line(void)
 
 static void bind_session(struct session *s, int active, void *ud)
 {
-    (void)s;
     (void)ud;
+    session_set_system_extra(s, active ? relay_system_note() : NULL);
     if (active) {
         rt.busy_sent = -1;
         send_hello();
@@ -811,6 +1000,8 @@ static void cleanup(void)
         close(rt.wake[1]);
     rt.wake[0] = rt.wake[1] = -1;
     inbox_clear();
+    if (current_session())
+        session_set_system_extra(current_session(), NULL);
     cJSON_Delete(menu_items);
     menu_items = NULL;
     tgbridge_forget(&rt.bridge, current_session());
@@ -884,6 +1075,7 @@ int relay_start(struct session *s)
         goto fail;
     }
     files_start();
+    session_set_system_extra(s, relay_system_note());
     restart_flag("--relay");
     rt.active = 1;
     note_up("relay on ws://%s:%d", rt.bind[0] ? rt.bind : "*", rt.port);

@@ -428,7 +428,6 @@ static void drop(int index, const struct session *fallback)
         viewport_forget();
         tg_refocus();
         relay_refocus();
-    relay_refocus();
         voice_refocus();
     }
 }
