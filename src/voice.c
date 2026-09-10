@@ -581,6 +581,8 @@ void voice_set_mic(int on)
     if (!on)
         voice_commit(workspace_current());
     mic = on;
+    if (voice)
+        macos_voice_mic(voice, on);
     if (on)
         chime("listening");
     dropping = 0;

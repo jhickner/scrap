@@ -112,6 +112,8 @@ public final class VoiceController {
     /// a synthesizer callback that never arrives — and every one of those loses the signal
     /// that ends the reply, leaving the microphone shut for the rest of the conversation.
     private var silentSince: TimeInterval?
+    /// A tone asked for while the mic is released, played once the engine is back up.
+    private var pendingChime: VoiceChime?
 
     public init(settings: VoiceSettings = .default) {
         self.settings = settings
@@ -179,6 +181,7 @@ public final class VoiceController {
         heldUtterance = nil
         suppressCurrentTurn = false
         isSpeaking = false
+        pendingChime = nil
         endpointer.reset()
         echo.reset()
         pollTask?.cancel()
@@ -232,6 +235,10 @@ public final class VoiceController {
 
         output = makeOutput()
         mode = .listening
+        if let pendingChime {
+            engine.play(pendingChime)
+            self.pendingChime = nil
+        }
         startPolling()
         VoiceLog.note("listening (echo cancellation: \(engine.isEchoCancelled))")
         await recognizer.run(buffers: buffers) { [weak self] event in
@@ -667,7 +674,14 @@ public final class VoiceController {
     /// Acknowledgement tones are the client's to place: only it knows whether the transcript
     /// of this turn is being used, so only it knows whether a tone would mean anything.
     public func play(_ chime: VoiceChime) {
+        guard isConversing else { pendingChime = chime; return }
         engine.play(chime)
+    }
+
+    /// Off releases the input device so another app, or another machine sharing it, can take
+    /// it. The microphone and the speaker are one engine, so a reply in progress is cut off.
+    public func setMic(_ on: Bool) {
+        if on { startConversation() } else { stopConversation() }
     }
 
     public func setBusy(_ busy: Bool) {

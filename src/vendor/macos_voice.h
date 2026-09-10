@@ -41,6 +41,8 @@ int  macos_voice_mute(macos_voice *v);
 /* Play an acknowledgement tone: "sent", "interrupted" or "listening". The helper does
  * not chime on its own, since only the client knows whether the turn is being used. */
 int  macos_voice_chime(macos_voice *v, const char *name);
+/* Off releases the input device so another app can take it; a reply in progress is cut off. */
+int  macos_voice_mic(macos_voice *v, int on);
 int  macos_voice_busy(macos_voice *v, int busy);
 int  macos_voice_volume(macos_voice *v, double volume);
 /* AVSpeechUtterance rate, 0-1; the utterance in progress keeps its own rate. */
@@ -198,6 +200,7 @@ int macos_voice_finish(macos_voice *v) { return mv_write(v, "FINISH", NULL); }
 int macos_voice_cancel(macos_voice *v) { return mv_write(v, "CANCEL", NULL); }
 int macos_voice_mute(macos_voice *v) { return mv_write(v, "MUTE", NULL); }
 int macos_voice_chime(macos_voice *v, const char *name) { return mv_write(v, "CHIME", name); }
+int macos_voice_mic(macos_voice *v, int on) { return mv_write(v, "MIC", on ? "1" : "0"); }
 int macos_voice_busy(macos_voice *v, int busy) { return mv_write(v, "BUSY", busy ? "1" : "0"); }
 int macos_voice_volume(macos_voice *v, double volume) {
     if (volume < 0) volume = 0;

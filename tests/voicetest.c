@@ -79,6 +79,7 @@ int  macos_voice_chime(macos_voice *v, const char *name)
         chimes[nchimes++] = strdup(name);
     return 0;
 }
+int  macos_voice_mic(macos_voice *v, int on) { (void)v; (void)on; return 0; }
 int  macos_voice_busy(macos_voice *v, int busy) { (void)v; (void)busy; return 0; }
 int  macos_voice_volume(macos_voice *v, double volume) { (void)v; (void)volume; return 0; }
 int  macos_voice_rate(macos_voice *v, double rate) { (void)v; (void)rate; return 0; }

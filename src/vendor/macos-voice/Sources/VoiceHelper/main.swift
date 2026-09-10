@@ -187,6 +187,7 @@ final class Session {
             case "CANCEL": voice.cancelReply()
             case "MUTE": voice.stopSpeaking()
             case "BUSY": voice.setBusy(rest == "1")
+            case "MIC": voice.setMic(rest == "1")
             case "CHIME":
                 if let chime = VoiceChime(rawValue: rest) { voice.play(chime) }
             default: send("ERR unknown command: \(verb)", to: fd)
