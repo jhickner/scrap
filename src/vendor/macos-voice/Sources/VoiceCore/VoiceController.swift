@@ -44,6 +44,9 @@ public final class VoiceController {
     static let bargeInLevelWindow: TimeInterval = 1.5
     /// The breath at a paragraph break, on top of the gap between sentences.
     static let paragraphPause: TimeInterval = 0.5
+    /// How long a reply may stand with no audio outstanding before it is taken for a lost
+    /// completion. Long enough to cover the handoff between two utterances of a reply.
+    static let silentSpeechTimeout: TimeInterval = 0.5
 
     public private(set) var mode: Mode = .idle {
         didSet { if mode != oldValue { onMode?(mode) } }
@@ -104,6 +107,11 @@ public final class VoiceController {
     private var suppressCurrentTurn = false
     /// How loud the microphone peaked during the last turn that was sent.
     private var lastTurnPeak: Float = 0
+    /// When `.speaking` was first seen with nothing left to play. Audio can be dropped before
+    /// it is scheduled — the engine restarting under a route change, a conversion that fails,
+    /// a synthesizer callback that never arrives — and every one of those loses the signal
+    /// that ends the reply, leaving the microphone shut for the rest of the conversation.
+    private var silentSince: TimeInterval?
 
     public init(settings: VoiceSettings = .default) {
         self.settings = settings
@@ -342,6 +350,7 @@ public final class VoiceController {
 
     private func poll() {
         guard isConversing, mode != .idle, mode != .starting else { return }
+        pollSilentSpeech()
         // Read before polling: a send resets the endpointer, and what it thought of the turn
         // goes with it.
         let completion = endpointer.completion
@@ -356,6 +365,25 @@ public final class VoiceController {
         volatileText = ""
         heardDraft = ""
         deliver(utterance)
+    }
+
+    /// Recovers from a reply whose end was never reported.
+    private func pollSilentSpeech() {
+        guard mode == .speaking || isSpeaking, !engine.isSpeaking,
+              !(output?.hasPendingSpeech ?? false)
+        else {
+            silentSince = nil
+            return
+        }
+        let now = Date.timeIntervalSinceReferenceDate
+        guard let since = silentSince else {
+            silentSince = now
+            return
+        }
+        guard now - since >= Self.silentSpeechTimeout else { return }
+        VoiceLog.problem("speaking with nothing to play (mode \(mode)); listening again")
+        silentSince = nil
+        handlePlaybackDrained(echoCancelled: engine.isEchoCancelled)
     }
 
     private var canDeliver: Bool {

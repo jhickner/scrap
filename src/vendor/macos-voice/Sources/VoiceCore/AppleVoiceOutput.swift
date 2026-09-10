@@ -64,9 +64,14 @@ final class AppleVoiceOutput: VoiceOutput {
     /// queued behind the one that ended.
     private final class SpeakerDelegate: NSObject, AVSpeechSynthesizerDelegate {
         var onIdle: (() -> Void)?
-        private var pending = 0
+        private(set) var pending = 0
 
         func note(_ utterance: AVSpeechUtterance) { pending += 1 }
+
+        /// After a stop the synthesizer does not reliably report every utterance it drops. A
+        /// count left above zero would swallow the idle callback for every later reply, so a
+        /// stop clears it rather than waiting for callbacks that may never come.
+        func reset() { pending = 0 }
 
         private func finished() {
             pending = max(0, pending - 1)
@@ -118,7 +123,12 @@ final class AppleVoiceOutput: VoiceOutput {
         owedDelay = 0
         isRendering = false
         speaker.stopSpeaking(at: .immediate)
+        speakerDelegate.reset()
         engine.stopPlayback()
+    }
+
+    var hasPendingSpeech: Bool {
+        isRendering || !queue.isEmpty || speakerDelegate.pending > 0 || speaker.isSpeaking
     }
 
     /// Resolves the configured voice, retrying while the named one is still missing.

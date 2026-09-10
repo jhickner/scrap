@@ -21,4 +21,7 @@ protocol VoiceOutput: AnyObject {
     /// Called when the output has nothing left to say. Only the direct route reports this;
     /// audio scheduled on the engine is drained by the engine.
     var onFinished: (() -> Void)? { get set }
+    /// True while an utterance is still being rendered, queued, or spoken. Read by the
+    /// controller to tell a reply that is still coming from one whose completion was lost.
+    var hasPendingSpeech: Bool { get }
 }
