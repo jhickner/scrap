@@ -246,6 +246,24 @@ static int can_pick(const char *usage)
     return 1;
 }
 
+/* A typed name must be on the backend's list, with or without the "claude-"
+   prefix the list carries. A backend without a list takes any name. */
+static int known_model(const struct session *s, const char *name)
+{
+    int count = 0;
+    const struct pick_item *choices = model_choices(s, &count);
+    if (!count)
+        return 1;
+    const char *backend = session_backend(s);
+    for (int i = 0; i < count; i++) {
+        if (!strcmp(choices[i].label, name))
+            return 1;
+        if (!strcmp(models_short_name(backend, choices[i].label), name))
+            return 1;
+    }
+    return 0;
+}
+
 static void do_model(struct session *s, const char *arg)
 {
     const char *chosen = arg;
@@ -266,6 +284,9 @@ static void do_model(struct session *s, const char *arg)
         if (index < 0)
             return;
         chosen = choices[index].label;
+    } else if (!known_model(s, chosen)) {
+        reply_error("unknown model %s", chosen);
+        return;
     }
 
     const char *model = strcmp(chosen, "default") == 0 ? NULL : chosen;
