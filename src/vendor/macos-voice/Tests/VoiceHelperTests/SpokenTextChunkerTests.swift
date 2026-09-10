@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Spoken text chunker")
 struct SpokenTextChunkerTests {
-    /// Feeds a reply in slices, the way it arrives from the model, and collects everything spoken.
+
     private func spoken(_ deltas: [String]) -> [String] {
         var chunker = SpokenTextChunker()
         var utterances: [String] = []
@@ -18,8 +18,7 @@ struct SpokenTextChunkerTests {
         var chunker = SpokenTextChunker()
         #expect(chunker.append("A volcano is a mountain") == [])
         #expect(chunker.append(" that opens downward. ") == ["A volcano is a mountain that opens downward."])
-        // A terminator with nothing yet behind it is taken at face value, so the last sentence
-        // of a reply is spoken as it lands rather than when the stream closes.
+
         #expect(chunker.append("Would you like to build one?") == ["Would you like to build one?"])
         #expect(chunker.finish() == [])
     }

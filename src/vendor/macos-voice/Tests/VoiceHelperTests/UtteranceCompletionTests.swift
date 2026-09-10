@@ -26,8 +26,7 @@ struct UtteranceCompletionTests {
 
     @Test("a dangling conjunction outranks the recognizer's full stop")
     func conjunctionBeatsPunctuation() {
-        // SpeechAnalyzer punctuates its own output and will happily end a fragment with a
-        // full stop; the trailing word is the better evidence.
+
         #expect(classify("we could build a volcano and.") == .incomplete)
         #expect(classify("I like it because?") == .incomplete)
     }

@@ -3,21 +3,18 @@ import Foundation
 import Speech
 
 enum VoiceInputEvent: Sendable {
-    /// The running hypothesis for the segment being spoken. Never committed — it only proves
-    /// the child is still talking.
+
     case volatile(String)
-    /// One segment the recognizer has committed to, at a pause. `confidence` is the
-    /// recognizer's own, averaged over the words, or nil when it did not report one.
+
     case final(String, confidence: Double?)
     case failed(String)
 }
 
 @MainActor
 protocol VoiceInput: AnyObject {
-    /// The audio format this recognizer wants, decided before the engine starts because the
-    /// microphone tap has to convert into it.
+
     func prepare() async throws -> AVAudioFormat
-    /// Consumes microphone audio until the stream ends or `stop()` is called.
+
     func run(
         buffers: AsyncStream<VoiceAudioBuffer>,
         onEvent: @escaping @MainActor (VoiceInputEvent) -> Void
@@ -42,9 +39,6 @@ enum VoiceInputError: LocalizedError {
     }
 }
 
-/// Asks for the microphone and speech-recognition grants. Primer is a signed, bundled app with
-/// its own identity, so it can hold these itself — voiceclaude needed a separate helper app
-/// only because processes started inside tmux are denied them.
 enum VoicePermissions {
     static func request() async -> Bool {
         let speech = await withCheckedContinuation { continuation in
@@ -60,11 +54,6 @@ enum VoicePermissions {
     }
 }
 
-/// On-device continuous transcription through `SpeechAnalyzer`.
-///
-/// Chosen over `SFSpeechRecognizer` for accuracy, for having no session length cap, and for
-/// endpointing on pauses by itself — all three matter when the microphone stays open for a
-/// whole conversation rather than for one held button.
 @available(macOS 26.0, *)
 @MainActor
 final class AnalyzerVoiceInput: VoiceInput {
@@ -87,7 +76,6 @@ final class AnalyzerVoiceInput: VoiceInput {
         )
         self.transcriber = transcriber
 
-        // The model is a one-time, system-managed download on first use.
         let installed = await Self.isInstalled(locale)
         VoiceLog.note("transcriber built; model installed for \(locale.identifier): \(installed)")
         if !installed {
@@ -120,8 +108,6 @@ final class AnalyzerVoiceInput: VoiceInput {
         let (inputSequence, inputBuilder) = AsyncStream<AnalyzerInput>.makeStream()
         self.inputBuilder = inputBuilder
 
-        // Results are consumed before audio is fed in, so nothing said at the very start of a
-        // session is missed.
         resultsTask = Task { @MainActor in
             do {
                 for try await result in transcriber.results {
@@ -176,7 +162,6 @@ final class AnalyzerVoiceInput: VoiceInput {
         Task { try? await analyzer?.finalizeAndFinishThroughEndOfInput() }
     }
 
-    /// The mean of the per-run confidences the transcriber attached, weighted by length.
     private static func confidence(of text: AttributedString) -> Double? {
         var total = 0.0
         var weight = 0

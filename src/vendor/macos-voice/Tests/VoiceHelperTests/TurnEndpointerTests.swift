@@ -23,8 +23,7 @@ struct TurnEndpointerTests {
 
     @Test("a child still talking resets the clock, so they are never cut off mid-thought")
     func volatileResetsTheClock() {
-        // A finished question, so the wait is the short one and the reset is what is being
-        // measured rather than the classifier.
+
         var endpointer = TurnEndpointer(silence: 1.4)
         _ = endpointer.noteFinal("what is a volcano?", at: 10)
         #expect(endpointer.poll(at: 10.5) == .waiting)
@@ -69,7 +68,7 @@ struct TurnEndpointerTests {
     func waitsLongerOnIncompleteSpeech() {
         var endpointer = TurnEndpointer(silence: 1.4)
         _ = endpointer.noteFinal("what is a volcano and", at: 10)
-        // A fixed threshold would have cut them off here.
+
         #expect(endpointer.poll(at: 11.5) == .waiting)
         #expect(endpointer.poll(at: 12.7) == .send("what is a volcano and"))
     }
@@ -98,7 +97,7 @@ struct TurnEndpointerTests {
 
     @Test("a stop inside a real sentence is part of the question")
     func stopInsideASentenceIsNotACommand() {
-        // Matched against the whole utterance, so these stay questions to be answered.
+
         #expect(!TurnEndpointer.isStopCommand("stop the volcano"))
         #expect(!TurnEndpointer.isStopCommand("why did it stop"))
         #expect(!TurnEndpointer.isStopCommand("what makes lava stop moving"))

@@ -1,66 +1,49 @@
 import AVFoundation
 import Foundation
 
-/// The state machine behind the microphone button.
-///
-/// It owns the audio engine, the recognizer, the voice, and the three pure pieces that decide
-/// what counts as a turn. Everything above it — `ChatModel`, the composer — only sees a mode
-/// being switched on, text arriving, and replies being fed in as they stream.
 @MainActor
 public final class VoiceController {
     public enum Mode: Equatable, Sendable {
-        /// Nothing is listening and nothing is spoken.
+
         case idle
-        /// Bringing up the engine, or downloading the speech model on first run.
+
         case starting
         case listening
-        /// The child's turn has been sent and the Primer is answering.
+
         case answering
         case speaking
     }
 
-    /// How long after the last spoken audio drains before the microphone is trusted again.
-    /// Voice processing is subtraction rather than cancellation and its tail outlives the
-    /// audio; a shorter gate lets the end of a sentence come back as a turn.
     static let echoGate: TimeInterval = 0.7
-    /// The same wait when the engine could not bring voice processing up at all.
+
     static let uncancelledEchoGate: TimeInterval = 1.5
-    /// How often the silence clock is checked. Well below the silence threshold it feeds.
+
     static let pollInterval = Duration.milliseconds(150)
-    /// Speech heard while the reply is playing needs more than one word before it is kept.
-    /// A single leaked or misheard token must not become a queued turn.
+
     static let bargeInWordCount = 2
-    /// The echo floor while the Primer is speaking. Low, because everything heard then is
-    /// suspect, and a leak of two or three words is common.
+
     static let echoWordsWhileSpeaking = 2
-    /// Below this confidence, a segment finalized while the Primer is speaking is taken for
-    /// what the recognizer makes of cancellation residue rather than for the child.
+
     static let bargeInConfidence = 0.5
-    /// How loud the microphone has to be, as a share of the child's last real turn, before
-    /// something heard while the Primer is speaking is believed. What cancellation leaves of
-    /// the reply is far quieter than a child in the room.
+
     static let bargeInLevelShare: Float = 0.25
-    /// The window the level is judged over: long enough to cover the words just recognized.
+
     static let bargeInLevelWindow: TimeInterval = 1.5
-    /// The breath at a paragraph break, on top of the gap between sentences.
+
     static let paragraphPause: TimeInterval = 0.5
-    /// How long a reply may stand with no audio outstanding before it is taken for a lost
-    /// completion. Long enough to cover the handoff between two utterances of a reply.
+
     static let silentSpeechTimeout: TimeInterval = 0.5
 
     public private(set) var mode: Mode = .idle {
         didSet { if mode != oldValue { onMode?(mode) } }
     }
-    /// True while the child is in a conversation. The latch, not a preference: an open
-    /// microphone is bounded by a mode they deliberately entered.
+
     public private(set) var isConversing = false
-    /// What the child has said so far this turn, shown in the composer as it forms. It is the
-    /// segments the recognizer has committed to plus its running guess at the one being spoken
-    /// now, so words appear while they are being said rather than when the turn ends.
+
     public private(set) var heardDraft = "" {
         didSet { if heardDraft != oldValue { onHeard?(heardDraft) } }
     }
-    /// True while a reply is being read aloud.
+
     public private(set) var isSpeaking = false {
         didSet { if isSpeaking != oldValue { onSpeaking?(isSpeaking) } }
     }
@@ -68,15 +51,14 @@ public final class VoiceController {
         didSet { if let errorMessage { onError?(errorMessage) } }
     }
 
-    /// Called with a finished turn. `ChatModel` sends it.
     public var onSend: ((String) -> Void)?
-    /// Called when the user said the stop word. The client abandons the turn in flight.
+
     public var onInterrupt: (() -> Void)?
     public var onMode: ((Mode) -> Void)?
     public var onHeard: ((String) -> Void)?
     public var onSpeaking: ((Bool) -> Void)?
     public var onError: ((String) -> Void)?
-    /// Something the user should read but which does not end the conversation.
+
     public var onNotice: ((String) -> Void)?
 
     private let settings: VoiceSettings
@@ -90,31 +72,22 @@ public final class VoiceController {
     private var echo = EchoRejector()
     private var runTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
-    /// The recognizer's hypothesis for the segment in progress. Held separately from the
-    /// endpointer's committed segments because it is replaced wholesale on every update and
-    /// must never become part of the turn that is sent.
+
     private var volatileText = ""
     private var gateUntil: TimeInterval = 0
     private var isBusy = false
     private var heldUtterance: String?
-    /// Set by the stop button: the rest of this reply stays silent as it streams in.
+
     private var isReplyMuted = false
-    /// A hypothesis judged to be the Primer's own voice. The recognizer extends a segment word
-    /// by word and gets the echo's first words right more often than its later ones, so once
-    /// a prefix has been rejected everything that grows from it is rejected too — otherwise
-    /// each extension is another roll of the dice, and one pass is all a leak needs.
+
     private var rejectedEchoPrefix: String?
-    /// A focus handoff in the middle of an analyzer segment must not give its tail to the new
-    /// client. Ignore that segment through its final result, then start cleanly.
+
     private var suppressCurrentTurn = false
-    /// How loud the microphone peaked during the last turn that was sent.
+
     private var lastTurnPeak: Float = 0
-    /// When `.speaking` was first seen with nothing left to play. Audio can be dropped before
-    /// it is scheduled — the engine restarting under a route change, a conversion that fails,
-    /// a synthesizer callback that never arrives — and every one of those loses the signal
-    /// that ends the reply, leaving the microphone shut for the rest of the conversation.
+
     private var silentSince: TimeInterval?
-    /// A tone asked for while the mic is released, played once the engine is back up.
+
     private var pendingChime: VoiceChime?
 
     public init(settings: VoiceSettings = .default) {
@@ -136,15 +109,11 @@ public final class VoiceController {
         output?.volume = self.volume
     }
 
-    /// Takes effect on the next utterance; one already being spoken keeps the rate it started
-    /// with, because AVSpeechUtterance reads its rate once.
     public func setRate(_ rate: Float) {
         self.rate = min(max(rate, 0), 1)
         output?.rate = self.rate
     }
 
-    /// The baseline end-of-turn silence. Takes effect on the next pause; what is already
-    /// accumulated this turn is kept.
     public func setSilence(_ seconds: TimeInterval) {
         endpointer.silence = min(max(seconds, 0.4), 10)
     }
@@ -153,8 +122,6 @@ public final class VoiceController {
         if #available(macOS 26.0, *) { return true }
         return false
     }
-
-    // MARK: - conversation mode
 
     public func toggleConversation() {
         if isConversing {
@@ -254,8 +221,6 @@ public final class VoiceController {
         stopConversation()
     }
 
-    /// A route change — AirPods sleeping, a case opening, another device taking them — moves
-    /// the formats under the graph. Rebuilding is more reliable than patching it up.
     private func handleRouteChange() {
         guard isConversing else { return }
         stopConversation()
@@ -263,8 +228,6 @@ public final class VoiceController {
         mode = .starting
         runTask = Task { await run() }
     }
-
-    // MARK: - hearing
 
     private func handle(_ event: VoiceInputEvent) {
         switch event {
@@ -313,9 +276,6 @@ public final class VoiceController {
         }
     }
 
-    /// Clears what the reply already leaked into the draft. A leak is only recognised once
-    /// enough words have arrived to match what was spoken, and the fragments before that were
-    /// shown as the user's own text; they are ours, so they go.
     private func dropLeakedDraft() {
         guard replyInTheAir, !heardDraft.isEmpty else { return }
         endpointer.reset()
@@ -337,7 +297,6 @@ public final class VoiceController {
         mode == .speaking || mode == .answering || engine.isSpeaking
     }
 
-    /// True when this hypothesis is the user, not the reply leaking back.
     private func hearable(
         _ text: String, isFinal: Bool, at now: TimeInterval, confidence: Double? = nil
     ) -> Bool {
@@ -345,10 +304,7 @@ public final class VoiceController {
             VoiceLog.note("\(isFinal ? "final" : "volatile") gated (mode \(mode)): \(text)")
             return false
         }
-        // The recognizer keeps growing a hypothesis already judged to be a leak, and the
-        // leaked prefix would otherwise reject every later version of it — including the one
-        // where the child has started talking over the reply. The prefix is settled; only the
-        // words added since it was rejected decide whether this is now a turn.
+
         var judged = text
         if let prefix = rejectedEchoPrefix {
             let heardWords = Self.words(text)
@@ -373,7 +329,7 @@ public final class VoiceController {
         if speaking, !isPlausiblyTheChild(text, confidence: confidence) {
             return false
         }
-        // One leaked token must not start a queued turn while the reply is in the air.
+
         if speaking, !endpointer.hasSpeech, !Self.isBargeIn(text) {
             return false
         }
@@ -394,15 +350,13 @@ public final class VoiceController {
     private func poll() {
         guard isConversing, mode != .idle, mode != .starting else { return }
         pollSilentSpeech()
-        // Read before polling: a send resets the endpointer, and what it thought of the turn
-        // goes with it.
+
         let completion = endpointer.completion
         let threshold = endpointer.silenceThreshold
         guard case let .send(utterance) = endpointer.poll(at: Date.timeIntervalSinceReferenceDate)
         else { return }
         VoiceLog.note("turn (\(completion) after \(threshold)s): \(utterance)")
-        // The loudest the child was over this turn and its trailing silence, as the yardstick
-        // for whether what is heard during the reply is them.
+
         lastTurnPeak = engine.levels.peak(within: 5)
         VoiceLog.note(String(format: "turn peak level %.3f", lastTurnPeak))
         volatileText = ""
@@ -410,7 +364,6 @@ public final class VoiceController {
         deliver(utterance)
     }
 
-    /// Recovers from a reply whose end was never reported.
     private func pollSilentSpeech() {
         guard mode == .speaking || isSpeaking, !engine.isSpeaking,
               !(output?.hasPendingSpeech ?? false)
@@ -433,8 +386,6 @@ public final class VoiceController {
         !isBusy && mode != .speaking && !engine.isSpeaking
     }
 
-    /// Holds a turn back while a reply is still in flight, rather than interrupting it.
-    /// A busy client has already said it will queue, so the utterance is sent now.
     private func deliver(_ utterance: String) {
         if VoiceTurnGate.sendImmediately(isBusy: isBusy) {
             VoiceLog.note("queued: \(utterance)")
@@ -463,13 +414,6 @@ public final class VoiceController {
         return EchoRejector.words(text).count >= bargeInWordCount
     }
 
-    /// Whether a stop word right now should take the floor.
-    ///
-    /// A busy client is mid-turn even while this side is still listening, so stop aborts it.
-    /// While it is answering but not yet speaking, nothing is playing, so anything heard is
-    /// certainly the child. While it is speaking, a running hypothesis is only trusted with
-    /// echo cancellation — otherwise a leaked "stop" would cancel the reply on its own first
-    /// word. Without it, only finalized segments count.
     private func canInterrupt(isFinal: Bool) -> Bool {
         VoiceTurnGate.canInterrupt(
             isBusy: isBusy,
@@ -479,7 +423,6 @@ public final class VoiceController {
         )
     }
 
-    /// Stops the reply only on a stop word. Other speech is queued behind it.
     @discardableResult
     private func considerInterrupting(
         _ text: String, isFinal: Bool, confidence: Double? = nil
@@ -491,10 +434,6 @@ public final class VoiceController {
         return true
     }
 
-    /// While the Primer is speaking, what cancellation leaves of its own voice is still audio,
-    /// and the recognizer will make sentences out of it — sentences that match nothing it
-    /// said, so text cannot catch them. Two things can: the recognizer's own confidence in
-    /// them, which is low, and the microphone level, which is far below a child in the room.
     private func isPlausiblyTheChild(_ text: String, confidence: Double?) -> Bool {
         guard mode == .speaking else { return true }
         let level = engine.levels.peak(within: Self.bargeInLevelWindow)
@@ -521,8 +460,6 @@ public final class VoiceController {
         return true
     }
 
-    /// The stop word. Everything about the turn in flight is abandoned — the audio, the
-    /// sentences still queued, and the model round still generating.
     private func interrupt() {
         VoiceLog.note("interrupted while \(mode)")
         output?.stop()
@@ -532,8 +469,7 @@ public final class VoiceController {
         volatileText = ""
         heardDraft = ""
         rejectedEchoPrefix = nil
-        // With cancellation the same words that stopped the reply can begin the next turn.
-        // Without it the tail of the reply is still being finalized and must not become one.
+
         gateUntil = engine.isEchoCancelled
             ? 0 : Date.timeIntervalSinceReferenceDate + Self.echoGate
         isSpeaking = false
@@ -541,8 +477,6 @@ public final class VoiceController {
         onInterrupt?()
     }
 
-    /// The stop button. Silences the rest of this reply without abandoning it: the text keeps
-    /// streaming in, and in a conversation the microphone opens again for the next turn.
     public func stopSpeaking() {
         VoiceLog.note("speech stopped by button while \(mode)")
         output?.stop()
@@ -555,8 +489,6 @@ public final class VoiceController {
         if mode == .speaking { resumeListening() }
     }
 
-    // MARK: - speaking
-
     private func makeOutput() -> any VoiceOutput {
         let output = AppleVoiceOutput(
             engine: engine,
@@ -568,10 +500,7 @@ public final class VoiceController {
         output.onMissingVoice = { [weak self] name in
             self?.onNotice?("voice \(name) is not installed; the reply was not spoken")
         }
-        // The direct route has no engine playback to drain, so the synthesizer going idle is
-        // the only signal that the reply is over. Without it the mode never leaves .speaking
-        // and every later turn is held instead of sent. Nothing cancels this audio, so it
-        // takes the longer gate.
+
         output.onFinished = { [weak self] in
             guard let self, !engine.isSpeaking else { return }
             handlePlaybackDrained(echoCancelled: false)
@@ -579,9 +508,6 @@ public final class VoiceController {
         return output
     }
 
-    /// The reply as it streams. Sentences are spoken the moment they are complete, so the
-    /// Primer starts talking about a sentence behind the model rather than a whole answer
-    /// behind it.
     public func appendReply(_ delta: String) {
         guard isConversing, !isReplyMuted else { return }
         let utterances = chunker.append(delta)
@@ -613,8 +539,6 @@ public final class VoiceController {
         }
     }
 
-    /// Called when a turn is abandoned — cancelled, or failed. Nothing half-spoken should
-    /// carry into the next one.
     public func cancelReply() {
         chunker = SpokenTextChunker()
         output?.stop()
@@ -623,7 +547,6 @@ public final class VoiceController {
         if isConversing { resumeListening() }
     }
 
-    /// A short cue from a client that is not focused: it does not take the microphone.
     public func announce(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isConversing, !trimmed.isEmpty else { return }
@@ -632,9 +555,6 @@ public final class VoiceController {
         output?.speak(trimmed)
     }
 
-    /// A different client took ownership of a shared helper. Drop both sides of the old
-    /// exchange so a partial utterance or an unfinished reply cannot cross that boundary.
-    /// Returns in-progress speech so the departing client can send it rather than lose it.
     @discardableResult
     public func handoff() -> String? {
         let leftover = heardDraft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -669,8 +589,7 @@ public final class VoiceController {
     }
 
     private func handlePlaybackDrained(echoCancelled: Bool) {
-        // With no cancellation the tail of the reply is still in the room, and the recognizer
-        // is still finalizing segments from it. Wait longer before trusting the microphone.
+
         let gate = echoCancelled ? Self.echoGate : Self.uncancelledEchoGate
         gateUntil = Date.timeIntervalSinceReferenceDate + gate
         isSpeaking = false
@@ -688,17 +607,11 @@ public final class VoiceController {
         flushHeld()
     }
 
-    /// Mirrors a streaming turn: stop aborts it, and other speech is sent so the client
-    /// can queue it rather than interrupting.
-    /// Acknowledgement tones are the client's to place: only it knows whether the transcript
-    /// of this turn is being used, so only it knows whether a tone would mean anything.
     public func play(_ chime: VoiceChime) {
         guard isConversing else { pendingChime = chime; return }
         engine.play(chime)
     }
 
-    /// Off releases the input device so another app, or another machine sharing it, can take
-    /// it. The microphone and the speaker are one engine, so a reply in progress is cut off.
     public func setMic(_ on: Bool) {
         if on { startConversation() } else { stopConversation() }
     }
@@ -714,10 +627,9 @@ public struct VoiceSettings: Sendable {
     public var voice: String?
     public var rate: Float
     public var silence: TimeInterval
-    /// Name substring of the input device to prefer, so a headset is used even when it is
-    /// not the system default input.
+
     public var preferredInput: String?
-    /// 0 is silence, 1 is full. Applies to spoken replies, not the chime.
+
     public var volume: Float
 
     public static let defaultVoice = "Jamie"

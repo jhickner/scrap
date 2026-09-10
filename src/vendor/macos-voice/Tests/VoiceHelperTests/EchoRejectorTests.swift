@@ -54,8 +54,7 @@ struct EchoRejectorTests {
     func strictWhileSpeaking() {
         var rejector = EchoRejector()
         rejector.noteSpoken("Would you like to build a volcano, or read about one first?")
-        // The same three words are let through while listening, because they are a plausible
-        // answer, and caught while speaking, because nothing said then is the child's.
+
         #expect(!rejector.shouldReject("build a volcano"))
         #expect(rejector.shouldReject("build a volcano", minimumWords: 2))
     }

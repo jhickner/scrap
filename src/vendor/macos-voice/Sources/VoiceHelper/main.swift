@@ -1,6 +1,4 @@
-// Shared socket-driven voice helper. One signed process owns the microphone and speech
-// engine; every mux with /voice enabled connects to it, and terminal focus chooses which
-// connection may receive transcripts or control spoken output.
+
 import AppKit
 import AVFoundation
 import Foundation
@@ -53,8 +51,7 @@ var bound = withUnsafePointer(to: &addr) {
     }
 }
 if bound != 0 && errno == EADDRINUSE {
-    // A live helper won the launch race. Leave its socket alone. If the path is stale,
-    // remove it and make one more attempt to become the server.
+
     let probe = socket(AF_UNIX, SOCK_STREAM, 0)
     let live = withUnsafePointer(to: &addr) {
         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
@@ -73,9 +70,6 @@ if bound != 0 && errno == EADDRINUSE {
 guard bound == 0, listen(listener, 8) == 0 else { close(listener); exit(2) }
 chmod(socketPath, 0o600)
 
-/// The socket file this process owns. A helper whose path was unlinked and rebound by a
-/// racing launch keeps running with no clients, still holding the microphone and Personal
-/// Voice, so it watches the path and exits once the path stops being its own socket.
 private func socketIdentity(_ path: String) -> (dev_t, ino_t)? {
     var st = stat()
     guard stat(path, &st) == 0 else { return nil }
@@ -109,8 +103,7 @@ func unescape(_ text: String) -> String {
 final class Session {
     let voice = VoiceController(settings: settings)
     var clients = Set<Int32>()
-    /// Clients that have asked for the microphone off. The device is shared, so it is
-    /// released only once no connected client still wants it.
+
     var micOff = Set<Int32>()
     var active: Int32?
     var announced = false
@@ -151,8 +144,7 @@ final class Session {
             active = nil
         }
         close(fd)
-        // An empty helper keeps the engine up for its grace period, in case a client
-        // is reconnecting across a restart.
+
         if !clients.isEmpty { updateMic() }
         if clients.isEmpty {
             emptyGeneration += 1
@@ -205,7 +197,7 @@ final class Session {
             if rest == "1" { micOff.remove(fd) } else { micOff.insert(fd) }
             updateMic()
         case "QUIT": remove(fd)
-        // Ends the helper for every client, so a new build replaces a running one.
+
         case "SHUTDOWN": quit()
         case "VOLUME":
             if let n = Float(rest) { voice.setVolume(n) }
@@ -272,10 +264,6 @@ let accepter = Thread {
 }
 accepter.start()
 
-// Personal Voice stays out of speechVoices() until the user authorizes this bundle, so the
-// conversation waits for the answer: a reply spoken before it lands resolves to a stock
-// voice and that choice is then held for the session. The timeout covers an unanswered
-// permission dialog, where starting in the fallback voice beats never listening at all.
 let voiceAuthorized = DispatchSemaphore(value: 0)
 AVSpeechSynthesizer.requestPersonalVoiceAuthorization { status in
     VoiceLog.note("personal voice authorization: \(status.rawValue) (3 = authorized)")
