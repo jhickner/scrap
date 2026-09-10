@@ -611,6 +611,30 @@ static void do_voice(struct session *s, const char *arg)
         return;
     }
 
+    if (arg && !strncmp(arg, "rate", 4) && (!arg[4] || arg[4] == ' ')) {
+        const char *rest = arg + 4;
+        while (*rest == ' ')
+            rest++;
+        if (!*rest) {
+            reply_note("voice rate %d", voice_rate());
+            return;
+        }
+        char *end;
+        long n = strtol(rest, &end, 10);
+        if (*end == '%')
+            end++;
+        while (*end == ' ')
+            end++;
+        if (*end || n < VOICE_RATE_MIN || n > VOICE_RATE_MAX) {
+            reply_error("/voice rate takes a number from %d to %d",
+                        VOICE_RATE_MIN, VOICE_RATE_MAX);
+            return;
+        }
+        voice_set_rate((int)n);
+        reply_note("voice rate %d", (int)n);
+        return;
+    }
+
     if (!arg || !*arg) {
         want = !voice_on();
         speak = voice_speak();
@@ -624,7 +648,7 @@ static void do_voice(struct session *s, const char *arg)
         want = 1;
         speak = 0;
     } else {
-        reply_error("/voice takes on, off, listen, complete, volume, or nothing to flip it");
+        reply_error("/voice takes on, off, listen, complete, volume, rate, or nothing to flip it");
         return;
     }
 
@@ -1015,7 +1039,7 @@ static const struct cmd COMMANDS[] = {
     {"/sticky", "float the prompt above the spinner", "[on|off]", CMD_LIVE, do_sticky},
     {"/relay", "answer over the phone relay", "[on|off]", CMD_LIVE, do_relay},
     {"/telegram", "answer over Telegram", "[on|off]", CMD_LIVE, do_telegram},
-    {"/voice", "talk instead of typing", "[on|off|listen|complete|volume]", CMD_LIVE, do_voice},
+    {"/voice", "talk instead of typing", "[on|off|listen|complete|volume|rate]", CMD_LIVE, do_voice},
     {"/image", "tallest an inline image may be drawn", "[rows]", CMD_LIVE, do_image},
     {"/permission", "how the CLI gates tool calls", "[mode]", 0, do_permission},
     {"/settings", "show and change every setting", NULL, 0, do_settings},

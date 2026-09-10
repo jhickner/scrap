@@ -27,8 +27,9 @@
 #define SETTING_SHUNT        "shunt"
 
 /* hands-free voice: on/off, whether replies are spoken, output volume,
-   the helper app, the voice name, its rate, the end-of-turn silence in
-   seconds, and the input device name to prefer */
+   the helper app, the voice name, the speaking rate as a percent of normal
+   speed, the end-of-turn silence in seconds, and the input device name to
+   prefer */
 #define SETTING_VOICE          "voice"
 #define SETTING_VOICE_SPEAK    "voice_speak"
 #define SETTING_VOICE_VOLUME   "voice_volume"
@@ -39,6 +40,9 @@
 #define SETTING_VOICE_INPUT    "voice_input"
 
 #define VOICE_VOLUME_DEFAULT 100
+#define VOICE_RATE_DEFAULT   100
+#define VOICE_RATE_MIN        20
+#define VOICE_RATE_MAX       200
 /* say the session name when a turn ends while this pane is unfocused */
 #define SETTING_VOICE_COMPLETE "voice_complete"
 

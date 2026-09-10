@@ -40,6 +40,8 @@ int  macos_voice_cancel(macos_voice *v);
 int  macos_voice_mute(macos_voice *v);
 int  macos_voice_busy(macos_voice *v, int busy);
 int  macos_voice_volume(macos_voice *v, double volume);
+/* AVSpeechUtterance rate, 0-1; the utterance in progress keeps its own rate. */
+int  macos_voice_rate(macos_voice *v, double rate);
 /* Only the focused client receives microphone events or controls output. */
 int  macos_voice_focus(macos_voice *v, int focused);
 /* Disconnect this client. The helper exits when the last client leaves. */
@@ -195,6 +197,13 @@ int macos_voice_volume(macos_voice *v, double volume) {
     char text[32];
     snprintf(text, sizeof text, "%g", volume);
     return mv_write(v, "VOLUME", text);
+}
+int macos_voice_rate(macos_voice *v, double rate) {
+    if (rate < 0) rate = 0;
+    if (rate > 1) rate = 1;
+    char text[32];
+    snprintf(text, sizeof text, "%g", rate);
+    return mv_write(v, "RATE", text);
 }
 int macos_voice_focus(macos_voice *v, int focused) { return mv_write(v, "FOCUS", focused ? "1" : "0"); }
 

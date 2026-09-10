@@ -15,10 +15,11 @@ BIN     := mux
 BUILD   := build
 
 # The signed Swift helper that /voice talks to. Built from the vendored source
-# in libs/c and installed beside the binary; voice_helper in settings overrides.
+# in src/vendor/macos-voice and installed beside the binary; voice_helper in
+# settings overrides.
 VOICE_HELPER     := $(BUILD)/VoiceHelper.app
 VOICE_HELPER_DIR := $(PREFIX)/libexec/mux
-VOICE_SRC        := $(HOME)/working/libs/c/media/macos-voice/helper
+VOICE_SRC        := src/vendor/macos-voice
 ALL_CFLAGS += -DVOICE_HELPER_PATH='"$(VOICE_HELPER_DIR)/VoiceHelper.app"'
 
 CHECK_NAMES  := $(patsubst tests/%.c,%,$(wildcard tests/*.c))

@@ -17,6 +17,10 @@ int  voice_speak(void);
 int  voice_apply(int on, int speak, char *err, size_t size);
 void voice_set_volume(int percent);
 int  voice_volume(void);
+/* speaking rate as a percent of normal speed; a reply already being spoken
+   keeps the rate it started at */
+void voice_set_rate(int percent);
+int  voice_rate(void);
 
 /* what has been heard so far this turn; "" once it is sent or dropped */
 void voice_on_heard(void (*fn)(void *ud, const char *text), void *ud);

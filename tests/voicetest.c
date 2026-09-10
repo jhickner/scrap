@@ -71,6 +71,7 @@ int  macos_voice_cancel(macos_voice *v) { (void)v; return 0; }
 int  macos_voice_mute(macos_voice *v) { (void)v; return 0; }
 int  macos_voice_busy(macos_voice *v, int busy) { (void)v; (void)busy; return 0; }
 int  macos_voice_volume(macos_voice *v, double volume) { (void)v; (void)volume; return 0; }
+int  macos_voice_rate(macos_voice *v, double rate) { (void)v; (void)rate; return 0; }
 int  macos_voice_focus(macos_voice *v, int focused) { (void)v; (void)focused; return 0; }
 void macos_voice_stop(macos_voice *v) { (void)v; }
 

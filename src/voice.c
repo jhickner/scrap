@@ -24,6 +24,8 @@
 #define READY_WAIT_MS 30000
 #define LINE_MAX_QUEUE 16
 #define DROP_HOLD_MS 700
+/* AVSpeechUtteranceDefaultSpeechRate, what 100 percent means */
+#define AV_RATE_DEFAULT 0.5
 
 static macos_voice *voice;
 static int          ready;
@@ -348,7 +350,7 @@ int voice_start(char *err, size_t size)
     macos_voice_opts opts = {
         .helper_path = settings_get_str(SETTING_VOICE_HELPER, VOICE_HELPER_PATH),
         .voice       = settings_get_str(SETTING_VOICE_NAME, NULL),
-        .rate        = atof(settings_get_str(SETTING_VOICE_RATE, "0")),
+        .rate        = voice_rate() / 100.0 * AV_RATE_DEFAULT,
         .silence     = atof(settings_get_str(SETTING_VOICE_SILENCE, "0")),
         .volume      = voice_volume() / 100.0,
         .input       = settings_get_str(SETTING_VOICE_INPUT, NULL),
@@ -386,6 +388,7 @@ int voice_start(char *err, size_t size)
     }
     macos_voice_focus(voice, armed);
     macos_voice_volume(voice, voice_volume() / 100.0);
+    macos_voice_rate(voice, voice_rate() / 100.0 * AV_RATE_DEFAULT);
     session_add_listener(on_session_event, NULL);
     return 1;
 }
@@ -443,6 +446,28 @@ void voice_set_volume(int percent)
     settings_set_int(SETTING_VOICE_VOLUME, percent);
     if (voice)
         macos_voice_volume(voice, percent / 100.0);
+}
+
+static int clamp_rate(int n)
+{
+    if (n < VOICE_RATE_MIN)
+        return VOICE_RATE_MIN;
+    if (n > VOICE_RATE_MAX)
+        return VOICE_RATE_MAX;
+    return n;
+}
+
+int voice_rate(void)
+{
+    return clamp_rate(settings_get_int(SETTING_VOICE_RATE, VOICE_RATE_DEFAULT));
+}
+
+void voice_set_rate(int percent)
+{
+    percent = clamp_rate(percent);
+    settings_set_int(SETTING_VOICE_RATE, percent);
+    if (voice)
+        macos_voice_rate(voice, percent / 100.0 * AV_RATE_DEFAULT);
 }
 
 int voice_apply(int on, int speak_on, char *err, size_t size)

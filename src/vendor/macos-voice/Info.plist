@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>VoiceHelper</string>
+  <key>CFBundleIdentifier</key><string>local.c-libs.macos-voice</string>
+  <key>CFBundleName</key><string>macos-voice Helper</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>LSMinimumSystemVersion</key><string>26.0</string>
+  <key>LSUIElement</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>Hands-free voice conversation listens through the microphone.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>On-device speech recognition transcribes what is said.</string>
+</dict></plist>

@@ -8,3 +8,4 @@ TODO.md
 .grok/
 .claude/worktrees
 testimages/
+.build/
