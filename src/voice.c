@@ -574,10 +574,12 @@ static void teardown(int end_helper)
         return;
     session_remove_listener(on_session_event, NULL);
     macos_voice_focus(voice, 0);
-    if (end_helper)
+    if (end_helper) {
         macos_voice_shutdown(voice);
-    else
+        macos_voice_reap(settings_get_str(SETTING_VOICE_HELPER, VOICE_HELPER_PATH));
+    } else {
         macos_voice_stop(voice);
+    }
     voice = NULL;
     ready = 0;
     speaking = 0;

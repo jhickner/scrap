@@ -73,6 +73,26 @@ if bound != 0 && errno == EADDRINUSE {
 guard bound == 0, listen(listener, 8) == 0 else { close(listener); exit(2) }
 chmod(socketPath, 0o600)
 
+/// The socket file this process owns. A helper whose path was unlinked and rebound by a
+/// racing launch keeps running with no clients, still holding the microphone and Personal
+/// Voice, so it watches the path and exits once the path stops being its own socket.
+private func socketIdentity(_ path: String) -> (dev_t, ino_t)? {
+    var st = stat()
+    guard stat(path, &st) == 0 else { return nil }
+    return (st.st_dev, st.st_ino)
+}
+let ownedSocket = socketIdentity(socketPath)
+let socketWatch = DispatchSource.makeTimerSource(queue: .main)
+socketWatch.schedule(deadline: .now() + 2, repeating: 2)
+socketWatch.setEventHandler {
+    guard let owned = ownedSocket else { return }
+    let now = socketIdentity(socketPath)
+    if let now, now == owned { return }
+    VoiceLog.note("socket path taken over by another helper; exiting")
+    exit(0)
+}
+socketWatch.resume()
+
 let writeLock = NSLock()
 func send(_ line: String, to fd: Int32) {
     let flat = line.replacingOccurrences(of: "\n", with: "\\n")

@@ -56,6 +56,10 @@ int  macos_voice_focus(macos_voice *v, int focused);
 void macos_voice_stop(macos_voice *v);
 /* End the helper for every client, then disconnect. */
 void macos_voice_shutdown(macos_voice *v);
+/* Kill helper processes left running after a shutdown. One that has already dropped
+   its socket answers no probe but still holds the microphone, and a replacement
+   cannot take the socket path from it. Returns the number killed. */
+int  macos_voice_reap(const char *helper_path);
 #endif
 
 #ifdef MACOS_VOICE_IMPLEMENTATION
@@ -66,6 +70,7 @@ void macos_voice_shutdown(macos_voice *v);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/wait.h>
@@ -98,6 +103,14 @@ static int mv_write(macos_voice *v, const char *verb, const char *text) {
         off += (size_t)w;
     }
     free(line); return rc;
+}
+
+int macos_voice_reap(const char *helper_path);
+
+static void mv_unlock(int lock) {
+    if (lock < 0) return;
+    flock(lock, LOCK_UN);
+    close(lock);
 }
 
 static int mv_connect(const char *path) {
@@ -140,7 +153,22 @@ macos_voice *macos_voice_start(const macos_voice_opts *o, macos_voice_cb cb, voi
     if (o->rate > 0) snprintf(rate, sizeof rate, "%g", o->rate);
     if (o->silence > 0) snprintf(silence, sizeof silence, "%g", o->silence);
     if (o->volume > 0) snprintf(volume, sizeof volume, "%g", o->volume);
-    if (v->fd < 0) {
+    /* A helper that died without unlinking its socket, or one left running after a
+       shutdown, answers nothing and holds the path a new one needs; so a failed
+       attempt reaps the strays and tries once more. */
+    /* Two sessions that both find no helper would each launch one, and the loser
+       keeps running without clients while still holding the microphone and the
+       Personal Voice. Only the holder of the lock may launch. */
+    char lockpath[sizeof v->path];
+    snprintf(lockpath, sizeof lockpath, "/tmp/macos-voice-%u.lock", (unsigned)getuid());
+    int lock = v->fd < 0 ? open(lockpath, O_CREAT | O_RDWR | O_CLOEXEC, 0600) : -1;
+    if (lock >= 0) {
+        flock(lock, LOCK_EX);
+        v->fd = mv_connect(v->path); /* the session ahead may have started one */
+    }
+    for (int attempt = 0; v->fd < 0 && attempt < 2; attempt++) {
+        if (attempt)
+            macos_voice_reap(o->helper_path);
         pid_t pid = fork();
         if (!pid) {
             const char *av[24]; int n = 0;
@@ -154,20 +182,22 @@ macos_voice *macos_voice_start(const macos_voice_opts *o, macos_voice_cb cb, voi
             av[n] = NULL;
             execvp("open", (char *const *)av); _exit(127);
         }
-        if (pid < 0) { macos_voice_stop(v); return NULL; }
+        if (pid < 0) { mv_unlock(lock); macos_voice_stop(v); return NULL; }
         int status = 0; waitpid(pid, &status, 0);
-        if (!WIFEXITED(status) || WEXITSTATUS(status)) { macos_voice_stop(v); return NULL; }
-    }
+        if (!WIFEXITED(status) || WEXITSTATUS(status)) { mv_unlock(lock); macos_voice_stop(v); return NULL; }
 
-    int left = o->timeout_ms > 0 ? o->timeout_ms : 15000;
-    while (v->fd < 0) {
-        int slice = left > 90 ? 90 : left;
-        poll(NULL, 0, slice);
-        left -= slice;
-        if (left <= 0) { macos_voice_stop(v); return NULL; }
-        v->fd = mv_connect(v->path);
-        if (o->tick) o->tick(o->tick_ud);
+        for (int left = o->timeout_ms > 0 ? o->timeout_ms : 15000; left > 0;) {
+            int slice = left > 90 ? 90 : left;
+            poll(NULL, 0, slice);
+            left -= slice;
+            v->fd = mv_connect(v->path);
+            if (o->tick) o->tick(o->tick_ud);
+            if (v->fd >= 0) break;
+        }
     }
+    mv_unlock(lock);
+    if (v->fd < 0) { macos_voice_stop(v); return NULL; }
+
     signal(SIGPIPE, SIG_IGN);
     return v;
 }
@@ -239,6 +269,31 @@ void macos_voice_shutdown(macos_voice *v) {
         close(probe);
         poll(NULL, 0, 20);
     }
+}
+
+int macos_voice_reap(const char *helper_path) {
+    if (!helper_path || !*helper_path) return 0;
+    char cmd[8192];
+    snprintf(cmd, sizeof cmd, "pgrep -f '^%s/Contents/MacOS/' 2>/dev/null", helper_path);
+    FILE *f = popen(cmd, "r");
+    if (!f) return 0;
+    pid_t pids[64]; int n = 0;
+    while (n < (int)(sizeof pids / sizeof *pids)) {
+        long pid = 0;
+        if (fscanf(f, "%ld", &pid) != 1) break;
+        if (pid > 1 && pid != getpid()) pids[n++] = (pid_t)pid;
+    }
+    pclose(f);
+    for (int i = 0; i < n; i++) kill(pids[i], SIGTERM);
+    for (int left = n ? 500 : 0; left > 0; left -= 20) {
+        int alive = 0;
+        for (int i = 0; i < n; i++)
+            if (!kill(pids[i], 0)) alive = 1;
+        if (!alive) return n;
+        poll(NULL, 0, 20);
+    }
+    for (int i = 0; i < n; i++) kill(pids[i], SIGKILL);
+    return n;
 }
 
 void macos_voice_stop(macos_voice *v) {

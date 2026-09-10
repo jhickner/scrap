@@ -85,8 +85,9 @@ struct prompt {
     void        *cancel_ud;
     int          stopped;
     int          frame_ok;
-    /* the live transcription span in the buffer: its text and byte offset */
-    char         preview[544];
+    /* the live transcription span in the buffer: its text and byte offset. Sized for a
+       held dictation, which accumulates whole utterances before it is sent */
+    char         preview[8704];
     int          preview_at;
     int          preview_taken;
 };
