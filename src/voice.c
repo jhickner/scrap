@@ -98,6 +98,23 @@ static const char *box_edit(void)
     return cur;
 }
 
+/* 1 when the box holds text voice did not put there. A taken line is then
+   folded into that draft rather than sent, and must not chime as if it left */
+static int box_has_typed(void)
+{
+    const char *cur = draft_fn ? draft_fn(draft_ud) : NULL;
+    if (!cur || !*cur)
+        return 0;
+    if (!shown[0])
+        return 1;
+    const char *found = strstr(cur, shown);
+    if (!found)
+        return 1;
+    if (found > cur && !(found == cur + 1 && (cur[0] == ' ' || cur[0] == '\n')))
+        return 1;
+    return found[strlen(shown)] != '\0';
+}
+
 /* adopt an edit made in the box, which is what gets sent: a word deleted there
    is gone from the dictation, and an emptied box leaves nothing to send.
    1 when there was one, with the box copied to out */
@@ -889,7 +906,8 @@ char *voice_take_line(void)
     for (int i = 1; i < nqueue; i++)
         queue[i - 1] = queue[i];
     nqueue--;
-    chime("sent");
+    if (!box_has_typed())
+        chime("sent");
     return line;
 }
 

@@ -413,10 +413,39 @@ int main(void)
     voice_commit(&sess);
     if (nsent)
         fail("a voice commit does not bypass a typed draft");
+    clear_chimes();
     line = voice_take_line();
     eq_str("speech beside a typed draft stays queued", line,
            "dictated after it");
+    if (nchimes)
+        fail("taking speech beside a typed draft does not chime");
     free(line);
+    voice_on_draft(NULL, NULL);
+
+    clear_chimes();
+    fire("final", "sent on its own");
+    line = voice_take_line();
+    if (nchimes != 1)
+        fail("taking speech with an empty box still chimes");
+    else
+        eq_str("chime on empty take", chimes[0], "sent");
+    free(line);
+
+    voice_on_heard(box_heard, NULL);
+    voice_on_draft(box_line, NULL);
+    box[0] = '\0';
+    box_released = 0;
+    fire("final", "first turn");
+    fire("partial", "next words");
+    clear_chimes();
+    line = voice_take_line();
+    eq_str("a take while the next words preview", line, "first turn");
+    if (nchimes != 1)
+        fail("a take while the box is only the next preview still chimes");
+    else
+        eq_str("chime on preview-only take", chimes[0], "sent");
+    free(line);
+    voice_on_heard(NULL, NULL);
     voice_on_draft(NULL, NULL);
 
     voice_stop();
