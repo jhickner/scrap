@@ -15,6 +15,7 @@
 #include "viewport.h"
 
 #define BRACKETED_PASTE_ON  "\x1b[?2004h"
+#define FOCUS_ENV           "MUX_FOCUSED"
 #define FOCUS_ON            "\x1b[?1004h"
 #define FOCUS_OFF           "\x1b[?1004l"
 
@@ -174,6 +175,14 @@ int tty_rows(void)
     return n < 3 ? 3 : n;
 }
 
+/* A macOS permission dialog opening over the terminal bounces focus out and
+   back, and acting on each edge repaints the chrome and re-arms voice. Hold a
+   change until the state has been still this long. */
+#define FOCUS_SETTLE_MS 250
+static int  focused = 1;
+static int  focus_next = -1;
+static long focus_next_at;
+
 int tty_raw_begin(void)
 {
     if (in_raw)
@@ -219,6 +228,14 @@ int tty_raw_begin(void)
 
     signal(SIGPIPE, SIG_IGN);
 
+    /* focus is only reported when it changes, so a window that starts out of
+       front has no way to learn it. A restart hands the state over instead. */
+    const char *carried = getenv(FOCUS_ENV);
+    if (carried) {
+        focused = *carried != '0';
+        unsetenv(FOCUS_ENV);
+    }
+
     fputs(BRACKETED_PASTE_ON FOCUS_ON KEYBOARD_PUSH, stdout);
     fflush(stdout);
     if (getenv("TMUX"))
@@ -229,13 +246,10 @@ int tty_raw_begin(void)
 
 static void (*focus_fn)(int on);
 static void (*focus_edge_fn)(int on);
-/* A macOS permission dialog opening over the terminal bounces focus out and
-   back, and acting on each edge repaints the chrome and re-arms voice. Hold a
-   change until the state has been still this long. */
-#define FOCUS_SETTLE_MS 250
-static int  focused = 1;
-static int  focus_next = -1;
-static long focus_next_at;
+int tty_focused(void)
+{
+    return focus_next < 0 ? focused : focus_next;
+}
 
 void tty_on_focus(void (*fn)(int on))
 {
@@ -273,6 +287,7 @@ void tty_raw_end(void)
 
 void tty_raw_handoff(void)
 {
+    setenv(FOCUS_ENV, tty_focused() ? "1" : "0", 1);
     raw_end(MODE_RESTORE);
 }
 

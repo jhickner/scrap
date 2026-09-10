@@ -15,6 +15,7 @@
 #include "settings.h"
 #include "status.h"
 #include "text.h"
+#include "tty.h"
 #include "vendor/agents/backend.h"
 #include "vendor/macos_voice.h"
 #include "workspace.h"
@@ -578,7 +579,10 @@ int voice_start(char *err, size_t size)
         return 1;
     ready = 0;
     speaking = 0;
-    armed = 1;
+    /* a window that is not in front must not take the microphone from the one
+       that is: every window starting at once after a restart would otherwise
+       leave the last of them holding it */
+    armed = tty_focused();
     mic = 1;
     dropping = 0;
     drop_until = 0;
@@ -637,7 +641,8 @@ int voice_start(char *err, size_t size)
         return 0;
     }
     macos_voice_focus(voice, armed);
-    chime("listening");
+    if (armed)
+        chime("listening");
     macos_voice_volume(voice, voice_volume() / 100.0);
     macos_voice_rate(voice, voice_rate() / 100.0 * AV_RATE_DEFAULT);
     /* the helper may already be running for another client, with its silence */

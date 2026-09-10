@@ -129,6 +129,9 @@ void session_remove_listener(session_listener_fn fn, void *ud) { (void)fn; (void
 
 void prompt_echo_message(const char *text) { (void)text; }
 
+static int focused_window = 1;
+int tty_focused(void) { return focused_window; }
+
 /* stands in for the input box: the preview is the whole line there */
 static char box[1024];
 
@@ -400,6 +403,20 @@ int main(void)
     voice_on_release(NULL, NULL);
 
     voice_stop();
+    clear_chimes();
+    clear_sent();
+
+    /* a window started out of front leaves the microphone to the one in front */
+    focused_window = 0;
+    if (!start_voice())
+        return 1;
+    if (nchimes)
+        fail("starting out of front does not chime");
+    fire("final", "meant for the other window");
+    if (voice_take_line())
+        fail("speech is not taken by a window out of front");
+    voice_stop();
+
     if (fails)
         return 1;
     puts("voicetest: ok");
