@@ -27,6 +27,7 @@
 #include "image.h"
 #include "sessionfork.h"
 #include "sessionlist.h"
+#include "gitinfo.h"
 #include "sessionload.h"
 #include "sessionview.h"
 #include "viewport.h"
@@ -986,6 +987,8 @@ static void do_board(struct session *s, const char *arg)
 static void do_status(struct session *s, const char *arg)
 {
     (void)arg;
+    /* the repo may have moved from outside this session since the last turn */
+    gitinfo_forget();
     hud_print(s);
 }
 
