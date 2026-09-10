@@ -47,6 +47,8 @@ final class AppleVoiceOutput: VoiceOutput {
     /// The breath between sentences on the engine route, where the synthesizer's own
     /// post-utterance delay does not apply because only the speech itself is rendered.
     static let sentenceGap: TimeInterval = 0.12
+    /// The longest utterance handed to the direct route, in characters.
+    static let directUtteranceLimit = 120
     private var isRendering = false
     private var generation = 0
 
@@ -94,13 +96,20 @@ final class AppleVoiceOutput: VoiceOutput {
         guard !trimmed.isEmpty else { return }
         guard engine.isRunning, !isPersonalVoice else {
             // The synthesizer keeps its own queue and speaks in order, so with no engine to
-            // schedule against there is nothing here to manage.
-            let utterance = utterance(for: trimmed)
-            utterance.preUtteranceDelay = owedDelay
-            owedDelay = 0
-            speakerDelegate.note(utterance)
-            speaker.speak(utterance)
-            onSpoken?(trimmed)
+            // schedule against there is nothing here to manage. Utterances are cut shorter
+            // here than the engine route needs: Personal Voice sometimes skips part of a long
+            // one, and a shorter utterance bounds what a skip can cost.
+            let parts = SpokenTextChunker.clamped(trimmed, limit: Self.directUtteranceLimit)
+            for (index, part) in parts.enumerated() {
+                let utterance = utterance(for: part)
+                // The beat belongs at the end of the sentence, not between its clauses.
+                if index < parts.count - 1 { utterance.postUtteranceDelay = 0 }
+                utterance.preUtteranceDelay = owedDelay
+                owedDelay = 0
+                speakerDelegate.note(utterance)
+                speaker.speak(utterance)
+                onSpoken?(part)
+            }
             return
         }
         queue.append(.text(trimmed))

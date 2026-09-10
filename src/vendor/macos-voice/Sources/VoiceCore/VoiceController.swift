@@ -258,7 +258,10 @@ public final class VoiceController {
             guard !suppressCurrentTurn else { return }
             let now = Date.timeIntervalSinceReferenceDate
             if considerInterrupting(text, isFinal: false) { return }
-            guard hearable(text, isFinal: false, at: now) else { return }
+            guard hearable(text, isFinal: false, at: now) else {
+                dropLeakedDraft()
+                return
+            }
             endpointer.noteVolatile(text, at: now)
             volatileText = text
             updateHeardDraft()
@@ -278,7 +281,10 @@ public final class VoiceController {
                 heardDraft = ""
                 return
             }
-            guard hearable(text, isFinal: true, at: now, confidence: confidence) else { return }
+            guard hearable(text, isFinal: true, at: now, confidence: confidence) else {
+                dropLeakedDraft()
+                return
+            }
             VoiceLog.note("final: \(text)")
             volatileText = ""
             switch endpointer.noteFinal(text, at: now) {
@@ -291,6 +297,16 @@ public final class VoiceController {
             VoiceLog.problem("recognizer failed: \(message)")
             fail(message)
         }
+    }
+
+    /// Clears what the reply already leaked into the draft. A leak is only recognised once
+    /// enough words have arrived to match what was spoken, and the fragments before that were
+    /// shown as the user's own text; they are ours, so they go.
+    private func dropLeakedDraft() {
+        guard replyInTheAir, !heardDraft.isEmpty else { return }
+        endpointer.reset()
+        volatileText = ""
+        heardDraft = ""
     }
 
     private func updateHeardDraft() {

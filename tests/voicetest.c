@@ -75,6 +75,7 @@ int  macos_voice_volume(macos_voice *v, double volume) { (void)v; (void)volume; 
 int  macos_voice_rate(macos_voice *v, double rate) { (void)v; (void)rate; return 0; }
 int  macos_voice_focus(macos_voice *v, int focused) { (void)v; (void)focused; return 0; }
 void macos_voice_stop(macos_voice *v) { (void)v; }
+void macos_voice_shutdown(macos_voice *v) { (void)v; }
 
 int settings_get_int(const char *key, int fallback) { (void)key; return fallback; }
 const char *settings_get_str(const char *key, const char *fallback)

@@ -7,14 +7,14 @@ import os
 /// thread, inside a system recognizer, or in a permission dialog, and none of those leave a
 /// trace in the transcript. Reading `log stream --predicate 'subsystem == "local.c-libs.macos-voice"'`
 /// while talking to it is the only way to see what happened.
-enum VoiceLog {
+public enum VoiceLog {
     private static let logger = Logger(subsystem: "local.c-libs.macos-voice", category: "voice")
 
-    static func note(_ message: String) {
+    public static func note(_ message: String) {
         logger.info("\(message, privacy: .public)")
     }
 
-    static func problem(_ message: String) {
+    public static func problem(_ message: String) {
         logger.error("\(message, privacy: .public)")
     }
 }

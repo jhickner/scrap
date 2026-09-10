@@ -46,6 +46,8 @@ int  macos_voice_rate(macos_voice *v, double rate);
 int  macos_voice_focus(macos_voice *v, int focused);
 /* Disconnect this client. The helper exits when the last client leaves. */
 void macos_voice_stop(macos_voice *v);
+/* End the helper for every client, then disconnect. */
+void macos_voice_shutdown(macos_voice *v);
 #endif
 
 #ifdef MACOS_VOICE_IMPLEMENTATION
@@ -206,6 +208,22 @@ int macos_voice_rate(macos_voice *v, double rate) {
     return mv_write(v, "RATE", text);
 }
 int macos_voice_focus(macos_voice *v, int focused) { return mv_write(v, "FOCUS", focused ? "1" : "0"); }
+
+void macos_voice_shutdown(macos_voice *v) {
+    if (!v) return;
+    char path[sizeof v->path];
+    snprintf(path, sizeof path, "%s", v->path);
+    int asked = v->fd >= 0 && mv_write(v, "SHUTDOWN", NULL) == 0;
+    macos_voice_stop(v);
+    /* The helper exits on its own thread, so wait for the socket to stop answering
+       before a caller starts a replacement and connects to the dying process. */
+    for (int left = asked ? 3000 : 0; left > 0; left -= 20) {
+        int probe = mv_connect(path);
+        if (probe < 0) break;
+        close(probe);
+        poll(NULL, 0, 20);
+    }
+}
 
 void macos_voice_stop(macos_voice *v) {
     if (!v) return;

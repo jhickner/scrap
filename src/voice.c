@@ -418,13 +418,17 @@ int voice_start(char *err, size_t size)
     return 1;
 }
 
-void voice_stop(void)
+/* end_helper quits the shared process for every client, not just this one. */
+static void teardown(int end_helper)
 {
     if (!voice)
         return;
     session_remove_listener(on_session_event, NULL);
     macos_voice_focus(voice, 0);
-    macos_voice_stop(voice);
+    if (end_helper)
+        macos_voice_shutdown(voice);
+    else
+        macos_voice_stop(voice);
     voice = NULL;
     ready = 0;
     speaking = 0;
@@ -437,6 +441,20 @@ void voice_stop(void)
     clear_queue();
     heard("");
     status_touch();
+}
+
+void voice_stop(void) { teardown(0); }
+
+int voice_restart(char *err, size_t size)
+{
+    int was_on = voice != NULL, was_speaking = speak;
+    teardown(1);
+    if (!was_on)
+        return 1;
+    if (!voice_start(err, size))
+        return 0;
+    voice_set_speak(was_speaking);
+    return 1;
 }
 
 int voice_on(void) { return voice != NULL; }

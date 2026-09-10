@@ -169,6 +169,8 @@ final class Session {
         switch verb {
         case "FOCUS": focus(fd, rest == "1")
         case "QUIT": remove(fd)
+        // Ends the helper for every client, so a new build replaces a running one.
+        case "SHUTDOWN": quit()
         case "VOLUME":
             if let n = Float(rest) { voice.setVolume(n) }
         case "RATE":
@@ -230,9 +232,19 @@ let accepter = Thread {
 }
 accepter.start()
 
-// Personal Voice stays out of speechVoices() until the user authorizes this bundle. Ask
-// without blocking startup: voices are resolved when a reply is first spoken, not now.
-AVSpeechSynthesizer.requestPersonalVoiceAuthorization { _ in }
-
-DispatchQueue.main.async { session.voice.startConversation() }
+// Personal Voice stays out of speechVoices() until the user authorizes this bundle, so the
+// conversation waits for the answer: a reply spoken before it lands resolves to a stock
+// voice and that choice is then held for the session. The timeout covers an unanswered
+// permission dialog, where starting in the fallback voice beats never listening at all.
+let voiceAuthorized = DispatchSemaphore(value: 0)
+AVSpeechSynthesizer.requestPersonalVoiceAuthorization { status in
+    VoiceLog.note("personal voice authorization: \(status.rawValue) (3 = authorized)")
+    voiceAuthorized.signal()
+}
+DispatchQueue.global().async {
+    if voiceAuthorized.wait(timeout: .now() + 10) == .timedOut {
+        VoiceLog.note("personal voice authorization still pending; starting anyway")
+    }
+    DispatchQueue.main.async { session.voice.startConversation() }
+}
 app.run()

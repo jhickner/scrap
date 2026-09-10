@@ -114,4 +114,15 @@ struct SpokenTextChunkerTests {
     func silentOnMarkupOnly() {
         #expect(spoken(["---\n\n"]) == [])
     }
+    @Test("reads a flag as words rather than a run of hyphens")
+    func speaksFlags() {
+        #expect(spoken(["Run `grok update --check` or `-v` now. "])
+            == ["Run grok update dash dash check or dash v now."])
+    }
+
+    @Test("leaves hyphens that are part of a word or a range alone")
+    func keepsHyphens() {
+        #expect(spoken(["A check-only flag, pages 3-5. "]) == ["A check-only flag, pages 3-5."])
+    }
+
 }

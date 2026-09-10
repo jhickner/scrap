@@ -48,7 +48,7 @@ struct SpokenTextChunker: Sendable {
         let split = Self.sentences(in: spoken, flushingTail: false)
         guard !split.complete.isEmpty else { return utterances }
         pending = split.remainder
-        utterances.append(contentsOf: emit(split.complete.flatMap(Self.clamped)))
+        utterances.append(contentsOf: emit(split.complete.flatMap { Self.clamped($0) }))
         return utterances
     }
 
@@ -107,7 +107,7 @@ struct SpokenTextChunker: Sendable {
         }
         // A finished line is a boundary in its own right: a heading or a list item is a whole
         // thought even without a full stop at the end of it.
-        return Self.sentences(in: spoken, flushingTail: true).complete.flatMap(Self.clamped)
+        return Self.sentences(in: spoken, flushingTail: true).complete.flatMap { Self.clamped($0) }
     }
 
     /// True while a partial line might still turn out to be a fence or a table row.
@@ -124,7 +124,37 @@ struct SpokenTextChunker: Sendable {
         var text = line.trimmingCharacters(in: .whitespaces)
         text = stripLeadingMarkers(text)
         text = stripInline(text)
+        text = spokenFlags(text)
         return text.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Reads a command-line flag as words. A run of hyphens is not speech, and Personal Voice
+    /// can drop the text around one rather than say it.
+    static func spokenFlags(_ line: String) -> String {
+        var output = ""
+        var index = line.startIndex
+        var atWordStart = true
+        while index < line.endIndex {
+            let character = line[index]
+            guard atWordStart, character == "-" else {
+                output.append(character)
+                atWordStart = character.isWhitespace || "([\"'".contains(character)
+                index = line.index(after: index)
+                continue
+            }
+            let dashes = line[index...].prefix(while: { $0 == "-" })
+            let rest = line[line.index(index, offsetBy: dashes.count)...]
+            guard let next = rest.first, next.isLetter else {
+                output.append(contentsOf: dashes)
+                index = line.index(index, offsetBy: dashes.count)
+                atWordStart = false
+                continue
+            }
+            output += String(repeating: "dash ", count: dashes.count)
+            index = line.index(index, offsetBy: dashes.count)
+            atWordStart = false
+        }
+        return output
     }
 
     private static func stripLeadingMarkers(_ line: String) -> String {
@@ -277,12 +307,12 @@ struct SpokenTextChunker: Sendable {
     }
 
     /// Splits an over-long utterance on the last sensible pause below the limit.
-    static func clamped(_ utterance: String) -> [String] {
-        guard utterance.count > utteranceLimit else { return [utterance] }
+    static func clamped(_ utterance: String, limit: Int = utteranceLimit) -> [String] {
+        guard utterance.count > limit else { return [utterance] }
         var remaining = Substring(utterance)
         var parts: [String] = []
-        while remaining.count > utteranceLimit {
-            let window = remaining.prefix(utteranceLimit)
+        while remaining.count > limit {
+            let window = remaining.prefix(limit)
             let breakIndex = window.lastIndex(where: { $0 == "," || $0 == ";" || $0 == ":" })
                 ?? window.lastIndex(of: " ")
                 ?? window.endIndex
