@@ -24,6 +24,7 @@ static void *cb_ud;
 static int need_ready;
 
 static char *sent[8];
+static char *sent_full[8];
 static int nsent;
 static int fails;
 
@@ -97,9 +98,11 @@ int workspace_index_of(const struct session *s) { (void)s; return 0; }
 int workspace_send(int index, const char *line, const char *shown)
 {
     (void)index;
-    (void)shown;
-    if (nsent < (int)(sizeof sent / sizeof sent[0]))
-        sent[nsent++] = strdup(line);
+    if (nsent < (int)(sizeof sent / sizeof sent[0])) {
+        sent_full[nsent] = strdup(line);
+        sent[nsent] = strdup(shown ? shown : line);
+        nsent++;
+    }
     return 1;
 }
 
@@ -120,8 +123,10 @@ static void fire(const char *kind, const char *text)
 
 static void clear_sent(void)
 {
-    for (int i = 0; i < nsent; i++)
+    for (int i = 0; i < nsent; i++) {
         free(sent[i]);
+        free(sent_full[i]);
+    }
     nsent = 0;
 }
 
@@ -184,6 +189,24 @@ int main(void)
     clear_sent();
 
     voice_arm(1);
+    fire("partial", "reading this back");
+    voice_commit(&sess);
+    if (nsent != 1)
+        fail("commit sends the draft while speaking");
+    else if (!strstr(sent_full[0], "read back") || !strstr(sent_full[0], "reading this back"))
+        fail("spoken input carries the preamble");
+    clear_sent();
+
+    voice_set_speak(0);
+    fire("partial", "no preamble here");
+    voice_commit(&sess);
+    if (nsent != 1)
+        fail("commit sends the draft while listening");
+    else
+        eq_str("listen-only draft", sent_full[0], "no preamble here");
+    clear_sent();
+    voice_set_speak(1);
+
     fire("partial", "sent by hand");
     voice_draft_sent();
     fire("final", "sent by hand");

@@ -30,6 +30,13 @@
 /* AVSpeechUtteranceDefaultSpeechRate, what 100 percent means */
 #define AV_RATE_DEFAULT 0.5
 
+/* prefixed to spoken input while replies are read back, so the answer is
+   shaped for the ear; the pane shows the words without it */
+#define SPOKEN_PREAMBLE                                                        \
+    "The message below was spoken aloud, and your reply will be read back "    \
+    "aloud. Answer in a sentence or two of plain prose. No lists, code "       \
+    "blocks, or long paths unless they are asked for.\n\n"
+
 static macos_voice *voice;
 static int          ready;
 static int          speaking;
@@ -225,7 +232,9 @@ static void send_line(struct session *s, const char *line)
         return;
     if (!session_turn_running(s))
         prompt_echo_message(line);
-    workspace_send(tab, line, NULL);
+    char *full = voice_with_preamble(line);
+    workspace_send(tab, full ? full : line, full ? line : NULL);
+    free(full);
 }
 
 static void discard_speech(const char *text)
@@ -672,6 +681,13 @@ void voice_arm(int on)
         macos_voice_busy(voice, s && session_turn_running(s));
     }
     status_touch();
+}
+
+char *voice_with_preamble(const char *line)
+{
+    if (!voice || !speak || !line || !*line)
+        return NULL;
+    return text_dsprintf("%s%s", SPOKEN_PREAMBLE, line);
 }
 
 int voice_speaking(void) { return voice && speaking; }

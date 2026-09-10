@@ -1227,8 +1227,11 @@ enum cmd_result cmd_submit(struct session *s, const char *line)
         return r;
 
     int tab = workspace_index_of(s);
-    if (tab >= 0)
-        workspace_send(tab, line, NULL);
+    if (tab >= 0) {
+        char *full = voice_with_preamble(line);
+        workspace_send(tab, full ? full : line, full ? line : NULL);
+        free(full);
+    }
     return CMD_NOT_A_COMMAND;
 }
 

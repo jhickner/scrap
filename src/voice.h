@@ -49,6 +49,10 @@ void voice_draft_sent(void);
 int  voice_drop(void);
 /* 0 while this pane is not focused: speech is discarded rather than submitted */
 void voice_arm(int on);
+/* line with the spoken-reply preamble prefixed, so the answer is shaped for
+   the ear; NULL when voice is off or replies are not read aloud. caller frees */
+char *voice_with_preamble(const char *line);
+
 /* 1 while a reply is being read aloud */
 int  voice_speaking(void);
 /* stop reading the current reply aloud */

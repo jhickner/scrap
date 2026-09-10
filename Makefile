@@ -204,7 +204,7 @@ $(BUILD)/highlighttest: tests/highlighttest.c $(BUILD)/highlight.o | $(BUILD)
 
 $(BUILD)/replboxtest: tests/replboxtest.c $(BUILD)/replbox.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/paste.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/files.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/voicetest: tests/voicetest.c src/voice.c | $(BUILD)
+$(BUILD)/voicetest: tests/voicetest.c src/voice.c $(BUILD)/text.o | $(BUILD)
 
 check: $(CHECK_BINS)
 	@for t in $^; do echo "$$t"; ./$$t || exit 1; done
