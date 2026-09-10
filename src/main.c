@@ -32,6 +32,7 @@
 #include "sessionswitch.h"
 #include "sessionview.h"
 #include "settings.h"
+#include "dispatch.h"
 #include "sidechannel.h"
 #include "reopen.h"
 #include "tabs.h"
@@ -162,6 +163,7 @@ static int idle_render(void *ud)
     tabs_admit(0);
     sidechannel_poll();
     sidechannel_tick();
+    dispatch_poll();
     reap_children();
 
     if (tg_pending() || relay_pending() || voice_pending())
@@ -634,6 +636,10 @@ int main(int argc, char **argv)
         model = session_saved_model(backend);
     if (!effort)
         effort = session_saved_effort(backend);
+
+    char pid_env[24];
+    snprintf(pid_env, sizeof pid_env, "%ld", (long)getpid());
+    setenv("MUX_PID", pid_env, 1);
 
     ui_init();
 
