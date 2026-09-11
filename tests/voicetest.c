@@ -86,7 +86,8 @@ int  macos_voice_poll(macos_voice *v, int timeout_ms)
 int  macos_voice_say(macos_voice *v, const char *text) { (void)v; (void)text; return 0; }
 int  macos_voice_announce(macos_voice *v, const char *text) { (void)v; (void)text; return 0; }
 int  macos_voice_finish(macos_voice *v) { (void)v; return 0; }
-int  macos_voice_cancel(macos_voice *v) { (void)v; return 0; }
+static int ncancels;
+int  macos_voice_cancel(macos_voice *v) { (void)v; ncancels++; return 0; }
 int  macos_voice_mute(macos_voice *v) { (void)v; return 0; }
 int  macos_voice_chime(macos_voice *v, const char *name)
 {
@@ -533,7 +534,10 @@ int main(void)
     fire("partial", "this is not for the prompt");
     if (box[0])
         fail("speech while paused is not previewed");
+    ncancels = 0;
     fire("final", "this is not for the prompt");
+    if (ncancels != 1)
+        fail("a turn dropped while paused releases the helper");
     fire("final", "stop");
     fire("interrupt", NULL);
     if (voice_take_line() || sess.abort || box[0])
@@ -569,6 +573,15 @@ int main(void)
     eq_str("a dictation carries on across a pause", line,
            "listen write a note about the build");
     free(line);
+    clear_chimes();
+
+    fire("final", "Pause, pause, pause, pause.");
+    if (voice_take_line())
+        fail("a repeated pause command is not sent");
+    eq_str("a repeated pause command pauses", voice_label(), "voice paused");
+    fire("final", "resume resume");
+    if (!strcmp(voice_label(), "voice paused"))
+        fail("a repeated resume command resumes");
     clear_chimes();
 
     fire("final", "pause");

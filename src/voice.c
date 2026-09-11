@@ -238,7 +238,7 @@ static int is_stale(const char *text)
 }
 
 /* 1 when the turn, lowercased and without punctuation or filler words, is one
-   of the phrases in list */
+   of the phrases in list, possibly repeated */
 static int is_command(const char *text, const char *const *list, int count)
 {
     char words[256];
@@ -306,9 +306,16 @@ static int is_command(const char *text, const char *const *list, int count)
     if (!*start)
         return 0;
 
-    for (int i = 0; i < count; i++)
-        if (!strcmp(start, list[i]))
-            return 1;
+    for (int i = 0; i < count; i++) {
+        size_t len = strlen(list[i]);
+        const char *p = start;
+        while (!strncmp(p, list[i], len) && (p[len] == ' ' || !p[len])) {
+            p += len;
+            if (!*p)
+                return 1;
+            p++;
+        }
+    }
     return 0;
 }
 
@@ -533,7 +540,11 @@ static void on_event(void *ud, const char *kind, const char *text)
             discard_speech();
             return;
         }
+        /* the helper waits for a reply to every turn it delivers and judges
+           speech as echo until one ends; a turn consumed here gets none */
         if (paused) {
+            if (voice)
+                macos_voice_cancel(voice);
             if (is_resume_command(text))
                 set_paused(0);
             return;
@@ -545,6 +556,8 @@ static void on_event(void *ud, const char *kind, const char *text)
         if (is_pause_command(text) || is_resume_command(text)) {
             erased = 0;
             forget_stale();
+            if (voice)
+                macos_voice_cancel(voice);
             set_paused(is_pause_command(text));
             return;
         }
