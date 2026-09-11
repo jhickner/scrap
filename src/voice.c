@@ -60,6 +60,9 @@ static char         draft[LISTEN_MAX];
    terminator, so a long input is not cut up by pauses */
 static int          listen_mode;
 static char         listen_buf[LISTEN_MAX];
+/* set by the spoken pause command: the recognizer keeps running so the resume
+   command is heard, and every other turn is discarded */
+static int          paused;
 static char         failure[256];
 static char        *queue[LINE_MAX_QUEUE];
 static int          nqueue;
@@ -234,7 +237,9 @@ static int is_stale(const char *text)
     return 1;
 }
 
-static int is_stop_command(const char *text)
+/* 1 when the turn, lowercased and without punctuation or filler words, is one
+   of the phrases in list */
+static int is_command(const char *text, const char *const *list, int count)
 {
     char words[256];
     size_t n = 0;
@@ -301,15 +306,32 @@ static int is_stop_command(const char *text)
     if (!*start)
         return 0;
 
-    static const char *stops[] = {
+    for (int i = 0; i < count; i++)
+        if (!strcmp(start, list[i]))
+            return 1;
+    return 0;
+}
+
+static int is_stop_command(const char *text)
+{
+    static const char *const stops[] = {
         "stop", "wait", "quiet", "be quiet", "shush", "shh", "hush", "stop talking",
         "stop it", "enough", "thats enough", "shut up", "silence", "hold on",
         "one second",
     };
-    for (int i = 0; i < (int)(sizeof stops / sizeof stops[0]); i++)
-        if (!strcmp(start, stops[i]))
-            return 1;
-    return 0;
+    return is_command(text, stops, (int)(sizeof stops / sizeof stops[0]));
+}
+
+static int is_pause_command(const char *text)
+{
+    static const char *const words[] = { "pause", "pause listening" };
+    return is_command(text, words, (int)(sizeof words / sizeof words[0]));
+}
+
+static int is_resume_command(const char *text)
+{
+    static const char *const words[] = { "resume", "resume listening" };
+    return is_command(text, words, (int)(sizeof words / sizeof words[0]));
 }
 
 static int listening(void) { return armed && mic; }
@@ -318,6 +340,15 @@ static void chime(const char *name)
 {
     if (voice && listening())
         macos_voice_chime(voice, name);
+}
+
+static void set_paused(int on)
+{
+    paused = on;
+    hearing = 0;
+    heard("");
+    chime(on ? "interrupted" : "listening");
+    status_touch();
 }
 
 /* the word "listen" where it starts, or NULL when the turn does not carry it.
@@ -468,6 +499,16 @@ static void on_event(void *ud, const char *kind, const char *text)
             discard_speech();
             return;
         }
+        if (paused) {
+            hearing = 0;
+            return;
+        }
+        /* a command word is not previewed; it shows once the turn grows past it */
+        if (is_pause_command(text) || is_resume_command(text)) {
+            hearing = 1;
+            heard("");
+            return;
+        }
         if (erased) {
             hearing = 0;
             return;
@@ -492,10 +533,21 @@ static void on_event(void *ud, const char *kind, const char *text)
             discard_speech();
             return;
         }
+        if (paused) {
+            if (is_resume_command(text))
+                set_paused(0);
+            return;
+        }
         char edit[LISTEN_MAX];
         take_edit(edit, sizeof edit);
         hearing = 0;
         heard("");
+        if (is_pause_command(text) || is_resume_command(text)) {
+            erased = 0;
+            forget_stale();
+            set_paused(is_pause_command(text));
+            return;
+        }
         if (erased) {
             erased = 0;
             /* the turn being erased is gone, but a terminator in it still ends
@@ -534,7 +586,7 @@ static void on_event(void *ud, const char *kind, const char *text)
         if (text && *text)
             enqueue(text);
     } else if (!strcmp(kind, "interrupt")) {
-        if (!listening())
+        if (!listening() || paused)
             return;
         clear_queue();
         listen_clear();
@@ -609,6 +661,7 @@ int voice_start(char *err, size_t size)
     drop_until = 0;
     hearing = 0;
     erased = 0;
+    paused = 0;
     forget_stale();
     listen_clear();
     draft[0] = '\0';
@@ -700,6 +753,7 @@ static void teardown(int end_helper)
     drop_until = 0;
     hearing = 0;
     erased = 0;
+    paused = 0;
     forget_stale();
     listen_clear();
     draft[0] = '\0';
@@ -849,6 +903,7 @@ void voice_set_mic(int on)
     drop_until = 0;
     hearing = 0;
     erased = 0;
+    paused = 0;
     listen_clear();
     heard("");
     if (voice) {
@@ -884,8 +939,10 @@ const char *voice_label(void)
         snprintf(label, sizeof label, "voice starting");
     else if (!mic)
         snprintf(label, sizeof label, "voice mic off");
-    else if (!armed)
+    else if (paused)
         snprintf(label, sizeof label, "voice paused");
+    else if (!armed)
+        snprintf(label, sizeof label, "voice unfocused");
     else if (listen_mode)
         snprintf(label, sizeof label, "voice dictation");
     else if (!speak)

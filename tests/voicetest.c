@@ -513,6 +513,70 @@ int main(void)
     else
         eq_str("chime on preview-only take", chimes[0], "sent");
     free(line);
+    clear_chimes();
+
+    box[0] = '\0';
+    fire("partial", "Pause.");
+    if (box[0])
+        fail("the pause command is not previewed");
+    fire("final", "Pause.");
+    if (box[0] || voice_take_line())
+        fail("the pause command is not sent");
+    eq_str("pause label", voice_label(), "voice paused");
+    if (nchimes != 1)
+        fail("pausing chimes once");
+    else
+        eq_str("chime on pause", chimes[0], "interrupted");
+    clear_chimes();
+    sess.running = 1;
+    sess.abort = 0;
+    fire("partial", "this is not for the prompt");
+    if (box[0])
+        fail("speech while paused is not previewed");
+    fire("final", "this is not for the prompt");
+    fire("final", "stop");
+    fire("interrupt", NULL);
+    if (voice_take_line() || sess.abort || box[0])
+        fail("speech while paused is not acted on");
+    fire("partial", "resume");
+    if (box[0])
+        fail("the resume command is not previewed");
+    fire("final", "okay resume");
+    if (voice_take_line() || box[0])
+        fail("the resume command is not sent");
+    if (!strcmp(voice_label(), "voice paused"))
+        fail("resume clears the pause label");
+    if (nchimes != 1)
+        fail("resuming chimes once");
+    else
+        eq_str("chime on resume", chimes[0], "listening");
+    sess.running = 0;
+    fire("partial", "pause the build");
+    eq_str("a turn that grows past a command word previews", box, "pause the build");
+    fire("final", "pause the build");
+    line = voice_take_line();
+    eq_str("a sentence starting with pause is a prompt", line, "pause the build");
+    free(line);
+    clear_chimes();
+
+    fire("final", "listen write a note");
+    fire("final", "pause");
+    eq_str("pausing keeps the dictation in the box", box, "listen write a note");
+    fire("final", "not part of the note");
+    fire("final", "resume");
+    fire("final", "about the build ok done");
+    line = voice_take_line();
+    eq_str("a dictation carries on across a pause", line,
+           "listen write a note about the build");
+    free(line);
+    clear_chimes();
+
+    fire("final", "pause");
+    voice_set_mic(0);
+    voice_set_mic(1);
+    if (!strcmp(voice_label(), "voice paused"))
+        fail("turning the mic on by hand clears the pause");
+    clear_chimes();
     voice_on_heard(NULL, NULL);
     voice_on_draft(NULL, NULL);
 
