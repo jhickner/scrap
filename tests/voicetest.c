@@ -235,6 +235,36 @@ int main(void)
     voice_set_mic(1);
     clear_chimes();
 
+    char long_text[800] = "listen ";
+    for (int i = 0; i < 65; i++)
+        strcat(long_text, "dictation ");
+    strcat(long_text, "illustration");
+    char terminated[850];
+    snprintf(terminated, sizeof terminated, "%s ok done", long_text);
+    fire("final", terminated);
+    char *long_line = voice_take_line();
+    eq_str("long dictation preserves the last word and terminator", long_line, long_text);
+    free(long_line);
+    voice_set_mic(0);
+    voice_set_mic(1);
+    clear_sent();
+    clear_chimes();
+
+    voice_on_heard(box_heard, NULL);
+    voice_on_draft(box_line, NULL);
+    fire("partial", long_text);
+    eq_str("long partial is fully previewed", box, long_text);
+    voice_set_mic(0);
+    if (nsent != 1)
+        fail("mic-off commits a long draft once");
+    else
+        eq_str("mic-off preserves the last word of a long draft", sent[0], long_text);
+    voice_set_mic(1);
+    voice_on_heard(NULL, NULL);
+    voice_on_draft(NULL, NULL);
+    clear_sent();
+    clear_chimes();
+
     sess.running = 1;
     fire("final", "and then do this");
     char *line = voice_take_line();

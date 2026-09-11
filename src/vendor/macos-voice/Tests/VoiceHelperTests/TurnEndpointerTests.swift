@@ -28,8 +28,24 @@ struct TurnEndpointerTests {
         _ = endpointer.noteFinal("what is a volcano?", at: 10)
         #expect(endpointer.poll(at: 10.5) == .waiting)
         endpointer.noteVolatile("actually wait", at: 10.6)
-        #expect(endpointer.poll(at: 11.2) == .waiting)
-        #expect(endpointer.poll(at: 11.4) == .send("what is a volcano?"))
+        #expect(endpointer.poll(at: 11.2, awaitingFinal: true) == .waiting)
+        #expect(endpointer.poll(at: 11.4, awaitingFinal: true) == .waiting)
+        #expect(endpointer.poll(at: 20, awaitingFinal: true) == .waiting)
+        _ = endpointer.noteFinal("actually wait for the illustration", at: 20)
+        #expect(endpointer.poll(at: 21.5) == .send(
+            "what is a volcano? actually wait for the illustration"
+        ))
+        #expect(endpointer.poll(at: 30) == .waiting)
+    }
+
+    @Test("a stalled partial can be promoted before the whole turn is sent")
+    func stalledTailIsPreserved() {
+        var endpointer = TurnEndpointer(silence: 1.4)
+        _ = endpointer.noteFinal("please explain the", at: 10)
+        endpointer.noteVolatile("illustration", at: 11)
+        #expect(endpointer.poll(at: 16, awaitingFinal: true) == .waiting)
+        _ = endpointer.noteFinal("illustration", at: 11)
+        #expect(endpointer.poll(at: 16) == .send("please explain the illustration"))
     }
 
     @Test("says nothing when nothing has been said")

@@ -53,9 +53,9 @@ static long         drop_until;
 static int          hearing;
 /* draft heard while unarmed or dropping; the helper can re-emit it after
    focus, and that residue must not preview or send */
-static char         stale[512];
+static char         stale[LISTEN_MAX];
 static int          stale_hit;
-static char         draft[512];
+static char         draft[LISTEN_MAX];
 /* dictation opened by the wake word: every turn is held here until the
    terminator, so a long input is not cut up by pauses */
 static int          listen_mode;
