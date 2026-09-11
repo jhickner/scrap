@@ -30,7 +30,8 @@ CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           sessionviewtest sessionloadtest highlighttest muxcfgtest telegramtest \
           boardtest modelstest boardgridtest boardtiletest viewstest sessionpresenttest \
           workspacetest replboxtest ttytest gitinfotest sidechannelviewtest \
-          sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest
+          sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
+          dispatchtest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,
@@ -199,6 +200,8 @@ $(BUILD)/boardtiletest: tests/boardtiletest.c $(BUILD)/boardtile.o $(BUILD)/text
 $(BUILD)/viewstest: tests/viewstest.c $(BUILD)/views.o | $(BUILD)
 
 $(BUILD)/workspacetest: tests/workspacetest.c tests/stubs/tabbar.c $(BUILD)/workspace.o $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
+
+$(BUILD)/dispatchtest: tests/dispatchtest.c $(BUILD)/dispatch.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/highlighttest: tests/highlighttest.c $(BUILD)/highlight.o | $(BUILD)
 

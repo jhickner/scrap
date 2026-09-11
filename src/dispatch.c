@@ -19,6 +19,9 @@
 
 static int dir_path(char *out, size_t size)
 {
+    const char *env = getenv("MUX_DISPATCH_DIR");
+    if (env && *env)
+        return (size_t)snprintf(out, size, "%s", env) < size;
     return path_config_subdir(out, size, "dispatch");
 }
 
@@ -132,6 +135,15 @@ static void serve(const char *dir, const char *base, const char *text)
         reply(dir, base, out);
         cJSON_Delete(o);
         return;
+    }
+
+    const char *title = field(o, "title");
+    if (title) {
+        char name[81];
+        struct session *s = workspace_at(at);
+        snprintf(name, sizeof name, "%s", title);
+        if (session_rename(s, name) == SESSION_RENAME_OK)
+            session_set_naming(s, 0);
     }
 
     workspace_show(workspace_index_of(was));

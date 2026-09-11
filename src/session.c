@@ -1074,10 +1074,17 @@ static void set_id(struct session *s, const char *id)
     if (changed) {
         if (s->parent[0])
             parent_set(s->id, s->parent);
-        s->title[0] = '\0';
-        s->stale_title[0] = '\0';
-        s->announce_title = 0;
-        s->named = 0;
+        if (s->held_title[0]) {
+            title_set(s->id, s->held_title);
+            s->held_title[0] = '\0';
+            s->named = 1;
+            s->retitle = 0;
+        } else {
+            s->title[0] = '\0';
+            s->stale_title[0] = '\0';
+            s->announce_title = 0;
+            s->named = 0;
+        }
         if (!s->retitle)
             title_lookup(s->id, s->title, sizeof s->title);
         status_set_note(s->title);

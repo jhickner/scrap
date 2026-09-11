@@ -212,6 +212,11 @@ void livelist_publish(const struct session *s, const char *status)
     char name[200] = "";
     if (id)
         title_lookup(id, name, sizeof name);
+    if (!name[0]) {
+        const char *given = session_title(s);
+        if (given && *given)
+            snprintf(name, sizeof name, "%s", given);
+    }
 
     cJSON *rec = cJSON_CreateObject();
     if (!rec)
