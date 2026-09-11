@@ -1408,14 +1408,9 @@ void voice_draft_sent(void)
     macos_voice_cancel(voice);
 }
 
-int voice_drop(void)
+static void drop_input(void)
 {
-    if (!voice || !listening())
-        return 0;
-    /* The drop hold only swallows recognition residue after a cancellation; it
-       is not itself voice input.  Reporting it as something dropped makes a
-       quick second Escape renew the hold instead of reaching the active turn. */
-    int had = nqueue > 0 || hearing || listen_mode;
+    int cut = draft[0] != 0;
     hold_drop();
     clear_queue();
     erased = 0;
@@ -1426,9 +1421,35 @@ int voice_drop(void)
     forget_stale();
     remember_stale(draft);
     heard("");
+    /* revised words no longer match that prefix: the rest of the utterance is
+       dropped until its final */
+    erased = cut;
     drain();
+}
+
+int voice_drop(void)
+{
+    if (!voice || !listening())
+        return 0;
+    /* The drop hold only swallows recognition residue after a cancellation; it
+       is not itself voice input.  Reporting it as something dropped makes a
+       quick second Escape renew the hold instead of reaching the active turn. */
+    int had = nqueue > 0 || hearing || listen_mode;
+    drop_input();
     macos_voice_cancel(voice);
     return had;
+}
+
+int voice_discard(void)
+{
+    if (!voice || !listening())
+        return 0;
+    if (!listen_mode && !hearing && !draft[0] && !shown[0] && !nqueue)
+        return 0;
+    drop_input();
+    if (!speaking)
+        macos_voice_cancel(voice);
+    return 1;
 }
 
 /* Releasing ownership makes the helper hand back whatever it had heard. Wait

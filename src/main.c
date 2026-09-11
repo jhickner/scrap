@@ -436,6 +436,12 @@ static int cancel_turn(void *ud)
     return 1;
 }
 
+static int discard_voice(void *ud)
+{
+    (void)ud;
+    return voice_discard();
+}
+
 static void turn_done(struct session *s)
 {
     voice_turn_done(s);
@@ -795,6 +801,7 @@ int main(int argc, char **argv)
     view_collapse(session_compact(session));
     prompt_set_board(prompt, board, prompt);
     prompt_set_cancel(prompt, cancel_turn, NULL);
+    prompt_set_discard(prompt, discard_voice, NULL);
     workspace_on_finish(turn_done);
 
     workspace_on_settled(boardwork_finished);

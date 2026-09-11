@@ -54,6 +54,9 @@ void prompt_set_takeover(struct prompt *p, int (*pending)(void *ud), void (*run)
                          void *ud);
 
 void prompt_set_cancel(struct prompt *p, int (*fn)(void *ud), void *ud);
+/* ctrl-c or escape on a non-empty line: drop the voice input in it. 1 when
+   there was some; escape then leaves the rest of the line */
+void prompt_set_discard(struct prompt *p, int (*fn)(void *ud), void *ud);
 
 void prompt_set_switcher(struct prompt *p, void (*fn)(void *ud), void *ud);
 

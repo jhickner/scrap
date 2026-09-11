@@ -76,6 +76,10 @@ void voice_draft_sent(void);
 /* drop the in-progress utterance: clear the preview and do not submit it.
    1 if there was something to drop */
 int  voice_drop(void);
+/* the input box is cleared by hand: drop the open dictation, the turns not yet
+   taken and the utterance in progress, so none of it is shown or sent again.
+   1 if there was any */
+int  voice_discard(void);
 /* 0 while this pane is not focused: speech is discarded rather than submitted */
 void voice_arm(int on);
 /* line with the spoken-reply preamble prefixed, so the answer is shaped for

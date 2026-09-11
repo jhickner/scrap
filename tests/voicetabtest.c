@@ -183,6 +183,7 @@ static void heard(void *ud, const char *text) { prompt_set_preview(ud, text); }
 static const char *line(void *ud) { return prompt_line(ud); }
 static void release(void *ud) { prompt_release_preview(ud); }
 static int claim(void *ud, const char *text) { return prompt_claim_preview(ud, text); }
+static int discard(void *ud) { (void)ud; return voice_discard(); }
 
 static void eq(const char *what, const char *got, const char *want)
 {
@@ -479,6 +480,142 @@ static void check_typed_prefix_submit(void)
     voice_stop();
 }
 
+static void key(int cp)
+{
+    tty_event ev = {0};
+    ev.key = TK_CHAR;
+    ev.cp = cp;
+    prompt_live_key(box, &ev);
+}
+
+static void lacks(const char *what, const char *got, const char *word)
+{
+    if (got && strstr(got, word)) {
+        fprintf(stderr, "FAIL %s: \"%s\" holds \"%s\"\n", what, got, word);
+        failures++;
+    }
+}
+
+#define CTRL_C 3
+
+/* ctrl-c on an open dictation: its words are gone from the box, and neither the
+   dictation held so far nor the rest of the utterance being spoken returns */
+static void check_ctrl_c_mid_utterance(void)
+{
+    begin();
+    partial("Listen. one two");
+    final("Listen. one two");
+    partial("three");
+    eq("dictation shows before ctrl-c", prompt_line(box), "Listen. one two three");
+    key(CTRL_C);
+    eq("ctrl-c empties the box", prompt_line(box), "");
+    partial("three four");
+    lacks("the utterance cut by ctrl-c is not previewed", prompt_line(box), "three");
+    final("three four");
+    partial("Listen. five");
+    final("Listen. five");
+    lacks("resumed dictation drops the cleared words", prompt_line(box), "one");
+    lacks("resumed dictation drops the cut utterance", prompt_line(box), "three");
+    final("ok done");
+    lacks("the next send has no cleared words", sent_a, "one");
+    lacks("the next send has no cut utterance", sent_a, "three");
+    voice_stop();
+}
+
+static void check_ctrl_c_between_utterances(void)
+{
+    begin();
+    partial("Listen. one two");
+    final("Listen. one two");
+    key(CTRL_C);
+    eq("ctrl-c empties the box", prompt_line(box), "");
+    partial("Listen. three");
+    final("Listen. three");
+    lacks("resumed dictation drops the cleared words", prompt_line(box), "one");
+    final("ok done");
+    lacks("the next send has no cleared words", sent_a, "one");
+    voice_stop();
+}
+
+/* the helper ends a turn with a dropped final while more of it is still heard */
+static void check_ctrl_c_then_dropped(void)
+{
+    begin();
+    partial("alpha beta");
+    key(CTRL_C);
+    helper_cb(helper_ud, "dropped", NULL);
+    partial("alpha beta gamma");
+    lacks("a dropped final does not bring back the cleared words", prompt_line(box), "alpha");
+    final("alpha beta gamma");
+    lacks("the cleared utterance is not inserted", prompt_line(box), "alpha");
+    lacks("the cleared utterance is not sent", sent_a, "alpha");
+    voice_stop();
+}
+
+/* the recognizer revises the words already heard, so they no longer match */
+static void check_ctrl_c_revised(void)
+{
+    begin();
+    partial("hello world");
+    key(CTRL_C);
+    partial("Hello, world, again");
+    lacks("revised words of the cleared utterance are not previewed", prompt_line(box), "world");
+    final("Hello, world, again");
+    lacks("revised words of the cleared utterance are not inserted", prompt_line(box), "world");
+    lacks("revised words of the cleared utterance are not sent", sent_a, "world");
+    /* past the residue hold that follows a drop */
+    usleep(800 * 1000);
+    partial("fresh words");
+    eq("speech after the cleared turn previews", prompt_line(box), "fresh words");
+    voice_stop();
+}
+
+static void check_ctrl_c_tab_round_trip(void)
+{
+    begin();
+    partial("Listen. one two");
+    final("Listen. one two");
+    key(CTRL_C);
+    show_tab(&b);
+    show_tab(&a);
+    partial("Listen. three");
+    final("Listen. three");
+    lacks("a tab round trip does not restore cleared dictation", prompt_line(box), "one");
+    voice_stop();
+}
+
+static void check_ctrl_c_keeps_typed_edit(void)
+{
+    begin();
+    type("typed");
+    key(CTRL_C);
+    eq("ctrl-c clears typed text", prompt_line(box), "");
+    partial("spoken");
+    eq("speech after clearing typed text previews", prompt_line(box), "spoken");
+    final("spoken");
+    eq("speech after clearing typed text sends", sent_a, "spoken");
+    voice_stop();
+}
+
+/* escape drops the dictated words and the dictation behind them */
+static void check_escape_drops_dictation(void)
+{
+    begin();
+    type("typed");
+    partial("Listen. one two");
+    final("Listen. one two");
+    partial("three");
+    press(TK_ESCAPE);
+    eq("escape leaves the typed text", prompt_line(box), "typed");
+    partial("three four");
+    final("three four");
+    partial("Listen. five");
+    final("Listen. five");
+    lacks("dictation after escape drops the old words", prompt_line(box), "one");
+    lacks("dictation after escape drops the cut utterance", prompt_line(box), "three");
+    voice_stop();
+}
+
 static void check_trace(void)
 {
     char home[4096], config[4200], settings[4300], log[4300];
@@ -557,6 +694,7 @@ int main(void)
     voice_on_draft(line, box);
     voice_on_release(release, box);
     voice_on_claim(claim, box);
+    prompt_set_discard(box, discard, NULL);
 
     if (!workspace_begin(&a, 0) || workspace_open(&b) < 0) {
         fail("open two tabs");
@@ -570,6 +708,13 @@ int main(void)
         check_caret_kept();
         check_typed_before_resumed_words();
         check_typed_inside_dictation();
+        check_ctrl_c_mid_utterance();
+        check_ctrl_c_between_utterances();
+        check_ctrl_c_then_dropped();
+        check_ctrl_c_revised();
+        check_ctrl_c_tab_round_trip();
+        check_ctrl_c_keeps_typed_edit();
+        check_escape_drops_dictation();
     }
 
     while (workspace_count())

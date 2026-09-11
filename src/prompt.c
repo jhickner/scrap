@@ -84,6 +84,8 @@ struct prompt {
     void        *collapse_ud;
     int        (*cancel)(void *ud);
     void        *cancel_ud;
+    int        (*discard)(void *ud);
+    void        *discard_ud;
     int          stopped;
     int          frame_ok;
     /* the live transcription span in the buffer: its text and byte offset. Sized for a
@@ -670,7 +672,7 @@ static const struct prompt_key SHORTCUTS[] = {
     {"up / down", "move through the completion list, else browse history"},
     {"ctrl-r", "search history"},
     {"esc", "close the completion, else drop voice input, else interrupt the model"},
-    {"ctrl-c", "clear the prompt line, or interrupt a running turn"},
+    {"ctrl-c", "clear the prompt line and its dictation, or interrupt a running turn"},
     {"ctrl-d (empty)", "close the session (quit on the last one)"},
     {"left (empty)", "open the list of every session"},
     {"ctrl-tab / ctrl-shift-tab", "cycle to the next / previous session"},
@@ -725,6 +727,11 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
                 return KEY_EOF;
             feed(p, REPL_KEY_DELETE, 0, NULL);
             return KEY_OK;
+        }
+        if (ev->cp == KEY_CTRL('C') && p->repl.len && !overlay_open(p)) {
+            if (p->discard)
+                p->discard(p->discard_ud);
+            return edit_key(p, ev);
         }
         if (ev->cp == KEY_CTRL('C') && p->repl.len == 0 && !overlay_open(p)) {
             if (live)
@@ -821,6 +828,8 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
 
     case TK_ESCAPE:
 
+        if (!overlay_open(p) && p->repl.len && p->discard && p->discard(p->discard_ud))
+            return KEY_OK;
         if (!overlay_open(p) && p->repl.len == 0 && p->cancel && p->cancel(p->cancel_ud))
             return KEY_OK;
         if (live && !overlay_open(p))
@@ -964,6 +973,12 @@ void prompt_set_cancel(struct prompt *p, int (*fn)(void *ud), void *ud)
 {
     p->cancel = fn;
     p->cancel_ud = ud;
+}
+
+void prompt_set_discard(struct prompt *p, int (*fn)(void *ud), void *ud)
+{
+    p->discard = fn;
+    p->discard_ud = ud;
 }
 
 void prompt_set_click(struct prompt *p, int (*fn)(void *ud, int row, int col),
