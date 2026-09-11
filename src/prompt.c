@@ -1193,6 +1193,31 @@ void prompt_release_preview(struct prompt *p)
         preview_forget(p);
 }
 
+int prompt_claim_preview(struct prompt *p, const char *text)
+{
+    if (!p || !text)
+        return 0;
+    preview_forget(p);
+    if (!*text)
+        return 1;
+    const char *line = repl_line(&p->repl);
+    const char *found = NULL;
+    for (const char *at = line ? strstr(line, text) : NULL; at; at = strstr(at + 1, text))
+        found = at;
+    if (!found)
+        return 0;
+    /* the separator set_preview put before the words is part of the preview */
+    int sep = found > line && found[-1] == ' ';
+    size_t len = strlen(text) + (size_t)sep;
+    if (len >= sizeof p->preview)
+        return 0;
+    found -= sep;
+    memcpy(p->preview, found, len);
+    p->preview[len] = '\0';
+    p->preview_at = (int)(found - line);
+    return 1;
+}
+
 void prompt_insert(struct prompt *p, const char *text)
 {
     if (!p || !text || !*text)

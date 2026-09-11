@@ -69,6 +69,17 @@ static char         draft[LISTEN_MAX];
    terminator, so a long input is not cut up by pauses */
 static int          listen_mode;
 static char         listen_buf[LISTEN_MAX];
+/* open dictations of tabs not in front, resumed when their tab is again */
+static struct {
+    const struct session *s;
+    char                 *text;
+} held[WORKSPACE_MAX];
+static int          nheld;
+/* the utterance in progress as last heard, and the part of it spoken before
+   the tab changed: the recognizer carries on with it, but only the rest
+   belongs to the tab now in front */
+static char         utter[LISTEN_MAX];
+static char         carry[LISTEN_MAX];
 /* set by the spoken pause command: the recognizer keeps running so the resume
    command is heard, and every other turn is discarded */
 static int          paused;
@@ -85,6 +96,8 @@ static const char *(*draft_fn)(void *ud);
 static void        *draft_ud;
 static void       (*release_fn)(void *ud);
 static void        *release_ud;
+static int        (*claim_fn)(void *ud, const char *text);
+static void        *claim_ud;
 /* the words heard for this utterance were erased in the box; what is left of
    it keeps arriving and is dropped rather than typed back in */
 static int          erased;
@@ -457,6 +470,105 @@ static void listen_clear(void)
     listen_buf[0] = '\0';
 }
 
+static int held_find(const struct session *s)
+{
+    for (int i = 0; i < nheld; i++)
+        if (held[i].s == s)
+            return i;
+    return -1;
+}
+
+static void held_remove(int i)
+{
+    free(held[i].text);
+    held[i] = held[--nheld];
+    held[nheld].s = NULL;
+    held[nheld].text = NULL;
+}
+
+static void held_put(const struct session *s, const char *text)
+{
+    int i = held_find(s);
+    if (i >= 0)
+        held_remove(i);
+    if (!s || nheld >= WORKSPACE_MAX)
+        return;
+    char *copy = strdup(text);
+    if (!copy)
+        return;
+    held[nheld].s = s;
+    held[nheld].text = copy;
+    nheld++;
+}
+
+static void held_clear(void)
+{
+    while (nheld)
+        held_remove(nheld - 1);
+}
+
+static void carry_clear(void)
+{
+    utter[0] = carry[0] = '\0';
+}
+
+static const char *skip_word(const char *p)
+{
+    while (*p && !isalnum((unsigned char)*p))
+        p++;
+    while (*p && !isspace((unsigned char)*p))
+        p++;
+    return p;
+}
+
+/* text past the words spoken before the tab changed. Case and punctuation the
+   recognizer revised still match; a revised word further in is skipped by
+   count, as long as the first word is the same. Text that does not start the
+   same way is a new utterance and is left whole */
+static const char *after_carry(const char *text)
+{
+    if (!carry[0] || !text)
+        return text;
+    const char *c = carry, *p = text;
+    for (;;) {
+        while (*c && !isalnum((unsigned char)*c))
+            c++;
+        while (*p && !isalnum((unsigned char)*p))
+            p++;
+        if (!*c || !*p || tolower((unsigned char)*c) != tolower((unsigned char)*p))
+            break;
+        c++;
+        p++;
+    }
+    if (*c) {
+        const char *cw = carry, *tw = text;
+        while (*cw && !isalnum((unsigned char)*cw))
+            cw++;
+        while (*tw && !isalnum((unsigned char)*tw))
+            tw++;
+        size_t n = strcspn(cw, " \t\n");
+        if (strcspn(tw, " \t\n") != n || strncasecmp(cw, tw, n))
+            return text;
+        p = text;
+        for (c = carry;;) {
+            while (*c && !isalnum((unsigned char)*c))
+                c++;
+            if (!*c)
+                break;
+            while (*c && !isspace((unsigned char)*c))
+                c++;
+            p = skip_word(p);
+        }
+    } else if (isalnum((unsigned char)*p) && p > text && isalnum((unsigned char)p[-1])) {
+        /* the carried text ended inside a word the recognizer has since finished */
+        while (*p && !isspace((unsigned char)*p))
+            p++;
+    }
+    while (*p && (isspace((unsigned char)*p) || ispunct((unsigned char)*p)))
+        p++;
+    return p;
+}
+
 /* end the dictation with tail as its last utterance and queue the whole thing */
 static void listen_flush(const char *tail)
 {
@@ -472,8 +584,9 @@ static void listen_flush(const char *tail)
     listen_buf[0] = '\0';
 }
 
-/* holds a finished turn in the dictation; 0 when this turn is not one */
-static int listen_take(const char *text)
+/* holds a finished turn in the dictation; 0 when this turn is not one. cue
+   chimes when the turn opens it */
+static int listen_take(const char *text, int cue)
 {
     const char *body = text;
 
@@ -483,7 +596,8 @@ static int listen_take(const char *text)
             return 0;
         listen_mode = 1;
         listen_buf[0] = '\0';
-        chime("listening");
+        if (cue)
+            chime("listening");
     }
     /* the dictation starts at the wake word rather than after it: the entry then shows
        the words as they were said, and an opening turn carrying nothing else leaves the
@@ -496,6 +610,18 @@ static int listen_take(const char *text)
     }
     listen_append(rest);
     return 1;
+}
+
+/* the utterance in progress joins the dictation it belongs to, as if its final
+   had arrived; 0 when it is not part of one */
+static int listen_hold_draft(void)
+{
+    if (!draft[0] || erased)
+        return 0;
+    char text[sizeof draft];
+    snprintf(text, sizeof text, "%s", draft);
+    draft[0] = '\0';
+    return listen_take(text, 0);
 }
 
 static void send_line(struct session *s, const char *line)
@@ -532,6 +658,8 @@ static void on_event(void *ud, const char *kind, const char *text)
             discard_speech();
             return;
         }
+        snprintf(utter, sizeof utter, "%s", text ? text : "");
+        text = after_carry(text);
         if (paused) {
             hearing = 0;
             if (!command_early && is_early_resume_command(text)) {
@@ -573,10 +701,13 @@ static void on_event(void *ud, const char *kind, const char *text)
             forget_stale();
     } else if (!strcmp(kind, "final")) {
         if (!listening()) {
+            carry_clear();
             remember_stale(text);
             discard_speech();
             return;
         }
+        text = after_carry(text);
+        carry_clear();
         /* the helper waits for a reply to every turn it delivers and judges
            speech as echo until one ends; a turn consumed here gets none. A reply
            still playing is left to end it, rather than being cut off */
@@ -625,7 +756,7 @@ static void on_event(void *ud, const char *kind, const char *text)
         if (text && *text && !is_stale(text) &&
             (listen_mode || listen_wake(text))) {
             forget_stale();
-            listen_take(text);
+            listen_take(text, 1);
             heard("");
             return;
         }
@@ -658,6 +789,7 @@ static void on_event(void *ud, const char *kind, const char *text)
         erased = 0;
     } else if (!strcmp(kind, "dropped")) {
         /* the erased turn ends here when the helper discards its final */
+        carry_clear();
         discard_speech();
         erased = 0;
     } else if (!strcmp(kind, "speaking")) {
@@ -729,6 +861,8 @@ int voice_start(char *err, size_t size)
     command_early = 0;
     forget_stale();
     listen_clear();
+    held_clear();
+    carry_clear();
     draft[0] = '\0';
     failure[0] = '\0';
 
@@ -822,6 +956,8 @@ static void teardown(int end_helper)
     command_early = 0;
     forget_stale();
     listen_clear();
+    held_clear();
+    carry_clear();
     draft[0] = '\0';
     clear_queue();
     heard("");
@@ -958,8 +1094,12 @@ void voice_set_mic(int on)
     on = on ? 1 : 0;
     if (on == mic)
         return;
-    if (!on)
+    if (!on) {
         voice_commit(workspace_current());
+        /* the dictation ends here, and what it held stays in the box */
+        if (listen_mode && release_fn)
+            release_fn(release_ud);
+    }
     mic = on;
     if (voice)
         macos_voice_mic(voice, on);
@@ -972,6 +1112,7 @@ void voice_set_mic(int on)
     paused = 0;
     command_early = 0;
     listen_clear();
+    carry_clear();
     heard("");
     if (voice) {
         drain();
@@ -996,6 +1137,12 @@ void voice_on_release(void (*fn)(void *ud), void *ud)
 {
     release_fn = fn;
     release_ud = ud;
+}
+
+void voice_on_claim(int (*fn)(void *ud, const char *text), void *ud)
+{
+    claim_fn = fn;
+    claim_ud = ud;
 }
 
 const char *voice_label(void)
@@ -1092,17 +1239,34 @@ void voice_refocus(void)
     macos_voice_cancel(voice);
     struct session *s = workspace_current();
     macos_voice_busy(voice, s && session_turn_running(s));
+    int i = s ? held_find(s) : -1;
+    if (i < 0)
+        return;
+    /* the box came back with the tab; its dictation carries on where it was
+       unless those words are no longer there */
+    if (!claim_fn || claim_fn(claim_ud, held[i].text)) {
+        listen_mode = 1;
+        snprintf(listen_buf, sizeof listen_buf, "%s", held[i].text);
+        snprintf(shown, sizeof shown, "%s", held[i].text);
+    }
+    held_remove(i);
+    status_touch();
 }
 
-void voice_suspend(void)
+void voice_leave(struct session *s)
 {
     if (!voice)
         return;
     drain();
-    if (!hearing && !listen_mode && !draft[0] && !nqueue)
-        return;
     char edit[LISTEN_MAX];
     take_edit(edit, sizeof edit);
+    snprintf(carry, sizeof carry, "%s", utter);
+    if (listen_mode || listen_wake(draft))
+        listen_hold_draft();
+    draft[0] = '\0';
+    hearing = erased = command_early = 0;
+    if (heard_fn && listen_mode)
+        show(listen_buf);
     /* Finals awaiting chat_line belong before the current preview. Materialize
        them in this box before workspace saves it, never in the global queue
        that the next tab would take. Keep any surrounding typed text intact. */
@@ -1122,16 +1286,21 @@ void voice_suspend(void)
             free(text);
         }
     }
+    if (listen_mode)
+        held_put(s, listen_buf);
     if (release_fn)
         release_fn(release_ud);
     clear_queue();
     listen_clear();
-    draft[0] = shown[0] = '\0';
-    hearing = erased = command_early = 0;
-    paused = 1;
-    macos_voice_cancel(voice);
-    status_set_alert("Voice paused; draft saved. Say resume listening to continue.");
+    shown[0] = '\0';
     status_touch();
+}
+
+void voice_forget(const struct session *s)
+{
+    int i = held_find(s);
+    if (i >= 0)
+        held_remove(i);
 }
 
 void voice_commit(struct session *s)
@@ -1139,12 +1308,6 @@ void voice_commit(struct session *s)
     if (!voice || !s)
         return;
     drain();
-    /* A wake word can still be only a partial when focus or the mic changes.
-       Neither edge is the dictation's explicit end phrase. */
-    if (listen_mode || listen_wake(draft)) {
-        voice_suspend();
-        return;
-    }
     char edit[LISTEN_MAX];
     take_edit(edit, sizeof edit);
     if (erased) {
@@ -1153,7 +1316,11 @@ void voice_commit(struct session *s)
             remember_stale(draft);
     } else if (draft[0] && !is_stale(draft)) {
         remember_stale(draft);
-        if (is_stop_command(draft)) {
+        /* A wake word can still be only a partial when focus or the mic changes.
+           Neither edge is the dictation's end phrase, so it stays open */
+        if (listen_mode || listen_wake(draft))
+            listen_hold_draft();
+        else if (is_stop_command(draft)) {
             if (session_turn_running(s))
                 session_interrupt(s);
             chime("interrupted");
@@ -1258,6 +1425,7 @@ void voice_arm(int on)
     dropping = 0;
     drop_until = 0;
     hearing = 0;
+    carry_clear();
     heard("");
     if (armed) {
         struct session *s = workspace_current();

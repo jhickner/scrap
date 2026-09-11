@@ -266,7 +266,7 @@ void workspace_show(int index)
     if (index < 0 || index >= ntabs || index == cur)
         return;
 
-    voice_suspend();
+    voice_leave(tabs[cur].s);
     draft_save(cur);
 
     ui_flush();
@@ -405,7 +405,8 @@ int workspace_dump(int index, const char *path)
 static void drop(int index, const struct session *fallback)
 {
     if (index == cur)
-        voice_suspend();
+        voice_leave(tabs[index].s);
+    voice_forget(tabs[index].s);
     if (tabs[index].s == base)
         base = NULL;
     tg_forget_session(tabs[index].s);

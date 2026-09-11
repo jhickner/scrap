@@ -114,6 +114,9 @@ int  prompt_line_was_external(struct prompt *p);
 int  prompt_line_had_preview(struct prompt *p);
 /* keep the line as it stands and stop tracking it as a preview */
 void prompt_release_preview(struct prompt *p);
+/* track text already in the line, its last occurrence, as the preview again.
+   "" forgets the preview; 0 when the text is not in the line */
+int  prompt_claim_preview(struct prompt *p, const char *text);
 
 void prompt_echo_message(const char *text);
 

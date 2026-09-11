@@ -42,6 +42,9 @@ void voice_on_draft(const char *(*fn)(void *ud), void *ud);
 /* the line was edited by hand and is the user's now: stop writing to it and
    leave what is there alone */
 void voice_on_release(void (*fn)(void *ud), void *ud);
+/* text already in the input box, restored with its tab, is an open dictation
+   again: track it as the preview. 0 when the box does not hold it */
+void voice_on_claim(int (*fn)(void *ud, const char *text), void *ud);
 
 /* the hud label, NULL when off */
 const char *voice_label(void);
@@ -55,13 +58,17 @@ char *voice_take_line(void);
 void voice_turn_begin(struct session *s);
 void voice_turn_done(struct session *s);
 void voice_turn_cancel(struct session *s);
+/* after the current tab changes: an open dictation held for that tab resumes */
 void voice_refocus(void);
-/* Before replacing the active input box: keep speech there as an unsent
-   draft and pause recognition until an explicit resume. */
-void voice_suspend(void);
+/* before the input box of tab s is stashed: speech heard so far stays in that
+   box unsent, an open dictation is held for s, and the rest of an utterance
+   still being spoken goes to the next tab. Voice keeps listening */
+void voice_leave(struct session *s);
+/* tab s is closed: drop the dictation held for it */
+void voice_forget(const struct session *s);
 /* send the in-progress utterance and anything queued to this session, so
-   leaving the pane does not drop what was already heard. Dictation is saved
-   and paused instead: only its terminator or a manual submit may send it. */
+   leaving the pane does not drop what was already heard. An open dictation
+   keeps the utterance instead: only its terminator or a manual submit sends it */
 void voice_commit(struct session *s);
 /* the in-progress utterance was submitted by hand: keep it out of the queue so
    it is not sent a second time when the turn endpoints */

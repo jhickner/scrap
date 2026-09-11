@@ -92,6 +92,23 @@ int main(void)
     prompt_set_preview(p, "");
     eq_line(p, "and removed", "typed more");
 
+    prompt_insert(p, " listen held");
+    if (!prompt_claim_preview(p, "listen held")) {
+        fprintf(stderr, "FAIL a preview is claimed from text in the line\n");
+        failures++;
+    }
+    prompt_set_preview(p, "listen held words");
+    eq_line(p, "a claimed preview is replaced in place", "typed more listen held words");
+    prompt_set_preview(p, "");
+    eq_line(p, "a claimed preview is removed", "typed more");
+    if (prompt_claim_preview(p, "not there")) {
+        fprintf(stderr, "FAIL claiming absent text fails\n");
+        failures++;
+    }
+    prompt_set_preview(p, "spoken");
+    eq_line(p, "a failed claim leaves no preview behind", "typed more spoken");
+    prompt_set_preview(p, "");
+
     prompt_insert(p, " hello world");
     {
         char *draft = NULL;

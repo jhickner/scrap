@@ -127,7 +127,10 @@ void status_end(void) {}
 void status_set_alert(const char *text) { (void)text; }
 void status_touch(void) {}
 
-struct session *workspace_current(void) { return &sess; }
+/* the tab in front, and a second one to switch to */
+static struct session other;
+static struct session *front = &sess;
+struct session *workspace_current(void) { return front; }
 int workspace_index_of(const struct session *s) { (void)s; return 0; }
 int workspace_send(int index, const char *line, const char *shown)
 {
@@ -175,6 +178,27 @@ static void box_release(void *ud)
 {
     (void)ud;
     box_released = 1;
+}
+
+/* the prompt tracks words already in the line as the preview again */
+static int box_claim(void *ud, const char *text)
+{
+    (void)ud;
+    if (!strstr(box, text))
+        return 0;
+    box_released = 0;
+    return 1;
+}
+
+/* workspace_show: leave the tab in front, stash its box, load the other */
+static void switch_tab(struct session *to, char *stash, size_t size, const char *load)
+{
+    voice_leave(front);
+    snprintf(stash, size, "%s", box);
+    snprintf(box, sizeof box, "%s", load);
+    box_released = 1;
+    front = to;
+    voice_refocus();
 }
 
 static const char *box_line(void *ud)
@@ -651,57 +675,159 @@ int main(void)
     clear_chimes();
     clear_sent();
 
-    /* workspace suspends before stashing the old box and loading the new one.
-       Exercise both a wake-word partial and a dictation spanning finals. */
+    /* a tab switch leaves voice listening: the dictation is held for its tab,
+       the rest of an utterance spanning the switch goes to the new tab, and
+       the dictation resumes where it was on return. Exercise both a wake-word
+       partial and a dictation spanning finals. */
     for (int multi = 0; multi < 2; multi++) {
         if (!start_voice())
             return 1;
         voice_on_heard(box_heard, NULL);
         voice_on_draft(box_line, NULL);
         voice_on_release(box_release, NULL);
+        voice_on_claim(box_claim, NULL);
         box[0] = '\0';
         box_released = 0;
+        front = &sess;
         if (multi)
             fire("final", "listen first part");
-        fire("partial", multi ? "second part" : "listen first part");
-        char saved[sizeof box];
-        snprintf(saved, sizeof saved, "%s", box);
-        voice_suspend();
-        eq_str("switch preserves all heard text", box, saved);
+        const char *raw = multi ? "second part" : "listen first part";
+        fire("partial", raw);
+        const char *want = multi ? "listen first part second part" : "listen first part";
+        eq_str("the dictation previews before switching", box, want);
+        char stash_a[sizeof box], stash_b[sizeof box];
+        switch_tab(&other, stash_a, sizeof stash_a, "");
+        eq_str("switch keeps all heard text in the departing box", stash_a, want);
         if (nsent || voice_take_line())
             fail("switch does not submit or queue an unfinished dictation");
-        eq_str("switch pauses dictation", voice_label(), "voice paused");
-        snprintf(box, sizeof box, "%s", "worker draft");
+        eq_str("switch leaves voice listening", voice_label(), "voice");
+
+        char spanning[256];
+        snprintf(spanning, sizeof spanning, "%s, and this is for the worker", raw);
+        fire("partial", spanning);
+        eq_str("the rest of a spanning utterance previews on the new tab", box,
+               "and this is for the worker");
+        /* the recognizer revises case and punctuation of the carried words */
+        fire("final", multi ? "Second part. And this is for the worker."
+                            : "Listen, first part. And this is for the worker.");
+        char *taken = voice_take_line();
+        eq_str("the rest of a spanning utterance is the new tab's turn", taken,
+               "And this is for the worker.");
+        free(taken);
+        if (!strcmp(voice_label(), "voice dictation"))
+            fail("the new tab does not inherit the dictation");
+        box[0] = '\0';
         box_released = 0;
-        voice_refocus();
-        fire("partial", "second part keeps arriving");
-        fire("final", "second part keeps arriving");
-        fire("final", "ok done");
+
+        fire("partial", "listen worker note");
+        switch_tab(&sess, stash_b, sizeof stash_b, stash_a);
+        eq_str("the new tab keeps its own dictation", stash_b, "listen worker note");
+        eq_str("returning resumes the dictation", voice_label(), "voice dictation");
+        eq_str("returning restores the box", box, want);
+        fire("partial", "third part");
+        char more[256];
+        snprintf(more, sizeof more, "%s third part", want);
+        eq_str("the resumed dictation appends to the saved draft", box, more);
+        fire("final", "third part");
         if (nsent || voice_take_line())
-            fail("speech after switching never submits to the worker tab");
-        eq_str("the worker draft is untouched", box, "worker draft");
-        snprintf(box, sizeof box, "%s", saved);
-        voice_refocus();
-        fire("final", "more speech before resuming");
-        eq_str("returning keeps the original draft", box, saved);
+            fail("a resumed dictation still waits for its end phrase");
+
+        switch_tab(&other, stash_a, sizeof stash_a, stash_b);
+        eq_str("each tab resumes its own dictation", box, "listen worker note");
+        fire("final", "about the build ok done");
+        taken = voice_take_line();
+        eq_str("the worker dictation sends on its own tab", taken,
+               "listen worker note about the build");
+        free(taken);
+        box[0] = '\0';
+        box_released = 0;
+
+        switch_tab(&sess, stash_b, sizeof stash_b, stash_a);
+        fire("final", "ok done");
+        taken = voice_take_line();
+        eq_str("the first dictation sends whole on its tab", taken, more);
+        free(taken);
+        if (nsent)
+            fail("switching never sends to a tab directly");
+
         voice_stop();
         voice_on_heard(NULL, NULL);
         voice_on_draft(NULL, NULL);
         voice_on_release(NULL, NULL);
+        voice_on_claim(NULL, NULL);
+        front = &sess;
         clear_sent();
         clear_chimes();
     }
 
+    /* the carried words are taken off a spanning utterance even when the
+       recognizer revised a word in them or the switch fell inside a word */
     if (!start_voice())
         return 1;
     voice_on_heard(box_heard, NULL);
     voice_on_draft(box_line, NULL);
     voice_on_release(box_release, NULL);
+    voice_on_claim(box_claim, NULL);
+    {
+        static const char *const spans[][3] = {
+            {"listen alpha for", "listen alpha four gamma", "gamma"},
+            {"listen alpha be", "listen alpha beta gamma", "gamma"},
+        };
+        char stash[sizeof box];
+        for (int i = 0; i < 2; i++) {
+            box[0] = '\0';
+            box_released = 0;
+            front = &sess;
+            fire("partial", spans[i][0]);
+            switch_tab(&other, stash, sizeof stash, "");
+            fire("final", spans[i][1]);
+            char *taken = voice_take_line();
+            eq_str("a spanning utterance leaves its carried words behind", taken,
+                   spans[i][2]);
+            free(taken);
+            voice_forget(&sess);
+        }
+    }
+    front = &sess;
+    voice_stop();
+    clear_sent();
+    clear_chimes();
+
+    /* a closed tab's dictation is not resumed by a tab that takes its place */
+    if (!start_voice())
+        return 1;
+    voice_on_heard(box_heard, NULL);
+    voice_on_draft(box_line, NULL);
+    voice_on_release(box_release, NULL);
+    voice_on_claim(box_claim, NULL);
+    box[0] = '\0';
+    box_released = 0;
+    {
+        char stash[sizeof box];
+        fire("final", "listen for a closed tab");
+        switch_tab(&other, stash, sizeof stash, "");
+        voice_forget(&sess);
+        switch_tab(&sess, stash, sizeof stash, stash);
+        if (!strcmp(voice_label(), "voice dictation"))
+            fail("a forgotten dictation does not resume");
+        /* a box that no longer holds the dictation does not resume it either */
+        fire("final", "listen held words");
+        switch_tab(&other, stash, sizeof stash, "");
+        switch_tab(&sess, stash, sizeof stash, "something else");
+        if (!strcmp(voice_label(), "voice dictation"))
+            fail("a dictation missing from its box does not resume");
+    }
+    voice_stop();
+    clear_sent();
+    clear_chimes();
+
+    if (!start_voice())
+        return 1;
     box[0] = '\0';
     box_released = 0;
     fire("final", "finished before switching");
     fire("partial", "next words");
-    voice_suspend();
+    voice_leave(front);
     eq_str("queued finals stay before the partial in the departing draft", box,
            "finished before switching next words");
     if (nsent || voice_take_line())
@@ -719,6 +845,13 @@ int main(void)
            "listen held across a focus change unfinished tail");
     if (nsent || voice_take_line())
         fail("focus loss does not flush dictation without ok done");
+    voice_arm(1);
+    eq_str("focus return keeps the dictation open", voice_label(), "voice dictation");
+    fire("final", "and more ok done");
+    line = voice_take_line();
+    eq_str("the dictation carries on after focus returns", line,
+           "listen held across a focus change unfinished tail and more");
+    free(line);
     voice_stop();
     voice_on_heard(NULL, NULL);
     voice_on_draft(NULL, NULL);
