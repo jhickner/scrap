@@ -40,6 +40,8 @@ detection with `JPEG_PREFIX=/path/to/jpeg-turbo`.
 
 ## Tests and diagnostics
 
+To trace voice input, set `voice_trace=1` in `~/.config/mux/settings` and restart mux; transcript text, draft positions, and sends are appended to `~/.config/mux/voice-events.log` (off by default).
+
 Run the unattended checks with:
 
 ```sh

@@ -37,6 +37,7 @@
 #define SETTING_VOICE_NAME     "voice_name"
 #define SETTING_VOICE_RATE     "voice_rate"
 #define SETTING_VOICE_SILENCE  "voice_silence"
+#define SETTING_VOICE_TRACE    "voice_trace" /* opt-in voice-events.log */
 #define SETTING_VOICE_INPUT    "voice_input"
 
 #define VOICE_VOLUME_DEFAULT 100

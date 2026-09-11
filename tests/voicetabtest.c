@@ -3,6 +3,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
+#include "settings.h"
 
 #include "chrome.h"
 #include "cmd.h"
@@ -175,6 +177,7 @@ int  session_last_interrupted(const struct session *s) { (void)s; return 0; }
 static struct prompt *box;
 static struct session a, b;
 static char sent_a[2048], sent_b[2048];
+static int sends;
 
 static void heard(void *ud, const char *text) { prompt_set_preview(ud, text); }
 static const char *line(void *ud) { return prompt_line(ud); }
@@ -203,6 +206,7 @@ static void pump(void)
     } else {
         char *to = workspace_current() == &a ? sent_a : sent_b;
         snprintf(to, sizeof sent_a, "%s", taken);
+        sends++;
     }
     free(taken);
 }
@@ -251,6 +255,7 @@ static void begin(void)
     show_tab(&a);
     prompt_adopt_draft(NULL, 0);
     sent_a[0] = sent_b[0] = '\0';
+    sends = 0;
     if (!voice_start(err, sizeof err))
         fail(err);
 }
@@ -387,6 +392,148 @@ static void check_typed_inside_dictation(void)
     voice_stop();
 }
 
+#define LIVE_FIRST "Listen. Okay, I'm gonna try the test again. This 1st part is dictated."
+#define LIVE_TYPED "\n\nThen this is typed. Now I'll switch tabs..."
+#define LIVE_BACK "And now I'm switched back."
+
+static void check_live_roundtrip(void)
+{
+    const char *ends[] = {"okay, done", "okay done", "ok, done", "OK DONE!", "Okay, DONE."};
+    for (int i = 0; i < 10; i++) {
+        begin();
+        partial(LIVE_FIRST);
+        if (i < 5)
+            final(LIVE_FIRST);
+        tty_event pasted = {.key = TK_TEXT, .text = strdup(LIVE_TYPED)};
+        prompt_live_key(box, &pasted);
+        int caret = prompt_cursor(box);
+        show_tab(&b);
+        show_tab(&a);
+        if (prompt_cursor(box) != caret)
+            fail("live roundtrip preserves caret after typed line");
+        partial(LIVE_BACK);
+        eq("return speech follows the typed line", prompt_line(box),
+           LIVE_FIRST LIVE_TYPED " " LIVE_BACK);
+        final(LIVE_BACK);
+        if (sends)
+            fail("live roundtrip never sends before terminator");
+        partial(ends[i % 5]);
+        final(ends[i % 5]);
+        eq("punctuated terminator sends the entire mixed draft", sent_a,
+           LIVE_FIRST LIVE_TYPED " " LIVE_BACK);
+        pump();
+        if (sends != 1)
+            fail("terminator submits exactly once");
+        eq("submitted mixed draft is cleared", prompt_line(box), "");
+        voice_stop();
+    }
+}
+
+/* The spoken sequence from the report, with the typed follow-up entered
+   after returning. With the fix it is a new draft after the voice submit. */
+static void check_reported_sequence(void)
+{
+    begin();
+    partial(LIVE_FIRST);
+    final(LIVE_FIRST);
+    show_tab(&b);
+    show_tab(&a);
+    partial(LIVE_BACK);
+    final(LIVE_BACK);
+    eq("reported speech stays in chronological order", prompt_line(box),
+       LIVE_FIRST " " LIVE_BACK);
+    if (sends)
+        fail("reported sequence waits for its terminator");
+    partial("Okay, this dictation appeared in the completely wrong place.");
+    final("Okay, this dictation appeared in the completely wrong place.");
+    partial("And, okay, done");
+    final("And, okay, done");
+    eq("reported punctuated end phrase submits", sent_a,
+       LIVE_FIRST " " LIVE_BACK " Okay, this dictation appeared in the completely wrong place. And,");
+    pump();
+    if (sends != 1)
+        fail("reported sequence submits exactly once");
+    type("Then this is typed. Now I'll switch tabs...");
+    eq("typed follow-up is a fresh draft", prompt_line(box),
+       "Then this is typed. Now I'll switch tabs...");
+    voice_stop();
+}
+
+static void check_typed_prefix_submit(void)
+{
+    begin();
+    type("Typed first.");
+    partial(LIVE_FIRST);
+    final(LIVE_FIRST);
+    show_tab(&b);
+    show_tab(&a);
+    final(LIVE_BACK);
+    final("okay, done with that thought");
+    if (sends)
+        fail("a nonterminal end phrase does not submit");
+    final("okay, done.");
+    eq("terminator includes a typed prefix", sent_a,
+       "Typed first. " LIVE_FIRST " " LIVE_BACK " okay, done with that thought");
+    if (sends != 1)
+        fail("mixed prefix draft submits exactly once");
+    voice_stop();
+}
+
+static void check_trace(void)
+{
+    char home[4096], config[4200], settings[4300], log[4300];
+    if (!getcwd(home, sizeof home)) {
+        fail("trace temporary home");
+        return;
+    }
+    size_t n = strlen(home);
+    snprintf(home + n, sizeof home - n, "/build/voice-trace-XXXXXX");
+    if (!mkdtemp(home)) {
+        fail("trace temporary directory");
+        return;
+    }
+    snprintf(config, sizeof config, "%s/.config", home);
+    mkdir(config, 0700);
+    snprintf(config, sizeof config, "%s/.config/mux", home);
+    mkdir(config, 0700);
+    snprintf(settings, sizeof settings, "%s/settings", config);
+    snprintf(log, sizeof log, "%s/voice-events.log", config);
+    setenv("HOME", home, 1);
+    settings_open(settings);
+    check_typed_prefix_submit();
+    if (!access(log, F_OK))
+        fail("trace is off by default");
+    settings_set_int(SETTING_VOICE_TRACE, 1);
+    check_live_roundtrip();
+    FILE *f = fopen(log, "r");
+    if (!f) {
+        fail("enabled trace creates a log");
+    } else {
+        char row[32768];
+        int mask = 0;
+        const char *events[] = {"helper.event", "tab.switch", "draft.save", "draft.restore",
+                                "span=", "voice.end-match", "voice.take", "\\n\\nThen"};
+        while (fgets(row, sizeof row, f)) {
+            for (int i = 0; i < 8; i++)
+                if (strstr(row, events[i]))
+                    mask |= 1 << i;
+            if (!strstr(row, "mono=") || !strstr(row, "pid="))
+                fail("trace events have timestamps and process identity");
+        }
+        fclose(f);
+        if (mask != 255)
+            fail("trace covers transcripts, switches, drafts, spans, matches and takes");
+    }
+    settings_open(NULL);
+    setenv("HOME", "/nonexistent", 1);
+    unlink(log);
+    unlink(settings);
+    rmdir(config);
+    snprintf(config, sizeof config, "%s/.config", home);
+    rmdir(config);
+    rmdir(home);
+}
+
 int main(void)
 {
     setenv("COLUMNS", "100", 1);
@@ -414,6 +561,10 @@ int main(void)
     if (!workspace_begin(&a, 0) || workspace_open(&b) < 0) {
         fail("open two tabs");
     } else {
+        check_live_roundtrip();
+        check_typed_prefix_submit();
+        check_reported_sequence();
+        check_trace();
         check_switch_mid_sentence();
         check_switch_between_utterances();
         check_caret_kept();

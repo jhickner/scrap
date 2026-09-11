@@ -13,6 +13,7 @@
 #include "prompt.h"
 #include "session.h"
 #include "settings.h"
+#include "voicetrace.h"
 #include "status.h"
 #include "text.h"
 #include "tty.h"
@@ -113,15 +114,19 @@ static void show(const char *text)
     heard_fn(heard_ud, text);
 }
 
-/* the box when it no longer holds the words put there; NULL while they are
-   still in it. Text typed around them leaves them whole, and the prompt keeps
-   that text beside the words on its own */
+/* Adopt edits to dictated words and typed continuations after them. A typed
+   prefix can remain outside the span; it is included when the draft submits. */
 static const char *box_edit(void)
 {
     if (!draft_fn || !shown[0])
         return NULL;
     const char *cur = draft_fn(draft_ud);
-    if (!cur || strstr(cur, shown))
+    if (!cur)
+        return NULL;
+    const char *found = strstr(cur, shown);
+    /* A typed continuation belongs before the next spoken utterance. Keeping
+       only the old spoken span would insert new speech before that suffix. */
+    if (found && !(listen_mode && found[strlen(shown)]))
         return NULL;
     return cur;
 }
@@ -159,6 +164,8 @@ static int take_edit(char *out, size_t n)
     if (listen_mode) {
         /* the box as it is, spacing included, so showing it again changes nothing */
         snprintf(listen_buf, sizeof listen_buf, "%s", out);
+        if (claim_fn)
+            claim_fn(claim_ud, out);
     } else if (release_fn) {
         /* the line is theirs now, and what they kept is left to send by hand */
         release_fn(release_ud);
@@ -196,6 +203,7 @@ static void enqueue(const char *text)
 {
     if (nqueue >= LINE_MAX_QUEUE)
         return;
+    voice_trace("voice.queue", "text=%s", text);
     queue[nqueue++] = strdup(text);
 }
 
@@ -447,6 +455,7 @@ static int listen_end(char *text)
         start = word_ends_at(text, e, "okay");
     if (start < 0)
         return 0;
+    voice_trace("voice.end-match", "offset=%td text=%s", start, text);
     text[start] = '\0';
     return 1;
 }
@@ -581,13 +590,26 @@ static void listen_flush(const char *tail)
         listen_end(body);
         listen_append(body);
     }
-    listen_mode = 0;
     size_t n = strlen(listen_buf);
     while (n && isspace((unsigned char)listen_buf[n - 1]))
         listen_buf[--n] = '\0';
-    if (listen_buf[0])
-        enqueue(listen_buf);
+    /* The terminator submits the whole input, including typed text before
+       the dictation. Materialize the final words before taking that snapshot,
+       then claim the whole draft so clearing it leaves no typed residue for
+       chat_line to mistake for an unfinished composition. */
+    if (heard_fn)
+        show(listen_buf);
+    const char *cur = draft_fn ? draft_fn(draft_ud) : NULL;
+    char *line = strdup(cur ? cur : listen_buf);
+    if (cur && claim_fn)
+        claim_fn(claim_ud, cur);
+    listen_mode = 0;
     listen_buf[0] = '\0';
+    if (heard_fn)
+        show("");
+    if (line && *line)
+        enqueue(line);
+    free(line);
 }
 
 /* holds a finished turn in the dictation; 0 when this turn is not one. cue
@@ -653,7 +675,7 @@ static void discard_speech(void)
         heard("");
 }
 
-static void on_event(void *ud, const char *kind, const char *text)
+static void handle_event(void *ud, const char *kind, const char *text)
 {
     (void)ud;
     if (!strcmp(kind, "ready")) {
@@ -809,6 +831,16 @@ static void on_event(void *ud, const char *kind, const char *text)
             return;
         snprintf(failure, sizeof failure, "%s", text ? text : "helper failed");
     }
+}
+
+static void on_event(void *ud, const char *kind, const char *text)
+{
+    voice_trace("helper.event", "tab=%p kind=%s text=%s listen=%d erased=%d carry=%s",
+                (void *)workspace_current(), kind, text ? text : "", listen_mode, erased, carry);
+    handle_event(ud, kind, text);
+    voice_trace("voice.state", "tab=%p listen=%d erased=%d armed=%d paused=%d queue=%d draft=%s held=%s shown=%s",
+                (void *)workspace_current(), listen_mode, erased, armed, paused, nqueue,
+                draft, listen_buf, shown);
 }
 
 static void on_session_event(void *ud, struct session *s, const backend_event *ev)
@@ -1201,6 +1233,7 @@ char *voice_take_line(void)
     for (int i = 1; i < nqueue; i++)
         queue[i - 1] = queue[i];
     nqueue--;
+    voice_trace("voice.take", "tab=%p typed=%d text=%s", (void *)workspace_current(), box_has_typed(), line);
     if (!box_has_typed())
         chime("sent");
     return line;
@@ -1255,6 +1288,7 @@ void voice_refocus(void)
         snprintf(listen_buf, sizeof listen_buf, "%s", held[i].text);
         snprintf(shown, sizeof shown, "%s", held[i].text);
     }
+    voice_trace("voice.resume", "tab=%p listen=%d text=%s", (void *)s, listen_mode, held[i].text);
     held_remove(i);
     status_touch();
 }
@@ -1269,6 +1303,9 @@ void voice_leave(struct session *s)
     snprintf(carry, sizeof carry, "%s", utter);
     if (listen_mode || listen_wake(draft))
         listen_hold_draft();
+    /* A wake-word partial only became an open dictation above. Adopt any
+       typed continuation now, before its span is parked for this tab. */
+    take_edit(edit, sizeof edit);
     draft[0] = '\0';
     hearing = erased = command_early = 0;
     if (heard_fn && listen_mode)
@@ -1292,6 +1329,7 @@ void voice_leave(struct session *s)
             free(text);
         }
     }
+    voice_trace("voice.leave", "tab=%p listen=%d carry=%s held=%s", (void *)s, listen_mode, carry, listen_buf);
     if (listen_mode)
         held_put(s, listen_buf);
     if (release_fn)

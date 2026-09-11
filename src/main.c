@@ -32,6 +32,7 @@
 #include "sessionswitch.h"
 #include "sessionview.h"
 #include "settings.h"
+#include "voicetrace.h"
 #include "dispatch.h"
 #include "sidechannel.h"
 #include "reopen.h"
@@ -233,6 +234,7 @@ static char *chat_line(void *ud)
     if (line) {
         const char *cur = prompt_line(p);
         if (cur && *cur) {
+            voice_trace("voice.merge", "cursor=%d line=%s", prompt_cursor(p), line);
             prompt_insert(p, line);
             free(line);
             return NULL;

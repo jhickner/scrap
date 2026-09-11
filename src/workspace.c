@@ -12,6 +12,7 @@
 #include "session.h"
 #include "sessionview.h"
 #include "settings.h"
+#include "voicetrace.h"
 #include "status.h"
 #include "tabbar.h"
 #include "text.h"
@@ -266,6 +267,7 @@ void workspace_show(int index)
     if (index < 0 || index >= ntabs || index == cur)
         return;
 
+    voice_trace("tab.switch", "from=%d:%p to=%d:%p", cur, (void *)tabs[cur].s, index, (void *)tabs[index].s);
     voice_leave(tabs[cur].s);
     draft_save(cur);
 
@@ -677,6 +679,7 @@ static void send_next(int index, int hold)
 
 int workspace_send(int index, const char *line, const char *shown)
 {
+    voice_trace("send.request", "tab=%d text=%s", index, shown ? shown : line ? line : "");
     if (index < 0 || index >= ntabs || !line || !*line)
         return 0;
     struct tab *t = &tabs[index];
@@ -691,6 +694,7 @@ int workspace_send(int index, const char *line, const char *shown)
             return 0;
         }
         t->pending[t->npending++] = p;
+        voice_trace("send.queued", "tab=%d pending=%d", index, t->npending);
         return 1;
     }
 
@@ -699,6 +703,7 @@ int workspace_send(int index, const char *line, const char *shown)
     if (on_turn)
         on_turn(t->s);
     int ok = session_turn_begin(t->s, line);
+    voice_trace("send.started", "tab=%d accepted=%d", index, ok);
     leave();
     spin_follow();
     return ok;

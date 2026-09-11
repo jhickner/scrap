@@ -124,6 +124,20 @@ int main(void)
         fprintf(stderr, "FAIL the same preview again leaves the caret: got %d\n", prompt_cursor(p));
         failures++;
     }
+    prompt_adopt_draft("before spoken after", 0);
+    prompt_claim_preview(p, "spoken");
+    prompt_set_preview(p, "spoken words");
+    if (prompt_cursor(p) != 0) {
+        fprintf(stderr, "FAIL updating speech moved a caret before its span\n");
+        failures++;
+    }
+    prompt_adopt_draft("before spoken after", 19);
+    prompt_claim_preview(p, "spoken");
+    prompt_set_preview(p, "spoken words");
+    if (prompt_cursor(p) != 25) {
+        fprintf(stderr, "FAIL updating speech moved a caret out of its typed suffix\n");
+        failures++;
+    }
     prompt_adopt_draft("typed more", 10);
 
     prompt_insert(p, " hello world");

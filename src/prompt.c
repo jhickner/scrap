@@ -15,6 +15,7 @@
 #include "files.h"
 #include "scrollback.h"
 #include "settings.h"
+#include "voicetrace.h"
 #include "sidechannel.h"
 #include "status.h"
 #include "tty.h"
@@ -1157,10 +1158,17 @@ static const char *nearest(const char *line, const char *words, int was)
     return best;
 }
 
+static void trace_prompt(struct prompt *p, const char *event)
+{
+    voice_trace(event, "prompt=%p cursor=%d span=%d+%zu line=%s",
+                (void *)p, p->repl.cursor, p->preview_at, strlen(p->preview), repl_line(&p->repl));
+}
+
 void prompt_set_preview(struct prompt *p, const char *text)
 {
     if (!p)
         return;
+    trace_prompt(p, "prompt.preview.before");
     const char *line = repl_line(&p->repl);
     int len = (int)strlen(p->preview);
     int at = p->preview_at;
@@ -1206,9 +1214,16 @@ void prompt_set_preview(struct prompt *p, const char *text)
         return;
     }
 
+    int cursor = p->repl.cursor;
     repl_replace_range(&p->repl, at, at + len, next);
+    /* Updating speech must not pull a caret out of surrounding typed text. */
+    if (len && cursor < at)
+        p->repl.cursor = cursor;
+    else if (len && cursor > at + len)
+        p->repl.cursor = cursor + (int)strlen(next) - len;
     snprintf(p->preview, sizeof p->preview, "%s", next);
     p->preview_at = next[0] ? at : 0;
+    trace_prompt(p, "prompt.preview.after");
     p->frame_ok = 0;
     if (!chrome_modal_active())
         repaint(p);
@@ -1248,6 +1263,7 @@ int prompt_claim_preview(struct prompt *p, const char *text)
     memcpy(p->preview, found, len);
     p->preview[len] = '\0';
     p->preview_at = (int)(found - line);
+    trace_prompt(p, "prompt.claim");
     return 1;
 }
 
@@ -1320,6 +1336,7 @@ void prompt_stash_draft(char **text, int *cursor)
     }
     if (cursor)
         *cursor = active->repl.cursor;
+    trace_prompt(active, "draft.save");
     preview_forget(active);
 }
 
@@ -1334,6 +1351,7 @@ void prompt_adopt_draft(const char *text, int cursor)
     if (text && *text)
         repl_insert_text(&active->repl, text);
     active->repl.cursor = clamp_cursor(&active->repl, cursor);
+    trace_prompt(active, "draft.restore");
 }
 
 void prompt_set_listen(struct prompt *p, int (*fn)(void *ud), void *ud)
