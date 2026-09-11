@@ -1610,6 +1610,7 @@ void viewport_begin(void)
         return;
     active = 1;
     home_mark();
+    tty_keyboard_off();
     direct_str(UI_ALT_ON);
     direct_str(MOUSE_ON);
     tty_keyboard_on();
@@ -1631,7 +1632,9 @@ void viewport_end(void)
     /* while suspended the screen is already the main one, with whatever the
        external command printed below the home row */
     if (!was_suspended) {
+        tty_keyboard_off();
         direct_str(UI_ALT_OFF);
+        tty_keyboard_on();
         home_return();
     }
     fflush(stdout);
@@ -1721,7 +1724,9 @@ void viewport_suspend(void)
     deferred = 0;
     direct_str(MOUSE_OFF);
     direct_str(UI_CURSOR_SHOW);
+    tty_keyboard_off();
     direct_str(UI_ALT_OFF);
+    tty_keyboard_on();
     home_return();
     fflush(stdout);
 }
@@ -1732,6 +1737,7 @@ void viewport_resume(void)
         return;
     suspended = 0;
     home_mark();
+    tty_keyboard_off();
     direct_str(UI_ALT_ON);
     direct_str(MOUSE_ON);
     tty_keyboard_on();

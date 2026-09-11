@@ -56,7 +56,9 @@ void tty_raw_end(void);
    screen that the replacement process inherits. */
 void tty_raw_handoff(void);
 
+/* Balance the current screen's keyboard stack before switching screens. */
 void tty_keyboard_on(void);
+void tty_keyboard_off(void);
 
 /* 1 while this window is in front */
 int  tty_focused(void);

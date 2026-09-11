@@ -93,6 +93,7 @@ int main(void)
         return 1;
     }
 
+    tty_keyboard_off();
     put("\x1b[?1049h");
     tty_keyboard_on();
     put("\x1b[?u");
@@ -113,6 +114,7 @@ int main(void)
             break;
     }
 
+    tty_keyboard_off();
     put("\x1b[?1049l");
     tty_raw_end();
     fwrite(logbuf, 1, logn, stdout);
