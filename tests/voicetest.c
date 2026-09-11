@@ -575,6 +575,27 @@ int main(void)
     free(line);
     clear_chimes();
 
+    fire("partial", "Pause listening");
+    eq_str("pause listening pauses from a partial", voice_label(), "voice paused");
+    if (nchimes != 1)
+        fail("an early pause chimes once");
+    fire("final", "Pause, listening.");
+    eq_str("the final of an early pause keeps it paused", voice_label(), "voice paused");
+    if (nchimes != 1 || voice_take_line())
+        fail("the final of an early pause does nothing more");
+    fire("partial", "Resume listening");
+    if (!strcmp(voice_label(), "voice paused"))
+        fail("resume listening resumes from a partial");
+    fire("final", "Resume listening.");
+    if (nchimes != 2 || voice_take_line() || box[0])
+        fail("the final of an early resume does nothing more");
+    fire("partial", "pause");
+    if (!strcmp(voice_label(), "voice paused"))
+        fail("a bare pause partial waits for the final");
+    fire("final", "pause");
+    fire("final", "resume");
+    clear_chimes();
+
     fire("final", "Pause, pause, pause, pause.");
     if (voice_take_line())
         fail("a repeated pause command is not sent");

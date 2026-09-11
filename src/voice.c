@@ -63,6 +63,9 @@ static char         listen_buf[LISTEN_MAX];
 /* set by the spoken pause command: the recognizer keeps running so the resume
    command is heard, and every other turn is discarded */
 static int          paused;
+/* the pause state was changed from a partial; the final of that turn is
+   consumed without changing it again */
+static int          command_early;
 static char         failure[256];
 static char        *queue[LINE_MAX_QUEUE];
 static int          nqueue;
@@ -341,6 +344,20 @@ static int is_resume_command(const char *text)
     return is_command(text, words, (int)(sizeof words / sizeof words[0]));
 }
 
+/* the two-word forms are acted on from a partial, ahead of the final and the
+   endpoint silence; a bare word could still grow into a sentence */
+static int is_early_pause_command(const char *text)
+{
+    static const char *const words[] = { "pause listening" };
+    return is_command(text, words, 1);
+}
+
+static int is_early_resume_command(const char *text)
+{
+    static const char *const words[] = { "resume listening" };
+    return is_command(text, words, 1);
+}
+
 static int listening(void) { return armed && mic; }
 
 static void chime(const char *name)
@@ -508,6 +525,17 @@ static void on_event(void *ud, const char *kind, const char *text)
         }
         if (paused) {
             hearing = 0;
+            if (!command_early && is_early_resume_command(text)) {
+                command_early = 1;
+                set_paused(0);
+            }
+            return;
+        }
+        if (!command_early && is_early_pause_command(text)) {
+            command_early = 1;
+            erased = 0;
+            forget_stale();
+            set_paused(1);
             return;
         }
         /* a command word is not previewed; it shows once the turn grows past it */
@@ -542,6 +570,14 @@ static void on_event(void *ud, const char *kind, const char *text)
         }
         /* the helper waits for a reply to every turn it delivers and judges
            speech as echo until one ends; a turn consumed here gets none */
+        if (command_early) {
+            command_early = 0;
+            if (is_pause_command(text) || is_resume_command(text)) {
+                if (voice)
+                    macos_voice_cancel(voice);
+                return;
+            }
+        }
         if (paused) {
             if (voice)
                 macos_voice_cancel(voice);
@@ -675,6 +711,7 @@ int voice_start(char *err, size_t size)
     hearing = 0;
     erased = 0;
     paused = 0;
+    command_early = 0;
     forget_stale();
     listen_clear();
     draft[0] = '\0';
@@ -767,6 +804,7 @@ static void teardown(int end_helper)
     hearing = 0;
     erased = 0;
     paused = 0;
+    command_early = 0;
     forget_stale();
     listen_clear();
     draft[0] = '\0';
@@ -917,6 +955,7 @@ void voice_set_mic(int on)
     hearing = 0;
     erased = 0;
     paused = 0;
+    command_early = 0;
     listen_clear();
     heard("");
     if (voice) {
