@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "cmd.h"
+#include "prompt.h"
 #include "session.h"
 #include "text.h"
 #include "vendor/cJSON.h"
@@ -42,6 +43,12 @@ static void reply(const char *dir, const char *base, const char *json)
     fputc('\n', f);
     fclose(f);
     rename(tmp, path);
+}
+
+static void echo_prompt(struct session *s, void *ud)
+{
+    (void)s;
+    prompt_echo_message(ud);
 }
 
 static void serve(const char *dir, const char *base, const char *text)
@@ -87,8 +94,10 @@ static void serve(const char *dir, const char *base, const char *text)
 
     workspace_show(workspace_index_of(was));
     const char *prompt = field(o, "prompt");
-    if (prompt)
+    if (prompt) {
+        workspace_render(at, echo_prompt, (void *)prompt);
         workspace_send(at, prompt, NULL);
+    }
 
     const char *id = session_id(workspace_at(at));
     cJSON *r = cJSON_CreateObject();
