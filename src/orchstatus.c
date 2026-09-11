@@ -228,22 +228,61 @@ static void shrink(int *width, int minimum, int *need)
     *need -= take;
 }
 
-void orchstatus_columns(struct orchstatus_columns *out, int columns)
+void orchstatus_status(char *out, size_t size, const struct orch_task *t)
+{
+    if (!strcmp(t->status, "dispatched") && t->live_status[0])
+        snprintf(out, size, "%s/%s", t->status, t->live_status);
+    else
+        snprintf(out, size, "%s", t->status);
+}
+
+void orchstatus_agent(char *out, size_t size, const struct orch_task *t)
+{
+    if (t->backend[0] && t->model[0])
+        snprintf(out, size, "%s / %s", t->backend, t->model);
+    else if (t->backend[0] || t->model[0])
+        snprintf(out, size, "%s%s", t->backend, t->model);
+    else
+        snprintf(out, size, "-");
+}
+
+static void fit(int *width, size_t len, int cap)
+{
+    if ((int)len > *width)
+        *width = (int)len < cap ? (int)len : cap;
+}
+
+void orchstatus_columns(struct orchstatus_columns *out, int columns,
+                        const struct orch_task *tasks, int count)
 {
     *out = (struct orchstatus_columns){
-        .project = 12,
+        .project = 7,
         .task = 4,
-        .status = 18,
-        .agent = 17,
+        .status = 6,
+        .agent = 15,
         .age = 3,
     };
+    char buf[256];
+    for (int i = 0; i < count; i++) {
+        fit(&out->project, strlen(tasks[i].project), 16);
+        orchstatus_status(buf, sizeof buf, &tasks[i]);
+        fit(&out->status, strlen(buf), 20);
+        orchstatus_agent(buf, sizeof buf, &tasks[i]);
+        fit(&out->agent, strlen(buf), 24);
+    }
 
     /* Leave room for the indent, separators, and terminal right margin. */
     int available = columns - 7;
     if (available < 13)
         available = 13;
-    int fixed = out->project + out->status + out->agent + out->age;
-    int task = available - fixed;
+    int task = available - out->project - out->status - out->agent - out->age;
+    if (task < 24) {
+        int need = 24 - task;
+        shrink(&out->agent, 10, &need);
+        shrink(&out->status, 10, &need);
+        shrink(&out->project, 8, &need);
+        task = available - out->project - out->status - out->agent - out->age;
+    }
     if (task < 4) {
         int need = 4 - task;
         shrink(&out->agent, 2, &need);
@@ -252,6 +291,34 @@ void orchstatus_columns(struct orchstatus_columns *out, int columns)
         task = available - out->project - out->status - out->agent - out->age;
     }
     out->task = task;
+}
+
+const char *orchstatus_wrap(char *out, size_t size, const char *in, size_t width)
+{
+    while (*in == ' ' || *in == '\n' || *in == '\r' || *in == '\t')
+        in++;
+    size_t limit = width < size - 1 ? width : size - 1;
+    size_t len = strlen(in);
+    size_t take = len;
+    if (len > limit) {
+        take = limit;
+        while (take > 0 && !strchr(" \n\r\t", in[take]))
+            take--;
+        if (take == 0) {
+            take = limit;
+            while (take > 0 && ((unsigned char)in[take] & 0xc0) == 0x80)
+                take--;
+        }
+    }
+    for (size_t i = 0; i < take; i++)
+        out[i] = in[i] == '\n' || in[i] == '\r' || in[i] == '\t' ? ' ' : in[i];
+    while (take > 0 && out[take - 1] == ' ')
+        take--;
+    out[take] = '\0';
+    in += take;
+    while (*in == ' ' || *in == '\n' || *in == '\r' || *in == '\t')
+        in++;
+    return in;
 }
 
 void orchstatus_cell(char *out, size_t size, const char *in, size_t width)

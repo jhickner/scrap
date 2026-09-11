@@ -66,16 +66,30 @@ int main(void)
     assert(!strcmp(age, "3d"));
 
     struct orchstatus_columns widths;
-    orchstatus_columns(&widths, 80);
-    assert(widths.project == 12);
-    assert(widths.task == 23);
-    assert(widths.status == 18);
-    assert(widths.agent == 17);
+    struct orch_task row = {
+        .project = "mux", .status = "open", .backend = "claude", .model = "opus",
+    };
+    orchstatus_columns(&widths, 80, &row, 1);
+    assert(widths.project == 7);
+    assert(widths.status == 6);
+    assert(widths.agent == 15);
     assert(widths.age == 3);
+    assert(widths.task == 42);
     assert(2 + widths.project + 1 + widths.task + 1 + widths.status + 1
              + widths.agent + 1 + widths.age == 79);
 
-    orchstatus_columns(&widths, 40);
+    struct orch_task wide = {
+        .project = "a-long-project-name", .status = "dispatched",
+        .live_status = "working", .backend = "claude",
+        .model = "claude-opus-5-with-a-long-suffix",
+    };
+    orchstatus_columns(&widths, 80, &wide, 1);
+    assert(widths.project == 16);
+    assert(widths.task == 24);
+    assert(2 + widths.project + 1 + widths.task + 1 + widths.status + 1
+             + widths.agent + 1 + widths.age == 79);
+
+    orchstatus_columns(&widths, 40, &wide, 1);
     assert(widths.task == 4);
     assert(2 + widths.project + 1 + widths.task + 1 + widths.status + 1
              + widths.agent + 1 + widths.age == 39);
@@ -83,6 +97,17 @@ int main(void)
     char cell[16];
     orchstatus_cell(cell, sizeof cell, "a long\ttask", 8);
     assert(!strcmp(cell, "a lon..."));
+
+    char line[64];
+    const char *rest = orchstatus_wrap(line, sizeof line, "fix the task\tcolumn width", 12);
+    assert(!strcmp(line, "fix the task"));
+    rest = orchstatus_wrap(line, sizeof line, rest, 12);
+    assert(!strcmp(line, "column width"));
+    assert(!*rest);
+    rest = orchstatus_wrap(line, sizeof line, "abcdefghij klm", 4);
+    assert(!strcmp(line, "abcd"));
+    rest = orchstatus_wrap(line, sizeof line, rest, 4);
+    assert(!strcmp(line, "efgh"));
 
     snprintf(path, sizeof path, "%s/123-0.json", live);
     assert(unlink(path) == 0);

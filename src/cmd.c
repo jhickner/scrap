@@ -1082,7 +1082,7 @@ static void do_tasks(struct session *s, const char *arg)
     help_heading(title);
 
     struct orchstatus_columns widths;
-    orchstatus_columns(&widths, ui_columns());
+    orchstatus_columns(&widths, ui_columns(), tasks, count);
     char project_head[16], task_head[16], status_head[16], agent_head[32], age_head[16];
     orchstatus_cell(project_head, sizeof project_head, "PROJECT", (size_t)widths.project);
     orchstatus_cell(task_head, sizeof task_head, "TASK", (size_t)widths.task);
@@ -1101,27 +1101,24 @@ static void do_tasks(struct session *s, const char *arg)
         struct orch_task *t = &tasks[i];
         char project[128], desc[512], status[80], agent[220], age[16], age_cell[16];
         char full_status[80], full_agent[220];
-        if (!strcmp(t->status, "dispatched") && t->live_status[0])
-            snprintf(full_status, sizeof full_status, "%s/%s", t->status,
-                     t->live_status);
-        else
-            snprintf(full_status, sizeof full_status, "%s", t->status);
-        if (t->backend[0] && t->model[0])
-            snprintf(full_agent, sizeof full_agent, "%s / %s", t->backend, t->model);
-        else
-            snprintf(full_agent, sizeof full_agent, "%s%s", t->backend, t->model);
+        orchstatus_status(full_status, sizeof full_status, t);
+        orchstatus_agent(full_agent, sizeof full_agent, t);
         orchstatus_cell(project, sizeof project, t->project, (size_t)widths.project);
-        orchstatus_cell(desc, sizeof desc, t->desc[0] ? t->desc : t->id,
-                        (size_t)widths.task);
+        const char *rest = orchstatus_wrap(desc, sizeof desc,
+                                           t->desc[0] ? t->desc : t->id,
+                                           (size_t)widths.task);
         orchstatus_cell(status, sizeof status, full_status, (size_t)widths.status);
-        orchstatus_cell(agent, sizeof agent, full_agent[0] ? full_agent : "-",
-                        (size_t)widths.agent);
+        orchstatus_cell(agent, sizeof agent, full_agent, (size_t)widths.agent);
         orchstatus_age(age, sizeof age, t->updated ? t->updated : t->created, now);
         orchstatus_cell(age_cell, sizeof age_cell, age, (size_t)widths.age);
         ui_printf("  %-*s %-*s %-*s %-*s %-*s\n",
                   widths.project, project, widths.task, desc,
                   widths.status, status, widths.agent, agent,
                   widths.age, age_cell);
+        while (*rest) {
+            rest = orchstatus_wrap(desc, sizeof desc, rest, (size_t)widths.task);
+            ui_printf("  %*s %s\n", widths.project, "", desc);
+        }
     }
     free(tasks);
     viewport_item_end();
