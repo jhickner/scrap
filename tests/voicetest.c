@@ -253,16 +253,19 @@ int main(void)
 
     voice_on_heard(box_heard, NULL);
     voice_on_draft(box_line, NULL);
+    voice_on_release(box_release, NULL);
     fire("partial", long_text);
     eq_str("long partial is fully previewed", box, long_text);
     voice_set_mic(0);
-    if (nsent != 1)
-        fail("mic-off commits a long draft once");
-    else
-        eq_str("mic-off preserves the last word of a long draft", sent[0], long_text);
+    if (nsent || voice_take_line())
+        fail("mic-off never submits an unterminated dictation");
+    eq_str("mic-off preserves the long dictation as a draft", box, long_text);
     voice_set_mic(1);
     voice_on_heard(NULL, NULL);
     voice_on_draft(NULL, NULL);
+    voice_on_release(NULL, NULL);
+    box[0] = '\0';
+    box_released = 0;
     clear_sent();
     clear_chimes();
 
@@ -647,6 +650,80 @@ int main(void)
     voice_stop();
     clear_chimes();
     clear_sent();
+
+    /* workspace suspends before stashing the old box and loading the new one.
+       Exercise both a wake-word partial and a dictation spanning finals. */
+    for (int multi = 0; multi < 2; multi++) {
+        if (!start_voice())
+            return 1;
+        voice_on_heard(box_heard, NULL);
+        voice_on_draft(box_line, NULL);
+        voice_on_release(box_release, NULL);
+        box[0] = '\0';
+        box_released = 0;
+        if (multi)
+            fire("final", "listen first part");
+        fire("partial", multi ? "second part" : "listen first part");
+        char saved[sizeof box];
+        snprintf(saved, sizeof saved, "%s", box);
+        voice_suspend();
+        eq_str("switch preserves all heard text", box, saved);
+        if (nsent || voice_take_line())
+            fail("switch does not submit or queue an unfinished dictation");
+        eq_str("switch pauses dictation", voice_label(), "voice paused");
+        snprintf(box, sizeof box, "%s", "worker draft");
+        box_released = 0;
+        voice_refocus();
+        fire("partial", "second part keeps arriving");
+        fire("final", "second part keeps arriving");
+        fire("final", "ok done");
+        if (nsent || voice_take_line())
+            fail("speech after switching never submits to the worker tab");
+        eq_str("the worker draft is untouched", box, "worker draft");
+        snprintf(box, sizeof box, "%s", saved);
+        voice_refocus();
+        fire("final", "more speech before resuming");
+        eq_str("returning keeps the original draft", box, saved);
+        voice_stop();
+        voice_on_heard(NULL, NULL);
+        voice_on_draft(NULL, NULL);
+        voice_on_release(NULL, NULL);
+        clear_sent();
+        clear_chimes();
+    }
+
+    if (!start_voice())
+        return 1;
+    voice_on_heard(box_heard, NULL);
+    voice_on_draft(box_line, NULL);
+    voice_on_release(box_release, NULL);
+    box[0] = '\0';
+    box_released = 0;
+    fire("final", "finished before switching");
+    fire("partial", "next words");
+    voice_suspend();
+    eq_str("queued finals stay before the partial in the departing draft", box,
+           "finished before switching next words");
+    if (nsent || voice_take_line())
+        fail("no queued speech leaks across a tab switch");
+    voice_stop();
+    clear_chimes();
+    box[0] = '\0';
+    box_released = 0;
+    if (!start_voice())
+        return 1;
+    fire("final", "listen held across a focus change");
+    fire("partial", "unfinished tail");
+    voice_arm(0);
+    eq_str("focus loss preserves dictation", box,
+           "listen held across a focus change unfinished tail");
+    if (nsent || voice_take_line())
+        fail("focus loss does not flush dictation without ok done");
+    voice_stop();
+    voice_on_heard(NULL, NULL);
+    voice_on_draft(NULL, NULL);
+    voice_on_release(NULL, NULL);
+    clear_chimes();
 
     /* a window started out of front leaves the microphone to the one in front */
     focused_window = 0;

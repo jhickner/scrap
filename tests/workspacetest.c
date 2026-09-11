@@ -33,7 +33,18 @@ int  sidechannel_fds(int *out, int max) { (void)out; (void)max; return 0; }
 void gitinfo_forget(void) {}
 void tg_refocus(void) {}
 void voice_refocus(void) {}
-void voice_commit(struct session *s) { (void)s; }
+static struct prompt *suspend_prompt;
+static struct session *suspend_session;
+static int suspended_before_switch;
+void voice_suspend(void)
+{
+    if (suspend_prompt) {
+        suspended_before_switch = workspace_current() == suspend_session;
+        prompt_set_preview(suspend_prompt, "saved speech");
+        prompt_release_preview(suspend_prompt);
+        suspend_prompt = NULL;
+    }
+}
 void tg_forget_session(struct session *s) { (void)s; }
 void relay_refocus(void) {}
 void relay_forget_session(struct session *s) { (void)s; }
@@ -221,6 +232,21 @@ int main(void)
         }
         if (a.running)
             fail("restoring unsent input does not submit it");
+
+        /* Voice must finish preserving its preview in the departing prompt
+           before its draft is stashed or the destination is made current. */
+        workspace_show(1);
+        suspend_prompt = prompt;
+        suspend_session = workspace_current();
+        workspace_show(0);
+        if (!suspended_before_switch)
+            fail("voice is suspended while its originating tab is current");
+        if (strcmp(prompt_line(prompt), "alpha\nmore"))
+            fail("suspending voice leaves the destination draft alone");
+        workspace_show(1);
+        if (strcmp(prompt_line(prompt), "beta saved speech"))
+            fail("voice is preserved before the departing draft is saved");
+        workspace_show(0);
 
         if (workspace_count() != 2)
             fail("two tabs stay open");
