@@ -1094,19 +1094,60 @@ void voice_refocus(void)
     macos_voice_busy(voice, s && session_turn_running(s));
 }
 
+void voice_suspend(void)
+{
+    if (!voice)
+        return;
+    drain();
+    if (!hearing && !listen_mode && !draft[0] && !nqueue)
+        return;
+    char edit[LISTEN_MAX];
+    take_edit(edit, sizeof edit);
+    /* Finals awaiting chat_line belong before the current preview. Materialize
+       them in this box before workspace saves it, never in the global queue
+       that the next tab would take. Keep any surrounding typed text intact. */
+    if (nqueue && heard_fn) {
+        char *text = strdup("");
+        for (int i = 0; text && i < nqueue; i++) {
+            char *next = text_dsprintf("%s%s%s", text, *text ? " " : "", queue[i]);
+            free(text);
+            text = next;
+        }
+        if (text) {
+            char *next = text_dsprintf("%s%s%s", text, shown[0] ? " " : "", shown);
+            if (next) {
+                show(next);
+                free(next);
+            }
+            free(text);
+        }
+    }
+    if (release_fn)
+        release_fn(release_ud);
+    clear_queue();
+    listen_clear();
+    draft[0] = shown[0] = '\0';
+    hearing = erased = command_early = 0;
+    paused = 1;
+    macos_voice_cancel(voice);
+    status_set_alert("Voice paused; draft saved. Say resume listening to continue.");
+    status_touch();
+}
+
 void voice_commit(struct session *s)
 {
     if (!voice || !s)
         return;
     drain();
+    /* A wake word can still be only a partial when focus or the mic changes.
+       Neither edge is the dictation's explicit end phrase. */
+    if (listen_mode || listen_wake(draft)) {
+        voice_suspend();
+        return;
+    }
     char edit[LISTEN_MAX];
     take_edit(edit, sizeof edit);
-    if (listen_mode) {
-        const char *tail = draft[0] && !is_stale(draft) ? draft : NULL;
-        if (tail)
-            remember_stale(tail);
-        listen_flush(tail);
-    } else if (erased) {
+    if (erased) {
         erased = 0;
         if (draft[0])
             remember_stale(draft);

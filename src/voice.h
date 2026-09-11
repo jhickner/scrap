@@ -56,8 +56,12 @@ void voice_turn_begin(struct session *s);
 void voice_turn_done(struct session *s);
 void voice_turn_cancel(struct session *s);
 void voice_refocus(void);
+/* Before replacing the active input box: keep speech there as an unsent
+   draft and pause recognition until an explicit resume. */
+void voice_suspend(void);
 /* send the in-progress utterance and anything queued to this session, so
-   leaving the pane does not drop what was already heard */
+   leaving the pane does not drop what was already heard. Dictation is saved
+   and paused instead: only its terminator or a manual submit may send it. */
 void voice_commit(struct session *s);
 /* the in-progress utterance was submitted by hand: keep it out of the queue so
    it is not sent a second time when the turn endpoints */
