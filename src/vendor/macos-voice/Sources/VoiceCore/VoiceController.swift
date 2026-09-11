@@ -18,6 +18,10 @@ public final class VoiceController {
 
     static let uncancelledEchoGate: TimeInterval = 1.5
 
+    /* after playback drains, how long heard speech is still compared against
+       the words just spoken; past it, repeating a reply's words is not echo */
+    static let echoTail: TimeInterval = 3.0
+
     static let pollInterval = Duration.milliseconds(150)
 
     static let bargeInWordCount = 2
@@ -58,6 +62,8 @@ public final class VoiceController {
     public var onSend: ((String) -> Void)?
 
     public var onInterrupt: (() -> Void)?
+    /* a turn was discarded rather than sent, and nothing of it is left */
+    public var onDrop: (() -> Void)?
     public var onMode: ((Mode) -> Void)?
     public var onHeard: ((String) -> Void)?
     public var onSpeaking: ((Bool) -> Void)?
@@ -81,6 +87,7 @@ public final class VoiceController {
     private var volatileAt: TimeInterval?
     private var promotedFinal: String?
     private var gateUntil: TimeInterval = 0
+    private var echoUntil: TimeInterval = 0
     private var isBusy = false
     private var heldUtterance: String?
 
@@ -259,6 +266,7 @@ public final class VoiceController {
                 endpointer.reset()
                 volatileText = ""
                 heardDraft = ""
+                onDrop?()
                 return
             }
             if let promoted = promotedFinal {
@@ -275,10 +283,12 @@ public final class VoiceController {
                 VoiceLog.note("stop command; nothing sent")
                 endpointer.reset()
                 heardDraft = ""
+                onDrop?()
                 return
             }
             guard hearable(text, isFinal: true, at: now, confidence: confidence) else {
                 dropLeakedDraft()
+                if endpointer.draft.isEmpty { onDrop?() }
                 return
             }
             VoiceLog.note("final: \(text)")
@@ -338,9 +348,10 @@ public final class VoiceController {
             }
         }
         let speaking = replyInTheAir
+        let echoLive = mode == .speaking || isSpeaking || engine.isSpeaking || now < echoUntil
         let floor = speaking ? Self.echoWordsWhileSpeaking : nil
         let ratio = speaking ? EchoRejector.matchRatioWhileSpeaking : EchoRejector.matchRatio
-        if echo.shouldReject(judged, minimumWords: floor, ratio: ratio) {
+        if echoLive, echo.shouldReject(judged, minimumWords: floor, ratio: ratio) {
             VoiceLog.note("\(isFinal ? "final" : "volatile") rejected as echo: \(text)")
             if speaking { rejectedEchoPrefix = text }
             return false
@@ -534,6 +545,7 @@ public final class VoiceController {
         chunker = SpokenTextChunker()
         isReplyMuted = true
         isSpeaking = false
+        echoUntil = Date.timeIntervalSinceReferenceDate + Self.echoTail
         guard isConversing else { return }
         gateUntil = engine.isEchoCancelled
             ? 0 : Date.timeIntervalSinceReferenceDate + Self.echoGate
@@ -643,6 +655,7 @@ public final class VoiceController {
 
         let gate = echoCancelled ? Self.echoGate : Self.uncancelledEchoGate
         gateUntil = Date.timeIntervalSinceReferenceDate + gate
+        echoUntil = Date.timeIntervalSinceReferenceDate + Self.echoTail
         isSpeaking = false
         guard isConversing, mode == .speaking else { return }
         resumeListening()

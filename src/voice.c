@@ -37,17 +37,19 @@
 
 /* prefixed to spoken input while replies are read back, so the answer is
    shaped for the ear; the pane shows the words without it */
+#define SPOKEN_BREVITY                                                         \
+    "Reply in one or two short sentences of plain prose. Answer only what "    \
+    "was asked: no background, caveats, alternatives, or offers of further "   \
+    "help. No lists, code blocks, or paths unless they are asked for.\n\n"
 #define SPOKEN_PREAMBLE                                                        \
     "The message below was spoken aloud, and your reply will be read back "    \
-    "aloud. Answer in a sentence or two of plain prose. No lists, code "       \
-    "blocks, or long paths unless they are asked for.\n\n"
+    "aloud. " SPOKEN_BREVITY
 /* a queued message is answered after another reply, which a listener cannot
    tell apart from the one before it */
 #define QUEUED_PREAMBLE                                                        \
     "The message below was spoken aloud while an earlier reply was running, "  \
     "and your reply will be read back aloud. Open with a few words restating " \
-    "what it asks, then answer in a sentence or two of plain prose. No lists, "\
-    "code blocks, or long paths unless they are asked for.\n\n"
+    "what it asks. " SPOKEN_BREVITY
 
 static macos_voice *voice;
 static int          ready;
@@ -652,6 +654,11 @@ static void on_event(void *ud, const char *kind, const char *text)
         if (s && session_turn_running(s))
             session_interrupt(s);
         chime("interrupted");
+        erased = 0;
+    } else if (!strcmp(kind, "dropped")) {
+        /* the erased turn ends here when the helper discards its final */
+        discard_speech();
+        erased = 0;
     } else if (!strcmp(kind, "speaking")) {
         speaking = text && *text == '1';
         status_touch();

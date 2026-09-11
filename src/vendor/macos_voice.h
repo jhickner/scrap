@@ -10,6 +10,7 @@
  *   partial    the running hypothesis for the current turn
  *   final      a finished turn, ready to send
  *   interrupt  the stop word; cancel the turn in flight
+ *   dropped    the turn in progress was discarded without a final (text NULL)
  *   speaking   "1" while a reply is being read aloud, "0" when it stops
  *   mode       idle | starting | listening | answering | speaking
  *   notice     something to show the user; the helper keeps running
@@ -182,6 +183,7 @@ static void mv_emit(macos_voice *v, char *line) {
     else if (!strncmp(line, "P ", 2)) { mv_unescape(line + 2); v->cb(v->ud, "partial", line + 2); }
     else if (!strncmp(line, "T ", 2)) { mv_unescape(line + 2); v->cb(v->ud, "final", line + 2); }
     else if (!strcmp(line, "INTERRUPT")) v->cb(v->ud, "interrupt", NULL);
+    else if (!strcmp(line, "DROP")) v->cb(v->ud, "dropped", NULL);
     else if (!strncmp(line, "SPEAKING ", 9)) v->cb(v->ud, "speaking", line + 9);
     else if (!strncmp(line, "MODE ", 5)) v->cb(v->ud, "mode", line + 5);
     else if (!strncmp(line, "NOTE ", 5)) v->cb(v->ud, "notice", line + 5);

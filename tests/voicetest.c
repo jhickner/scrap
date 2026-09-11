@@ -440,6 +440,23 @@ int main(void)
     clear_sent();
     clear_chimes();
 
+    voice_set_mic(0);
+    voice_set_mic(1);
+    box[0] = '\0';
+    box_released = 0;
+    fire("partial", "ok commit and make");
+    box[0] = '\0';
+    fire("partial", "ok commit and make install");
+    fire("dropped", NULL);
+    fire("partial", "ok commit and make install");
+    eq_str("an utterance after a dropped erased turn shows", box, "ok commit and make install");
+    fire("final", "ok commit and make install");
+    line = voice_take_line();
+    eq_str("an utterance after a dropped erased turn is sent", line, "ok commit and make install");
+    free(line);
+    clear_sent();
+    clear_chimes();
+
     /* out of the hold left by the hand-submits above */
     voice_set_mic(0);
     voice_set_mic(1);
