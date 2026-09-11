@@ -244,11 +244,10 @@ public final class VoiceController {
         runTask = Task { await run() }
     }
 
-    private func handle(_ event: VoiceInputEvent) {
+    func handle(_ event: VoiceInputEvent, at now: TimeInterval = Date.timeIntervalSinceReferenceDate) {
         switch event {
         case let .volatile(text):
             guard !suppressCurrentTurn else { return }
-            let now = Date.timeIntervalSinceReferenceDate
             if considerInterrupting(text, isFinal: false) { return }
             guard hearable(text, isFinal: false, at: now) else {
                 dropLeakedDraft()
@@ -277,7 +276,6 @@ public final class VoiceController {
                     return
                 }
             }
-            let now = Date.timeIntervalSinceReferenceDate
             if considerInterrupting(text, isFinal: true, confidence: confidence) { return }
             if TurnEndpointer.isStopCommand(text) {
                 VoiceLog.note("stop command; nothing sent")
@@ -413,9 +411,8 @@ public final class VoiceController {
        volatile has sat past the silence threshold plus a margin, promote it to
        the final it never got; its real final, should it still come, is dropped
        as a duplicate. */
-    private func pollStalledVolatile() {
+    func pollStalledVolatile(at now: TimeInterval = Date.timeIntervalSinceReferenceDate) {
         guard !volatileText.isEmpty, let since = volatileAt else { return }
-        let now = Date.timeIntervalSinceReferenceDate
         guard now - since >= endpointer.silenceThreshold + Self.volatileStallTimeout
         else { return }
         let text = volatileText
@@ -671,12 +668,13 @@ public final class VoiceController {
         resumeListening()
     }
 
-    private func resumeListening() {
+    func resumeListening() {
         rejectedEchoPrefix = nil
-        if !endpointer.hasSpeech {
-            volatileText = ""
-            heardDraft = ""
-        }
+        /* Reply completion is not a recognition boundary. A turn can have only
+           volatile text: clearing it here blanks the preview while volatileAt
+           still blocks endpointing, and leaves nothing for stall recovery to
+           promote. Keep both unfinished and finalized speech until the input
+           pipeline sends or explicitly discards it. */
         mode = .listening
         flushHeld()
     }
