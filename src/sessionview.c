@@ -666,9 +666,10 @@ static void cluster_paint(const char *line, const unsigned char *spans)
     if (line[tag])
         tag++;
 
+    /* one row per call: fill the width and cut mid-word, so a long first token
+       does not leave the row nearly empty */
     size_t len = strlen(line);
-    size_t skip = 0;
-    size_t fit = ui_wrap_row(line, len, (size_t)cluster_budget(), &skip, NULL);
+    size_t fit = ui_fit_visible(line, len, (size_t)cluster_budget());
     if (fit < tag)
         fit = tag;
     if (fit > len)
