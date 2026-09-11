@@ -92,6 +92,41 @@ int main(void)
     prompt_set_preview(p, "");
     eq_line(p, "and removed", "typed more");
 
+    prompt_insert(p, " hello world");
+    {
+        char *draft = NULL;
+        int   cursor = 0;
+        prompt_stash_draft(&draft, &cursor);
+        eq_line(p, "stashing keeps the live line", "typed more hello world");
+        if (cursor != (int)strlen("typed more hello world")) {
+            fprintf(stderr, "FAIL stash cursor: got %d\n", cursor);
+            failures++;
+        }
+        prompt_adopt_draft("ab cd", 3);
+        eq_line(p, "adopting replaces the line", "ab cd");
+        if (prompt_cursor(p) != 3) {
+            fprintf(stderr, "FAIL adopt cursor: got %d, want 3\n", prompt_cursor(p));
+            failures++;
+        }
+        prompt_adopt_draft(NULL, 0);
+        eq_line(p, "an empty draft clears the line", "");
+        prompt_adopt_draft(draft, 5);
+        eq_line(p, "the parked draft comes back", "typed more hello world");
+        if (prompt_cursor(p) != 5) {
+            fprintf(stderr, "FAIL restored cursor: got %d, want 5\n",
+                    prompt_cursor(p));
+            failures++;
+        }
+        prompt_adopt_draft("one\ntwo", 3);
+        eq_line(p, "a multi-line draft is kept", "one\ntwo");
+        if (prompt_cursor(p) != 3) {
+            fprintf(stderr, "FAIL multi-line cursor: got %d, want 3\n",
+                    prompt_cursor(p));
+            failures++;
+        }
+        free(draft);
+    }
+
     prompt_free(p);
 
     fflush(stdout);

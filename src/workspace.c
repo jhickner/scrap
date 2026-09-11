@@ -34,6 +34,8 @@ struct tab {
     struct pending         pending[PENDING_MAX];
     int                    npending;
     char                  *sticky;
+    char                  *draft;
+    int                    draft_cursor;
     int                    finished;
 };
 
@@ -139,6 +141,7 @@ void workspace_end(void)
             free(tabs[i].pending[j].shown);
         }
         free(tabs[i].sticky);
+        free(tabs[i].draft);
     }
     memset(tabs, 0, sizeof tabs);
     ntabs = 0;
@@ -245,12 +248,26 @@ static void follow(const struct session *s)
     gitinfo_forget();
 }
 
+static void draft_save(int index)
+{
+    free(tabs[index].draft);
+    tabs[index].draft = NULL;
+    tabs[index].draft_cursor = 0;
+    prompt_stash_draft(&tabs[index].draft, &tabs[index].draft_cursor);
+}
+
+static void draft_load(int index)
+{
+    prompt_adopt_draft(tabs[index].draft, tabs[index].draft_cursor);
+}
+
 void workspace_show(int index)
 {
     if (index < 0 || index >= ntabs || index == cur)
         return;
 
     voice_commit(tabs[cur].s);
+    draft_save(cur);
 
     ui_flush();
     viewport_stash(tabs[cur].screen);
@@ -261,6 +278,7 @@ void workspace_show(int index)
     session_set_unseen(tabs[cur].s, 0);
     status_sticky_prompt(tabs[cur].sticky);
     status_sticky_busy(session_busy(tabs[cur].s));
+    draft_load(cur);
     follow(tabs[cur].s);
     spin_follow();
     viewport_forget();
@@ -404,6 +422,8 @@ static void drop(int index, const struct session *fallback)
     tabs[index].npending = 0;
     free(tabs[index].sticky);
     tabs[index].sticky = NULL;
+    free(tabs[index].draft);
+    tabs[index].draft = NULL;
 
     for (int i = index; i + 1 < ntabs; i++)
         tabs[i] = tabs[i + 1];
@@ -423,6 +443,7 @@ static void drop(int index, const struct session *fallback)
         block_forget();
         status_sticky_prompt(tabs[cur].sticky);
         status_sticky_busy(session_busy(tabs[cur].s));
+        draft_load(cur);
         follow(tabs[cur].s);
         spin_follow();
         viewport_forget();

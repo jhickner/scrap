@@ -178,13 +178,62 @@ int main(void)
         if (status_spinning())
             fail("background work does not take the input spinner");
         b.work = 0;
+        a.running = 0;
+
+        workspace_show(0);
+        prompt_insert(prompt, "alpha");
+        workspace_show(1);
+        {
+            const char *got = prompt_line(prompt);
+            if (got && *got)
+                fail("the other tab does not show this tab's unsent input");
+        }
+        prompt_insert(prompt, "beta");
+        workspace_show(0);
+        {
+            const char *got = prompt_line(prompt);
+            if (!got || strcmp(got, "alpha"))
+                fail("unsent input comes back with its tab");
+            if (prompt_cursor(prompt) != 5)
+                fail("the caret comes back where it was");
+        }
+        workspace_show(1);
+        {
+            const char *got = prompt_line(prompt);
+            if (!got || strcmp(got, "beta"))
+                fail("each tab keeps its own unsent input");
+        }
+        workspace_show(0);
+        prompt_adopt_draft("alpha\nmore", 5);
+        workspace_show(1);
+        {
+            const char *got = prompt_line(prompt);
+            if (!got || strcmp(got, "beta"))
+                fail("a multi-line draft stays on its tab");
+        }
+        workspace_show(0);
+        {
+            const char *got = prompt_line(prompt);
+            if (!got || strcmp(got, "alpha\nmore"))
+                fail("a multi-line draft comes back");
+            if (prompt_cursor(prompt) != 5)
+                fail("a multi-line caret comes back");
+        }
+        if (a.running)
+            fail("restoring unsent input does not submit it");
 
         if (workspace_count() != 2)
             fail("two tabs stay open");
+        workspace_show(1);
         if (workspace_close(1) != 1)
             fail("close drops a tab");
         if (workspace_count() != 1 || workspace_current() != &a)
             fail("the remaining tab is the one left");
+        {
+            const char *got = prompt_line(prompt);
+            if (!got || strcmp(got, "alpha\nmore"))
+                fail("closing a tab restores the remaining draft");
+        }
         if (workspace_close(0) != 0)
             fail("close drops the last tab");
         if (workspace_count() || workspace_current())

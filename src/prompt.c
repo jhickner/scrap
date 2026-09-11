@@ -425,6 +425,9 @@ void prompt_echo_load(const cJSON *st)
     viewport_item_persist(mark, PROMPT_ECHO_KIND, echo_encode);
 }
 
+static struct prompt *active;
+static struct prompt *completion_owner;
+
 struct prompt *prompt_new(const ReplCommand *commands, int command_count)
 {
     struct prompt *p = calloc(1, sizeof *p);
@@ -433,10 +436,9 @@ struct prompt *prompt_new(const ReplCommand *commands, int command_count)
     repl_init(&p->repl, commands, command_count);
 
     p->repl.suggest_off = true;
+    active = p;
     return p;
 }
-
-static struct prompt *completion_owner;
 
 void prompt_file_completion(struct prompt *p, const char *root)
 {
@@ -458,6 +460,8 @@ void prompt_free(struct prompt *p)
 {
     if (!p)
         return;
+    if (active == p)
+        active = NULL;
     if (completion_owner == p)
         completion_owner = NULL;
     repl_free(&p->repl);
@@ -1222,6 +1226,56 @@ void prompt_insert(struct prompt *p, const char *text)
 const char *prompt_line(struct prompt *p)
 {
     return p ? repl_line(&p->repl) : NULL;
+}
+
+int prompt_cursor(const struct prompt *p)
+{
+    return p ? p->repl.cursor : 0;
+}
+
+static int clamp_cursor(const Repl *r, int cursor)
+{
+    if (!r->buf || cursor <= 0)
+        return 0;
+    if (cursor > r->len)
+        cursor = r->len;
+    while (cursor > 0 && cursor < r->len &&
+           ((unsigned char)r->buf[cursor] & 0xC0) == 0x80)
+        cursor--;
+    return cursor;
+}
+
+void prompt_stash_draft(char **text, int *cursor)
+{
+    if (text)
+        *text = NULL;
+    if (cursor)
+        *cursor = 0;
+    if (!active || !text)
+        return;
+
+    const char *line = repl_line(&active->repl);
+    if (line && *line) {
+        *text = strdup(line);
+        if (!*text)
+            return;
+    }
+    if (cursor)
+        *cursor = active->repl.cursor;
+    preview_forget(active);
+}
+
+void prompt_adopt_draft(const char *text, int cursor)
+{
+    if (!active)
+        return;
+
+    active->frame_ok = 0;
+    repl_reset(&active->repl);
+    preview_forget(active);
+    if (text && *text)
+        repl_insert_text(&active->repl, text);
+    active->repl.cursor = clamp_cursor(&active->repl, cursor);
 }
 
 void prompt_set_listen(struct prompt *p, int (*fn)(void *ud), void *ud)

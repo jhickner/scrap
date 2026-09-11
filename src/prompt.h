@@ -101,6 +101,11 @@ void prompt_set_external(struct prompt *p, char *(*fn)(void *ud), void *ud);
 void prompt_set_preview(struct prompt *p, const char *text);
 void prompt_insert(struct prompt *p, const char *text);
 const char *prompt_line(struct prompt *p);
+int         prompt_cursor(const struct prompt *p);
+
+/* unsent input parked while another tab is in front; *text is heap or NULL */
+void prompt_stash_draft(char **text, int *cursor);
+void prompt_adopt_draft(const char *text, int cursor);
 /* 1 when the prompt should show the listen mark */
 void prompt_set_listen(struct prompt *p, int (*fn)(void *ud), void *ud);
 
