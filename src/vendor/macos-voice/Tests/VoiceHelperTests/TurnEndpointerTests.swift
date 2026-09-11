@@ -111,6 +111,15 @@ struct TurnEndpointerTests {
         #expect(TurnEndpointer.isStopCommand("hold on, hold on"))
     }
 
+    @Test("pause and resume are commands only on their own")
+    func recognizesPauseCommands() {
+        #expect(TurnEndpointer.isPauseCommand("Pause."))
+        #expect(TurnEndpointer.isPauseCommand("okay, resume listening"))
+        #expect(TurnEndpointer.isPauseCommand("Pause, pause."))
+        #expect(!TurnEndpointer.isPauseCommand("pause the build"))
+        #expect(!TurnEndpointer.isStopCommand("pause"))
+    }
+
     @Test("a stop inside a real sentence is part of the question")
     func stopInsideASentenceIsNotACommand() {
 

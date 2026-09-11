@@ -578,17 +578,18 @@ static void on_event(void *ud, const char *kind, const char *text)
             return;
         }
         /* the helper waits for a reply to every turn it delivers and judges
-           speech as echo until one ends; a turn consumed here gets none */
+           speech as echo until one ends; a turn consumed here gets none. A reply
+           still playing is left to end it, rather than being cut off */
         if (command_early) {
             command_early = 0;
             if (is_pause_command(text) || is_resume_command(text)) {
-                if (voice)
+                if (voice && !speaking)
                     macos_voice_cancel(voice);
                 return;
             }
         }
         if (paused) {
-            if (voice)
+            if (voice && !speaking)
                 macos_voice_cancel(voice);
             if (is_resume_command(text))
                 set_paused(0);
@@ -601,7 +602,7 @@ static void on_event(void *ud, const char *kind, const char *text)
         if (is_pause_command(text) || is_resume_command(text)) {
             erased = 0;
             forget_stale();
-            if (voice)
+            if (voice && !speaking)
                 macos_voice_cancel(voice);
             set_paused(is_pause_command(text));
             return;

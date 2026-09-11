@@ -286,6 +286,16 @@ public final class VoiceController {
                 onDrop?()
                 return
             }
+            /* sent at once, past the endpoint silence, the reply hold, and the
+               barge-in word count, so it works while a reply is read or awaited */
+            if TurnEndpointer.isPauseCommand(text), !endpointer.hasSpeech, !isGated(at: now),
+               isPlausiblyTheChild(text, confidence: confidence) {
+                VoiceLog.note("pause command: \(text)")
+                volatileText = ""
+                heardDraft = ""
+                onSend?(text)
+                return
+            }
             guard hearable(text, isFinal: true, at: now, confidence: confidence) else {
                 dropLeakedDraft()
                 if endpointer.draft.isEmpty { onDrop?() }

@@ -83,6 +83,19 @@ struct TurnEndpointer: Sendable {
     }
 
     static func isStopCommand(_ text: String) -> Bool {
+        isCommand(text, in: stopPhrases)
+    }
+
+    static let pausePhrases: Set<String> = [
+        "pause", "pause listening", "resume", "resume listening",
+    ]
+
+    /* the client's pause and resume words, which it acts on from the turn text */
+    static func isPauseCommand(_ text: String) -> Bool {
+        isCommand(text, in: pausePhrases)
+    }
+
+    private static func isCommand(_ text: String, in stopPhrases: Set<String>) -> Bool {
         var words = normalized(text).split(separator: " ").map(String.init)
 
         while let first = words.first, stopPadding.contains(first) { words.removeFirst() }
