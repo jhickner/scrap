@@ -83,7 +83,13 @@ public final class VoiceController {
     private var runTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
 
-    private var volatileText = ""
+    // Keep the level observed during this recognition segment. A final can
+    // arrive after the speaker has gone quiet and the level window has expired.
+    private var volatilePeak: Float = 0
+    private var volatileText = "" {
+        didSet { if volatileText.isEmpty { volatilePeak = 0 } }
+    }
+    private let levelPeak: (TimeInterval) -> Float
     private var volatileAt: TimeInterval?
     private var promotedFinal: String?
     private var gateUntil: TimeInterval = 0
@@ -103,11 +109,20 @@ public final class VoiceController {
 
     private var pendingChime: VoiceChime?
 
-    public init(settings: VoiceSettings = .default) {
+    public convenience init(settings: VoiceSettings = .default) {
+        self.init(settings: settings, output: nil, levelPeak: nil)
+    }
+
+    // Inject output and metering so recognition/playback races can be tested
+    // without starting a microphone or playing audio.
+    init(settings: VoiceSettings = .default, output: (any VoiceOutput)?,
+         levelPeak: ((TimeInterval) -> Float)?) {
         self.settings = settings
         self.volume = settings.volume
         self.rate = settings.rate
         self.endpointer = TurnEndpointer(silence: settings.silence)
+        self.output = output
+        self.levelPeak = levelPeak ?? { [engine] in engine.levels.peak(within: $0) }
         engine.playbackVolume = settings.volume
         engine.onConfigurationChange = { [weak self] in self?.handleRouteChange() }
         engine.onPlaybackDrained = { [weak self] in
@@ -255,9 +270,11 @@ public final class VoiceController {
             }
             endpointer.noteVolatile(text, at: now)
             volatileText = text
+            volatilePeak = max(volatilePeak, levelPeak(Self.bargeInLevelWindow))
             volatileAt = now
             updateHeardDraft()
         case let .final(text, confidence):
+            defer { volatilePeak = 0 }
             volatileAt = nil
             if suppressCurrentTurn {
                 suppressCurrentTurn = false
@@ -287,7 +304,7 @@ public final class VoiceController {
             /* sent at once, past the endpoint silence, the reply hold, and the
                barge-in word count, so it works while a reply is read or awaited */
             if TurnEndpointer.isPauseCommand(text), !endpointer.hasSpeech, !isGated(at: now),
-               isPlausiblyTheChild(text, confidence: confidence) {
+               isPlausiblyTheChild(text, confidence: confidence, isFinal: true) {
                 VoiceLog.note("pause command: \(text)")
                 volatileText = ""
                 heardDraft = ""
@@ -364,7 +381,7 @@ public final class VoiceController {
             if speaking { rejectedEchoPrefix = text }
             return false
         }
-        if speaking, !isPlausiblyTheChild(text, confidence: confidence) {
+        if speaking, !isPlausiblyTheChild(text, confidence: confidence, isFinal: isFinal) {
             return false
         }
 
@@ -390,16 +407,20 @@ public final class VoiceController {
         pollSilentSpeech()
         pollStalledVolatile()
 
+        pollTurn()
+    }
+
+    func pollTurn(at now: TimeInterval = Date.timeIntervalSinceReferenceDate) {
         let completion = endpointer.completion
         let threshold = endpointer.silenceThreshold
         // Silence must not discard a trailing segment still being recognized.
         guard case let .send(utterance) = endpointer.poll(
-            at: Date.timeIntervalSinceReferenceDate, awaitingFinal: volatileAt != nil
+            at: now, awaitingFinal: volatileAt != nil
         )
         else { return }
         VoiceLog.note("turn (\(completion) after \(threshold)s): \(utterance)")
 
-        lastTurnPeak = engine.levels.peak(within: 5)
+        lastTurnPeak = levelPeak(5)
         VoiceLog.note(String(format: "turn peak level %.3f", lastTurnPeak))
         volatileText = ""
         heardDraft = ""
@@ -498,14 +519,15 @@ public final class VoiceController {
     ) -> Bool {
         guard canInterrupt(isFinal: isFinal) else { return false }
         guard TurnEndpointer.isStopCommand(text) else { return false }
-        guard isPlausiblyTheChild(text, confidence: confidence) else { return false }
+        guard isPlausiblyTheChild(text, confidence: confidence, isFinal: isFinal) else { return false }
         interrupt()
         return true
     }
 
-    private func isPlausiblyTheChild(_ text: String, confidence: Double?) -> Bool {
+    private func isPlausiblyTheChild(_ text: String, confidence: Double?, isFinal: Bool) -> Bool {
         guard mode == .speaking else { return true }
-        let level = engine.levels.peak(within: Self.bargeInLevelWindow)
+        let currentLevel = levelPeak(Self.bargeInLevelWindow)
+        let level = isFinal ? max(currentLevel, volatilePeak) : currentLevel
         let floor = lastTurnPeak * Self.bargeInLevelShare
         let confidenceText = confidence.map { String(format: "%.2f", $0) } ?? "n/a"
         if lastTurnPeak > 0, level < floor {
@@ -596,7 +618,7 @@ public final class VoiceController {
         if isConversing, !engine.isSpeaking, mode != .speaking { resumeListening() }
     }
 
-    private func speak(_ utterances: [String]) {
+    func speak(_ utterances: [String]) {
         ensureOutput()
         isSpeaking = true
         mode = .speaking

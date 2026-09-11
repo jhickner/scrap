@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import VoiceCore
 
@@ -49,4 +50,72 @@ struct VoiceControllerTests {
         voice.handle(.final("Second sentence revised.", confidence: nil), at: 102)
         #expect(voice.heardDraft == "First sentence. Second sentence revised.")
     }
+    @Test("a delayed barge-in final keeps its preview and is delivered once", arguments: [false, true])
+    func delayedBargeInFinal(busy: Bool) {
+        var level: Float = 0.662
+        let voice = VoiceController(output: SilentOutput(), levelPeak: { window in window == 5 ? 0.662 : level })
+        var sent: [String] = []
+        var previews: [String] = []
+        var drops = 0
+        voice.onSend = { sent.append($0) }
+        voice.onHeard = { previews.append($0) }
+        voice.onDrop = { drops += 1 }
+
+        // Establish the previous turn's peak, as in the 12:24 incident.
+        voice.handle(.final("Check the voice build.", confidence: 0.97), at: 100)
+        voice.pollTurn(at: 110)
+        sent.removeAll()
+        previews.removeAll()
+        voice.setBusy(busy)
+        voice.speak(["The voice build is current."])
+        level = 0.501
+        voice.handle(.volatile("Okay, dispatch Gro to do something small so you get its quota"), at: 120)
+        level = 0.010
+        let final = "Okay, and dispatch Brock to do something small so you get its quota."
+        voice.handle(.final(final, confidence: 0.82), at: 122)
+        #expect(voice.heardDraft == final)
+        #expect(!previews.contains(""))
+        #expect(drops == 0)
+
+        voice.pollTurn(at: 130)
+        #expect(sent == (busy ? [final] : []))
+        voice.resumeListening()
+        voice.pollTurn(at: 140)
+        #expect(sent == [final])
+
+        // The preceding segment's loudness must not authorize another final.
+        voice.speak(["Another reply."])
+        voice.handle(.final("Unrelated quiet speech.", confidence: 0.9), at: 150)
+        #expect(voice.heardDraft.isEmpty)
+        #expect(drops == 1)
+    }
+
+    @Test("retained speech level does not bypass final confidence rejection")
+    func lowConfidenceFinal() {
+        var level: Float = 0.662
+        let voice = VoiceController(output: SilentOutput(), levelPeak: { window in window == 5 ? 0.662 : level })
+        voice.handle(.final("Check the voice build.", confidence: 0.97), at: 100)
+        voice.pollTurn(at: 110)
+        voice.speak(["The voice build is current."])
+        level = 0.501
+        voice.handle(.volatile("Some uncertain words"), at: 120)
+        level = 0.010
+        voice.handle(.final("Some uncertain words.", confidence: 0.2), at: 122)
+        #expect(voice.heardDraft.isEmpty)
+        #expect(voice.handoff() == nil)
+    }
+
+}
+
+
+@MainActor
+private final class SilentOutput: VoiceOutput {
+    var volume: Float = 1
+    var rate: Float = 0.5
+    var onSpoken: ((String) -> Void)?
+    var onFinished: (() -> Void)?
+    var hasPendingSpeech = false
+    func speak(_ text: String) {}
+    func pause(_ duration: TimeInterval) {}
+    func stop() {}
 }
