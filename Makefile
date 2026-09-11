@@ -31,7 +31,7 @@ CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           boardtest modelstest boardgridtest boardtiletest viewstest sessionpresenttest \
           workspacetest replboxtest ttytest gitinfotest sidechannelviewtest \
           sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
-          dispatchtest
+          dispatchtest voicetabtest
 CHECKS += orchstatustest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest
 
@@ -110,7 +110,7 @@ tests: $(TOOLS)
 manual: $(MANUAL_BINS)
 
 FULL_LIB_TOOLS := spintest chrometest ttytest keydump gitinfotest muxcfgtest \
-                  telegramtest boardgridtest workspacetest replboxtest
+                  telegramtest boardgridtest workspacetest replboxtest voicetabtest
 JPEG_TOOLS := imagerowtest imagefittest imagetest mdtest sessionpresenttest
 
 $(addprefix $(BUILD)/,$(FULL_LIB_TOOLS)): TOOL_LIBS = $(LIBS)
@@ -211,6 +211,8 @@ $(BUILD)/highlighttest: tests/highlighttest.c $(BUILD)/highlight.o | $(BUILD)
 $(BUILD)/replboxtest: tests/replboxtest.c $(BUILD)/replbox.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/paste.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/files.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/voicetest: tests/voicetest.c src/voice.c $(BUILD)/text.o | $(BUILD)
+
+$(BUILD)/voicetabtest: tests/voicetabtest.c tests/stubs/tabbar.c tests/stubs/vendorimpl.c src/voice.c $(BUILD)/workspace.o $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
 check: $(CHECK_BINS)
 	@for t in $^; do echo "$$t"; ./$$t || exit 1; done
