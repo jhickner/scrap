@@ -53,8 +53,9 @@ int main(void)
 
     count = orchstatus_load(projects, live, 1, &tasks);
     assert(count == 3);
-    assert(!strcmp(tasks[1].id, "t-done"));
-    assert(!strcmp(tasks[2].id, "t-one"));
+    assert(!strcmp(tasks[0].id, "t-done"));
+    assert(!strcmp(tasks[1].id, "t-one"));
+    assert(!strcmp(tasks[2].id, "t-two"));
     free(tasks);
 
     char age[16];

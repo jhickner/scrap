@@ -160,15 +160,30 @@ static void apply_live(struct orch_task *tasks, int count, const char *dir)
     closedir(d);
 }
 
+static time_t last_change(const struct orch_task *t)
+{
+    return t->updated ? t->updated : t->created;
+}
+
+static int order_recent(const void *a, const void *b)
+{
+    const struct orch_task *x = a, *y = b;
+    time_t tx = last_change(x), ty = last_change(y);
+    if (tx != ty)
+        return tx < ty ? 1 : -1;
+    int project = strcmp(x->project, y->project);
+    if (project)
+        return project;
+    return strcmp(x->id, y->id);
+}
+
 static int order(const void *a, const void *b)
 {
     const struct orch_task *x = a, *y = b;
     int project = strcmp(x->project, y->project);
     if (project)
         return project;
-    if (x->updated != y->updated)
-        return x->updated < y->updated ? 1 : -1;
-    return strcmp(x->id, y->id);
+    return order_recent(a, b);
 }
 
 int orchstatus_load(const char *projects_dir, const char *live_dir,
@@ -199,7 +214,7 @@ int orchstatus_load(const char *projects_dir, const char *live_dir,
     }
     count = kept;
     apply_live(tasks, count, live_dir);
-    qsort(tasks, (size_t)count, sizeof *tasks, order);
+    qsort(tasks, (size_t)count, sizeof *tasks, include_done ? order_recent : order);
     *out = tasks;
     return count;
 }

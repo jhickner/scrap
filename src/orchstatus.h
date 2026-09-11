@@ -26,7 +26,8 @@ struct orchstatus_columns {
 };
 
 /* Load each .jsonl file and retain the last record for each (project, id).
-   Done tasks are omitted unless include_done is nonzero. */
+   Done tasks are omitted unless include_done is nonzero. Open tasks are grouped
+   by project; with include_done, all tasks are ordered most recent first. */
 int orchstatus_load(const char *projects_dir, const char *live_dir,
                     int include_done, struct orch_task **out);
 
