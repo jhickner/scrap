@@ -68,6 +68,18 @@ typedef struct {
     long cache_creation_tokens;
 } grok_result;
 
+/* Subscription credit window from `_x.ai/billing`. used_percent is
+ * creditUsagePercent; resets_at is billingPeriodEnd as epoch seconds. */
+typedef struct {
+    int  available;
+    int  used_percent;
+    long resets_at;
+    long window_minutes;
+} grok_rate_limit;
+
+/* Latest reading; zeroed when none has arrived. */
+void grok_get_rate_limit(grok_client *c, grok_rate_limit *out);
+
 /* As grok_send, but also fills *meta (zeroed first). `meta` may be NULL. */
 char *grok_send_ex(grok_client *c, const char *user_text, grok_result *meta);
 
@@ -152,6 +164,7 @@ void grok_stop(grok_client *c);
 #include <poll.h>
 #include <fcntl.h>
 #include <sys/wait.h>
+#include <time.h>
 #include "cJSON.h"
 
 #define GK_TOOL_CAP 64
@@ -202,6 +215,8 @@ struct grok_client {
     int   n_models;
     int   no_session;         /* use an ephemeral session/new                */
     int   handshake_failed;   /* the deferred handshake was tried and lost  */
+    int   rpc_quiet;          /* skip last_error for a probe whose fail is ok */
+    grok_rate_limit rate_limit;
     int   next_id;            /* JSON-RPC request id counter                */
     int   abort_latched;      /* ESC arrived before a session was live      */
     int   cancelling;         /* session/cancel has been sent this turn     */
@@ -755,6 +770,7 @@ static const char *gk_title_arg(const char *title, const char *name)
 }
 
 static void gk_note_usage(grok_client *c, cJSON *meta);
+static void gk_note_rate_limit(grok_client *c, cJSON *res);
 
 static void gk_tool_update(grok_client *c, cJSON *u) {
     const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(u, "toolCallId"));
@@ -924,7 +940,7 @@ static int gk_handle(grok_client *c, cJSON *ev, int want_id, char **acc, int *ok
             /* A cancel can surface as an RPC error; the turn still ended cleanly. */
             if (c->cancelling) {
                 *ok = 1;
-            } else if (m) {
+            } else if (m && !c->rpc_quiet) {
                 char line[512];
                 int n = snprintf(line, sizeof line, "grok: rpc error: %s\n", m);
                 if (n > 0) gk_append_error(c, line, (size_t)n < sizeof line ? (size_t)n : sizeof line - 1);
@@ -935,6 +951,7 @@ static int gk_handle(grok_client *c, cJSON *ev, int want_id, char **acc, int *ok
             if (stop && !strcmp(stop, "cancelled") && c->meta)
                 c->meta->interrupted = 1;
             gk_note_usage(c, cJSON_GetObjectItem(res, "_meta"));
+            gk_note_rate_limit(c, res);
         }
         return 1;
     }
@@ -966,6 +983,75 @@ static void gk_note_usage(grok_client *c, cJSON *meta) {
     c->meta->input_tokens = input > cached ? input - cached : input;
     c->meta->output_tokens = output;
     c->meta->cost_usd = c->cost_usd;
+}
+
+/* `_x.ai/billing` quotes period bounds as RFC3339. Fractional seconds and a
+ * trailing Z or +00:00 are ignored; the live API always sends UTC. */
+static long gk_parse_iso8601(const char *s) {
+    struct tm tm = {0};
+    int y, mo, d, h, mi, se;
+    if (!s || sscanf(s, "%d-%d-%dT%d:%d:%d", &y, &mo, &d, &h, &mi, &se) != 6)
+        return 0;
+    tm.tm_year = y - 1900;
+    tm.tm_mon = mo - 1;
+    tm.tm_mday = d;
+    tm.tm_hour = h;
+    tm.tm_min = mi;
+    tm.tm_sec = se;
+    time_t t = timegm(&tm);
+    return t > 0 ? (long)t : 0;
+}
+
+static const char *gk_billing_time(cJSON *config, const char *key, const char *nested) {
+    const char *s = cJSON_GetStringValue(cJSON_GetObjectItem(config, key));
+    if (s && *s) return s;
+    cJSON *period = cJSON_GetObjectItem(config, "currentPeriod");
+    return period ? cJSON_GetStringValue(cJSON_GetObjectItem(period, nested)) : NULL;
+}
+
+/* Sparse updates keep the last good resets_at / window, matching Codex. */
+static void gk_note_rate_limit(grok_client *c, cJSON *res) {
+    cJSON *config = res ? cJSON_GetObjectItem(res, "config") : NULL;
+    if (!cJSON_IsObject(config)) return;
+    cJSON *pct = cJSON_GetObjectItem(config, "creditUsagePercent");
+    if (!cJSON_IsNumber(pct)) return;
+    int percent = (int)(pct->valuedouble + 0.5);
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    c->rate_limit.used_percent = percent;
+    c->rate_limit.available = 1;
+    long resets = gk_parse_iso8601(gk_billing_time(config, "billingPeriodEnd", "end"));
+    long started = gk_parse_iso8601(gk_billing_time(config, "billingPeriodStart", "start"));
+    if (resets > 0)
+        c->rate_limit.resets_at = resets;
+    if (resets > started && started > 0)
+        c->rate_limit.window_minutes = (resets - started) / 60;
+}
+
+static int gk_await(grok_client *c, int want_id, char **acc,
+                    char *sid_out, size_t sid_sz, int allow_cancel);
+
+/* Older CLIs lack `_x.ai/billing`; a miss leaves quota unavailable. */
+static void gk_read_billing(grok_client *c) {
+    int id = c->next_id++;
+    cJSON *req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "jsonrpc", "2.0");
+    cJSON_AddNumberToObject(req, "id", id);
+    cJSON_AddStringToObject(req, "method", "_x.ai/billing");
+    cJSON_AddObjectToObject(req, "params");
+    if (!gk_write(c, req)) return;
+    c->rpc_quiet = 1;
+    (void)gk_await(c, id, NULL, NULL, 0, 0);
+    c->rpc_quiet = 0;
+}
+
+void grok_get_rate_limit(grok_client *c, grok_rate_limit *out) {
+    if (!out) return;
+    if (!c) {
+        *out = (grok_rate_limit){0};
+        return;
+    }
+    *out = c->rate_limit;
 }
 
 /* Remember the model line-up from a handshake result. initialize reports it
@@ -1228,6 +1314,7 @@ static int gk_handshake(grok_client *c) {
             c->effort = NULL;
         }
     }
+    gk_read_billing(c);
     return 1;
 }
 
@@ -1384,6 +1471,7 @@ char *grok_send_ex(grok_client *c, const char *user_text, grok_result *meta) {
     c->cancelling = 0;
     c->abort_latched = 0;
     if (!ok) { free(acc); return NULL; }
+    gk_read_billing(c);
     return acc ? acc : strdup("");
 }
 

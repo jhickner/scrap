@@ -964,6 +964,18 @@ static const char *backend_grok_error(Backend *b) {
     return x->client ? grok_last_error(x->client) : NULL;
 }
 
+static void backend_grok_rate_limit(Backend *b, backend_rate_limit *out) {
+    if (!out) return;
+    backend_grok *x = b->ctx;
+    grok_rate_limit limit = {0};
+    memset(out, 0, sizeof *out);
+    grok_get_rate_limit(x->client, &limit);
+    out->available = limit.available;
+    out->used_percent = limit.used_percent;
+    out->resets_at = limit.resets_at;
+    out->window_minutes = limit.window_minutes;
+}
+
 static void backend_grok_close(Backend *b) {
     backend_grok *x = b->ctx;
     if (x->client) grok_stop(x->client);
@@ -993,6 +1005,7 @@ static Backend *backend_grok_open(const backend_opts *o) {
     b->effort = backend_grok_effort;
     b->auth_source = backend_none;
     b->last_error = backend_grok_error;
+    b->rate_limit = backend_grok_rate_limit;
     return b;
 }
 

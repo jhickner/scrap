@@ -74,6 +74,7 @@ static void emit_tool(const char *id, const char *status, const char *content,
 }
 
 static int pinned_model;
+static int billing_reads;
 
 static int mock_server(int argc, char **argv)
 {
@@ -119,6 +120,15 @@ static int mock_server(int argc, char **argv)
             }
         } else if (method && !strcmp(method, "session/set_mode")) {
             respond(id, "{}");
+        } else if (method && !strcmp(method, "_x.ai/billing")) {
+            billing_reads++;
+            if (billing_reads == 1)
+                respond(id, "{\"config\":{\"creditUsagePercent\":17,"
+                            "\"billingPeriodStart\":\"2033-05-11T03:33:20+00:00\","
+                            "\"billingPeriodEnd\":\"2033-05-18T03:33:20+00:00\"}}");
+            else
+                respond(id, "{\"config\":{\"creditUsagePercent\":29,"
+                            "\"billingPeriodEnd\":\"2033-05-18T03:35:00+00:00\"}}");
         } else if (method && !strcmp(method, "session/prompt")) {
             const char *text = prompt_text(msg);
             fprintf(stderr, "2026-08-21T17:42:19.713144Z ERROR tool_error: "
@@ -256,6 +266,28 @@ int main(int argc, char **argv)
     }
     grok_set_event_cb(client, on_event, NULL);
 
+    grok_rate_limit rate = {0};
+    grok_get_rate_limit(client, &rate);
+    if (rate.available) {
+        fputs("groktest: rate limit reported before handshake\n", stderr);
+        grok_stop(client);
+        return 1;
+    }
+    if (!grok_connect(client)) {
+        fputs("groktest: handshake failed\n", stderr);
+        grok_stop(client);
+        return 1;
+    }
+    grok_get_rate_limit(client, &rate);
+    if (!rate.available || rate.used_percent != 17 ||
+        rate.resets_at != 2000000000L || rate.window_minutes != 10080) {
+        fprintf(stderr, "groktest: initial billing window was not retained "
+                "(%d, %ld, %ld)\n",
+                rate.used_percent, rate.resets_at, rate.window_minutes);
+        grok_stop(client);
+        return 1;
+    }
+
     grok_result meta = {0};
     char *reply = grok_send_ex(client, "name this conversation", &meta);
     if (!reply || strcmp(reply, "A useful title")) {
@@ -270,6 +302,16 @@ int main(int argc, char **argv)
         meta.cache_read_tokens != 300 || meta.cache_creation_tokens != 12 ||
         meta.cost_usd != 0.0015) {
         fputs("groktest: the turn's usage was not reported\n", stderr);
+        grok_stop(client);
+        return 1;
+    }
+
+    grok_get_rate_limit(client, &rate);
+    if (!rate.available || rate.used_percent != 29 ||
+        rate.resets_at != 2000000100L || rate.window_minutes != 10080) {
+        fprintf(stderr, "groktest: rolling billing window was not retained "
+                "(%d, %ld, %ld)\n",
+                rate.used_percent, rate.resets_at, rate.window_minutes);
         grok_stop(client);
         return 1;
     }
