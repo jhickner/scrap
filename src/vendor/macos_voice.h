@@ -13,6 +13,7 @@
  *   dropped    the turn in progress was discarded without a final (text NULL)
  *   speaking   "1" while a reply is being read aloud, "0" when it stops
  *   mode       idle | starting | listening | answering | speaking
+ *   mic        "0" when another client turned the microphone off for every client
  *   notice     something to show the user; the helper keeps running
  *   error      the helper failed; it is stopping
  */
@@ -45,6 +46,9 @@ int  macos_voice_mute(macos_voice *v);
 int  macos_voice_chime(macos_voice *v, const char *name);
 /* Off releases the input device so another app can take it; a reply in progress is cut off. */
 int  macos_voice_mic(macos_voice *v, int on);
+/* Off for every client: the others receive a mic "0" event. A helper without
+ * support turns off only this client. */
+int  macos_voice_mic_off_all(macos_voice *v);
 int  macos_voice_busy(macos_voice *v, int busy);
 int  macos_voice_volume(macos_voice *v, double volume);
 /* AVSpeechUtterance rate, 0-1; the utterance in progress keeps its own rate. */
@@ -186,6 +190,7 @@ static void mv_emit(macos_voice *v, char *line) {
     else if (!strcmp(line, "DROP")) v->cb(v->ud, "dropped", NULL);
     else if (!strncmp(line, "SPEAKING ", 9)) v->cb(v->ud, "speaking", line + 9);
     else if (!strncmp(line, "MODE ", 5)) v->cb(v->ud, "mode", line + 5);
+    else if (!strncmp(line, "MIC ", 4)) v->cb(v->ud, "mic", line + 4);
     else if (!strncmp(line, "NOTE ", 5)) v->cb(v->ud, "notice", line + 5);
     else if (!strncmp(line, "ERR ", 4)) v->cb(v->ud, "error", line + 4);
 }
@@ -299,6 +304,7 @@ int macos_voice_cancel(macos_voice *v) { return mv_write(v, "CANCEL", NULL); }
 int macos_voice_mute(macos_voice *v) { return mv_write(v, "MUTE", NULL); }
 int macos_voice_chime(macos_voice *v, const char *name) { return mv_write(v, "CHIME", name); }
 int macos_voice_mic(macos_voice *v, int on) { return mv_write(v, "MIC", on ? "1" : "0"); }
+int macos_voice_mic_off_all(macos_voice *v) { return mv_write(v, "MIC", "0 all"); }
 int macos_voice_busy(macos_voice *v, int busy) { return mv_write(v, "BUSY", busy ? "1" : "0"); }
 int macos_voice_volume(macos_voice *v, double volume) {
     if (volume < 0) volume = 0;

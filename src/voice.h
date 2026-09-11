@@ -22,6 +22,9 @@ int  voice_apply(int on, int speak, char *err, size_t size);
 /* the microphone, while replies keep being read aloud */
 int  voice_mic(void);
 void voice_set_mic(int on);
+/* the microphone off here, as the space key does; every also turns it off in
+   the other clients of the helper */
+void voice_mic_off(int every);
 void voice_set_volume(int percent);
 int  voice_volume(void);
 /* speaking rate as a percent of normal speed; a reply already being spoken

@@ -97,6 +97,8 @@ int  macos_voice_chime(macos_voice *v, const char *name)
     return 0;
 }
 int  macos_voice_mic(macos_voice *v, int on) { (void)v; (void)on; return 0; }
+static int mic_off_alls;
+int  macos_voice_mic_off_all(macos_voice *v) { (void)v; mic_off_alls++; return 0; }
 int  macos_voice_busy(macos_voice *v, int busy) { (void)v; (void)busy; return 0; }
 int  macos_voice_volume(macos_voice *v, double volume) { (void)v; (void)volume; return 0; }
 int  macos_voice_rate(macos_voice *v, double rate) { (void)v; (void)rate; return 0; }
@@ -125,6 +127,8 @@ void status_begin(void) {}
 void status_tick(void) {}
 void status_end(void) {}
 void status_set_alert(const char *text) { (void)text; }
+static char last_note[64];
+void status_set_note(const char *text) { snprintf(last_note, sizeof last_note, "%s", text); }
 void status_touch(void) {}
 
 /* the tab in front, and a second one to switch to */
@@ -917,6 +921,32 @@ int main(void)
         return 1;
     if (focus_calls || helper_focus != 1)
         fail("resuming must also preserve the current helper owner");
+    voice_stop();
+
+    if (!start_voice())
+        return 1;
+    mic_off_alls = 0;
+    last_note[0] = '\0';
+    fire("mic", "0");
+    if (!voice_mic())
+        fail("mic off from the helper waits for the poll to return");
+    voice_pending();
+    if (voice_mic())
+        fail("mic off from the helper turns the mic off");
+    eq_str("mic off from the helper shows the local note", last_note, "mic off");
+    if (mic_off_alls)
+        fail("mic off from the helper is not sent back to every client");
+    voice_set_mic(1);
+    fire("mic", "1");
+    voice_pending();
+    if (!voice_mic())
+        fail("only mic off is taken from the helper");
+    voice_mic_off(1);
+    if (voice_mic() || mic_off_alls != 1)
+        fail("mic off with every asks the helper to turn off every client");
+    voice_mic_off(1);
+    if (mic_off_alls != 1)
+        fail("a mic already off sends nothing");
     voice_stop();
 
     if (fails)

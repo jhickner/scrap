@@ -87,6 +87,8 @@ static int          paused;
 /* the pause state was changed from a partial; the final of that turn is
    consumed without changing it again */
 static int          command_early;
+/* another client turned the mic off; applied once the helper poll returns */
+static int          mic_off_pending;
 static char         failure[256];
 static char        *queue[LINE_MAX_QUEUE];
 static int          nqueue;
@@ -823,6 +825,9 @@ static void handle_event(void *ud, const char *kind, const char *text)
     } else if (!strcmp(kind, "speaking")) {
         speaking = text && *text == '1';
         status_touch();
+    } else if (!strcmp(kind, "mic")) {
+        if (text && !strcmp(text, "0"))
+            mic_off_pending = 1;
     } else if (!strcmp(kind, "notice")) {
         if (text && *text)
             status_set_alert(text);
@@ -871,6 +876,11 @@ static void drain(void)
         snprintf(text, sizeof text, "voice stopped: %s", failure);
         voice_stop();
         status_set_alert(text);
+        return;
+    }
+    if (mic_off_pending) {
+        mic_off_pending = 0;
+        voice_mic_off(0);
     }
 }
 
@@ -997,6 +1007,7 @@ static void teardown(int end_helper)
     held_clear();
     carry_clear();
     draft[0] = '\0';
+    mic_off_pending = 0;
     clear_queue();
     heard("");
     status_touch();
@@ -1157,6 +1168,16 @@ void voice_set_mic(int on)
         macos_voice_cancel(voice);
     }
     status_touch();
+}
+
+void voice_mic_off(int every)
+{
+    if (!voice_mic())
+        return;
+    voice_set_mic(0);
+    status_set_note("mic off");
+    if (every && voice)
+        macos_voice_mic_off_all(voice);
 }
 
 void voice_on_heard(void (*fn)(void *ud, const char *text), void *ud)

@@ -208,6 +208,7 @@ static int voice_listening(void *ud)
     return voice_mic();
 }
 
+/* off applies to every client of the voice helper; on stays local */
 static void toggle_mic(void *ud)
 {
     (void)ud;
@@ -222,9 +223,12 @@ static void toggle_mic(void *ud)
         status_set_note("mic on");
         return;
     }
-    int on = !voice_mic();
-    voice_set_mic(on);
-    status_set_note(on ? "mic on" : "mic off");
+    if (voice_mic()) {
+        voice_mic_off(1);
+        return;
+    }
+    voice_set_mic(1);
+    status_set_note("mic on");
 }
 
 static char *chat_line(void *ud)

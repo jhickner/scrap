@@ -102,9 +102,7 @@ func unescape(_ text: String) -> String {
 @MainActor
 final class Session {
     let voice = VoiceController(settings: settings)
-    var clients = Set<Int32>()
-
-    var micOff = Set<Int32>()
+    var clients = VoiceClients()
     var active: Int32?
     var announced = false
     var emptyGeneration = 0
@@ -131,14 +129,13 @@ final class Session {
 
     func add(_ fd: Int32) {
         emptyGeneration += 1
-        clients.insert(fd)
+        clients.add(fd)
         updateMic()
         if announced { send("READY", to: fd) }
     }
 
     func remove(_ fd: Int32) {
-        guard clients.remove(fd) != nil else { return }
-        micOff.remove(fd)
+        guard clients.remove(fd) else { return }
         if active == fd {
             if let leftover = voice.handoff() { send("T " + leftover, to: fd) }
             send("P ", to: fd)
@@ -158,11 +155,11 @@ final class Session {
     }
 
     func updateMic() {
-        voice.setMic(clients.contains { !micOff.contains($0) })
+        voice.setMic(clients.micWanted)
     }
 
     func broadcast(_ line: String) {
-        for fd in clients { send(line, to: fd) }
+        for fd in clients.all { send(line, to: fd) }
     }
 
     func sendActive(_ line: String) {
@@ -195,7 +192,11 @@ final class Session {
         switch verb {
         case "FOCUS": focus(fd, rest == "1")
         case "MIC":
-            if rest == "1" { micOff.remove(fd) } else { micOff.insert(fd) }
+            if rest == "0 all" {
+                for other in clients.micOffAll(from: fd) { send("MIC 0", to: other) }
+            } else {
+                clients.setMic(fd, rest == "1")
+            }
             updateMic()
         case "QUIT": remove(fd)
 
