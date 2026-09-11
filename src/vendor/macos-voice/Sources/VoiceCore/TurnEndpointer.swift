@@ -55,7 +55,8 @@ struct TurnEndpointer: Sendable {
         return .waiting
     }
 
-    mutating func poll(at time: TimeInterval) -> Decision {
+    mutating func poll(at time: TimeInterval, awaitingFinal: Bool = false) -> Decision {
+        guard !awaitingFinal else { return .waiting }
         guard !segments.isEmpty, let lastActivity else { return .waiting }
         guard time - lastActivity >= silenceThreshold else { return .waiting }
         let utterance = draft

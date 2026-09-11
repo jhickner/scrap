@@ -373,7 +373,10 @@ public final class VoiceController {
 
         let completion = endpointer.completion
         let threshold = endpointer.silenceThreshold
-        guard case let .send(utterance) = endpointer.poll(at: Date.timeIntervalSinceReferenceDate)
+        // Silence must not discard a trailing segment still being recognized.
+        guard case let .send(utterance) = endpointer.poll(
+            at: Date.timeIntervalSinceReferenceDate, awaitingFinal: volatileAt != nil
+        )
         else { return }
         VoiceLog.note("turn (\(completion) after \(threshold)s): \(utterance)")
 
