@@ -165,7 +165,7 @@ static const struct pick_item CLAUDE[] = {
     {"claude-opus-5[1m]", "opus with a 1M-token context"},
     {"claude-sonnet-5", "balanced speed and capability"},
     {"claude-haiku-4-5", "fastest"},
-    {"claude-fable-5", "compact"},
+    {"claude-fable-5-1", "compact"},
 };
 
 static const struct pick_item GROK[] = {

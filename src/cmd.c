@@ -248,22 +248,28 @@ static int can_pick(const char *usage)
     return 1;
 }
 
-/* A typed name must be on the backend's list, with or without the "claude-"
-   prefix the list carries. A backend without a list takes any name. */
-static int known_model(const struct session *s, const char *name)
+/* Resolve a typed name against the backend's list: exact label or short name,
+   then the first short name it prefixes, then the first containing it. A
+   backend without a list takes any name. */
+static const char *resolve_model(const struct session *s, const char *name)
 {
     int count = 0;
     const struct pick_item *choices = model_choices(s, &count);
     if (!count)
-        return 1;
+        return name;
     const char *backend = session_backend(s);
-    for (int i = 0; i < count; i++) {
-        if (!strcmp(choices[i].label, name))
-            return 1;
-        if (!strcmp(models_short_name(backend, choices[i].label), name))
-            return 1;
-    }
-    return 0;
+    size_t      len = strlen(name);
+    for (int i = 0; i < count; i++)
+        if (!strcmp(choices[i].label, name) ||
+            !strcmp(models_short_name(backend, choices[i].label), name))
+            return choices[i].label;
+    for (int i = 0; i < count; i++)
+        if (!strncmp(models_short_name(backend, choices[i].label), name, len))
+            return choices[i].label;
+    for (int i = 0; i < count; i++)
+        if (strstr(choices[i].label, name))
+            return choices[i].label;
+    return NULL;
 }
 
 static void do_model(struct session *s, const char *arg)
@@ -286,9 +292,12 @@ static void do_model(struct session *s, const char *arg)
         if (index < 0)
             return;
         chosen = choices[index].label;
-    } else if (!known_model(s, chosen)) {
-        reply_error("unknown model %s", chosen);
-        return;
+    } else {
+        chosen = resolve_model(s, arg);
+        if (!chosen) {
+            reply_error("unknown model %s", arg);
+            return;
+        }
     }
 
     const char *model = strcmp(chosen, "default") == 0 ? NULL : chosen;
