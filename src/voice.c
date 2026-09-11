@@ -41,6 +41,13 @@
     "The message below was spoken aloud, and your reply will be read back "    \
     "aloud. Answer in a sentence or two of plain prose. No lists, code "       \
     "blocks, or long paths unless they are asked for.\n\n"
+/* a queued message is answered after another reply, which a listener cannot
+   tell apart from the one before it */
+#define QUEUED_PREAMBLE                                                        \
+    "The message below was spoken aloud while an earlier reply was running, "  \
+    "and your reply will be read back aloud. Open with a few words restating " \
+    "what it asks, then answer in a sentence or two of plain prose. No lists, "\
+    "code blocks, or long paths unless they are asked for.\n\n"
 
 static macos_voice *voice;
 static int          ready;
@@ -496,7 +503,7 @@ static void send_line(struct session *s, const char *line)
         return;
     if (!session_turn_running(s))
         prompt_echo_message(line);
-    char *full = voice_with_preamble(line);
+    char *full = voice_with_preamble(line, session_turn_running(s));
     workspace_send(tab, full ? full : line, full ? line : NULL);
     free(full);
     chime("sent");
@@ -1210,11 +1217,11 @@ void voice_arm(int on)
     status_touch();
 }
 
-char *voice_with_preamble(const char *line)
+char *voice_with_preamble(const char *line, int queued)
 {
     if (!voice || !speak || !line || !*line)
         return NULL;
-    return text_dsprintf("%s%s", SPOKEN_PREAMBLE, line);
+    return text_dsprintf("%s%s", queued ? QUEUED_PREAMBLE : SPOKEN_PREAMBLE, line);
 }
 
 int voice_speaking(void) { return voice && speaking; }

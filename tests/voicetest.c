@@ -326,6 +326,19 @@ int main(void)
         fail("commit sends the draft while speaking");
     else if (!strstr(sent_full[0], "read back") || !strstr(sent_full[0], "reading this back"))
         fail("spoken input carries the preamble");
+    else if (strstr(sent_full[0], "restating"))
+        fail("an idle send does not ask for a restatement");
+    clear_sent();
+
+    sess.running = 1;
+    fire("partial", "queued behind a reply");
+    voice_commit(&sess);
+    sess.running = 0;
+    if (nsent != 1)
+        fail("commit sends the draft mid-turn");
+    else if (!strstr(sent_full[0], "restating") ||
+             !strstr(sent_full[0], "queued behind a reply"))
+        fail("a queued send asks for a restatement");
     clear_sent();
 
     voice_set_speak(0);

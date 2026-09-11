@@ -68,8 +68,9 @@ int  voice_drop(void);
 /* 0 while this pane is not focused: speech is discarded rather than submitted */
 void voice_arm(int on);
 /* line with the spoken-reply preamble prefixed, so the answer is shaped for
-   the ear; NULL when voice is off or replies are not read aloud. caller frees */
-char *voice_with_preamble(const char *line);
+   the ear; queued when the session is mid-turn and the line waits for it.
+   NULL when voice is off or replies are not read aloud. caller frees */
+char *voice_with_preamble(const char *line, int queued);
 
 /* 1 while a reply is being read aloud */
 int  voice_speaking(void);

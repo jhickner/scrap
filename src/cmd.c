@@ -1363,7 +1363,7 @@ enum cmd_result cmd_submit(struct session *s, const char *line)
 
     int tab = workspace_index_of(s);
     if (tab >= 0) {
-        char *full = voice_with_preamble(line);
+        char *full = voice_with_preamble(line, session_turn_running(s));
         workspace_send(tab, full ? full : line, full ? line : NULL);
         free(full);
     }
