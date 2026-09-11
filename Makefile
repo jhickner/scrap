@@ -32,6 +32,7 @@ CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           workspacetest replboxtest ttytest gitinfotest sidechannelviewtest \
           sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
           dispatchtest
+CHECKS += orchstatustest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,
@@ -166,6 +167,8 @@ $(BUILD)/groktest: tests/groktest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON
 $(BUILD)/filedifftest: tests/filedifftest.c $(BUILD)/filediff.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
 $(BUILD)/taskstest: tests/taskstest.c $(BUILD)/tasks.o $(BUILD)/text.o $(BUILD)/toolstyle.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+
+$(BUILD)/orchstatustest: tests/orchstatustest.c $(BUILD)/orchstatus.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/claudetest: tests/claudetest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 

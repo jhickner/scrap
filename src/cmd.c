@@ -2,6 +2,7 @@
 
 #include <stdarg.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,7 @@
 #include "models.h"
 #include "muxcfg.h"
 #include "muxmake.h"
+#include "orchstatus.h"
 #include "pick.h"
 #include "reopen.h"
 #include "prompt.h"
@@ -1033,6 +1035,99 @@ static void do_status(struct session *s, const char *arg)
     hud_print(s);
 }
 
+static void do_tasks(struct session *s, const char *arg)
+{
+    (void)s;
+    int all = arg && (!strcmp(arg, "all") || !strcmp(arg, "--all"));
+    if (arg && *arg && !all) {
+        reply_error("/tasks [all] \xe2\x80\x94 expected all or no argument");
+        return;
+    }
+
+    const char *home = getenv("HOME");
+    if (!home || !*home) {
+        reply_error("could not find the orchestrator task directory");
+        return;
+    }
+    char projects[4200], live[4200];
+    if (snprintf(projects, sizeof projects, "%s/.config/orchestrator/projects", home)
+            >= (int)sizeof projects) {
+        reply_error("orchestrator task directory path is too long");
+        return;
+    }
+    const char *live_env = getenv("MUX_LIVE_DIR");
+    if (live_env && *live_env)
+        snprintf(live, sizeof live, "%s", live_env);
+    else if (snprintf(live, sizeof live, "%s/.config/mux/live", home)
+                 >= (int)sizeof live) {
+        live[0] = '\0';
+    }
+
+    struct orch_task *tasks = NULL;
+    int count = orchstatus_load(projects, live, all, &tasks);
+    if (count < 0) {
+        reply_error("could not read orchestrator tasks");
+        return;
+    }
+    if (!count) {
+        free(tasks);
+        reply_note("no %sorchestrator tasks", all ? "" : "open ");
+        return;
+    }
+
+    viewport_item_begin(VIEWPORT_ROWS(1, 1));
+    char title[80];
+    snprintf(title, sizeof title, "%d %sorchestrator task%s", count,
+             all ? "" : "open ", count == 1 ? "" : "s");
+    help_heading(title);
+
+    struct orchstatus_columns widths;
+    orchstatus_columns(&widths, ui_columns());
+    char project_head[16], task_head[16], status_head[16], agent_head[32], age_head[16];
+    orchstatus_cell(project_head, sizeof project_head, "PROJECT", (size_t)widths.project);
+    orchstatus_cell(task_head, sizeof task_head, "TASK", (size_t)widths.task);
+    orchstatus_cell(status_head, sizeof status_head, "STATUS", (size_t)widths.status);
+    orchstatus_cell(agent_head, sizeof agent_head, "BACKEND / MODEL", (size_t)widths.agent);
+    orchstatus_cell(age_head, sizeof age_head, "AGE", (size_t)widths.age);
+    ui_esc(ui_style(UI_DIM));
+    ui_printf("  %-*s %-*s %-*s %-*s %-*s\n",
+              widths.project, project_head, widths.task, task_head,
+              widths.status, status_head, widths.agent, agent_head,
+              widths.age, age_head);
+    ui_esc(ui_style(UI_RESET));
+
+    time_t now = time(NULL);
+    for (int i = 0; i < count; i++) {
+        struct orch_task *t = &tasks[i];
+        char project[128], desc[512], status[80], agent[220], age[16], age_cell[16];
+        char full_status[80], full_agent[220];
+        if (!strcmp(t->status, "dispatched") && t->live_status[0])
+            snprintf(full_status, sizeof full_status, "%s/%s", t->status,
+                     t->live_status);
+        else
+            snprintf(full_status, sizeof full_status, "%s", t->status);
+        if (t->backend[0] && t->model[0])
+            snprintf(full_agent, sizeof full_agent, "%s / %s", t->backend, t->model);
+        else
+            snprintf(full_agent, sizeof full_agent, "%s%s", t->backend, t->model);
+        orchstatus_cell(project, sizeof project, t->project, (size_t)widths.project);
+        orchstatus_cell(desc, sizeof desc, t->desc[0] ? t->desc : t->id,
+                        (size_t)widths.task);
+        orchstatus_cell(status, sizeof status, full_status, (size_t)widths.status);
+        orchstatus_cell(agent, sizeof agent, full_agent[0] ? full_agent : "-",
+                        (size_t)widths.agent);
+        orchstatus_age(age, sizeof age, t->updated ? t->updated : t->created, now);
+        orchstatus_cell(age_cell, sizeof age_cell, age, (size_t)widths.age);
+        ui_printf("  %-*s %-*s %-*s %-*s %-*s\n",
+                  widths.project, project, widths.task, desc,
+                  widths.status, status, widths.agent, agent,
+                  widths.age, age_cell);
+    }
+    free(tasks);
+    viewport_item_end();
+    ui_flush();
+}
+
 static void do_session(struct session *s, const char *arg)
 {
     (void)arg;
@@ -1102,6 +1197,8 @@ static const struct cmd COMMANDS[] = {
     {"/close", "close this session's card", NULL, CMD_LIVE, do_close},
     {"/run", "queue actions on this session's card", "[<action>, ...]", CMD_LIVE,
      do_run},
+    {"/tasks", "show orchestrator tasks across every project", "[all]", CMD_LIVE,
+     do_tasks},
     {"/status", "reprint the status bar", NULL, CMD_LIVE, do_status},
     {"/session", "show this session's info and totals", NULL, CMD_LIVE, do_session},
     {"/rename", "name this session, or ask the model to name it again", "[name]",
