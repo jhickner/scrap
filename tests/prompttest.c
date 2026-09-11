@@ -7,6 +7,7 @@
 #include "chrome.h"
 #include "prompt.h"
 #include "sidechannel.h"
+#include "tty.h"
 #include "ui.h"
 
 #include "restart.h"
@@ -108,6 +109,22 @@ int main(void)
     prompt_set_preview(p, "spoken");
     eq_line(p, "a failed claim leaves no preview behind", "typed more spoken");
     prompt_set_preview(p, "");
+
+    prompt_adopt_draft("x hello y hello", 0);
+    prompt_claim_preview(p, "hello");
+    prompt_insert(p, "ab");
+    prompt_set_preview(p, "hello there");
+    eq_line(p, "a moved preview updates the copy nearest where it was",
+            "abx hello y hello there");
+    tty_event home = {0};
+    home.key = TK_HOME;
+    prompt_live_key(p, &home);
+    prompt_set_preview(p, "hello there");
+    if (prompt_cursor(p) != 0) {
+        fprintf(stderr, "FAIL the same preview again leaves the caret: got %d\n", prompt_cursor(p));
+        failures++;
+    }
+    prompt_adopt_draft("typed more", 10);
 
     prompt_insert(p, " hello world");
     {

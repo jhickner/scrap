@@ -1139,6 +1139,24 @@ char *prompt_read(struct prompt *p)
     return out;
 }
 
+/* the copy of words closest to where they were last put, when text typed
+   around them has moved them or the same words appear twice */
+static const char *nearest(const char *line, const char *words, int was)
+{
+    const char *best = NULL;
+    int gap = 0;
+    for (const char *at = strstr(line, words); at; at = strstr(at + 1, words)) {
+        int d = (int)(at - line) - was;
+        if (d < 0)
+            d = -d;
+        if (!best || d < gap) {
+            best = at;
+            gap = d;
+        }
+    }
+    return best;
+}
+
 void prompt_set_preview(struct prompt *p, const char *text)
 {
     if (!p)
@@ -1149,7 +1167,13 @@ void prompt_set_preview(struct prompt *p, const char *text)
     if (len) {
         if (at < 0 || at + len > (int)strlen(line) ||
             memcmp(line + at, p->preview, (size_t)len)) {
-            const char *found = strstr(line, p->preview);
+            const char *found = nearest(line, p->preview, at);
+            /* text typed between the separator and the words leaves the words whole */
+            if (!found && p->preview[0] == ' ' && p->preview[1]) {
+                found = nearest(line, p->preview + 1, at);
+                if (found)
+                    len--;
+            }
             if (found) {
                 at = (int)(found - line);
             } else {
@@ -1172,6 +1196,15 @@ void prompt_set_preview(struct prompt *p, const char *text)
     }
     if (!len && !next[0])
         return;
+    /* the same words again leave the line and the caret as they are */
+    const char *same = (int)strlen(next) == len ? next
+                     : next[0] == ' ' && (int)strlen(next + 1) == len ? next + 1
+                                                                      : NULL;
+    if (len && same && !strncmp(line + at, same, (size_t)len)) {
+        snprintf(p->preview, sizeof p->preview, "%s", same);
+        p->preview_at = at;
+        return;
+    }
 
     repl_replace_range(&p->repl, at, at + len, next);
     snprintf(p->preview, sizeof p->preview, "%s", next);

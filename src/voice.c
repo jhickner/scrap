@@ -157,8 +157,8 @@ static int take_edit(char *out, size_t n)
        them takes nothing with it: the dictation carries on from what is kept */
     erased = draft[0] != 0;
     if (listen_mode) {
-        listen_buf[0] = '\0';
-        listen_append(out);
+        /* the box as it is, spacing included, so showing it again changes nothing */
+        snprintf(listen_buf, sizeof listen_buf, "%s", out);
     } else if (release_fn) {
         /* the line is theirs now, and what they kept is left to send by hand */
         release_fn(release_ud);
@@ -182,7 +182,9 @@ static void heard(const char *text)
         return;
     const char *tail = erased ? "" : draft;
     if (listen_mode && (listen_buf[0] || erased)) {
-        char *joined = text_dsprintf("%s%s%s", listen_buf, tail[0] ? " " : "", tail);
+        size_t n = strlen(listen_buf);
+        int gap = tail[0] && n && listen_buf[n - 1] != ' ' && listen_buf[n - 1] != '\n';
+        char *joined = text_dsprintf("%s%s%s", listen_buf, gap ? " " : "", tail);
         show(joined ? joined : listen_buf);
         free(joined);
         return;
@@ -461,7 +463,8 @@ static void listen_append(const char *text)
     size_t n = strlen(listen_buf);
     if (n + len + 2 > sizeof listen_buf)
         return;
-    snprintf(listen_buf + n, sizeof listen_buf - n, "%s%.*s", n ? " " : "", (int)len, text);
+    int gap = n && listen_buf[n - 1] != ' ' && listen_buf[n - 1] != '\n';
+    snprintf(listen_buf + n, sizeof listen_buf - n, "%s%.*s", gap ? " " : "", (int)len, text);
 }
 
 static void listen_clear(void)
@@ -579,6 +582,9 @@ static void listen_flush(const char *tail)
         listen_append(body);
     }
     listen_mode = 0;
+    size_t n = strlen(listen_buf);
+    while (n && isspace((unsigned char)listen_buf[n - 1]))
+        listen_buf[--n] = '\0';
     if (listen_buf[0])
         enqueue(listen_buf);
     listen_buf[0] = '\0';
