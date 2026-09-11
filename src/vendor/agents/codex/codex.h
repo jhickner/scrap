@@ -725,7 +725,7 @@ static void cx_read_rate_limit(codex_client *c) {
     cJSON_Delete(r);
 }
 
-static int cx_open_thread(codex_client *c, const char *resume) {
+static int cx_open_thread_once(codex_client *c, const char *resume, int note) {
     cJSON *p = cJSON_CreateObject();
     cJSON_AddStringToObject(p, "approvalPolicy", "never");
     cJSON_AddStringToObject(p, "sandbox", c->sandbox);
@@ -741,7 +741,7 @@ static int cx_open_thread(codex_client *c, const char *resume) {
         ? c->fork_session ? "thread/fork" : "thread/resume"
         : "thread/start";
     int id = cx_request(c, method, p);
-    cJSON *r = id ? cx_wait_response(c, id, 1) : NULL;
+    cJSON *r = id ? cx_wait_response(c, id, note) : NULL;
     if (!r) return 0;
     cJSON *result = cJSON_GetObjectItemCaseSensitive(r, "result");
     cJSON *thread = result ? cJSON_GetObjectItemCaseSensitive(result, "thread") : NULL;
@@ -754,6 +754,17 @@ static int cx_open_thread(codex_client *c, const char *resume) {
     cx_note_model(c, result);
     cx_note_cwd(c, result);
     cJSON_Delete(r); return sid != NULL;
+}
+
+/* A thread id can name a thread the CLI has no rollout for: one that was started
+ * but never took a turn leaves nothing on disk, so resuming it fails. Start a
+ * fresh thread instead rather than leaving the session with no thread at all. */
+static int cx_open_thread(codex_client *c, const char *resume) {
+    if (resume && *resume) {
+        if (cx_open_thread_once(c, resume, 0)) return 1;
+        c->session_id[0] = '\0';
+    }
+    return cx_open_thread_once(c, NULL, 1);
 }
 
 /* The app-server handshake and thread creation are local but noticeably slower
