@@ -34,6 +34,7 @@
 #include "settings.h"
 #include "voicetrace.h"
 #include "dispatch.h"
+#include "orchinstall.h"
 #include "sidechannel.h"
 #include "reopen.h"
 #include "tabs.h"
@@ -635,6 +636,7 @@ int main(int argc, char **argv)
         snprintf(path, sizeof path, "%s/settings", config);
         settings_open(path);
     }
+    orch_install();
 
     if (!pin_backend)
         backend = cmd_default_backend();

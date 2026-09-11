@@ -32,7 +32,7 @@ CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           workspacetest replboxtest ttytest gitinfotest sidechannelviewtest \
           sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
           dispatchtest voicetabtest
-CHECKS += orchstatustest
+CHECKS += orchstatustest orchinstalltest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,
@@ -99,6 +99,13 @@ $(BUILD)/%.o: src/%.c | $(BUILD) $(BUILD)/vendor
 src/boarddefaults.c: FORCE tools/gen-defaults.sh
 	@tmp=$@.tmp; trap 'rm -f $$tmp' EXIT HUP INT TERM; \
 	 tools/gen-defaults.sh board > $$tmp; \
+	 if ! cmp -s $$tmp $@; then mv $$tmp $@; fi
+
+# Skill, quota.sh, and routing seed under orchestrate/ are compiled in and
+# written out on startup, so a binary-only deploy still has the machinery.
+src/orchdata.c: FORCE tools/gen-embed.sh
+	@tmp=$@.tmp; trap 'rm -f $$tmp' EXIT HUP INT TERM; \
+	 tools/gen-embed.sh orchestrate orchdata.h orch_files orch_files_n > $$tmp; \
 	 if ! cmp -s $$tmp $@; then mv $$tmp $@; fi
 
 FORCE:
@@ -169,6 +176,8 @@ $(BUILD)/filedifftest: tests/filedifftest.c $(BUILD)/filediff.o $(BUILD)/ui.o $(
 $(BUILD)/taskstest: tests/taskstest.c $(BUILD)/tasks.o $(BUILD)/text.o $(BUILD)/toolstyle.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/orchstatustest: tests/orchstatustest.c $(BUILD)/orchstatus.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+
+$(BUILD)/orchinstalltest: tests/orchinstalltest.c $(BUILD)/orchinstall.o $(BUILD)/orchdata.o $(BUILD)/text.o | $(BUILD)
 
 $(BUILD)/claudetest: tests/claudetest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
