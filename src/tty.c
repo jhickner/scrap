@@ -1,6 +1,7 @@
 #include "tty.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -19,9 +20,10 @@
 #define FOCUS_ON            "\x1b[?1004h"
 #define FOCUS_OFF           "\x1b[?1004l"
 
-/* disambiguate + report-all, else the terminal keeps ctrl-tab for itself */
-#define KEYBOARD_PUSH "\x1b[>9u\x1b[>4;2m"
-#define KEYBOARD_SET  "\x1b[=9u\x1b[>4;2m"
+/* Disambiguate shortcuts, but keep text as UTF-8. Report-all also sends
+   standalone modifier keys (e.g. LEFT_CONTROL = 57442), not characters. */
+#define KEYBOARD_PUSH "\x1b[>1u\x1b[>4;2m"
+#define KEYBOARD_SET  "\x1b[=1u\x1b[>4;2m"
 #define KEYBOARD_OFF  "\x1b[>4;0m\x1b[<u"
 
 #define MODE_RESTORE \
@@ -29,7 +31,6 @@
     "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" \
     "\x1b[?2004l" \
     FOCUS_OFF \
-    KEYBOARD_OFF \
     "\x1b[?25h" \
     "\x1b[?7h" \
     "\x1b[0m" \
@@ -42,6 +43,7 @@
 static struct termios entry_mode;
 static int have_entry;
 static int in_raw;
+static volatile sig_atomic_t keyboard_active;
 static volatile sig_atomic_t got_winch;
 
 static unsigned char pending[4096];
@@ -90,6 +92,10 @@ static void snapshot_entry(const struct termios *now)
 static void on_fatal(int sig)
 {
     if (in_raw || have_entry) {
+        if (keyboard_active) {
+            (void)!write(STDOUT_FILENO, KEYBOARD_OFF, sizeof KEYBOARD_OFF - 1);
+            keyboard_active = 0;
+        }
         (void)!write(STDOUT_FILENO, CRASH_RESTORE, sizeof CRASH_RESTORE - 1);
         if (have_entry)
             apply_mode(&entry_mode, TCSANOW);
@@ -256,7 +262,8 @@ int tty_raw_begin(void)
         focused = tmux_pane_focused();
     }
 
-    fputs(BRACKETED_PASTE_ON FOCUS_ON KEYBOARD_PUSH, stdout);
+    fputs(BRACKETED_PASTE_ON FOCUS_ON, stdout);
+    tty_keyboard_on();
     fflush(stdout);
     if (getenv("TMUX"))
         (void)system("tmux set-option -p extended-keys on >/dev/null 2>&1; "
@@ -277,7 +284,16 @@ void tty_on_focus(void (*fn)(int on))
 
 void tty_keyboard_on(void)
 {
-    fputs(KEYBOARD_SET, stdout);
+    fputs(keyboard_active ? KEYBOARD_SET : KEYBOARD_PUSH, stdout);
+    keyboard_active = 1;
+}
+
+void tty_keyboard_off(void)
+{
+    if (keyboard_active) {
+        fputs(KEYBOARD_OFF, stdout);
+        keyboard_active = 0;
+    }
 }
 
 static void raw_end(const char *restore)
@@ -285,6 +301,7 @@ static void raw_end(const char *restore)
     if (!in_raw && !have_entry)
         return;
     if (in_raw) {
+        tty_keyboard_off();
         fputs(restore, stdout);
         fflush(stdout);
         tcflush(STDIN_FILENO, TCIFLUSH);
@@ -644,7 +661,7 @@ static void emit_modified_tab(tty_event *ev, int mods)
     if (bits & 4)
         emit(ev, (bits & 1) ? TK_PREV_TAB : TK_NEXT_TAB);
     else
-        emit(ev, TK_TAB);
+        emit(ev, (bits & 1) ? TK_PREV_TAB : TK_TAB);
 }
 
 /* Focus is only ever reported as a change, so a window that started in the
@@ -659,15 +676,93 @@ static void focus_change(tty_event *ev, int on)
     emit(ev, focused ? TK_FOCUS_IN : TK_FOCUS_OUT);
 }
 
-static void decode_csi(tty_event *ev, const int *params, int nparams, int final,
-                       int event)
+/* All three wire formats must reach the same control-key semantics. */
+static void emit_codepoint(tty_event *ev, uint32_t cp)
 {
-    if (event == 3) {
+    switch (cp) {
+    case 13: emit(ev, TK_ENTER); return;
+    case 10: emit(ev, TK_NEWLINE); return;
+    case 9: emit(ev, TK_TAB); return;
+    case 8: case 127: emit(ev, TK_BACKSPACE); return;
+    case 27: emit(ev, TK_ESCAPE); return;
+    default: emit(ev, TK_CHAR); ev->cp = cp; return;
+    }
+}
+
+static void decode_modified(tty_event *ev, int key, int mods, int shifted)
+{
+    int bits = mods > 1 ? mods - 1 : 0;
+    int shortcuts = bits & 63; /* Lock state alone does not modify Enter. */
+    /* Disambiguation gives keypad keys dedicated codes even without report-all. */
+    if (key >= 57399 && key <= 57408) key = '0' + key - 57399;
+    switch (key) {
+    case 57409: key = '.'; break;
+    case 57410: key = '/'; break;
+    case 57411: key = '*'; break;
+    case 57412: key = '-'; break;
+    case 57413: key = '+'; break;
+    case 57414: key = 13; break;
+    case 57415: key = '='; break;
+    case 57416: key = ','; break;
+    case 57417: emit(ev, (bits & 6) ? TK_WORD_LEFT : TK_LEFT); return;
+    case 57418: emit(ev, (bits & 6) ? TK_WORD_RIGHT : TK_RIGHT); return;
+    case 57419: emit(ev, TK_UP); return;
+    case 57420: emit(ev, TK_DOWN); return;
+    case 57421: emit(ev, TK_PAGE_UP); return;
+    case 57422: emit(ev, TK_PAGE_DOWN); return;
+    case 57423: emit(ev, TK_HOME); return;
+    case 57424: emit(ev, TK_END); return;
+    case 57426: emit(ev, TK_DELETE); return;
+    }
+    if (key < 0 || key > 0x10ffff || (key >= 0xd800 && key <= 0xdfff) ||
+        (key >= 57344 && key <= 63743)) {
+        /* Kitty functional/modifier keys are not Unicode text. */
+        emit(ev, TK_NONE);
+        return;
+    }
+    if (key == 13) {
+        emit(ev, shortcuts ? TK_NEWLINE : TK_ENTER);
+        return;
+    }
+    if (key == 9) {
+        emit_modified_tab(ev, mods);
+        return;
+    }
+    if (bits & 4) {
+        if (key >= 'a' && key <= 'z') key -= 'a' - 'A';
+        if (key >= '@' && key <= '_') key &= 31;
+        else if (key == ' ' || key == '2') key = 0;
+        else if (key >= '3' && key <= '7') key = key - '3' + 27;
+        else if (key == '/') key = 31;
+        else if (key == '~') key = 30;
+        else if (key == '8' || key == '?') key = 127;
+    } else if (bits & 2) {
+        switch (key) {
+        case 'b': emit(ev, TK_WORD_LEFT); return;
+        case 'f': emit(ev, TK_WORD_RIGHT); return;
+        case 127: emit(ev, TK_WORD_LEFT); return;
+        default: emit(ev, TK_NONE); return;
+        }
+    } else if (bits & (8 | 16 | 32)) {
+        emit(ev, TK_NONE);
+        return;
+    } else if ((bits & 1) && shifted > 0 && shifted <= 0x10ffff &&
+               !(shifted >= 0xd800 && shifted <= 0xdfff)) {
+        key = shifted;
+    }
+    emit_codepoint(ev, (uint32_t)key);
+}
+
+static void decode_csi(tty_event *ev, const int *params, int nparams, int final,
+                       int event, int shifted)
+{
+    if (event != 1 && event != 2) {
         emit(ev, TK_NONE);
         return;
     }
     int mods = nparams >= 2 ? params[1] : 1;
-    int ctrl_or_alt = (mods == 5 || mods == 3 || mods == 7 || mods == 9);
+    int bits = mods > 1 ? mods - 1 : 0;
+    int ctrl_or_alt = bits & (2 | 4 | 8);
 
     switch (final) {
     case 'A': emit(ev, TK_UP); return;
@@ -680,69 +775,15 @@ static void decode_csi(tty_event *ev, const int *params, int nparams, int final,
     case 'O': focus_change(ev, 0); return;
     case 'Z': emit(ev, TK_PREV_TAB); return;
     case 'u':
-
-        if (nparams >= 1 && params[0] == 13) {
-            emit(ev, mods > 1 ? TK_NEWLINE : TK_ENTER);
+        if (nparams >= 1) {
+            decode_modified(ev, params[0], mods, shifted);
             return;
         }
-        if (nparams >= 1 && params[0] == 9) {
-            emit_modified_tab(ev, mods);
-            return;
-        }
-        if (nparams >= 1 && (params[0] == 8 || params[0] == 127)) {
-            emit(ev, TK_BACKSPACE);
-            return;
-        }
-        if (nparams >= 1 && params[0] == 27) {
-            emit(ev, TK_ESCAPE);
-            return;
-        }
-        if (nparams >= 1 && params[0] >= 32) {
-            uint32_t cp = (uint32_t)params[0];
-            int bits = mods > 1 ? mods - 1 : 0;
-            if ((bits & 4) && cp >= 'A' && cp <= 'Z')
-                cp = cp - 'A' + 'a';
-            if ((bits & 4) && cp >= 'a' && cp <= 'z') {
-                if (cp == 'j') {
-                    emit(ev, TK_NEWLINE);
-                    return;
-                }
-                ev->key = TK_CHAR;
-                ev->cp = cp - 'a' + 1;
-                ev->text = NULL;
-                return;
-            }
-            ev->key = TK_CHAR;
-            ev->cp = cp;
-            ev->text = NULL;
-            return;
-        }
-        emit(ev, TK_NONE);
-        return;
+        break;
     case '~':
-        if (nparams >= 3 && params[0] == 27) {
-            int key = params[2];
-            int bits = params[1] > 1 ? params[1] - 1 : 0;
-            if (key == 13) {
-                emit(ev, params[1] > 1 ? TK_NEWLINE : TK_ENTER);
-                return;
-            }
-            if (key == 9) {
-                emit_modified_tab(ev, params[1]);
-                return;
-            }
-            if ((bits & 4) && key >= 'A' && key <= 'Z')
-                key = key - 'A' + 'a';
-            if ((bits & 4) && key >= 'a' && key <= 'z') {
-                if (key == 'j') {
-                    emit(ev, TK_NEWLINE);
-                    return;
-                }
-                ev->key = TK_CHAR;
-                ev->cp = (uint32_t)(key - 'a' + 1);
-                ev->text = NULL;
-                return;
-            }
+        if (nparams == 3 && params[0] == 27) {
+            decode_modified(ev, params[2], mods, 0);
+            return;
         }
         switch (nparams >= 1 ? params[0] : 0) {
         case 1: case 7: emit(ev, TK_HOME); return;
@@ -750,13 +791,10 @@ static void decode_csi(tty_event *ev, const int *params, int nparams, int final,
         case 4: case 8: emit(ev, TK_END); return;
         case 5:         emit(ev, TK_PAGE_UP); return;
         case 6:         emit(ev, TK_PAGE_DOWN); return;
-        default:        emit(ev, TK_NONE); return;
+        default: break;
         }
-    default:
-
-        emit(ev, TK_NONE);
-        return;
     }
+    emit(ev, TK_NONE);
 }
 
 static void skip_string(tty_event *ev)
@@ -786,9 +824,8 @@ static void decode_escape(tty_event *ev)
 
     if (b == '[') {
         pending_pos++;
-        int params[8] = {0};
-        int nparams = 0, have_digits = 0, private = 0;
-        int event = 1, in_event = 0;
+        int params[8][3] = {{0}};
+        int field = 0, sub = 0, have_params = 0, private = 0, invalid = 0;
         for (;;) {
             int c = take_byte(50);
             if (c < 0) {
@@ -796,55 +833,57 @@ static void decode_escape(tty_event *ev)
                 return;
             }
             if (c >= '0' && c <= '9') {
-                if (in_event)
-                    event = event * 10 + (c - '0');
-                else if (nparams < 8) {
-                    params[nparams] = params[nparams] * 10 + (c - '0');
-                    have_digits = 1;
+                have_params = 1;
+                if (field < 8 && sub < 3) {
+                    int *v = &params[field][sub];
+                    if (*v > (INT_MAX - (c - '0')) / 10)
+                        invalid = 1;
+                    else
+                        *v = *v * 10 + (c - '0');
                 }
                 continue;
             }
-            if (c == ':') {
-                if (nparams == 1) {
-                    in_event = 1;
-                    event = 0;
-                    have_digits = 1;
-                    continue;
+            if (c == ':' || c == ';') {
+                have_params = 1;
+                if (c == ':') {
+                    if (sub < 3) sub++;
+                } else {
+                    if (field < 8) field++;
+                    else invalid = 1;
+                    sub = 0;
                 }
-                if (nparams < 7)
-                    nparams++;
-                have_digits = 1;
-                continue;
-            }
-            if (c == ';') {
-                if (nparams < 7)
-                    nparams++;
-                have_digits = 1;
-                in_event = 0;
                 continue;
             }
             if (c == '?' || c == '<' || c == '>' || c == '=') {
+                if (have_params || private) invalid = 1;
                 private = c;
                 continue;
             }
-
-            if (c >= 0x20 && c <= 0x2f)
+            if (c >= 0x20 && c <= 0x2f) {
+                invalid = 1;
                 continue;
+            }
             if (c < 0x40 || c > 0x7e) {
                 emit(ev, TK_NONE);
                 return;
             }
-            if (have_digits)
-                nparams++;
-            if (private == '<') {
-                decode_mouse(ev, params, nparams, c);
+            if (invalid || field >= 8 || (private && private != '<')) {
+                emit(ev, TK_NONE);
                 return;
             }
-            if (c == '~' && nparams >= 1 && params[0] == 200) {
+            int flat[8];
+            for (int i = 0; i < 8; i++) flat[i] = params[i][0];
+            int nparams = have_params ? field + 1 : 0;
+            if (private == '<') {
+                decode_mouse(ev, flat, nparams, c);
+                return;
+            }
+            if (c == '~' && nparams == 1 && flat[0] == 200) {
                 read_paste(ev);
                 return;
             }
-            decode_csi(ev, params, nparams, c, event);
+            int event = params[1][1] ? params[1][1] : 1;
+            decode_csi(ev, flat, nparams, c, event, params[0][1]);
             return;
         }
     }

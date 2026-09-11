@@ -107,7 +107,7 @@ static void handoff_keeps_alt_screen(void)
     dup2(oldout, STDOUT_FILENO);
     close(oldin);
     close(oldout);
-    close(slave);
+    fcntl(master, F_SETFL, O_NONBLOCK);
 
     char output[4096];
     size_t n = 0;
@@ -120,8 +120,14 @@ static void handoff_keeps_alt_screen(void)
             break;
     }
     output[n] = '\0';
+    close(slave);
     close(master);
 
+    if (!strstr(output, "\x1b[>1u") || !strstr(output, "\x1b[<u") ||
+        !strstr(output, "\x1b[>4;0m"))
+        fail("handoff restores keyboard modes");
+    if (strstr(output, "\x1b[>9u"))
+        fail("report-all inserts standalone modifier keys");
     if (strstr(output, "\x1b[?1049l"))
         fail("handoff left the alternate screen");
 }
@@ -167,6 +173,75 @@ static void expect_ctrl(int wfd, const char *bytes, size_t n, uint32_t cp,
             free(ev.text);
         return;
     }
+}
+
+/* Match the legacy stream from tmux against CSI-u and modifyOtherKeys,
+   including Control press/release reports from report-all on Ghostty/kitty. */
+static void modified_keys(int w)
+{
+    for (int ch = 'a'; ch <= 'z'; ch++) {
+        char raw = (char)(ch - 'a' + 1), seq[96];
+        tty_key key = TK_CHAR;
+        if (raw == 8) key = TK_BACKSPACE;
+        if (raw == 9) key = TK_TAB;
+        if (raw == 10) key = TK_NEWLINE;
+        if (raw == 13) key = TK_ENTER;
+        for (int form = 0; form < 5; form++) {
+            int n;
+            if (form == 0) { seq[0] = raw; n = 1; }
+            else if (form == 1) n = snprintf(seq, sizeof seq, "\x1b[%d;5u", ch);
+            else if (form == 2) n = snprintf(seq, sizeof seq, "\x1b[27;5;%d~", ch);
+            else if (form == 3) n = snprintf(seq, sizeof seq, "\x1b[%d::%d;69:2u", ch, ch);
+            else n = snprintf(seq, sizeof seq, "\x1b[%d:%d;6:1u", ch, ch - 32);
+            if (key == TK_CHAR)
+                expect_ctrl(w, seq, (size_t)n, (uint32_t)raw, "ctrl-letter formats");
+            else
+                expect_key(w, seq, (size_t)n, key, "ctrl-letter formats");
+        }
+    }
+#define KEY(s, k) expect_key(w, s, sizeof(s) - 1, k, s)
+#define CHAR(s, c) expect_ctrl(w, s, sizeof(s) - 1, c, s)
+#define NONE(s) expect_none(w, s, sizeof(s) - 1, s)
+    NONE("\x1b[57442;5u"); /* LEFT_CONTROL press: used to insert U+E062. */
+    CHAR("\x1b[100;5u", 4);
+    NONE("\x1b[57442u"); /* LEFT_CONTROL release with report-all only. */
+    NONE("\x1b[57448;5u"); /* RIGHT_CONTROL */
+    NONE("\x1b[100::100;5:3u");
+    NONE("\x1b[?9u"); /* A keyboard-mode reply is not a Tab keystroke. */
+    NONE("\x1b[1114112u");
+    NONE("\x1b[55296u");
+    NONE("\x1b[999999999999999999999999u");
+    NONE("\x1b[1;2;3;4;5;6;7;8;9u");
+    CHAR("h", 'h');
+    CHAR("H", 'H');
+    CHAR("\x1b[104;1u", 'h');
+    CHAR("\x1b[104:72;2u", 'H');
+    CHAR("\x1b[27;2;72~", 'H');
+    CHAR("\x1b[233u", 233);
+    CHAR("\x1b[32;5u", 0);
+    CHAR("\x1b[95;5u", 31);
+    CHAR("\x1b[27;5;47~", 31);
+    KEY("\x1b[91;5u", TK_ESCAPE);
+    KEY("\x1b[27;5;127~", TK_BACKSPACE);
+    KEY("\x1b[27;1;27~", TK_ESCAPE);
+    KEY("\x1b[13;65u", TK_ENTER);
+    KEY("\x1b[9;2u", TK_PREV_TAB);
+    KEY("\x1b[27;2;9~", TK_PREV_TAB);
+    KEY("\x1b[98;3u", TK_WORD_LEFT);
+    KEY("\x1b[27;3;102~", TK_WORD_RIGHT);
+    KEY("\x1b[1;70D", TK_WORD_LEFT);
+    KEY("\x1b[1;6C", TK_WORD_RIGHT);
+    KEY("\x1bOD", TK_LEFT);
+    KEY("\x1b[3;5~", TK_DELETE);
+    KEY("\x1b[1;5H", TK_HOME);
+    KEY("\x1b[57414u", TK_ENTER);
+    KEY("\x1b[57414;2u", TK_NEWLINE);
+    KEY("\x1b[57417;5u", TK_WORD_LEFT);
+    CHAR("\x1b[57400u", '1');
+    NONE("\x1b[97;9u"); /* Unbound Command-A cannot type a. */
+#undef KEY
+#undef CHAR
+#undef NONE
 }
 
 static int restore_from_raw_pty(void)
@@ -313,6 +388,7 @@ static void keys_from_pipe(void)
     close(sp[0]);
     int w = sp[1];
 
+    modified_keys(w);
     expect_key(w, "\t", 1, TK_TAB, "tab");
     expect_key(w, "\x1b[9u", 4, TK_TAB, "csi-u tab");
     expect_key(w, "\x1b[9;5u", 6, TK_NEXT_TAB, "csi-u ctrl-tab");
@@ -507,11 +583,14 @@ static void exit_returns_home(void)
     viewport_begin();
     /* the pty holds only a few kilobytes; keep it drained while painting */
     n += drain(master, out + n, sizeof out - n - 1);
+    viewport_suspend();
+    viewport_resume();
     viewport_end();
     fflush(stdout);
     n += drain(master, out + n, sizeof out - n - 1);
-    out[n] = '\0';
     tty_raw_end();
+    n += drain(master, out + n, sizeof out - n - 1);
+    out[n] = '\0';
 
     dup2(oldin, STDIN_FILENO);
     dup2(oldout, STDOUT_FILENO);
@@ -519,6 +598,19 @@ static void exit_returns_home(void)
     close(oldout);
     close(slave);
     close(master);
+    /* Independent keyboard stacks: never leave one of our pushes behind on
+       either screen, including suspend/resume and final raw-mode cleanup. */
+    int screen = 0, depth[2] = {0};
+    for (const char *p = out; *p; p++) {
+        if (!strncmp(p, "\x1b[>1u", 5)) depth[screen]++;
+        if (!strncmp(p, "\x1b[<u", 4) && --depth[screen] < 0)
+            fail("keyboard stack underflow");
+        if (!strncmp(p, "\x1b[?1049h", 8) || !strncmp(p, "\x1b[?1049l", 8)) {
+            if (depth[screen]) fail("keyboard mode left on previous screen");
+            screen = p[7] == 'h';
+        }
+    }
+    if (depth[0] || depth[1]) fail("keyboard stack leaked on exit");
     const char *off = strstr(out, "\x1b[?1049l");
     if (!off)
         fail("home never left the alternate screen");
