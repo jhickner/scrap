@@ -51,11 +51,53 @@ static void echo_prompt(struct session *s, void *ud)
     prompt_echo_message(ud);
 }
 
+static void close_slot(const char *dir, const char *base, const cJSON *target)
+{
+    int at = -1;
+    if (cJSON_IsNumber(target) && target->valuedouble == target->valueint)
+        at = workspace_at(target->valueint) ? target->valueint : -1;
+    else if (cJSON_IsString(target))
+        at = workspace_find_id(target->valuestring);
+
+    struct session *s = workspace_at(at);
+    if (!s) {
+        reply(dir, base, "{\"error\": \"no such slot or session\"}");
+        return;
+    }
+    if (at == workspace_index()) {
+        reply(dir, base, "{\"error\": \"slot is in view\"}");
+        return;
+    }
+    if (session_turn_running(s) || workspace_queued(at)) {
+        reply(dir, base, "{\"error\": \"slot is busy\"}");
+        return;
+    }
+
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", 1);
+    cJSON_AddNumberToObject(r, "slot", at);
+    const char *id = session_id(s);
+    if (id)
+        cJSON_AddStringToObject(r, "session", id);
+    char *json = cJSON_PrintUnformatted(r);
+    workspace_close(at);
+    reply(dir, base, json ? json : "{\"ok\":true}");
+    free(json);
+    cJSON_Delete(r);
+}
+
 static void serve(const char *dir, const char *base, const char *text)
 {
     cJSON *o = cJSON_Parse(text);
     if (!o) {
         reply(dir, base, "{\"error\": \"bad json\"}");
+        return;
+    }
+
+    cJSON *target = cJSON_GetObjectItem(o, "close");
+    if (target) {
+        close_slot(dir, base, target);
+        cJSON_Delete(o);
         return;
     }
 
