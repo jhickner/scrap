@@ -161,8 +161,8 @@ static time_t backend_stamp(const char *backend)
 }
 
 static const struct pick_item CLAUDE[] = {
-    {"claude-opus-5", "most capable"},
     {"claude-opus-5[1m]", "opus with a 1M-token context"},
+    {"claude-opus-5", "most capable"},
     {"claude-sonnet-5", "balanced speed and capability"},
     {"claude-haiku-4-5", "fastest"},
     {"claude-fable-5-1", "compact"},
