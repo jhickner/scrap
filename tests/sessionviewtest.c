@@ -95,6 +95,59 @@ static int tool_rows(struct screen *s)
     return ok;
 }
 
+static int hooked(struct screen *s)
+{
+    int ok = 1;
+    const char *mark = "\xe2\x9a\x91";
+
+    viewport_clear();
+    view_collapse(0);
+    view_keep_tool_call("Edit", "src/a.c", 0);
+    viewport_paint();
+    pump(s);
+    if (count_on_screen(s, mark) != 0)
+        ok = fail("a call draws no hook mark until a hook fires", NULL) == 0;
+
+    view_keep_tool_hooked();
+    pump(s);
+    int at = row_with(s, "[edit]");
+    if (at < 0 || row_with(s, mark) != at)
+        ok = fail("a hook marks the call it fired for", NULL) == 0;
+    const char *row = row_text(s, at);
+    const char *tag = strstr(row, "[edit]");
+    const char *flag = strstr(row, mark);
+    if (!tag || !flag || flag < tag || strstr(flag, "src/a.c") == NULL)
+        ok = fail("the mark sits between the tag and the argument", NULL) == 0;
+
+    view_keep_tool_hooked();
+    pump(s);
+    if (count_on_screen(s, mark) != 1)
+        ok = fail("a second hook on the same call adds nothing", NULL) == 0;
+
+    view_keep_tool_call("Edit", "src/b.c", 0);
+    viewport_paint();
+    pump(s);
+    if (row_with(s, "src/b.c") == row_with(s, mark))
+        ok = fail("the next call starts unmarked", NULL) == 0;
+
+    viewport_clear();
+    view_collapse(1);
+    view_keep_tool_call("Read", "src/a.c", 1);
+    view_keep_tool_call("Read", "src/b.c", 1);
+    view_keep_tool_hooked();
+    pump(s);
+    at = row_with(s, "src/a.c");
+    if (at < 0 || row_with(s, "src/b.c") != at || row_with(s, mark) != at)
+        ok = fail("a hook on a merged call marks the shared row", NULL) == 0;
+
+    view_collapse(0);
+    pump(s);
+    if (count_on_screen(s, mark) != 1 || row_with(s, mark) != row_with(s, "src/b.c"))
+        ok = fail("expanding keeps the mark on the hooked call only", NULL) == 0;
+
+    return ok;
+}
+
 static int merges(struct screen *s)
 {
     int ok = 1;
@@ -270,6 +323,7 @@ static int collapse_redraws(void)
 
     ok = merges(&s) && ok;
     ok = tool_rows(&s) && ok;
+    ok = hooked(&s) && ok;
 
     viewport_end();
     return ok ? 0 : 1;
