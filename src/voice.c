@@ -861,6 +861,8 @@ static void handle_event(void *ud, const char *kind, const char *text)
                 else if (listen_cancel(rest))
                     listen_discard();
                 heard("");
+                if (voice_wake() && listen_mode && voice && !speaking)
+                    macos_voice_cancel(voice);
             }
             return;
         }
