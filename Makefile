@@ -139,7 +139,7 @@ $(BUILD)/statustest: tests/statustest.c tests/stubs/tabbar.c $(BUILD)/status.o $
 
 $(BUILD)/prompttest: tests/prompttest.c tests/stubs/tabbar.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/bash.o $(BUILD)/block.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/chrometest: tests/chrometest.c tests/stubs/tabbar.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
+$(BUILD)/chrometest: tests/chrometest.c $(BUILD)/confirm.o $(BUILD)/frontend.o tests/stubs/tabbar.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
 $(BUILD)/imagerowtest: tests/imagerowtest.c $(BUILD)/image.o $(BUILD)/viewport.o $(BUILD)/ui.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/scrollback.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 

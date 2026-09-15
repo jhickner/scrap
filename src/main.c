@@ -871,6 +871,8 @@ int main(int argc, char **argv)
             break;
 
         offer_project_trust(session);
+        if (tty_quit_requested())
+            break;
 
         char *line = prompt_take_queued(prompt);
         if (line) {

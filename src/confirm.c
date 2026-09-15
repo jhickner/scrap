@@ -44,6 +44,10 @@ int confirm_run(const char *question)
 
     chrome_modal(paint_question, (void *)question);
     for (;;) {
+        if (tty_quit_requested() || chrome_modal_interrupted()) {
+            chrome_modal(NULL, NULL);
+            return 0;
+        }
         tty_event ev;
         if (!tty_read(&ev, -1)) {
             if (!chrome_modal_interrupted())

@@ -1,5 +1,13 @@
 
 #include <fcntl.h>
+#include <signal.h>
+#include <sys/wait.h>
+#if defined(__APPLE__)
+#include <util.h>
+#else
+#include <pty.h>
+#endif
+#include "confirm.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -123,8 +131,57 @@ static void check_queued(struct prompt *p, struct screen *s)
         fail("a queued line that was cut short says so");
 }
 
+/* Exercise the actual modal reader through a terminal, including a quit
+   signal that previously left it spinning without reading any more keys. */
+static void check_confirmation(const char *input, int quit, int expected)
+{
+    int master, ready[2];
+    if (pipe(ready) != 0) {
+        fail("confirmation pipe");
+        return;
+    }
+    pid_t child = forkpty(&master, NULL, NULL, NULL);
+    if (child == 0) {
+        close(ready[0]);
+        alarm(3);
+        unsetenv("TMUX");
+        if (tty_raw_begin() != 0)
+            _exit(2);
+        ui_raw(1);
+        if (write(ready[1], "r", 1) != 1)
+            _exit(2);
+        int answer = confirm_run("trust this folder in codex?");
+        int clean = !chrome_modal_active();
+        tty_raw_end();
+        _exit(answer == expected && clean ? 0 : 1);
+    }
+    close(ready[1]);
+    if (child < 0) {
+        close(ready[0]);
+        fail("confirmation forkpty");
+        return;
+    }
+    char byte;
+    if (read(ready[0], &byte, 1) != 1)
+        fail("confirmation ready");
+    else if (quit)
+        kill(child, SIGTERM);
+    else if (write(master, input, strlen(input)) != (ssize_t)strlen(input))
+        fail("confirmation input");
+    close(ready[0]);
+    int status;
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status))
+        fail(quit ? "confirmation exits on quit signal" : "confirmation keyboard response");
+    close(master);
+}
+
 int main(void)
 {
+    check_confirmation("y", 0, 1);
+    check_confirmation("n", 0, 0);
+    check_confirmation("\003", 0, 0);
+    check_confirmation("\033", 0, 0);
+    check_confirmation("", 1, 0);
     setenv("COLUMNS", "80", 1);
     setenv("LINES", "24", 1);
 
