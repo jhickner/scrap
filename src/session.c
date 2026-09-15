@@ -775,7 +775,6 @@ static int abort_check(void)
 
     sidechannel_poll();
     sidechannel_tick();
-    status_update_tick(live);
     image_poll();
     status_tick();
     return interrupt;
@@ -1916,8 +1915,11 @@ int session_turn_pump(struct session *s)
     name_poll(s);
     usage_poll(s);
 
-    if (!s->finished)
+    if (!s->finished) {
+        if (s == live)
+            status_update_tick(s);
         return 1;
+    }
 
     pthread_join(s->thread, NULL);
     s->running = 0;
