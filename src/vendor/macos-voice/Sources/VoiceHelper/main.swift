@@ -111,6 +111,7 @@ final class Session {
         voice.onSend = { [weak self] text in self?.sendActive("T " + text) }
         voice.onInterrupt = { [weak self] in self?.sendActive("INTERRUPT") }
         voice.onDrop = { [weak self] in self?.sendActive("DROP") }
+        voice.onCancel = { [weak self] in self?.sendActive("CANCEL") }
         voice.onHeard = { [weak self] text in self?.sendActive("P " + text) }
         voice.onSpeaking = { [weak self] speaking in
             self?.broadcast("SPEAKING " + (speaking ? "1" : "0"))

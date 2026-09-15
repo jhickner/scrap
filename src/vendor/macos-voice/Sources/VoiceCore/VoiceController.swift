@@ -64,6 +64,8 @@ public final class VoiceController {
     public var onInterrupt: (() -> Void)?
     /* a turn was discarded rather than sent, and nothing of it is left */
     public var onDrop: (() -> Void)?
+    /* the turn was cancelled by a spoken cancel phrase */
+    public var onCancel: (() -> Void)?
     public var onMode: ((Mode) -> Void)?
     public var onHeard: ((String) -> Void)?
     public var onSpeaking: ((Bool) -> Void)?
@@ -321,6 +323,7 @@ public final class VoiceController {
             switch endpointer.noteFinal(text, at: now) {
             case .cancelled:
                 heardDraft = ""
+                onCancel?()
             case .send, .waiting:
                 updateHeardDraft()
             }
@@ -444,6 +447,7 @@ public final class VoiceController {
         switch endpointer.noteFinal(text, at: since) {
         case .cancelled:
             heardDraft = ""
+            onCancel?()
         case .send, .waiting:
             updateHeardDraft()
         }

@@ -1036,6 +1036,28 @@ int main(void)
     line = voice_take_line();
     eq_str("wake word works again after a cancel", line, "listen after cancel");
     free(line);
+    fire("partial", "Listen");
+    fire("final", "Listen");
+    eq_str("bare wake word is previewed", box, "Listen");
+    fire("partial", "Cancel");
+    eq_str("cancel partial joins the preview", box, "Listen Cancel");
+    fire("final", "Cancel");
+    if (voice_take_line())
+        fail("cancel right after the wake word sends nothing");
+    eq_str("cancel right after the wake word empties the box", box, "");
+    eq_str("cancel right after the wake word returns to waiting", voice_label(), "voice: say listen");
+    fire("partial", "Listen");
+    fire("final", "Listen");
+    fire("partial", "Cancel");
+    fire("partial", "");
+    fire("cancelled", NULL);
+    if (voice_take_line())
+        fail("the helper cancel event sends nothing");
+    eq_str("the helper cancel event empties the box", box, "");
+    eq_str("the helper cancel event returns to waiting", voice_label(), "voice: say listen");
+    fire("partial", "Listen cancel");
+    fire("final", "Listen cancel");
+    eq_str("wake word and cancel in one turn empty the box", box, "");
     fire("final", "listen one more thing, cancel.");
     if (voice_take_line())
         fail("cancel sharing a turn with the wake word sends nothing");

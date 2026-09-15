@@ -19,14 +19,16 @@ static inline void voice_trace(const char *event, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 static inline void voice_trace(const char *event, const char *fmt, ...)
 {
-    if (!settings_get_int(SETTING_VOICE_TRACE, 0))
-        return;
     const char *home = getenv("HOME");
     if (!home || !*home)
         return;
     char path[4096];
     int n = snprintf(path, sizeof path, "%s/" APP_CONFIG "/voice-events.log", home);
     if (n < 0 || (size_t)n >= sizeof path)
+        return;
+    /* the log file existing also opts in: the setting is lost whenever another
+       instance writes its own copy of the settings file */
+    if (!settings_get_int(SETTING_VOICE_TRACE, 0) && access(path, F_OK) != 0)
         return;
     va_list ap, copy;
     va_start(ap, fmt);

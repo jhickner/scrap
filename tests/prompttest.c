@@ -83,6 +83,15 @@ int main(void)
     prompt_set_preview(p, "");
     eq_line(p, "removing the preview keeps the typed text", "typed");
 
+    /* the exact call order of a spoken cancel right after the wake word */
+    prompt_set_preview(p, "Listen");
+    prompt_set_preview(p, "Listen Cancel");
+    prompt_set_preview(p, "Listen");
+    prompt_claim_preview(p, prompt_line(p));
+    prompt_set_preview(p, "");
+    eq_line(p, "a spoken cancel empties the box", "");
+    prompt_insert(p, "typed");
+
     prompt_set_preview(p, "spoken");
     prompt_insert(p, "more");
     eq_line(p, "a line inserted under a preview goes before it",

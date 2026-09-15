@@ -907,6 +907,16 @@ static void handle_event(void *ud, const char *kind, const char *text)
         carry_clear();
         discard_speech();
         erased = 0;
+    } else if (!strcmp(kind, "cancelled")) {
+        /* the helper dropped the turn on its own cancel phrase; in a dictation
+           that phrase cancels the whole dictation, not just the last turn */
+        carry_clear();
+        erased = 0;
+        if (listening() && listen_mode) {
+            draft[0] = '\0';
+            listen_discard();
+        }
+        discard_speech();
     } else if (!strcmp(kind, "speaking")) {
         speaking = text && *text == '1';
         status_touch();
