@@ -41,7 +41,9 @@
 #define SPOKEN_BREVITY                                                         \
     "Reply in one or two short sentences of plain prose. Answer only what "    \
     "was asked: no background, caveats, alternatives, or offers of further "   \
-    "help. No lists, code blocks, or paths unless they are asked for.\n\n"
+    "help. No lists or paths unless they are asked for. Any command or "     \
+    "code you give must be verbatim in a fenced code block, never spelled "  \
+    "out or paraphrased for speech.\n\n"
 #define SPOKEN_PREAMBLE                                                        \
     "The message below was spoken aloud, and your reply will be read back "    \
     "aloud. " SPOKEN_BREVITY
