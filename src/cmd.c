@@ -1207,6 +1207,40 @@ static void do_fork_w(struct session *s, const char *arg)
     sessionfork_run(s, FORK_WINDOW);
 }
 
+static void do_fork_t(struct session *s, const char *arg)
+{
+    (void)arg;
+    const char *backend = session_backend(s);
+    if (!session_can_resume(s)) {
+        reply_error("%s cannot resume a conversation, so there is nothing to fork", backend);
+        return;
+    }
+    const char *id = session_id(s);
+    if (!id || !*id) {
+        reply_error("nothing to fork yet — send a message first");
+        return;
+    }
+    if (workspace_count() >= WORKSPACE_MAX) {
+        reply_error("this window is already holding as many sessions as it can");
+        return;
+    }
+
+    struct session *f = workspace_prepare(backend, session_model_label(s), session_effort(s),
+                                          session_cwd(s), id, NULL);
+    if (!f) {
+        reply_error("could not start the %s CLI", backend);
+        return;
+    }
+    session_set_fork(f, 1);
+    if (!session_start(f) || workspace_open(f) < 0) {
+        session_free(f);
+        reply_error("could not start the %s CLI", backend);
+        return;
+    }
+    hud_print(workspace_current());
+    ui_flush();
+}
+
 static const struct cmd COMMANDS[] = {
     {"/new", "start a fresh conversation, or a new tab running the prompt",
      "[prompt]", CMD_SELF_ECHOES | CMD_LIVE_ARG, do_new},
@@ -1240,6 +1274,7 @@ static const struct cmd COMMANDS[] = {
     {"/fs", "alias for /fh", NULL, CMD_LIVE, do_fork_h},
     {"/fv", "fork into a vertical tmux split", NULL, CMD_LIVE, do_fork_v},
     {"/fw", "fork into a tmux window", NULL, CMD_LIVE, do_fork_w},
+    {"/ft", "fork into a new tab", NULL, CMD_LIVE, do_fork_t},
     {"/split", "open a shell split in this directory", "[h|v|w]", 0, do_split},
     {"/card", "add a card to the board", "<text>", CMD_LIVE, do_card},
     {"/board", "show the cards, by column", NULL, CMD_LIVE, do_board},
