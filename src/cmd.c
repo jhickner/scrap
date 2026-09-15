@@ -814,7 +814,7 @@ int cmd_resume(struct session *s)
     return resumed;
 }
 
-static void do_new(struct session *s, const char *arg)
+static void do_clear(struct session *s, const char *arg)
 {
     (void)arg;
     if (!session_clear(s)) {
@@ -826,6 +826,25 @@ static void do_new(struct session *s, const char *arg)
     viewport_item_begin(VIEWPORT_ROWS(1, 1));
     ui_bar(ui_style(UI_DIM), "new conversation");
     viewport_item_end();
+    ui_flush();
+}
+
+static void do_new(struct session *s, const char *arg)
+{
+    if (!arg || !*arg) {
+        do_clear(s, arg);
+        return;
+    }
+
+    const char *backend = session_backend(s);
+    int at = workspace_spawn(backend, session_model_label(s), session_effort(s),
+                             session_cwd(s), NULL);
+    if (at < 0) {
+        reply_error("could not start the %s CLI", backend);
+        return;
+    }
+    hud_print(workspace_current());
+    workspace_send(at, arg, NULL);
     ui_flush();
 }
 
@@ -943,6 +962,8 @@ enum {
     CMD_SELF_ECHOES = 1u << 2,
 
     CMD_LIVE        = 1u << 3,
+
+    CMD_LIVE_ARG    = 1u << 4,
 };
 
 struct cmd {
@@ -1187,8 +1208,9 @@ static void do_fork_w(struct session *s, const char *arg)
 }
 
 static const struct cmd COMMANDS[] = {
-    {"/new", "start a fresh conversation", NULL, 0, do_new},
-    {"/clear", "alias for /new", NULL, 0, do_new},
+    {"/new", "start a fresh conversation, or a new tab running the prompt",
+     "[prompt]", CMD_SELF_ECHOES | CMD_LIVE_ARG, do_new},
+    {"/clear", "start a fresh conversation", NULL, 0, do_clear},
     {"/model", "switch model", "[name]", 0, do_model},
     {"/effort", "set reasoning/thinking effort", "[level]", 0, do_effort},
     {"/backend", "continue with another backend", "<name>", 0, do_backend},
@@ -1297,7 +1319,7 @@ int cmd_runs_live(const char *line)
 {
     const char       *arg;
     const struct cmd *c = cmd_for_line(line, &arg);
-    return c && (c->flags & CMD_LIVE);
+    return c && ((c->flags & CMD_LIVE) || ((c->flags & CMD_LIVE_ARG) && arg && *arg));
 }
 
 #define DEFERRED_MAX 8
@@ -1314,7 +1336,7 @@ void cmd_dispatch_live(struct session *s, const char *line)
     if (!c || (c->flags & CMD_QUITS))
         return;
 
-    if (c->flags & CMD_LIVE) {
+    if ((c->flags & CMD_LIVE) || ((c->flags & CMD_LIVE_ARG) && arg && *arg)) {
         c->run(s, arg);
         return;
     }
