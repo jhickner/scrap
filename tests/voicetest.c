@@ -1029,6 +1029,13 @@ int main(void)
     line = voice_take_line();
     eq_str("cancel mid-sentence is kept as words", line, "listen cancel the meeting");
     free(line);
+    fire("final", "listen drop it cancel that");
+    if (voice_take_line())
+        fail("cancel that drops the dictation");
+    fire("final", "listen after cancel ok done");
+    line = voice_take_line();
+    eq_str("wake word works again after a cancel", line, "listen after cancel");
+    free(line);
     fire("final", "listen one more thing, cancel.");
     if (voice_take_line())
         fail("cancel sharing a turn with the wake word sends nothing");

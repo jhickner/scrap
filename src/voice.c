@@ -472,13 +472,15 @@ static int listen_end(char *text)
     return 1;
 }
 
-/* strips a closing "cancel" or "cancel this"; 1 when it was there */
+/* strips a closing "cancel", "cancel this" or "cancel that"; 1 when it was there */
 static int listen_cancel(char *text)
 {
     size_t n = strlen(text);
     while (n && !isalnum((unsigned char)text[n - 1]))
         n--;
     ptrdiff_t start = word_ends_at(text, n, "this");
+    if (start < 0)
+        start = word_ends_at(text, n, "that");
     if (start >= 0) {
         size_t e = (size_t)start;
         while (e && !isalnum((unsigned char)text[e - 1]))
@@ -659,6 +661,10 @@ static void listen_discard(void)
     if (heard_fn)
         show("");
     chime("interrupted");
+    /* the recognizer starts over, so the cancelled utterance does not carry
+       into the next wake word */
+    if (voice && !speaking)
+        macos_voice_cancel(voice);
 }
 
 /* holds a finished turn in the dictation; 0 when this turn is not one. cue
