@@ -2,6 +2,23 @@ import Testing
 @testable import VoiceCore
 
 struct VoiceClientsTests {
+    @Test("playback rates belong to each client and are forgotten on disconnect")
+    func playbackRates() {
+        var clients = VoiceClients()
+        clients.add(3)
+        clients.add(4)
+        clients.setRate(3, 0.6)
+        clients.setRate(4, 0.5)
+        #expect(clients.rate(3, fallback: 0.5) == 0.6)
+        #expect(clients.rate(4, fallback: 0.5) == 0.5)
+        clients.setRate(3, .nan)
+        #expect(clients.rate(3, fallback: 0.5) == 0.6)
+        clients.remove(3)
+        clients.setRate(3, 0.9)
+        clients.add(3)
+        #expect(clients.rate(3, fallback: 0.5) == 0.5)
+    }
+
     @Test("mic off for every client stops the mic and names the other clients")
     func micOffAll() {
         var clients = VoiceClients()

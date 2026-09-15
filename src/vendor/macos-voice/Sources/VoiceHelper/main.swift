@@ -177,6 +177,7 @@ final class Session {
                 _ = voice.handoff()
             }
             active = fd
+            voice.setRate(clients.rate(fd, fallback: settings.rate))
             send("P ", to: fd)
         } else if active == fd {
             if let leftover = voice.handoff() { send("T " + leftover, to: fd) }
@@ -204,11 +205,18 @@ final class Session {
         case "VOLUME":
             if let n = Float(rest) { voice.setVolume(n) }
         case "RATE":
-            if let n = Float(rest) { voice.setRate(n) }
+            if let n = Float(rest), n.isFinite {
+                clients.setRate(fd, n)
+                if active == fd { voice.setRate(clients.rate(fd, fallback: settings.rate)) }
+            }
         case "SILENCE":
             if let n = Double(rest) { voice.setSilence(n) }
         case "ANNOUNCE":
-            if !rest.isEmpty { voice.announce(unescape(rest)) }
+            if !rest.isEmpty {
+                voice.setRate(clients.rate(fd, fallback: settings.rate))
+                voice.announce(unescape(rest))
+                if let active { voice.setRate(clients.rate(active, fallback: settings.rate)) }
+            }
         default:
             guard active == fd else { return }
             switch verb {

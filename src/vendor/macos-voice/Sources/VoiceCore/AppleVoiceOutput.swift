@@ -21,7 +21,7 @@ final class AppleVoiceOutput: VoiceOutput {
     var volume: Float
     private let speakerDelegate = SpeakerDelegate()
     private enum Item {
-        case text(String)
+        case text(AVSpeechUtterance)
         case silence(TimeInterval)
     }
     private var queue: [Item] = []
@@ -113,7 +113,7 @@ final class AppleVoiceOutput: VoiceOutput {
             }
             return
         }
-        queue.append(.text(trimmed))
+        queue.append(.text(utterance(for: trimmed)))
         pump()
     }
 
@@ -190,14 +190,14 @@ final class AppleVoiceOutput: VoiceOutput {
 
     private func pump() {
         guard !isRendering, !queue.isEmpty else { return }
-        let text: String
+        let utterance: AVSpeechUtterance
         switch queue.removeFirst() {
         case let .silence(duration):
             engine.schedule([Self.silence(duration)].compactMap { $0 })
             pump()
             return
         case let .text(queued):
-            text = queued
+            utterance = queued
         }
         isRendering = true
         renderDeadline = Date.timeIntervalSinceReferenceDate +
@@ -207,7 +207,8 @@ final class AppleVoiceOutput: VoiceOutput {
 
         let render = Render()
 
-        renderer.write(utterance(for: text)) { @Sendable [weak self] buffer in
+        let text = utterance.speechString
+        renderer.write(utterance) { @Sendable [weak self] buffer in
             guard let pcm = buffer as? AVAudioPCMBuffer else { return }
             guard pcm.frameLength > 0 else {
                 Task { @MainActor [weak self] in

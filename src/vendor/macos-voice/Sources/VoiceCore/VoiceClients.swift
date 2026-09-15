@@ -3,6 +3,7 @@
 public struct VoiceClients: Sendable {
     public private(set) var all = Set<Int32>()
     private var micOff = Set<Int32>()
+    private var rates: [Int32: Float] = [:]
 
     public init() {}
 
@@ -19,7 +20,17 @@ public struct VoiceClients: Sendable {
     @discardableResult
     public mutating func remove(_ fd: Int32) -> Bool {
         micOff.remove(fd)
+        rates.removeValue(forKey: fd)
         return all.remove(fd) != nil
+    }
+
+    public mutating func setRate(_ fd: Int32, _ rate: Float) {
+        guard all.contains(fd), rate.isFinite else { return }
+        rates[fd] = min(max(rate, 0), 1)
+    }
+
+    public func rate(_ fd: Int32, fallback: Float) -> Float {
+        rates[fd] ?? fallback
     }
 
     public mutating func setMic(_ fd: Int32, _ on: Bool) {
