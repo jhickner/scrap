@@ -18,6 +18,7 @@
 #include "status.h"
 #include "ui.h"
 #include "viewport.h"
+#include "workspace.h"
 #include "vendor/cJSON.h"
 
 #define SIDE_MAX 4
@@ -45,6 +46,7 @@ struct side {
     pid_t            pid;
     struct stream    out, err;
     char            *question;
+    const struct session *owner;
     sidechannel_done done;
     void            *ud;
 };
@@ -77,6 +79,7 @@ static void slot_free(struct side *c)
     stream_free(&c->err);
     free(c->question);
     c->question = NULL;
+    c->owner = NULL;
     c->done = NULL;
     c->ud = NULL;
     c->pid = 0;
@@ -173,11 +176,17 @@ static void btw_free(void *ud)
 static int    spin_frame;
 static double spun_at;
 
+static int shown(const struct side *c)
+{
+    return c->pid && c->question && (!c->owner || c->owner == workspace_current() ||
+                                     workspace_index_of(c->owner) < 0);
+}
+
 int sidechannel_rows(void)
 {
     int n = 0;
     for (int i = 0; i < SIDE_MAX; i++)
-        if (slots[i].pid && slots[i].question)
+        if (shown(&slots[i]))
             n += sidechannel_question_paint(slots[i].question, NULL, ui_columns(), 0, 1);
     return n;
 }
@@ -185,7 +194,7 @@ int sidechannel_rows(void)
 void sidechannel_paint(int budget)
 {
     for (int i = 0; i < SIDE_MAX && budget > 0; i++) {
-        if (!slots[i].pid || !slots[i].question)
+        if (!shown(&slots[i]))
             continue;
 
         char mark[16];
@@ -306,6 +315,7 @@ static int start(const struct session *s, const char *asked, const char *label,
     }
 
     c->question = strdup(label);
+    c->owner = s;
     c->done = done;
     c->ud = ud;
     chrome_paint();
@@ -347,13 +357,20 @@ int sidechannel_status(const struct session *s, const char *prev,
     return ok;
 }
 
-void sidechannel_forget(void *ud)
+static void slot_kill(struct side *c)
+{
+    kill(c->pid, SIGTERM);
+    int status = 0;
+    while (waitpid(c->pid, &status, 0) < 0 && errno == EINTR)
+        ;
+    slot_free(c);
+}
+
+void sidechannel_forget(const struct session *s)
 {
     for (int i = 0; i < SIDE_MAX; i++)
-        if (slots[i].pid && slots[i].ud == ud) {
-            slots[i].done = NULL;
-            slots[i].ud = NULL;
-        }
+        if (slots[i].pid && slots[i].owner == s)
+            slot_kill(&slots[i]);
 }
 
 int sidechannel_fds(int *out, int max)
@@ -389,6 +406,18 @@ static char *trimmed(struct stream *s)
     while (end && (text[end - 1] == '\n' || text[end - 1] == ' '))
         text[--end] = '\0';
     return *text ? text : NULL;
+}
+
+static void btw_place(struct session *s, void *ud)
+{
+    (void)s;
+    struct btw *b = ud;
+    unsigned mark = viewport_item_begin(&(struct viewport_entry){
+        .render = btw_render, .ud = b, .free_ud = btw_free, .reflow = 1,
+        .pad_before = b->gap, .pad_after = 1});
+    btw_render(b, ui_columns());
+    viewport_item_end();
+    viewport_item_persist(mark, SIDECHANNEL_BTW_KIND, btw_encode);
 }
 
 static void emit(struct side *c, int status)
@@ -429,12 +458,11 @@ static void emit(struct side *c, int status)
         return;
     }
 
-    unsigned mark = viewport_item_begin(&(struct viewport_entry){
-        .render = btw_render, .ud = b, .free_ud = btw_free, .reflow = 1,
-        .pad_before = b->gap, .pad_after = 1});
-    btw_render(b, ui_columns());
-    viewport_item_end();
-    viewport_item_persist(mark, SIDECHANNEL_BTW_KIND, btw_encode);
+    int tab = c->owner ? workspace_index_of(c->owner) : -1;
+    if (tab >= 0 && c->owner != workspace_current())
+        workspace_render(tab, btw_place, b);
+    else
+        btw_place(NULL, b);
     ui_flush();
 }
 
@@ -529,10 +557,6 @@ void sidechannel_close_all(void)
     for (int i = 0; i < SIDE_MAX; i++) {
         if (!slots[i].pid)
             continue;
-        kill(slots[i].pid, SIGTERM);
-        int status = 0;
-        while (waitpid(slots[i].pid, &status, 0) < 0 && errno == EINTR)
-            ;
-        slot_free(&slots[i]);
+        slot_kill(&slots[i]);
     }
 }
