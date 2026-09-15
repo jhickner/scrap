@@ -32,6 +32,7 @@
    prefer */
 #define SETTING_VOICE          "voice"
 #define SETTING_VOICE_SPEAK    "voice_speak"
+#define SETTING_VOICE_WAKE     "voice_wake"
 #define SETTING_VOICE_VOLUME   "voice_volume"
 #define SETTING_VOICE_HELPER   "voice_helper"
 #define SETTING_VOICE_NAME     "voice_name"

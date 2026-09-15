@@ -40,6 +40,8 @@ detection with `JPEG_PREFIX=/path/to/jpeg-turbo`.
 
 ## Tests and diagnostics
 
+Use `/voice mode wake` to wait for “listen,” collect speech across pauses, and send on “ok done” (or “okay done”). After sending, voice waits for “listen” again. Use `/voice mode auto` to restore automatic sending after a pause, or `/voice mode` to see the current mode. The mode is remembered across restarts and voice on/off toggles. `/voice on` enables voice, `/voice off` disables it, and `/voice listen` enables voice with spoken replies off.
+
 To trace voice input, set `voice_trace=1` in `~/.config/mux/settings` and restart mux; transcript text, draft positions, and sends are appended to `~/.config/mux/voice-events.log` (off by default).
 
 Run the unattended checks with:

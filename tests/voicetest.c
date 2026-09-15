@@ -111,13 +111,20 @@ void macos_voice_stop(macos_voice *v) { (void)v; }
 void macos_voice_shutdown(macos_voice *v) { (void)v; }
 int  macos_voice_reap(const char *helper_path) { (void)helper_path; return 0; }
 
-int settings_get_int(const char *key, int fallback) { (void)key; return fallback; }
+static int wake_setting;
+int settings_get_int(const char *key, int fallback)
+{
+    return !strcmp(key, SETTING_VOICE_WAKE) ? wake_setting : fallback;
+}
 const char *settings_get_str(const char *key, const char *fallback)
 {
     (void)key;
     return fallback;
 }
-void settings_set_int(const char *key, int value) { (void)key; (void)value; }
+void settings_set_int(const char *key, int value)
+{
+    if (!strcmp(key, SETTING_VOICE_WAKE)) wake_setting = value;
+}
 void settings_set_str(const char *key, const char *value) { (void)key; (void)value; }
 
 void status_resume(void) {}
@@ -947,6 +954,78 @@ int main(void)
     voice_mic_off(1);
     if (mic_off_alls != 1)
         fail("a mic already off sends nothing");
+    voice_stop();
+
+    focused_window = 1;
+    focus_when_ready = -1;
+    resumed = 0;
+    voice_set_wake(1);
+    if (!start_voice())
+        return 1;
+    voice_on_heard(box_heard, NULL);
+    voice_on_draft(box_line, NULL);
+    voice_on_release(box_release, NULL);
+    voice_on_claim(box_claim, NULL);
+    box[0] = '\0';
+    box_released = 0;
+    clear_sent();
+    eq_str("wake mode waits for its word", voice_label(), "voice: say listen");
+    fire("partial", "background conversation");
+    eq_str("background speech stays out of the box", box, "");
+    voice_commit(front);
+    fire("final", "background conversation");
+    fire("final", "listener ok done");
+    if (nsent || voice_take_line())
+        fail("wake mode ignores speech without the complete wake word");
+    fire("partial", "noise Listen write a note");
+    eq_str("wake preview starts at the wake word", box, "Listen write a note");
+    fire("final", "noise Listen write a note");
+    eq_str("wake mode opens dictation", voice_label(), "voice dictation");
+    fire("final", "with two paragraphs");
+    if (voice_take_line())
+        fail("silence does not submit wake dictation");
+    fire("final", "okay done with the introduction");
+    if (voice_take_line())
+        fail("a closing phrase inside a sentence does not send");
+    fire("final", "OK, done.");
+    line = voice_take_line();
+    eq_str("wake mode sends joined speech without the closing phrase", line,
+           "Listen write a note with two paragraphs okay done with the introduction");
+    free(line);
+    eq_str("sending returns to wake waiting", voice_label(), "voice: say listen");
+    fire("final", "more background speech");
+    if (voice_take_line())
+        fail("each wake message needs a new wake word");
+    fire("final", "listen second message ok done");
+    line = voice_take_line();
+    eq_str("wake and closing phrase can share one turn", line, "listen second message");
+    free(line);
+    fire("partial", "listen keep this unsent");
+    voice_commit(front);
+    if (nsent || voice_take_line())
+        fail("focus commit holds a wake partial without sending");
+    fire("final", "listen keep this unsent");
+    fire("final", "ok done");
+    line = voice_take_line();
+    eq_str("committed partial is not duplicated", line, "listen keep this unsent");
+    free(line);
+    fire("final", "listen split closing phrase okay");
+    if (voice_take_line())
+        fail("half a closing phrase does not send");
+    fire("final", "done");
+    line = voice_take_line();
+    eq_str("closing phrase can span recognition turns", line, "listen split closing phrase");
+    free(line);
+    voice_stop();
+    if (!start_voice())
+        return 1;
+    if (!voice_wake())
+        fail("wake mode survives voice restart");
+    voice_set_wake(0);
+    fire("final", "ordinary voice again");
+    line = voice_take_line();
+    eq_str("turning wake mode off restores ordinary voice", line, "ordinary voice again");
+    free(line);
     voice_stop();
 
     if (fails)

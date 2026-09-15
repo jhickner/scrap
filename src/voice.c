@@ -396,6 +396,14 @@ static int is_early_resume_command(const char *text)
 
 static int listening(void) { return armed && mic; }
 
+int voice_wake(void) { return settings_get_int(SETTING_VOICE_WAKE, 0); }
+
+void voice_set_wake(int on)
+{
+    settings_set_int(SETTING_VOICE_WAKE, !!on);
+    status_touch();
+}
+
 static void chime(const char *name)
 {
     if (voice && listening())
@@ -641,6 +649,10 @@ static int listen_take(const char *text, int cue)
         return 1;
     }
     listen_append(rest);
+    /* Recognition can endpoint between "ok" and "done". Match the joined
+       dictation too, so a pause inside the closing phrase still sends. */
+    if (voice_wake() && listen_end(listen_buf))
+        listen_flush(NULL);
     return 1;
 }
 
@@ -692,6 +704,14 @@ static void handle_event(void *ud, const char *kind, const char *text)
         }
         snprintf(utter, sizeof utter, "%s", text ? text : "");
         text = after_carry(text);
+        if (voice_wake() && !listen_mode && !paused) {
+            text = text ? listen_wake(text) : NULL;
+            if (!text) {
+                hearing = 0;
+                heard("");
+                return;
+            }
+        }
         if (paused) {
             hearing = 0;
             if (!command_early && is_early_resume_command(text)) {
@@ -740,6 +760,16 @@ static void handle_event(void *ud, const char *kind, const char *text)
         }
         text = after_carry(text);
         carry_clear();
+        if (voice_wake() && !listen_mode && !paused) {
+            text = text ? listen_wake(text) : NULL;
+            if (!text) {
+                hearing = 0;
+                heard("");
+                if (voice && !speaking)
+                    macos_voice_cancel(voice);
+                return;
+            }
+        }
         /* the helper waits for a reply to every turn it delivers and judges
            speech as echo until one ends; a turn consumed here gets none. A reply
            still playing is left to end it, rather than being cut off */
@@ -790,6 +820,8 @@ static void handle_event(void *ud, const char *kind, const char *text)
             forget_stale();
             listen_take(text, 1);
             heard("");
+            if (voice_wake() && listen_mode && voice && !speaking)
+                macos_voice_cancel(voice);
             return;
         }
         if (still_dropping() || is_stale(text)) {
@@ -1220,6 +1252,8 @@ const char *voice_label(void)
         snprintf(label, sizeof label, "voice unfocused");
     else if (listen_mode)
         snprintf(label, sizeof label, "voice dictation");
+    else if (voice_wake())
+        snprintf(label, sizeof label, "voice: say listen");
     else if (!speak)
         snprintf(label, sizeof label, "voice listen");
     else
@@ -1387,11 +1421,11 @@ void voice_commit(struct session *s)
            Neither edge is the dictation's end phrase, so it stays open */
         if (listen_mode || listen_wake(draft))
             listen_hold_draft();
-        else if (is_stop_command(draft)) {
+        else if (!voice_wake() && is_stop_command(draft)) {
             if (session_turn_running(s))
                 session_interrupt(s);
             chime("interrupted");
-        } else {
+        } else if (!voice_wake()) {
             enqueue(draft);
         }
     }

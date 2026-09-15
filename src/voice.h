@@ -17,6 +17,9 @@ int  voice_restart(char *err, size_t size);
 int  voice_on(void);
 void voice_set_speak(int on);
 int  voice_speak(void);
+/* Require "listen" to open dictation and "ok done" to send it. */
+int  voice_wake(void);
+void voice_set_wake(int on);
 /* start or stop and remember it so later sessions and restarts match */
 int  voice_apply(int on, int speak, char *err, size_t size);
 /* the microphone, while replies keep being read aloud */
