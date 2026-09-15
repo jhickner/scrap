@@ -42,10 +42,22 @@ struct btw {
 };
 
 struct side {
-    pid_t         pid;
-    struct stream out, err;
-    char         *question;
+    pid_t            pid;
+    struct stream    out, err;
+    char            *question;
+    sidechannel_done done;
+    void            *ud;
 };
+
+#define STATUS_PREAMBLE                                                          \
+    "You are a fork of an agent in the middle of a long turn. Give the user a "  \
+    "one or two sentence status update on what the agent has been doing and "    \
+    "where it is now, based on the conversation so far. Plain prose, no lists, " \
+    "no questions, no offers. "
+
+#define STATUS_AGAIN                                                             \
+    "The previous update was:\n\n%s\n\nDo not repeat it; report only what has " \
+    "happened since."
 
 static struct side slots[SIDE_MAX];
 
@@ -65,6 +77,8 @@ static void slot_free(struct side *c)
     stream_free(&c->err);
     free(c->question);
     c->question = NULL;
+    c->done = NULL;
+    c->ud = NULL;
     c->pid = 0;
 }
 
@@ -269,6 +283,35 @@ static int spawn(struct side *c, const struct session *s, const char *prompt)
     return 1;
 }
 
+static int start(const struct session *s, const char *asked, const char *label,
+                 sidechannel_done done, void *ud, int loud)
+{
+    struct side *c = free_slot();
+    if (!c) {
+        if (loud) {
+            ui_error("already running %d side turns", SIDE_MAX);
+            ui_put("\n");
+        }
+        return 0;
+    }
+
+    slot_init(c);
+    if (!spawn(c, s, asked)) {
+        slot_free(c);
+        if (loud) {
+            ui_error("could not start the side turn");
+            ui_put("\n");
+        }
+        return 0;
+    }
+
+    c->question = strdup(label);
+    c->done = done;
+    c->ud = ud;
+    chrome_paint();
+    return 1;
+}
+
 int sidechannel_start(const struct session *s, const char *prompt, const char *label)
 {
     if (!prompt || !*prompt)
@@ -276,32 +319,41 @@ int sidechannel_start(const struct session *s, const char *prompt, const char *l
     if (!label || !*label)
         label = prompt;
 
-    struct side *c = free_slot();
-    if (!c) {
-        ui_error("already running %d side turns", SIDE_MAX);
-        ui_put("\n");
-        return 0;
-    }
-
     size_t want = sizeof BTW_PREAMBLE + strlen(prompt);
     char  *asked = malloc(want);
     if (!asked)
         return 0;
     snprintf(asked, want, "%s%s", BTW_PREAMBLE, prompt);
 
-    slot_init(c);
-    if (!spawn(c, s, asked)) {
-        slot_free(c);
-        free(asked);
-        ui_error("could not start the side turn");
-        ui_put("\n");
-        return 0;
-    }
+    int ok = start(s, asked, label, NULL, NULL, 1);
     free(asked);
+    return ok;
+}
 
-    c->question = strdup(label);
-    chrome_paint();
-    return 1;
+int sidechannel_status(const struct session *s, const char *prev,
+                       sidechannel_done done, void *ud)
+{
+    size_t want = sizeof STATUS_PREAMBLE + sizeof STATUS_AGAIN +
+                  (prev ? strlen(prev) : 0);
+    char *asked = malloc(want);
+    if (!asked)
+        return 0;
+    int n = snprintf(asked, want, "%s", STATUS_PREAMBLE);
+    if (prev && *prev)
+        snprintf(asked + n, want - (size_t)n, STATUS_AGAIN, prev);
+
+    int ok = start(s, asked, "status update", done, ud, 0);
+    free(asked);
+    return ok;
+}
+
+void sidechannel_forget(void *ud)
+{
+    for (int i = 0; i < SIDE_MAX; i++)
+        if (slots[i].pid && slots[i].ud == ud) {
+            slots[i].done = NULL;
+            slots[i].ud = NULL;
+        }
 }
 
 int sidechannel_fds(int *out, int max)
@@ -361,6 +413,9 @@ static void emit(struct side *c, int status)
             answer = note;
         }
     }
+
+    if (c->done)
+        c->done(c->ud, failed ? NULL : answer);
 
     struct btw *b = calloc(1, sizeof *b);
     if (!b)

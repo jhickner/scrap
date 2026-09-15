@@ -17,6 +17,12 @@
 
 #define TASK_STALL_DEFAULT 45
 
+/* Seconds a turn runs before a forked side turn reports a short status update,
+   repeated every interval. 0 turns the updates off. */
+#define SETTING_STATUS_INTERVAL "status_seconds"
+
+#define STATUS_INTERVAL_DEFAULT 300
+
 #define SETTING_BACKEND      "backend"
 
 /* claude only: pass --chrome, so the agent gets the Claude in Chrome tools */

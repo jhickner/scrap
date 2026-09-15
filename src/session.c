@@ -119,6 +119,9 @@ struct session {
     char           *reply;
     backend_result  meta;
     double          started;
+    double          status_at;   /* when the last status update was asked for */
+    char           *status_last; /* its answer, so the next one adds to it */
+    int             status_open;
 
     struct sessionpresent present;
 };
@@ -723,6 +726,29 @@ int session_poll_input(void)
     return interrupt;
 }
 
+static void status_update_done(void *ud, const char *answer)
+{
+    struct session *s = ud;
+    s->status_open = 0;
+    s->status_at = now_seconds();
+    if (answer)
+        replace(&s->status_last, answer);
+}
+
+/* Every status interval of a running turn, fork a side turn that says what the
+   agent has done since the last update. */
+static void status_update_tick(struct session *s)
+{
+    if (!s || !s->running || s->status_open)
+        return;
+    int every = settings_get_int(SETTING_STATUS_INTERVAL, STATUS_INTERVAL_DEFAULT);
+    if (every <= 0 || now_seconds() - s->status_at < every)
+        return;
+    s->status_at = now_seconds();
+    if (sidechannel_status(s, s->status_last, status_update_done, s))
+        s->status_open = 1;
+}
+
 /* The session whose work this thread is running: set on every thread but the
    window's own, so the abort check knows not to draw or read from it. */
 static __thread struct session *owner;
@@ -749,6 +775,7 @@ static int abort_check(void)
 
     sidechannel_poll();
     sidechannel_tick();
+    status_update_tick(live);
     image_poll();
     status_tick();
     return interrupt;
@@ -807,6 +834,7 @@ void session_free(struct session *s)
     }
     livelist_forget(s);
     agenttabs_forget(s);
+    sidechannel_forget(s);
 
     if (s->running) {
         s->abort_request = 1;
@@ -832,6 +860,7 @@ void session_free(struct session *s)
     free(s->last_block);
     sessionpresent_free(&s->present);
     free(s->prompt);
+    free(s->status_last);
     free(s->permission);
     free(s->error_note);
     free(s->system_extra);
@@ -1653,6 +1682,8 @@ static void turn_prepare(struct session *s, const char *text)
     replace(&s->prompt, text);
     s->started = now_seconds();
     s->heard_at = s->started;
+    s->status_at = s->started;
+    replace(&s->status_last, NULL);
     s->tool_open = 0;
     s->idle_busy = 1;
     s->stall_told = 0;

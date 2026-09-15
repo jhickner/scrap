@@ -8,6 +8,14 @@ struct session;
 
 int sidechannel_start(const struct session *s, const char *prompt, const char *label);
 
+/* A forked status update on the running turn; prev is the last one given, so
+   the reply covers only what changed since. done gets the answer, or NULL on
+   failure, then ud is dropped. */
+typedef void (*sidechannel_done)(void *ud, const char *answer);
+int  sidechannel_status(const struct session *s, const char *prev,
+                        sidechannel_done done, void *ud);
+void sidechannel_forget(void *ud);
+
 int sidechannel_fds(int *out, int max);
 
 void sidechannel_poll(void);
