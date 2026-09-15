@@ -1016,6 +1016,23 @@ int main(void)
     line = voice_take_line();
     eq_str("closing phrase can span recognition turns", line, "listen split closing phrase");
     free(line);
+    fire("final", "listen throw this away");
+    fire("final", "cancel this");
+    if (voice_take_line())
+        fail("cancel does not send the dictation");
+    eq_str("cancel returns to wake waiting", voice_label(), "voice: say listen");
+    eq_str("cancel empties the box", box, "");
+    fire("final", "listen cancel the meeting");
+    if (voice_take_line())
+        fail("cancel inside a sentence does not drop the dictation");
+    fire("final", "ok done");
+    line = voice_take_line();
+    eq_str("cancel mid-sentence is kept as words", line, "listen cancel the meeting");
+    free(line);
+    fire("final", "listen one more thing, cancel.");
+    if (voice_take_line())
+        fail("cancel sharing a turn with the wake word sends nothing");
+    eq_str("cancel in the opening turn returns to waiting", voice_label(), "voice: say listen");
     voice_stop();
     if (!start_voice())
         return 1;

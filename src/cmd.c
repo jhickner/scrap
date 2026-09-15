@@ -605,7 +605,7 @@ static void do_voice(struct session *s, const char *arg)
             return;
         }
         voice_set_wake(!strcmp(rest, "wake"));
-        reply_note(voice_wake() ? "voice mode wake: say listen to start, ok done to send"
+        reply_note(voice_wake() ? "voice mode wake: say listen to start, ok done to send, cancel to drop"
                                : "voice mode auto: send after a pause");
         return;
     }
@@ -732,7 +732,7 @@ static void do_voice(struct session *s, const char *arg)
     if (!want)
         reply_note("voice off");
     else if (voice_wake())
-        reply_note("voice on: say listen to start, ok done to send");
+        reply_note("voice on: say listen to start, ok done to send, cancel to drop");
     else
         reply_note(speak ? "voice on: listening" : "voice on: listen only");
 }

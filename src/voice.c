@@ -472,6 +472,28 @@ static int listen_end(char *text)
     return 1;
 }
 
+/* strips a closing "cancel" or "cancel this"; 1 when it was there */
+static int listen_cancel(char *text)
+{
+    size_t n = strlen(text);
+    while (n && !isalnum((unsigned char)text[n - 1]))
+        n--;
+    ptrdiff_t start = word_ends_at(text, n, "this");
+    if (start >= 0) {
+        size_t e = (size_t)start;
+        while (e && !isalnum((unsigned char)text[e - 1]))
+            e--;
+        start = word_ends_at(text, e, "cancel");
+    } else {
+        start = word_ends_at(text, n, "cancel");
+    }
+    if (start < 0)
+        return 0;
+    voice_trace("voice.cancel-match", "offset=%td text=%s", start, text);
+    text[start] = '\0';
+    return 1;
+}
+
 static void listen_append(const char *text)
 {
     while (*text == ' ')
@@ -624,6 +646,21 @@ static void listen_flush(const char *tail)
     free(line);
 }
 
+/* end the dictation and drop everything in it, the box included */
+static void listen_discard(void)
+{
+    if (heard_fn)
+        show(listen_buf);
+    const char *cur = draft_fn ? draft_fn(draft_ud) : NULL;
+    if (cur && claim_fn)
+        claim_fn(claim_ud, cur);
+    listen_mode = 0;
+    listen_buf[0] = '\0';
+    if (heard_fn)
+        show("");
+    chime("interrupted");
+}
+
 /* holds a finished turn in the dictation; 0 when this turn is not one. cue
    chimes when the turn opens it */
 static int listen_take(const char *text, int cue)
@@ -648,11 +685,17 @@ static int listen_take(const char *text, int cue)
         listen_flush(rest);
         return 1;
     }
+    if (listen_cancel(rest)) {
+        listen_discard();
+        return 1;
+    }
     listen_append(rest);
     /* Recognition can endpoint between "ok" and "done". Match the joined
        dictation too, so a pause inside the closing phrase still sends. */
     if (voice_wake() && listen_end(listen_buf))
         listen_flush(NULL);
+    else if (voice_wake() && listen_cancel(listen_buf))
+        listen_discard();
     return 1;
 }
 
@@ -809,6 +852,8 @@ static void handle_event(void *ud, const char *kind, const char *text)
                 snprintf(rest, sizeof rest, "%s", text ? text : "");
                 if (listen_end(rest))
                     listen_flush(NULL);
+                else if (listen_cancel(rest))
+                    listen_discard();
                 heard("");
             }
             return;
