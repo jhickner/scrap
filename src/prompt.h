@@ -123,6 +123,9 @@ int  prompt_claim_preview(struct prompt *p, const char *text);
 
 void prompt_echo_message(const char *text);
 
+/* Flag the last echoed prompt as one a hook injected context into. */
+void prompt_echo_hooked(void);
+
 #define PROMPT_ECHO_KIND "echo"
 void prompt_echo_load(const cJSON *st);
 

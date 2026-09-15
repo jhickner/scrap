@@ -10,7 +10,8 @@
    every tool), optional `match` (a substring, or a list of them, one of which
    the tool's command or file path must contain), optional `event` (PreToolUse
    unless given) and `context` (the text injected into the model's context
-   when the hook fires). */
+   when the hook fires). A UserPromptSubmit entry takes no `tool`; its `match`
+   is tested case-insensitively against the submitted prompt. */
 
 #define HOOKS_MAX       64
 #define HOOKS_MATCH_MAX 32

@@ -334,11 +334,27 @@ struct echo_item {
     enum ui_role role;
     int          cap;
     int          gap;
+    int          hooked;
 };
+
+static char echo_owner;
+
+static unsigned *last_echo(void)
+{
+    static unsigned fallback;
+    unsigned *mark = viewport_state_local(&echo_owner, sizeof *mark);
+    return mark ? mark : &fallback;
+}
+
+#define ECHO_HOOK_MARK UI_HOOK_MARK " "
 
 static void echo_paint(const struct echo_item *e)
 {
-    struct ui_wrap w = bar_wrap(queued_budget(ui_columns()), e->role, e->cap, NULL);
+    size_t budget = queued_budget(ui_columns());
+    if (e->hooked && budget > 6)
+        budget -= ui_cells(ECHO_HOOK_MARK);
+    struct ui_wrap w = bar_wrap(budget, e->role, e->cap,
+                                e->hooked ? ECHO_HOOK_MARK : NULL);
     ui_wrap_paint(e->text, &w);
 }
 
@@ -357,6 +373,8 @@ static char *echo_encode(void *ud)
     cJSON_AddNumberToObject(o, "role", e->role);
     cJSON_AddNumberToObject(o, "cap", e->cap);
     cJSON_AddNumberToObject(o, "gap", e->gap);
+    if (e->hooked)
+        cJSON_AddNumberToObject(o, "hooked", 1);
     char *out = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     return out;
@@ -385,6 +403,7 @@ void prompt_echo_message(const char *text)
         e->role = bash_is_command(text) ? UI_BASH : UI_ECHO;
         e->cap = cap > 0 ? cap : 0;
         e->gap = 1;
+        e->hooked = 0;
         if (!e->text) {
             free(e);
             e = NULL;
@@ -398,13 +417,25 @@ void prompt_echo_message(const char *text)
         echo_paint(e);
         viewport_item_end();
         viewport_item_persist(mark, PROMPT_ECHO_KIND, echo_encode);
+        *last_echo() = mark;
     } else {
         struct echo_item fallback = {(char *)(text ? text : ""),
                                      bash_is_command(text) ? UI_BASH : UI_ECHO,
-                                     cap > 0 ? cap : 0, 1};
+                                     cap > 0 ? cap : 0, 1, 0};
         echo_paint(&fallback);
     }
     ui_flush();
+}
+
+void prompt_echo_hooked(void)
+{
+    unsigned mark = *last_echo();
+    struct echo_item *e = mark ? viewport_item_data(mark) : NULL;
+    if (!e || e->hooked)
+        return;
+    e->hooked = 1;
+    viewport_item_stale(mark);
+    viewport_paint();
 }
 
 void prompt_echo_load(const cJSON *st)
@@ -416,6 +447,7 @@ void prompt_echo_load(const cJSON *st)
     e->role = (enum ui_role)scrollback_int(st, "role");
     e->cap = scrollback_int(st, "cap");
     e->gap = scrollback_int(st, "gap");
+    e->hooked = scrollback_int(st, "hooked");
     if (!e->text) {
         free(e);
         return;

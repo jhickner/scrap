@@ -314,16 +314,17 @@ int hooks_backend(backend_hook *out, int max)
     return n;
 }
 
-static int any_match(const struct hook *h, const char *text)
+static int any_match(const struct hook *h, const char *text, int fold)
 {
     for (int i = 0; i < h->match_count; i++)
-        if (strstr(text, h->match[i]))
+        if (fold ? strcasestr(text, h->match[i]) : strstr(text, h->match[i]))
             return 1;
     return 0;
 }
 
 /* Each `match` is tested against the tool's command or file path when the
-   input has one, else against the whole input; one hit is enough. */
+   input has one, against the prompt text (case-insensitive) for a prompt
+   hook, else against the whole input; one hit is enough. */
 static int matches(const struct hook *h, const char *input_json)
 {
     if (!h->match_count)
@@ -332,20 +333,24 @@ static int matches(const struct hook *h, const char *input_json)
         return 0;
     cJSON *input = cJSON_Parse(input_json);
     int hit = 0, scoped = 0;
-    if (input) {
+    if (input && !strcmp(h->event, "UserPromptSubmit")) {
+        const char *prompt = cJSON_GetStringValue(cJSON_GetObjectItem(input, "prompt"));
+        hit = prompt && any_match(h, prompt, 1);
+        scoped = 1;
+    } else if (input) {
         static const char *const fields[] = {"command", "file_path", "path", "notebook_path"};
         for (size_t i = 0; i < sizeof fields / sizeof *fields; i++) {
             const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(input, fields[i]));
             if (!v)
                 continue;
             scoped = 1;
-            if (any_match(h, v))
+            if (any_match(h, v, 0))
                 hit = 1;
         }
-        cJSON_Delete(input);
     }
+    cJSON_Delete(input);
     if (!scoped)
-        hit = any_match(h, input_json);
+        hit = any_match(h, input_json, 0);
     return hit;
 }
 

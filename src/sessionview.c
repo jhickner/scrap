@@ -15,9 +15,6 @@
 
 #define TOOL_INDENT 2
 
-/* drawn after a call's tag when a hook injected context into it */
-#define HOOK_MARK "\xe2\x9a\x91"
-
 /* A subagent's work is drawn one step in from the session's own, under a mark
    naming which agent it came from, so a call it made is not read as a call the
    session made, nor as another agent's. */
@@ -642,13 +639,13 @@ static void hook_mark_paint(void)
 {
     ui_put(" ");
     ui_esc(ui_style(UI_CHROME));
-    ui_put(HOOK_MARK);
+    ui_put(UI_HOOK_MARK);
     ui_esc(ui_style(UI_RESET));
 }
 
 static int hook_mark_width(int hooked)
 {
-    return hooked ? (int)ui_cells(HOOK_MARK) + 1 : 0;
+    return hooked ? (int)ui_cells(UI_HOOK_MARK) + 1 : 0;
 }
 
 void view_tool_call(const char *name, const char *arg)

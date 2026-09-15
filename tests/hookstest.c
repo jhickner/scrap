@@ -128,6 +128,19 @@ int main(void)
     ctx = hooks_context(9, "Bash", "{}");
     eq("out of range", ctx, NULL);
 
+    eq_int("prompt count", hooks_parse(
+        "- event: UserPromptSubmit\n"
+        "  match: [kitty graphics, kitty image]\n"
+        "  context: Read kitty.md.\n"), 1);
+    eq("prompt backend tool", (hooks_backend(table, HOOKS_MAX), table[0].tool), "");
+    ctx = hooks_context(0, NULL,
+        "{\"prompt\":\"make a Kitty Graphics viewer\",\"cwd\":\"/p\"}");
+    eq("prompt match", ctx, "Read kitty.md.");
+    free(ctx);
+    ctx = hooks_context(0, NULL,
+        "{\"prompt\":\"fix the build\",\"cwd\":\"/kitty graphics\"}");
+    eq("prompt miss ignores other fields", ctx, NULL);
+
     eq_int("empty", hooks_parse(""), 0);
     eq_int("empty count", hooks_count(), 0);
 

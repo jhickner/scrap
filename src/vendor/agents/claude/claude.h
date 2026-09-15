@@ -893,7 +893,8 @@ static void cl_hook_callback(claude_client *c, cJSON *ev) {
             cJSON_GetObjectItemCaseSensitive(input, "tool_name")) : NULL;
         cJSON *tool_input = input ?
             cJSON_GetObjectItemCaseSensitive(input, "tool_input") : NULL;
-        char *input_json = tool_input ? cJSON_PrintUnformatted(tool_input) : NULL;
+        cJSON *payload = tool_input ? tool_input : input;
+        char *input_json = payload ? cJSON_PrintUnformatted(payload) : NULL;
         context = c->on_hook(c->on_hook_ud, hook, tool, input_json);
         free(input_json);
         if (context && *context) {
