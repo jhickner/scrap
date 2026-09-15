@@ -38,6 +38,7 @@
 #define KEY_ASK    'p'
 #define KEY_HERE   'c'
 #define KEY_ALL    '*'
+#define KEY_PULL   'a'
 
 static int show_all;
 
@@ -365,6 +366,22 @@ static void yank(const struct live_session *v)
     ui_flush();
 }
 
+static void yank_all(const struct live_session *live, int nlive)
+{
+    int any = 0;
+    for (int i = 0; i < nlive; i++) {
+        if (live[i].mine || !live[i].id[0])
+            continue;
+        yank(&live[i]);
+        any = 1;
+    }
+    if (!any) {
+        ui_note("no sessions in other windows");
+        ui_put("\n");
+        ui_flush();
+    }
+}
+
 static int pid_count(const struct live_session *live, int n, long pid)
 {
     int found = 0;
@@ -377,10 +394,6 @@ static int pid_count(const struct live_session *live, int n, long pid)
 static void close_live(const struct live_session *v, const struct live_session *live,
                        int nlive)
 {
-    ui_bar(ui_style(UI_DIM), "closing the session\xe2\x80\xa6");
-    ui_put("\n");
-    ui_flush();
-
     char screen[4400];
     int said = 0;
     if (handoff_kill(v->pid, v->id, screen, sizeof screen, waiting, &said)) {
@@ -736,7 +749,7 @@ static int switch_once(void)
     }
 
     char shortcuts[24] = {KEY_CLOSE, KEY_NEW, KEY_ASK, KEY_GO, KEY_RENAME,
-                          KEY_ALL, KEY_HERE,
+                          KEY_ALL, KEY_HERE, KEY_PULL,
                           KEY_CTRL(KEY_CLOSE), KEY_CTRL(KEY_NEW), KEY_CTRL(KEY_ASK),
                           KEY_CTRL(KEY_GO), KEY_CTRL(KEY_RENAME),
                           '\n', PICK_KEY_RIGHT, '\t', 0};
@@ -781,6 +794,12 @@ static int switch_once(void)
         resume_row = picked;
         free(live);
         return 1;
+    }
+
+    if (pressed == KEY_PULL) {
+        yank_all(live, nlive);
+        free(live);
+        return 0;
     }
 
     if (pressed == '\t') {
