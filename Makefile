@@ -121,7 +121,10 @@ FULL_LIB_TOOLS := spintest chrometest ttytest keydump gitinfotest muxcfgtest \
 JPEG_TOOLS := imagerowtest imagefittest imagetest mdtest sessionpresenttest
 
 $(addprefix $(BUILD)/,$(FULL_LIB_TOOLS)): TOOL_LIBS = $(LIBS)
-$(addprefix $(BUILD)/,$(JPEG_TOOLS)): TOOL_LIBS = $(JPEG_LIBS)
+$(addprefix $(BUILD)/,$(JPEG_TOOLS)): TOOL_LIBS = $(JPEG_LIBS) -pthread -lcurl
+
+# vendor/impl.o carries the grokbot backend, which links libcurl.
+TOOL_LIBS ?= -pthread -lcurl
 
 # Dependencies stay explicit below so each harness remains an isolated module
 # link. The compile/link mechanics and flag handling live in one place.

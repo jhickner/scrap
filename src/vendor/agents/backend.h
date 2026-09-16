@@ -1,7 +1,7 @@
 /*
  * backend.h — common backend interface for headless coding agents.
  *
- * Includes adapters for the nested claude/, codex/, grok/, and pi/ drivers. Define
+ * Includes adapters for the nested claude/, codex/, grok/, pi/, and grokbot/ drivers. Define
  * BACKEND_IMPLEMENTATION in exactly one C file; compile it with one bundled
  * cJSON.c (for example, claude/cJSON.c).
  *
@@ -34,7 +34,8 @@ typedef struct {
 
 /* Nothing here is retained: a backend copies what it needs. */
 typedef struct {
-    const char *name;           /* "claude" | "codex" | "grok" | "pi"; NULL -> claude */
+    const char *name;           /* "claude" | "codex" | "grok" | "pi" | "grokbot";
+                                   NULL -> claude                                    */
     const char *model;          /* driver/CLI model identifier; NULL -> its default   */
     const char *effort;         /* reasoning/thinking effort; NULL -> its default     */
     const char *system;         /* applied to every turn; NULL -> none                */
@@ -223,7 +224,8 @@ Backend *backend_open(const char *name, const char *model, const char *system);
 /* As backend_open, with the rest of the options. `opts` may be NULL. */
 Backend *backend_open_ex(const backend_opts *opts);
 
-/* The names backend_open accepts, NULL-terminated. */
+/* The names backend_open accepts, NULL-terminated. "grokbot" (model = bot or
+ * group name) is accepted but not listed. */
 const char *const *backend_names(void);
 
 /* Fan n prompts across independent agent sessions. Each worker owns one
@@ -375,6 +377,13 @@ static const char *backend_none(Backend *b) { (void)b; return NULL; }
 #define PI_IMPLEMENTATION
 #define PI_BACKEND_IMPLEMENTATION
 #include "pi/pi.h"
+#define GROKBOT_IMPLEMENTATION
+#include "grokbot/grokbot.h"
+
+#include <stdio.h>
+#include <time.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 /* ---------- claude ---------- */
 
@@ -1071,6 +1080,413 @@ static Backend *backend_grok_open(const backend_opts *o) {
     return b;
 }
 
+/* ---------- grokbot ----------
+ *
+ * model names a Grok Bot bot or group. A turn is sendPrompt followed by
+ * transcript polling: the user entry carrying our clientNonce gives the
+ * requestId, entries under it are the reply, and the turn ends once the
+ * agent reports isRunningTurn false. Between turns a poll thread on its own
+ * gateway handle queues entries newer than the last turn for idle_pump. */
+
+#define BACKEND_GROKBOT_TIMEOUT_MS (5 * 60 * 1000)
+#define BACKEND_GROKBOT_IDLE_MS    3000
+
+typedef struct backend_grokbot_item {
+    char *text;
+    struct backend_grokbot_item *next;
+} backend_grokbot_item;
+
+typedef struct {
+    backend_state st;
+    grokbot *g;
+    char *agent_id, *agent_name;
+    char err[512];
+    pthread_t thread;
+    int thread_on;
+    int pipe_fd[2];
+    pthread_mutex_t lock;
+    pthread_cond_t wake;
+    int stop, in_turn;
+    double watermark;
+    backend_grokbot_item *queue, *queue_tail;
+} backend_grokbot;
+
+static double backend_grokbot_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)(ts.tv_nsec / 1000000);
+}
+
+static cJSON *backend_grokbot_tail(grokbot *g, const char *id, int limit) {
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "id", id);
+    cJSON_AddNumberToObject(body, "limit", limit);
+    return grokbot_call(g, "getAgentTranscriptTail", body);
+}
+
+/* Reply text of an entry, or NULL for entries that are not bot output. */
+static char *backend_grokbot_entry_text(cJSON *e) {
+    const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(e, "kind"));
+    if (!kind) return NULL;
+    if (!strcmp(kind, "send-message")) {
+        const char *t = cJSON_GetStringValue(
+            cJSON_GetObjectItem(cJSON_GetObjectItem(e, "message"), "content"));
+        return backend_dup(t);
+    }
+    if (strcmp(kind, "message")) return NULL;
+    const char *role = cJSON_GetStringValue(cJSON_GetObjectItem(e, "role"));
+    const char *t = cJSON_GetStringValue(cJSON_GetObjectItem(e, "content"));
+    if (!role || strcmp(role, "assistant") || !t || !*t) return NULL;
+    if (cJSON_IsTrue(cJSON_GetObjectItem(e, "isStreaming"))) return NULL;
+    cJSON *to = cJSON_GetObjectItem(e, "toAgent");
+    const char *to_name = cJSON_GetStringValue(cJSON_GetObjectItem(to, "name"));
+    if (!to_name) return strdup(t);
+    size_t n = strlen(to_name) + strlen(t) + 8;
+    char *out = malloc(n);
+    if (out) snprintf(out, n, "→ %s: %s", to_name, t);
+    return out;
+}
+
+static int backend_grokbot_is_outbound(cJSON *e) {
+    return cJSON_GetObjectItem(e, "toAgent") != NULL;
+}
+
+static double backend_grokbot_ts(cJSON *e) {
+    cJSON *t = cJSON_GetObjectItem(e, "timestampMs");
+    return cJSON_IsNumber(t) ? t->valuedouble : 0;
+}
+
+static cJSON *backend_grokbot_entries(cJSON *tail) {
+    cJSON *a = cJSON_GetObjectItem(tail, "entries");
+    return cJSON_IsArray(a) ? a : NULL;
+}
+
+static int backend_grokbot_running(grokbot *g, const char *id) {
+    cJSON *list = grokbot_list_agents(g);
+    if (!list) return -1;
+    int running = -1;
+    cJSON *a;
+    cJSON_ArrayForEach(a, list) {
+        const char *aid = cJSON_GetStringValue(cJSON_GetObjectItem(a, "id"));
+        if (!aid || strcmp(aid, id)) continue;
+        running = cJSON_IsTrue(cJSON_GetObjectItem(a, "isRunningTurn")) ||
+                  cJSON_IsTrue(cJSON_GetObjectItem(a, "isComposingMessage"));
+        break;
+    }
+    cJSON_Delete(list);
+    return running;
+}
+
+static void *backend_grokbot_poll(void *arg) {
+    backend_grokbot *x = arg;
+    grokbot_opts o = { .gateway_url = x->g->url, .gateway_token = x->g->token };
+    char *headers = x->g->headers ? cJSON_PrintUnformatted(x->g->headers) : NULL;
+    o.extra_headers_json = headers;
+    grokbot *g = grokbot_open(&o);
+    free(headers);
+    char *id = strdup(x->agent_id);
+    pthread_mutex_lock(&x->lock);
+    while (g && id && !x->stop) {
+        struct timespec until;
+        clock_gettime(CLOCK_REALTIME, &until);
+        until.tv_sec += BACKEND_GROKBOT_IDLE_MS / 1000;
+        pthread_cond_timedwait(&x->wake, &x->lock, &until);
+        if (x->stop) break;
+        if (x->in_turn) continue;
+        pthread_mutex_unlock(&x->lock);
+        cJSON *tail = backend_grokbot_tail(g, id, 20);
+        pthread_mutex_lock(&x->lock);
+        if (!tail || x->in_turn || x->stop) { cJSON_Delete(tail); continue; }
+        int added = 0;
+        double mark = x->watermark;
+        cJSON *e;
+        cJSON_ArrayForEach(e, backend_grokbot_entries(tail)) {
+            double ts = backend_grokbot_ts(e);
+            if (ts <= x->watermark) continue;
+            if (ts > mark) mark = ts;
+            char *text = backend_grokbot_entry_text(e);
+            backend_grokbot_item *it = text ? calloc(1, sizeof *it) : NULL;
+            if (!it) { free(text); continue; }
+            it->text = text;
+            if (x->queue_tail) x->queue_tail->next = it; else x->queue = it;
+            x->queue_tail = it;
+            added = 1;
+        }
+        x->watermark = mark;
+        cJSON_Delete(tail);
+        if (added) (void)!write(x->pipe_fd[1], "", 1);
+    }
+    pthread_mutex_unlock(&x->lock);
+    free(id);
+    grokbot_close(g);
+    return NULL;
+}
+
+static void backend_grokbot_drain_queue(backend_grokbot *x) {
+    backend_grokbot_item *it = x->queue;
+    x->queue = x->queue_tail = NULL;
+    while (it) {
+        backend_grokbot_item *next = it->next;
+        free(it->text); free(it);
+        it = next;
+    }
+    char buf[64];
+    while (read(x->pipe_fd[0], buf, sizeof buf) > 0) {}
+}
+
+static void backend_grokbot_stop(backend_grokbot *x) {
+    if (x->thread_on) {
+        pthread_mutex_lock(&x->lock);
+        x->stop = 1;
+        pthread_cond_signal(&x->wake);
+        pthread_mutex_unlock(&x->lock);
+        pthread_join(x->thread, NULL);
+        x->thread_on = 0;
+        x->stop = 0;
+    }
+    pthread_mutex_lock(&x->lock);
+    backend_grokbot_drain_queue(x);
+    pthread_mutex_unlock(&x->lock);
+    grokbot_close(x->g);
+    x->g = NULL;
+    free(x->agent_id); free(x->agent_name);
+    x->agent_id = x->agent_name = NULL;
+}
+
+static int backend_grokbot_start(Backend *b, const char *resume) {
+    backend_grokbot *x = b->ctx;
+    (void)resume;
+    backend_grokbot_stop(x);
+    x->err[0] = 0;
+    if (!x->st.model) {
+        snprintf(x->err, sizeof x->err, "grokbot: no bot or group name set as model");
+        return 0;
+    }
+    x->g = grokbot_open(NULL);
+    if (!x->g) {
+        snprintf(x->err, sizeof x->err, "grokbot: gateway session unavailable");
+        return 0;
+    }
+    grokbot_agent a;
+    if (!grokbot_resolve(x->g, x->st.model, &a)) {
+        snprintf(x->err, sizeof x->err, "grokbot: %s", grokbot_error(x->g));
+        grokbot_close(x->g);
+        x->g = NULL;
+        return 0;
+    }
+    x->agent_id = strdup(a.id);
+    x->agent_name = strdup(*a.name ? a.name : a.id);
+    grokbot_agent_free(&a);
+    double mark = backend_grokbot_now_ms();
+    cJSON *tail = backend_grokbot_tail(x->g, x->agent_id, 5);
+    cJSON *e;
+    cJSON_ArrayForEach(e, backend_grokbot_entries(tail)) {
+        if (backend_grokbot_ts(e) > mark) mark = backend_grokbot_ts(e);
+    }
+    cJSON_Delete(tail);
+    pthread_mutex_lock(&x->lock);
+    x->watermark = mark;
+    x->in_turn = 0;
+    pthread_mutex_unlock(&x->lock);
+    x->thread_on = pthread_create(&x->thread, NULL, backend_grokbot_poll, x) == 0;
+    backend_event ev = { .kind = BACKEND_EV_INIT, .name = x->agent_name };
+    backend_emit(&x->st, &ev);
+    return 1;
+}
+
+static int backend_grokbot_wait(backend_grokbot *x, int ms) {
+    for (int t = 0; t < ms; t += 20) {
+        if (x->st.abort && x->st.abort()) return 1;
+        usleep(20000);
+    }
+    return 0;
+}
+
+static char *backend_grokbot_ask_ex(Backend *b, const char *user, backend_result *meta) {
+    backend_grokbot *x = b->ctx;
+    if (meta) memset(meta, 0, sizeof *meta);
+    if (!x->g && !backend_grokbot_start(b, NULL)) {
+        if (meta) { meta->is_error = 1; snprintf(meta->subtype, sizeof meta->subtype, "error"); }
+        return NULL;
+    }
+    pthread_mutex_lock(&x->lock);
+    x->in_turn = 1;
+    pthread_mutex_unlock(&x->lock);
+
+    char nonce[37];
+    gb_uuid(nonce);
+    double sent_ms = backend_grokbot_now_ms() - 2000;
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "agentId", x->agent_id);
+    cJSON_AddStringToObject(body, "prompt", user ? user : "");
+    cJSON_AddStringToObject(body, "clientNonce", nonce);
+    cJSON *sent = grokbot_call(x->g, "sendPrompt", body);
+
+    char *request = NULL, *reply = NULL;
+    size_t reply_len = 0;
+    cJSON *seen = cJSON_CreateObject();
+    double mark = sent_ms, deadline = backend_grokbot_now_ms() + BACKEND_GROKBOT_TIMEOUT_MS;
+    int error = !sent, interrupted = 0, got = 0;
+    const char *subtype = "success";
+    if (!sent) snprintf(x->err, sizeof x->err, "grokbot: %s", grokbot_error(x->g));
+    cJSON_Delete(sent);
+
+    while (!error) {
+        if (backend_grokbot_wait(x, 1000)) { interrupted = 1; subtype = "interrupted"; break; }
+        cJSON *tail = backend_grokbot_tail(x->g, x->agent_id, 40);
+        cJSON *e;
+        cJSON_ArrayForEach(e, backend_grokbot_entries(tail)) {
+            const char *nc = cJSON_GetStringValue(cJSON_GetObjectItem(e, "clientNonce"));
+            const char *rq = cJSON_GetStringValue(cJSON_GetObjectItem(e, "requestId"));
+            if (!request && nc && rq && !strcmp(nc, nonce)) request = strdup(rq);
+        }
+        cJSON_ArrayForEach(e, backend_grokbot_entries(tail)) {
+            const char *eid = cJSON_GetStringValue(cJSON_GetObjectItem(e, "id"));
+            const char *rq = cJSON_GetStringValue(cJSON_GetObjectItem(e, "requestId"));
+            double ts = backend_grokbot_ts(e);
+            if (!eid || cJSON_GetObjectItem(seen, eid)) continue;
+            if (request ? (!rq || strcmp(rq, request)) : ts <= sent_ms) continue;
+            char *text = backend_grokbot_entry_text(e);
+            if (!text) continue;
+            cJSON_AddTrueToObject(seen, eid);
+            if (ts > mark) mark = ts;
+            got = 1;
+            backend_event ev = { .kind = BACKEND_EV_ASSISTANT, .text = text };
+            backend_emit(&x->st, &ev);
+            if (!backend_grokbot_is_outbound(e)) {
+                size_t n = strlen(text);
+                char *grown = realloc(reply, reply_len + n + 3);
+                if (grown) {
+                    reply = grown;
+                    if (reply_len) { memcpy(reply + reply_len, "\n\n", 2); reply_len += 2; }
+                    memcpy(reply + reply_len, text, n + 1);
+                    reply_len += n;
+                }
+            }
+            free(text);
+        }
+        cJSON_Delete(tail);
+        if (request && got && backend_grokbot_running(x->g, x->agent_id) == 0) break;
+        if (backend_grokbot_now_ms() > deadline) {
+            error = 1;
+            subtype = "timeout";
+            snprintf(x->err, sizeof x->err, "grokbot: no reply from %s within %d s",
+                     x->agent_name, BACKEND_GROKBOT_TIMEOUT_MS / 1000);
+        }
+    }
+    if (error && !strcmp(subtype, "success")) subtype = "error";
+    cJSON_Delete(seen);
+    free(request);
+
+    pthread_mutex_lock(&x->lock);
+    if (mark > x->watermark) x->watermark = mark;
+    backend_grokbot_drain_queue(x);
+    x->in_turn = 0;
+    pthread_mutex_unlock(&x->lock);
+
+    if (meta) {
+        meta->is_error = error;
+        meta->interrupted = interrupted;
+        snprintf(meta->subtype, sizeof meta->subtype, "%s", subtype);
+    }
+    if (error && !reply) return NULL;
+    return reply ? reply : strdup("");
+}
+
+static char *backend_grokbot_ask(Backend *b, const char *user) {
+    return backend_grokbot_ask_ex(b, user, NULL);
+}
+
+static int backend_grokbot_reset(Backend *b) { (void)b; return 1; }
+
+static void backend_grokbot_set_event_cb(Backend *b,
+                                         void (*cb)(void *ud, const backend_event *ev),
+                                         void *ud) {
+    backend_grokbot *x = b->ctx;
+    x->st.on_event = cb;
+    x->st.event_ud = ud;
+}
+
+static void backend_grokbot_set_abort(Backend *b, int (*cb)(void)) {
+    ((backend_grokbot *)b->ctx)->st.abort = cb;
+}
+
+static int backend_grokbot_idle_fd(Backend *b) {
+    backend_grokbot *x = b->ctx;
+    return x->thread_on ? x->pipe_fd[0] : -1;
+}
+
+static int backend_grokbot_idle_pump(Backend *b) {
+    backend_grokbot *x = b->ctx;
+    pthread_mutex_lock(&x->lock);
+    backend_grokbot_item *it = x->queue;
+    x->queue = x->queue_tail = NULL;
+    char buf[64];
+    while (read(x->pipe_fd[0], buf, sizeof buf) > 0) {}
+    pthread_mutex_unlock(&x->lock);
+    while (it) {
+        backend_event ev = { .kind = BACKEND_EV_ASSISTANT, .text = it->text };
+        backend_emit(&x->st, &ev);
+        backend_grokbot_item *next = it->next;
+        free(it->text); free(it);
+        it = next;
+    }
+    return 0;
+}
+
+static const char *backend_grokbot_model(Backend *b) {
+    backend_grokbot *x = b->ctx;
+    return x->agent_name ? x->agent_name : x->st.model;
+}
+
+static const char *backend_grokbot_error(Backend *b) {
+    backend_grokbot *x = b->ctx;
+    return x->err[0] ? x->err : NULL;
+}
+
+static void backend_grokbot_close(Backend *b) {
+    backend_grokbot *x = b->ctx;
+    backend_grokbot_stop(x);
+    close(x->pipe_fd[0]);
+    close(x->pipe_fd[1]);
+    pthread_mutex_destroy(&x->lock);
+    pthread_cond_destroy(&x->wake);
+    backend_state_free(&x->st);
+    free(x); free(b);
+}
+
+static Backend *backend_grokbot_open(const backend_opts *o) {
+    backend_grokbot *x = calloc(1, sizeof *x);
+    Backend *b = calloc(1, sizeof *b);
+    if (!x || !b || pipe(x->pipe_fd) != 0) { free(x); free(b); return NULL; }
+    for (int i = 0; i < 2; i++) {
+        fcntl(x->pipe_fd[i], F_SETFL, fcntl(x->pipe_fd[i], F_GETFL) | O_NONBLOCK);
+        fcntl(x->pipe_fd[i], F_SETFD, FD_CLOEXEC);
+    }
+    pthread_mutex_init(&x->lock, NULL);
+    pthread_cond_init(&x->wake, NULL);
+    backend_state_init(&x->st, o);
+    b->ctx = x;
+    b->caps = 0;
+    b->ask = backend_grokbot_ask;
+    b->reset = backend_grokbot_reset;
+    b->close = backend_grokbot_close;
+    b->start = backend_grokbot_start;
+    b->ask_ex = backend_grokbot_ask_ex;
+    b->set_model = backend_set_model_generic;
+    b->set_permission = backend_set_permission_none;
+    b->set_event_cb = backend_grokbot_set_event_cb;
+    b->set_abort_check = backend_grokbot_set_abort;
+    b->idle_fd = backend_grokbot_idle_fd;
+    b->idle_pump = backend_grokbot_idle_pump;
+    b->session_id = backend_none;
+    b->model = backend_grokbot_model;
+    b->effort = backend_none;
+    b->auth_source = backend_none;
+    b->last_error = backend_grokbot_error;
+    return b;
+}
+
 /* ---------- dispatch ---------- */
 
 static const char *const BACKEND_NAMES[] = { "claude", "codex", "grok", "pi", NULL };
@@ -1083,6 +1499,7 @@ Backend *backend_open_ex(const backend_opts *opts) {
     if (!strcmp(o.name, "codex"))             return backend_codex_open(&o);
     if (!strcmp(o.name, "grok"))              return backend_grok_open(&o);
     if (!strcmp(o.name, "pi"))                return pi_backend_open(&o);
+    if (!strcmp(o.name, "grokbot"))           return backend_grokbot_open(&o);
     return NULL;
 }
 
