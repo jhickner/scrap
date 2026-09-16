@@ -77,6 +77,7 @@ static int painting;
 static int sync_placeholders;
 
 static viewport_width_fn on_width;
+static viewport_cover_fn on_cover;
 static int painted_cols;
 
 static unsigned anchor_id;
@@ -299,6 +300,11 @@ void viewport_item_stale(unsigned mark)
 void viewport_on_width(viewport_width_fn fn)
 {
     on_width = fn;
+}
+
+void viewport_on_cover(viewport_cover_fn fn)
+{
+    on_cover = fn;
 }
 
 void viewport_scan(unsigned from, viewport_scan_fn fn, void *ctx)
@@ -1406,6 +1412,15 @@ void viewport_paint(void)
         all.row[skip + i] = NULL;
     }
     frame_reset(&all);
+
+    if (on_cover && built.n == body) {
+        on_cover(built.row, body, W);
+        for (int i = 0; i < body; i++) {
+            if (!built.row[i])
+                built.row[i] = blank_row();
+            built.hash[i] = row_hash(built.row[i] ? built.row[i] : "");
+        }
+    }
 
     for (int i = 0; i < chrome_shown; i++)
         frame_push(&built, strdup(chrome_rows[i]));

@@ -1,0 +1,346 @@
+#include "vncinset.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "image.h"
+#include "overlay.h"
+#include "text.h"
+#include "ui.h"
+
+#define STUB_W 320
+#define STUB_H 200
+
+#define BOX_H  "\xe2\x94\x80"
+#define BOX_V  "\xe2\x94\x82"
+#define BOX_TL "\xe2\x94\x8c"
+#define BOX_TR "\xe2\x94\x90"
+#define BOX_BL "\xe2\x94\x94"
+#define BOX_BR "\xe2\x94\x98"
+
+#define COLS_MIN 12
+#define ROWS_MIN 4
+
+struct vncinset {
+    char                    bot[128];
+    int                     on;
+    int                     pct;
+    enum vncinset_side      side;
+    struct vncinset_source *src;
+    uint64_t                drawn_gen;
+    int                     drawn;
+};
+
+struct stub {
+    struct vncinset_source base;
+    uint8_t                rgb[STUB_W * STUB_H * 3];
+    uint64_t               gen;
+    int                    filled;
+};
+
+static void stub_fill(struct stub *s)
+{
+    static const uint8_t bars[8][3] = {
+        {235, 235, 235}, {235, 235, 16}, {16, 235, 235}, {16, 235, 16},
+        {235, 16, 235},  {235, 16, 16},  {16, 16, 235},  {16, 16, 16},
+    };
+    int shift = (int)(s->gen % STUB_W);
+    int bx = (int)(s->gen * 7 % (STUB_W - 40));
+    int by = (int)(s->gen * 5 % (STUB_H - 40));
+    for (int y = 0; y < STUB_H; y++) {
+        for (int x = 0; x < STUB_W; x++) {
+            uint8_t *p = s->rgb + (y * STUB_W + x) * 3;
+            if (y >= STUB_H * 3 / 4) {
+                uint8_t g = (uint8_t)(((x + shift * 4) % STUB_W) * 255 / STUB_W);
+                p[0] = p[1] = p[2] = g;
+            } else {
+                memcpy(p, bars[((x + shift * 4) % STUB_W) * 8 / STUB_W], 3);
+            }
+            if (x >= bx && x < bx + 40 && y >= by && y < by + 40)
+                p[0] = p[1] = p[2] = 0;
+        }
+    }
+    s->filled = 1;
+}
+
+static int stub_frame(struct vncinset_source *src, struct vncinset_frame *out)
+{
+    struct stub *s = (struct stub *)src;
+    uint64_t     gen = (uint64_t)(now_seconds() * VNCINSET_STUB_FPS);
+    if (!s->filled || gen != s->gen) {
+        s->gen = gen;
+        stub_fill(s);
+    }
+    out->rgb = s->rgb;
+    out->w = STUB_W;
+    out->h = STUB_H;
+    out->gen = s->gen;
+    return 1;
+}
+
+static void stub_close(struct vncinset_source *src) { free(src); }
+
+struct vncinset_source *vncinset_stub_open(void)
+{
+    struct stub *s = calloc(1, sizeof *s);
+    if (!s)
+        return NULL;
+    s->base.frame = stub_frame;
+    s->base.close = stub_close;
+    return &s->base;
+}
+
+static struct vncinset_source *stub_opener(const char *bot)
+{
+    (void)bot;
+    return vncinset_stub_open();
+}
+
+static vncinset_open_fn opener = stub_opener;
+
+void vncinset_set_opener(vncinset_open_fn fn) { opener = fn ? fn : stub_opener; }
+
+int vncinset_layout(enum vncinset_side side, int pct, int cols, int rows, int frame_w,
+                    int frame_h, int cell_w, int cell_h, struct vncinset_box *out)
+{
+    if (cols < COLS_MIN || rows < ROWS_MIN || frame_w < 1 || frame_h < 1 || cell_w < 1 ||
+        cell_h < 1)
+        return 0;
+    if (pct < VNCINSET_WIDTH_MIN)
+        pct = VNCINSET_WIDTH_MIN;
+    if (pct > VNCINSET_WIDTH_MAX)
+        pct = VNCINSET_WIDTH_MAX;
+
+    int max_cells = image_cells_max();
+    int w = cols * pct / 100;
+    if (w < COLS_MIN)
+        w = COLS_MIN;
+    if (w > cols)
+        w = cols;
+
+    long img_cols = w - 2;
+    if (img_cols > max_cells)
+        img_cols = max_cells;
+    long img_rows = (img_cols * cell_w * frame_h + (long)frame_w * cell_h / 2) /
+                    ((long)frame_w * cell_h);
+    if (img_rows < 1)
+        img_rows = 1;
+    if (img_rows > rows - 2 || img_rows > max_cells) {
+        img_rows = rows - 2 < max_cells ? rows - 2 : max_cells;
+        img_cols = (img_rows * cell_h * frame_w + (long)frame_h * cell_w / 2) /
+                   ((long)frame_h * cell_w);
+        if (img_cols < 1)
+            img_cols = 1;
+    }
+
+    out->img_cols = (int)img_cols;
+    out->img_rows = (int)img_rows;
+    out->w = out->img_cols + 2;
+    out->h = out->img_rows + 2;
+    out->row = 0;
+    out->col = side == VNCINSET_LEFT ? 0 : cols - out->w;
+    return 1;
+}
+
+/* the inset last transmitted, so a frame goes out once however often the
+   screen is painted */
+static const struct vncinset *sent_by;
+static uint64_t               sent_gen;
+static int                    sent_cols, sent_rows;
+
+struct vncinset *vncinset_new(const char *bot)
+{
+    struct vncinset *v = calloc(1, sizeof *v);
+    if (!v)
+        return NULL;
+    snprintf(v->bot, sizeof v->bot, "%s", bot ? bot : "");
+    v->pct = VNCINSET_WIDTH_DEFAULT;
+    v->side = VNCINSET_RIGHT;
+    return v;
+}
+
+static void close_source(struct vncinset *v)
+{
+    if (v->src && v->src->close)
+        v->src->close(v->src);
+    v->src = NULL;
+    v->drawn = 0;
+    if (sent_by == v) {
+        image_drop(image_inset_id());
+        sent_by = NULL;
+    }
+}
+
+void vncinset_free(struct vncinset *v)
+{
+    if (!v)
+        return;
+    close_source(v);
+    free(v);
+}
+
+void vncinset_set_bot(struct vncinset *v, const char *bot)
+{
+    if (!v || !bot || !strcmp(v->bot, bot))
+        return;
+    close_source(v);
+    snprintf(v->bot, sizeof v->bot, "%s", bot);
+}
+
+int vncinset_shown(const struct vncinset *v) { return v && v->on; }
+
+void vncinset_show(struct vncinset *v, int on)
+{
+    if (!v)
+        return;
+    v->on = on ? 1 : 0;
+    if (!v->on)
+        close_source(v);
+}
+
+void vncinset_set_side(struct vncinset *v, enum vncinset_side side)
+{
+    if (v)
+        v->side = side;
+}
+
+void vncinset_set_width(struct vncinset *v, int pct)
+{
+    if (!v)
+        return;
+    if (pct < VNCINSET_WIDTH_MIN)
+        pct = VNCINSET_WIDTH_MIN;
+    if (pct > VNCINSET_WIDTH_MAX)
+        pct = VNCINSET_WIDTH_MAX;
+    v->pct = pct;
+}
+
+int vncinset_width(const struct vncinset *v) { return v ? v->pct : VNCINSET_WIDTH_DEFAULT; }
+
+enum vncinset_side vncinset_side(const struct vncinset *v)
+{
+    return v ? v->side : VNCINSET_RIGHT;
+}
+
+static int latest(struct vncinset *v, struct vncinset_frame *f)
+{
+    memset(f, 0, sizeof *f);
+    if (!v->src && opener)
+        v->src = opener(v->bot);
+    return v->src && v->src->frame && v->src->frame(v->src, f) && f->rgb && f->w > 0 &&
+           f->h > 0;
+}
+
+int vncinset_stale(struct vncinset *v)
+{
+    if (!v || !v->on)
+        return 0;
+    struct vncinset_frame f;
+    int                   have = latest(v, &f);
+    return have != v->drawn || (have && f.gen != v->drawn_gen);
+}
+
+struct paint {
+    const struct vncinset     *v;
+    const struct vncinset_box *b;
+    int                        image;
+    int                        at;
+};
+
+static void rule(int n)
+{
+    for (int i = 0; i < n; i++)
+        ui_put(BOX_H);
+}
+
+static void paint_row(void *ud, int unused, int width)
+{
+    (void)unused;
+    const struct paint        *p = ud;
+    const struct vncinset_box *b = p->b;
+    int                        inner = width - 2;
+
+    ui_esc(ui_style(UI_DIM));
+    if (p->at == 0) {
+        ui_put(BOX_TL);
+        size_t budget = inner > 2 ? (size_t)(inner - 2) : 0;
+        size_t fit = budget ? ui_fit_visible(p->v->bot, strlen(p->v->bot), budget) : 0;
+        int    used = 0;
+        if (fit) {
+            ui_put(" ");
+            ui_putn(p->v->bot, fit);
+            ui_put(" ");
+            used = (int)ui_cells_n(p->v->bot, fit) + 2;
+        }
+        rule(inner - used);
+        ui_put(BOX_TR);
+    } else if (p->at == b->h - 1) {
+        ui_put(BOX_BL);
+        rule(inner);
+        ui_put(BOX_BR);
+    } else {
+        ui_put(BOX_V);
+        ui_esc(ui_style(UI_RESET));
+        if (p->image) {
+            image_place_row(image_inset_id(), p->at - 1, inner);
+        } else if (p->at == (b->h - 1) / 2 && inner >= 8) {
+            static const char wait[] = "no frame";
+            int pad = (inner - 8) / 2;
+            ui_pad(pad);
+            ui_esc(ui_style(UI_DIM));
+            ui_put(wait);
+            ui_pad(inner - 8 - pad);
+        } else {
+            ui_pad(inner);
+        }
+        ui_esc(ui_style(UI_DIM));
+        ui_put(BOX_V);
+    }
+    ui_esc(ui_style(UI_RESET));
+}
+
+void vncinset_cover(struct vncinset *v, char **rows, int n, int cols)
+{
+    if (!v || !v->on)
+        return;
+
+    struct vncinset_frame f;
+    int                   have = latest(v, &f);
+    int                   cw, ch;
+    image_cell_size(&cw, &ch);
+
+    struct vncinset_box b;
+    if (!vncinset_layout(v->side, v->pct, cols, n, have ? f.w : 16, have ? f.h : 10, cw,
+                         ch, &b))
+        return;
+
+    int image = have && image_available();
+    if (image && (sent_by != v || sent_gen != f.gen || sent_cols != b.img_cols ||
+                  sent_rows != b.img_rows)) {
+        image_frame(image_inset_id(), f.rgb, f.w, f.h, b.img_cols, b.img_rows);
+        sent_by = v;
+        sent_gen = f.gen;
+        sent_cols = b.img_cols;
+        sent_rows = b.img_rows;
+    }
+    v->drawn = have;
+    v->drawn_gen = have ? f.gen : 0;
+
+    struct paint   p = {v, &b, image, 0};
+    struct overlay o = {.row = 0, .col = b.col, .w = b.w, .rows = 1, .paint_row = paint_row,
+                        .ud = &p};
+    for (int r = b.row; r < b.row + b.h && r < n; r++) {
+        p.at = r - b.row;
+        ui_sink_begin();
+        overlay_put(rows[r] ? rows[r] : "", &o);
+        char *s = ui_sink_end();
+        if (!s)
+            continue;
+        size_t len = strlen(s);
+        while (len && (s[len - 1] == '\n' || s[len - 1] == '\r'))
+            s[--len] = '\0';
+        free(rows[r]);
+        rows[r] = s;
+    }
+}

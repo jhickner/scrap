@@ -737,6 +737,39 @@ void image_drop(uint32_t id)
         kg_delete(id);
 }
 
+void image_cell_size(int *cw, int *ch)
+{
+    int rows;
+    cell_pixels(cw, ch, &rows);
+}
+
+int image_cells_max(void) { return KG_DIACRITIC_COUNT; }
+
+/* 0x3E, like full_id's 0x3F, is a low byte next_id() never produces */
+uint32_t image_inset_id(void)
+{
+    unsigned pid = (unsigned)getpid();
+    return (uint32_t)(0x40 | (pid & 0x3F)) << 16 |
+           (uint32_t)(0x40 | ((pid >> 6) & 0x3F)) << 8 | 0x3E;
+}
+
+void image_frame(uint32_t id, const uint8_t *rgb, int w, int h, int cols, int rows)
+{
+    if (!id || !rgb || w < 1 || h < 1 || cols < 1 || rows < 1 || !image_available())
+        return;
+    kg_transmit_ex(id, rgb, w, h, 3);
+    kg_virtual_place(id, cols, rows);
+}
+
+void image_place_row(uint32_t id, int row, int cols)
+{
+    term_to_row = 1;
+    for (int c = 0; c < cols; c++)
+        kg_placeholder_cell(id, row, c);
+    term_to_row = 0;
+    ui_esc("\x1b[39m");
+}
+
 static void finish_pending(struct pending *p, int status)
 {
     int ok = 0;

@@ -42,6 +42,7 @@
 #include "vendor/agents/backend.h"
 #include "text.h"
 #include "vendor/cJSON.h"
+#include "vncinset.h"
 #include "voice.h"
 
 struct session {
@@ -106,6 +107,7 @@ struct session {
     int      unseen;
     char     tail_bot[128];
     struct grokbottail_mark tail_mark;
+    struct vncinset *inset;
 
     pthread_t       thread;
     int             running;
@@ -870,6 +872,7 @@ void session_free(struct session *s)
     free(s->error_note);
     free(s->system_extra);
     transcript_free(&s->transcript);
+    vncinset_free(s->inset);
     if (live == s)
         live = NULL;
     free(s);
@@ -2136,6 +2139,15 @@ void session_set_tail_mark(struct session *s, const char *bot,
         return;
     snprintf(s->tail_bot, sizeof s->tail_bot, "%s", bot);
     s->tail_mark = *mark;
+}
+
+struct vncinset *session_inset(struct session *s, int create)
+{
+    if (!s)
+        return NULL;
+    if (!s->inset && create)
+        s->inset = vncinset_new(s->model);
+    return s->inset;
 }
 
 int session_argv(const struct session *s, char **out, int max, unsigned what)

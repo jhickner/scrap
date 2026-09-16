@@ -31,7 +31,7 @@ CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           boardtest modelstest boardgridtest boardtiletest viewstest sessionpresenttest \
           workspacetest replboxtest ttytest gitinfotest sidechannelviewtest \
           sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
-          dispatchtest voicetabtest hookstest grokbottailtest
+          dispatchtest voicetabtest hookstest grokbottailtest vncinsettest
 CHECKS += orchstatustest orchinstalltest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest
 
@@ -118,7 +118,7 @@ manual: $(MANUAL_BINS)
 
 FULL_LIB_TOOLS := spintest chrometest ttytest keydump gitinfotest muxcfgtest \
                   telegramtest boardgridtest workspacetest replboxtest voicetabtest
-JPEG_TOOLS := imagerowtest imagefittest imagetest mdtest sessionpresenttest
+JPEG_TOOLS := imagerowtest vncinsettest imagefittest imagetest mdtest sessionpresenttest
 
 $(addprefix $(BUILD)/,$(FULL_LIB_TOOLS)): TOOL_LIBS = $(LIBS)
 $(addprefix $(BUILD)/,$(JPEG_TOOLS)): TOOL_LIBS = $(JPEG_LIBS) -pthread -lcurl
@@ -145,6 +145,8 @@ $(BUILD)/prompttest: tests/prompttest.c tests/stubs/tabbar.c $(BUILD)/status.o $
 $(BUILD)/chrometest: tests/chrometest.c $(BUILD)/confirm.o $(BUILD)/frontend.o tests/stubs/tabbar.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
 $(BUILD)/imagerowtest: tests/imagerowtest.c $(BUILD)/image.o $(BUILD)/viewport.o $(BUILD)/ui.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/scrollback.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+
+$(BUILD)/vncinsettest: tests/vncinsettest.c $(BUILD)/vncinset.o $(BUILD)/overlay.o $(BUILD)/image.o $(BUILD)/viewport.o $(BUILD)/ui.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/scrollback.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/overlaytest: tests/overlaytest.c $(BUILD)/overlay.o $(BUILD)/menu.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 

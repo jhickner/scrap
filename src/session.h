@@ -193,6 +193,10 @@ int  session_tail_mark(const struct session *s, const char *bot,
 void session_set_tail_mark(struct session *s, const char *bot,
                            const struct grokbottail_mark *mark);
 
+/* grokbot: the desktop inset, NULL until first asked for with `create` */
+struct vncinset;
+struct vncinset *session_inset(struct session *s, int create);
+
 #define SESSION_ARGV_MAX 16
 enum {
     SESSION_ARGV_CWD    = 1u << 0,

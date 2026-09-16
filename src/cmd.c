@@ -45,6 +45,7 @@
 #include "status.h"
 #include "ui.h"
 #include "vendor/agents/backend.h"
+#include "vncinset.h"
 #include "voice.h"
 
 static const struct pick_item CLAUDE_EFFORTS[] = {
@@ -896,6 +897,51 @@ static void do_tail(struct session *s, const char *arg)
         reply_note("no new messages from %s", session_model(s));
 }
 
+static void do_vnc(struct session *s, const char *arg)
+{
+    if (strcmp(session_backend(s), "grokbot")) {
+        reply_note("/vnc shows a grokbot desktop; this session runs %s",
+                   session_backend(s));
+        return;
+    }
+    struct vncinset *v = session_inset(s, 1);
+    if (!v) {
+        reply_error("could not open the desktop inset");
+        return;
+    }
+    vncinset_set_bot(v, session_model(s));
+
+    while (arg && *arg == ' ')
+        arg++;
+    if (!arg || !*arg) {
+        vncinset_show(v, !vncinset_shown(v));
+    } else if (!strcmp(arg, "off")) {
+        vncinset_show(v, 0);
+    } else if (!strcmp(arg, "left") || !strcmp(arg, "right")) {
+        vncinset_set_side(v, arg[0] == 'l' ? VNCINSET_LEFT : VNCINSET_RIGHT);
+        vncinset_show(v, 1);
+    } else if (!strncmp(arg, "size", 4) && (arg[4] == ' ' || !arg[4])) {
+        char *end;
+        long  pct = strtol(arg + 4, &end, 10);
+        while (*end == ' ')
+            end++;
+        if (end == arg + 4 || *end || pct < VNCINSET_WIDTH_MIN || pct > VNCINSET_WIDTH_MAX) {
+            reply_error("/vnc size takes a width from %d to %d percent", VNCINSET_WIDTH_MIN,
+                        VNCINSET_WIDTH_MAX);
+            return;
+        }
+        vncinset_set_width(v, (int)pct);
+        vncinset_show(v, 1);
+    } else {
+        reply_error("/vnc takes left, right, off, or size <percent>");
+        return;
+    }
+
+    if (vncinset_shown(v) && !image_available())
+        reply_note("this terminal has no graphics support; the desktop inset stays empty");
+    viewport_touch();
+}
+
 static void do_clear(struct session *s, const char *arg)
 {
     (void)arg;
@@ -1371,6 +1417,8 @@ static const struct cmd COMMANDS[] = {
      0, do_rename},
     {"/tail", "show bot messages that arrived since the last shown", "[count]", 0,
      do_tail},
+    {"/vnc", "show the bot's desktop in an inset", "[left|right|off|size <percent>]",
+     CMD_LIVE, do_vnc},
     {"/copy", "copy last response to clipboard", NULL, CMD_LIVE, do_copy},
     {"/restart", "reload the mux binary, keeping this conversation", NULL, 0,
      do_restart},

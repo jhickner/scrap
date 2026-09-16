@@ -51,6 +51,7 @@
 #include "vendor/repl.h"
 #include "text.h"
 #include "grokbottail.h"
+#include "vncinset.h"
 
 static void backend_choices(char *out, size_t size)
 {
@@ -263,7 +264,25 @@ static char *chat_line(void *ud)
     return tg_take_line();
 }
 
-static int side_busy(void *ud)  { (void)ud; return sidechannel_busy() || workspace_busy(); }
+static struct vncinset *inset_live(void)
+{
+    struct session *s = workspace_current();
+    if (!s || chrome_modal_active() || strcmp(session_backend(s), "grokbot"))
+        return NULL;
+    struct vncinset *v = session_inset(s, 0);
+    return vncinset_shown(v) ? v : NULL;
+}
+
+static void inset_cover(char **rows, int n, int cols)
+{
+    vncinset_cover(inset_live(), rows, n, cols);
+}
+
+static int side_busy(void *ud)
+{
+    (void)ud;
+    return sidechannel_busy() || workspace_busy() || inset_live();
+}
 
 static void side_tick(void *ud)
 {
@@ -274,6 +293,8 @@ static void side_tick(void *ud)
     image_poll();
     workspace_pump();
     status_tick();
+    if (vncinset_stale(inset_live()))
+        viewport_touch();
 }
 static int idle_poll(void *ud)   { (void)ud; return workspace_polling(); }
 static void replay(void *ud)      { (void)ud; session_replay(workspace_current()); }
@@ -823,6 +844,7 @@ int main(int argc, char **argv)
     prompt_set_replay(prompt, replay, NULL);
     prompt_set_blank(prompt, blank_line, NULL);
     prompt_set_animate(prompt, side_busy, side_tick, NULL);
+    viewport_on_cover(inset_cover);
     prompt_set_external(prompt, chat_line, prompt);
     prompt_set_listen(prompt, voice_listening, NULL);
     prompt_set_mic(prompt, toggle_mic, NULL);

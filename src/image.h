@@ -41,6 +41,18 @@ void image_place(uint32_t id, int indent, int cols, int rows);
 
 void image_drop(uint32_t id);
 
+void     image_cell_size(int *cw, int *ch);
+int      image_cells_max(void);
+
+/* the id the desktop inset draws under, distinct from every transcript image */
+uint32_t image_inset_id(void);
+
+/* transmit RGB24 pixels under `id`, placed virtually over cols x rows cells */
+void image_frame(uint32_t id, const uint8_t *rgb, int w, int h, int cols, int rows);
+
+/* one row of placeholder cells for a virtually placed image, no newline */
+void image_place_row(uint32_t id, int row, int cols);
+
 void image_poll(void);
 
 void image_wait(void);

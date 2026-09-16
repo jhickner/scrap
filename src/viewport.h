@@ -93,6 +93,11 @@ void viewport_on_width(viewport_width_fn fn);
 
 void viewport_repad(void);
 
+/* composites onto the transcript rows of each paint, above the chrome; a row
+   replaced is freed and set to a malloc'd string of at most `cols` cells */
+typedef void (*viewport_cover_fn)(char **rows, int n, int cols);
+void viewport_on_cover(viewport_cover_fn fn);
+
 typedef char *(*viewport_encode_fn)(void *ud);
 void viewport_item_persist(unsigned mark, const char *kind, viewport_encode_fn encode);
 
