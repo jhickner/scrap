@@ -16,6 +16,7 @@
 #include "block.h"
 #include "app.h"
 #include "gitinfo.h"
+#include "grokbottail.h"
 #include "hooks.h"
 #include "hud.h"
 #include "image.h"
@@ -103,6 +104,8 @@ struct session {
     volatile int    tool_open;
     int      interrupted;
     int      unseen;
+    char     tail_bot[128];
+    struct grokbottail_mark tail_mark;
 
     pthread_t       thread;
     int             running;
@@ -335,6 +338,8 @@ static void queue_drop(struct session *s)
 static void heard(struct session *s, const backend_event *ev)
 {
     s->heard_at = now_seconds();
+    if (ev->kind == BACKEND_EV_ASSISTANT && s->tail_bot[0])
+        s->tail_mark.ms = now_seconds() * 1000.0;
     if (ev->kind == BACKEND_EV_TOOL)
         s->tool_open = 1;
     else if (ev->kind == BACKEND_EV_TOOL_RESULT)
@@ -819,7 +824,7 @@ void session_replay(struct session *s)
     hud_print(s);
     if (!s)
         return;
-    if (s->id[0] && sessionload_into(s))
+    if ((s->id[0] || grokbottail_applies(s)) && sessionload_into(s))
         return;
     sessionpresent_replay(&s->transcript);
 }
@@ -2114,6 +2119,24 @@ const char *session_workdir(const struct session *s)
     return s->workdir ? s->workdir : s->cwd;
 }
 const char *session_backend(const struct session *s) { return s->backend; }
+
+int session_tail_mark(const struct session *s, const char *bot,
+                      struct grokbottail_mark *out)
+{
+    if (!s || !bot || strcmp(s->tail_bot, bot))
+        return 0;
+    *out = s->tail_mark;
+    return 1;
+}
+
+void session_set_tail_mark(struct session *s, const char *bot,
+                           const struct grokbottail_mark *mark)
+{
+    if (!s || !bot)
+        return;
+    snprintf(s->tail_bot, sizeof s->tail_bot, "%s", bot);
+    s->tail_mark = *mark;
+}
 
 int session_argv(const struct session *s, char **out, int max, unsigned what)
 {

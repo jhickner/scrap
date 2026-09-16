@@ -31,7 +31,7 @@ CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           boardtest modelstest boardgridtest boardtiletest viewstest sessionpresenttest \
           workspacetest replboxtest ttytest gitinfotest sidechannelviewtest \
           sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
-          dispatchtest voicetabtest hookstest
+          dispatchtest voicetabtest hookstest grokbottailtest
 CHECKS += orchstatustest orchinstalltest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest
 
@@ -201,6 +201,8 @@ $(BUILD)/transcripttest: tests/transcripttest.c $(BUILD)/transcript.o | $(BUILD)
 $(BUILD)/sessionviewtest: tests/sessionviewtest.c $(BUILD)/sessionview.o $(BUILD)/filediff.o $(BUILD)/highlight.o $(BUILD)/toolstyle.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/sessionpresenttest: tests/sessionpresenttest.c tests/stubs/tabbar.c $(BUILD)/sessionpresent.o $(BUILD)/sessionview.o $(BUILD)/filediff.o $(BUILD)/highlight.o $(BUILD)/md.o $(BUILD)/prompt.o $(BUILD)/status.o $(BUILD)/tasks.o $(BUILD)/transcript.o $(BUILD)/toolstyle.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/bash.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/image.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+
+$(BUILD)/grokbottailtest: tests/grokbottailtest.c $(BUILD)/grokbottail.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/sessionloadtest: tests/sessionloadtest.c $(BUILD)/sessionload.o $(BUILD)/transcript.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 

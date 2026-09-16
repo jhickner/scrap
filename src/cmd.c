@@ -30,6 +30,7 @@
 #include "sessionfork.h"
 #include "sessionlist.h"
 #include "gitinfo.h"
+#include "grokbottail.h"
 #include "sessionload.h"
 #include "sessionview.h"
 #include "viewport.h"
@@ -361,6 +362,8 @@ static void do_model(struct session *s, const char *arg)
         return;
     }
     note_identity(s);
+    if (grokbottail_applies(s))
+        grokbottail_show(s, GROKBOTTAIL_DEFAULT, 0);
 }
 
 static void do_effort(struct session *s, const char *arg)
@@ -871,6 +874,28 @@ int cmd_resume(struct session *s)
     return resumed;
 }
 
+static void do_tail(struct session *s, const char *arg)
+{
+    if (!grokbottail_applies(s)) {
+        reply_note("/tail reads a grokbot transcript; this session runs %s",
+                   session_backend(s));
+        return;
+    }
+    int count = GROKBOTTAIL_DEFAULT;
+    if (arg && *arg) {
+        char *end;
+        long n = strtol(arg, &end, 10);
+        if (*end || n < 1 || n > GROKBOTTAIL_MAX) {
+            reply_error("/tail takes a count from 1 to %d", GROKBOTTAIL_MAX);
+            return;
+        }
+        count = (int)n;
+    }
+    int drawn = grokbottail_show(s, count, 1);
+    if (drawn == 0)
+        reply_note("no new messages from %s", session_model(s));
+}
+
 static void do_clear(struct session *s, const char *arg)
 {
     (void)arg;
@@ -1344,6 +1369,8 @@ static const struct cmd COMMANDS[] = {
     {"/session", "show this session's info and totals", NULL, CMD_LIVE, do_session},
     {"/rename", "name this session, or ask the model to name it again", "[name]",
      0, do_rename},
+    {"/tail", "show bot messages that arrived since the last shown", "[count]", 0,
+     do_tail},
     {"/copy", "copy last response to clipboard", NULL, CMD_LIVE, do_copy},
     {"/restart", "reload the mux binary, keeping this conversation", NULL, 0,
      do_restart},

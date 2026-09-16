@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "grokbottail.h"
 #include "md.h"
 #include "prompt.h"
 #include "session.h"
@@ -50,6 +51,14 @@ const char *session_id(const struct session *s) { (void)s; return NULL; }
 const char *session_backend(const struct session *s) { (void)s; return NULL; }
 const char *session_cwd(const struct session *s) { (void)s; return NULL; }
 int session_thinking(const struct session *s) { (void)s; return 0; }
+int grokbottail_applies(const struct session *s) { (void)s; return 0; }
+int grokbottail_show(struct session *s, int limit, int only_new)
+{
+    (void)s;
+    (void)limit;
+    (void)only_new;
+    return 0;
+}
 
 void prompt_echo_message(const char *text)
 {
