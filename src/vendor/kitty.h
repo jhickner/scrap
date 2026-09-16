@@ -205,6 +205,10 @@ void kg_transmit_png(uint32_t id, const uint8_t *png, size_t bytes);
 // nothing to do. `b64` must be the standard alphabet with no newlines.
 void kg_transmit_png_b64(uint32_t id, const char *b64, size_t len);
 
+// Raw pixels already zlib-compressed by the caller (o=z). `bytes` is the
+// compressed length; w, h and channels describe the decompressed pixels.
+void kg_transmit_z(uint32_t id, const uint8_t *z, size_t bytes, int w, int h, int channels);
+
 // Declare that image `id` will be drawn into a cols x rows cell rectangle by
 // placeholder cells appearing later. Draws nothing by itself. The image is
 // fitted to the rectangle preserving aspect ratio, so pass a buffer already
@@ -590,6 +594,37 @@ void kg_transmit_png(uint32_t id, const uint8_t *png, size_t bytes) {
             int g = (int)(n - i);
             if (g > 3) g = 3;
             kg_b64_group(png + off + i, g, buf + len);
+            len += 4;
+        }
+        buf[len++] = '\x1b';
+        buf[len++] = '\\';
+        kg_emit(buf, len);
+    }
+    kg_batch_end();
+}
+
+void kg_transmit_z(uint32_t id, const uint8_t *z, size_t bytes, int w, int h, int channels) {
+    if (!z || !bytes || w <= 0 || h <= 0 || (channels != 3 && channels != 4)) return;
+
+    size_t per_chunk = (KG_CHUNK / 4) * 3;
+    char buf[128 + KG_CHUNK + 2];
+    bool first = true;
+
+    kg_batch_begin();
+    for (size_t off = 0; off < bytes; off += per_chunk) {
+        size_t n = bytes - off;
+        if (n > per_chunk) n = per_chunk;
+        bool last = (off + n >= bytes);
+
+        int len = first ? snprintf(buf, sizeof buf,
+                                   "\x1b_Ga=t,f=%d,o=z,s=%d,v=%d,i=%u,q=2,m=%d;",
+                                   channels == 4 ? 32 : 24, w, h, id, last ? 0 : 1)
+                        : snprintf(buf, sizeof buf, "\x1b_Gm=%d,q=2;", last ? 0 : 1);
+        first = false;
+        for (size_t i = 0; i < n; i += 3) {
+            int g = (int)(n - i);
+            if (g > 3) g = 3;
+            kg_b64_group(z + off + i, g, buf + len);
             len += 4;
         }
         buf[len++] = '\x1b';

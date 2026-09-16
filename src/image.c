@@ -12,6 +12,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <zlib.h>
 
 #include "app.h"
 #include "scrollback.h"
@@ -757,7 +758,22 @@ void image_frame(uint32_t id, const uint8_t *rgb, int w, int h, int cols, int ro
 {
     if (!id || !rgb || w < 1 || h < 1 || cols < 1 || rows < 1 || !image_available())
         return;
-    kg_transmit_ex(id, rgb, w, h, 3);
+    static Bytef *z;
+    static uLongf cap;
+    uLong         raw = (uLong)w * (uLong)h * 3;
+    uLongf        need = compressBound(raw);
+    if (need > cap) {
+        Bytef *grown = realloc(z, need);
+        if (grown) {
+            z = grown;
+            cap = need;
+        }
+    }
+    uLongf zlen = cap;
+    if (cap >= need && compress2(z, &zlen, rgb, raw, 1) == Z_OK)
+        kg_transmit_z(id, z, zlen, w, h, 3);
+    else
+        kg_transmit_ex(id, rgb, w, h, 3);
     kg_virtual_place(id, cols, rows);
 }
 

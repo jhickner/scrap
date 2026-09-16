@@ -917,6 +917,10 @@ static void do_vnc(struct session *s, const char *arg)
         vncinset_show(v, !vncinset_shown(v));
     } else if (!strcmp(arg, "off")) {
         vncinset_show(v, 0);
+        vncinset_set_test(v, 0);
+    } else if (!strcmp(arg, "test")) {
+        vncinset_set_test(v, 1);
+        vncinset_show(v, 1);
     } else if (!strcmp(arg, "left") || !strcmp(arg, "right")) {
         vncinset_set_side(v, arg[0] == 'l' ? VNCINSET_LEFT : VNCINSET_RIGHT);
         vncinset_show(v, 1);
@@ -933,7 +937,7 @@ static void do_vnc(struct session *s, const char *arg)
         vncinset_set_width(v, (int)pct);
         vncinset_show(v, 1);
     } else {
-        reply_error("/vnc takes left, right, off, or size <percent>");
+        reply_error("/vnc takes left, right, off, test, or size <percent>");
         return;
     }
 
@@ -1417,7 +1421,7 @@ static const struct cmd COMMANDS[] = {
      0, do_rename},
     {"/tail", "show bot messages that arrived since the last shown", "[count]", 0,
      do_tail},
-    {"/vnc", "show the bot's desktop in an inset", "[left|right|off|size <percent>]",
+    {"/vnc", "show the bot's desktop in an inset", "[left|right|off|test|size <percent>]",
      CMD_LIVE, do_vnc},
     {"/copy", "copy last response to clipboard", NULL, CMD_LIVE, do_copy},
     {"/restart", "reload the mux binary, keeping this conversation", NULL, 0,

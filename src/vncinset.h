@@ -16,10 +16,12 @@ struct vncinset_frame {
 };
 
 /* A frame source. `frame` fills `out` with the latest frame and returns 1, or
-   returns 0 while none is available. */
+   returns 0 while none is available. `status`, optional, names the
+   connection state for the title; NULL or "" when live. */
 struct vncinset_source {
-    int  (*frame)(struct vncinset_source *src, struct vncinset_frame *out);
-    void (*close)(struct vncinset_source *src);
+    int         (*frame)(struct vncinset_source *src, struct vncinset_frame *out);
+    void        (*close)(struct vncinset_source *src);
+    const char *(*status)(struct vncinset_source *src);
 };
 
 /* moving test pattern at VNCINSET_STUB_FPS */
@@ -28,6 +30,14 @@ struct vncinset_source *vncinset_stub_open(void);
 
 typedef struct vncinset_source *(*vncinset_open_fn)(const char *bot);
 void vncinset_set_opener(vncinset_open_fn fn);
+
+/* minimum seconds between transmitted frames */
+#define VNCINSET_FRAME_INTERVAL 0.2
+/* widest frame transmitted; the terminal scales it to the cell box */
+#define VNCINSET_TRANSMIT_W_MAX 800
+
+/* box-filter downscale of RGB24 src into dst (dw * dh * 3 bytes) */
+void vncinset_downscale(const uint8_t *src, int sw, int sh, uint8_t *dst, int dw, int dh);
 
 /* outer box in cells, border included; image fills the interior */
 struct vncinset_box {
@@ -44,6 +54,8 @@ struct vncinset;
 struct vncinset *vncinset_new(const char *bot);
 void             vncinset_free(struct vncinset *v);
 void             vncinset_set_bot(struct vncinset *v, const char *bot);
+/* 1 draws the stub pattern instead of the opener's source */
+void             vncinset_set_test(struct vncinset *v, int on);
 
 int  vncinset_shown(const struct vncinset *v);
 void vncinset_show(struct vncinset *v, int on);

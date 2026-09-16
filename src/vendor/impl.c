@@ -14,3 +14,6 @@
 
 #define MACOS_VOICE_IMPLEMENTATION
 #include "macos_voice.h"
+
+#define GROKVNC_IMPLEMENTATION
+#include "vnc/grokvnc.h"

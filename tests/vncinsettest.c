@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "image.h"
 #include "screenmodel.h"
 #include "ui.h"
 #include "viewport.h"
@@ -116,6 +117,20 @@ static void test_layout(void)
     CHECK(!vncinset_layout(VNCINSET_RIGHT, 40, 80, 3, 320, 200, 8, 16, &b), "too short");
 }
 
+static void test_downscale(void)
+{
+    uint8_t src[4 * 2 * 3], dst[2 * 1 * 3];
+    for (int i = 0; i < 8; i++) {
+        src[i * 3] = (uint8_t)(i < 2 || (i >= 4 && i < 6) ? 100 : 200);
+        src[i * 3 + 1] = 10;
+        src[i * 3 + 2] = (uint8_t)(i * 10);
+    }
+    vncinset_downscale(src, 4, 2, dst, 2, 1);
+    CHECK(dst[0] == 100 && dst[3] == 200 && dst[1] == 10, "box filter %d %d %d", dst[0],
+          dst[3], dst[1]);
+    CHECK(dst[2] == 25 && dst[5] == 45, "box filter blue %d %d", dst[2], dst[5]);
+}
+
 static void test_stub(void)
 {
     struct vncinset_source *src = vncinset_stub_open();
@@ -136,6 +151,8 @@ static void test_state(void)
     vncinset_cover(v, many, 12, 40);
     CHECK(!vncinset_stale(v), "frame drawn");
     fixed_src.gen++;
+    CHECK(!vncinset_stale(v) || !image_available(), "new generation held until the interval");
+    usleep((useconds_t)(VNCINSET_FRAME_INTERVAL * 1e6) + 20000);
     CHECK(vncinset_stale(v), "new generation");
     vncinset_show(v, 0);
     CHECK(fixed_src.closed == 1, "source closed on hide");
@@ -236,6 +253,7 @@ static void test_screen(void)
 int main(void)
 {
     test_layout();
+    test_downscale();
     test_stub();
     test_state();
     test_screen();

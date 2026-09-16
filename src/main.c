@@ -52,6 +52,7 @@
 #include "text.h"
 #include "grokbottail.h"
 #include "vncinset.h"
+#include "vncsource.h"
 
 static void backend_choices(char *out, size_t size)
 {
@@ -270,7 +271,10 @@ static struct vncinset *inset_live(void)
     if (!s || chrome_modal_active() || strcmp(session_backend(s), "grokbot"))
         return NULL;
     struct vncinset *v = session_inset(s, 0);
-    return vncinset_shown(v) ? v : NULL;
+    if (!vncinset_shown(v))
+        return NULL;
+    vncinset_set_bot(v, session_model(s));
+    return v;
 }
 
 static void inset_cover(char **rows, int n, int cols)
@@ -843,6 +847,7 @@ int main(int argc, char **argv)
     livelist_on_card(boardwork_card_of);
     prompt_set_replay(prompt, replay, NULL);
     prompt_set_blank(prompt, blank_line, NULL);
+    vncinset_set_opener(vncsource_open);
     prompt_set_animate(prompt, side_busy, side_tick, NULL);
     viewport_on_cover(inset_cover);
     prompt_set_external(prompt, chat_line, prompt);
