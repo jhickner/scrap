@@ -182,6 +182,14 @@ const char *session_cwd(const struct session *s);
 const char *session_workdir(const struct session *s);
 const char *session_backend(const struct session *s);
 
+/* grokbot: the newest transcript entry drawn for `bot`, which /tail continues
+   from. Replies drawn live advance its time. */
+struct grokbottail_mark;
+int  session_tail_mark(const struct session *s, const char *bot,
+                       struct grokbottail_mark *out);
+void session_set_tail_mark(struct session *s, const char *bot,
+                           const struct grokbottail_mark *mark);
+
 #define SESSION_ARGV_MAX 16
 enum {
     SESSION_ARGV_CWD    = 1u << 0,

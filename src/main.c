@@ -50,6 +50,7 @@
 #include "vendor/agents/backend.h"
 #include "vendor/repl.h"
 #include "text.h"
+#include "grokbottail.h"
 
 static void backend_choices(char *out, size_t size)
 {
@@ -862,7 +863,7 @@ int main(int argc, char **argv)
     if (reopen_arg)
         reopen_run();
 
-    if (!resume && session_arg && !restore_arg)
+    if (!resume && !restore_arg && (session_arg || grokbottail_applies(session)))
         sessionload_into(session);
 
     for (;;) {

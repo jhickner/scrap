@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "grokbottail.h"
 #include "md.h"
 #include "prompt.h"
 #include "sessionlist.h"
@@ -386,6 +387,8 @@ static int count_turns(FILE *f, long *from)
 
 int sessionload_into(const struct session *s)
 {
+    if (grokbottail_applies(s))
+        return grokbottail_show((struct session *)s, GROKBOTTAIL_DEFAULT, 0) > 0;
     const char *id = s ? session_id(s) : NULL;
     if (!id)
         return 0;
