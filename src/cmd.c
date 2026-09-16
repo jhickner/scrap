@@ -35,6 +35,7 @@
 #include "viewport.h"
 #include "views.h"
 #include "workspace.h"
+#include "vendor/agents/grokbot/grokbot.h"
 #include "sidechannel.h"
 #include "settings.h"
 #include "settingsui.h"
@@ -97,8 +98,58 @@ static int known_backend(const char *name)
     return 0;
 }
 
+#define GROKBOT_LIST_MAX 128
+#define GROKBOT_LIST_TTL 30
+
+/* The bots and groups the Grok Bot gateway serves. Refetched after
+   GROKBOT_LIST_TTL seconds; empty when the gateway is unreachable. */
+static const struct pick_item *grokbot_choices(int *count)
+{
+    static struct pick_item items[GROKBOT_LIST_MAX];
+    static char             label[GROKBOT_LIST_MAX][96];
+    static char             detail[GROKBOT_LIST_MAX][96];
+    static int              n;
+    static time_t           fetched;
+
+    time_t now = time(NULL);
+    if (fetched && now - fetched < GROKBOT_LIST_TTL) {
+        *count = n;
+        return items;
+    }
+    fetched = now;
+    n = 0;
+
+    grokbot *g = grokbot_open(NULL);
+    cJSON   *list = g ? grokbot_list_agents(g) : NULL;
+    cJSON   *a;
+    cJSON_ArrayForEach(a, list) {
+        if (n >= GROKBOT_LIST_MAX)
+            break;
+        const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(a, "name"));
+        const char *desc = cJSON_GetStringValue(cJSON_GetObjectItem(a, "description"));
+        if (!name || !*name)
+            continue;
+        snprintf(label[n], sizeof label[n], "%s", name);
+        cJSON *members = cJSON_GetObjectItem(a, "memberIds");
+        int    group = cJSON_IsTrue(cJSON_GetObjectItem(a, "isGroup")) ||
+                    cJSON_GetArraySize(members) > 0;
+        snprintf(detail[n], sizeof detail[n], "%s%s", group ? "group: " : "",
+                 desc ? desc : "");
+        items[n] = (struct pick_item){label[n], detail[n]};
+        n++;
+    }
+    cJSON_Delete(list);
+    grokbot_close(g);
+    if (!n)
+        fetched = 0;
+    *count = n;
+    return items;
+}
+
 const struct pick_item *cmd_model_choices(const char *backend, int *count)
 {
+    if (!strcmp(backend, "grokbot"))
+        return grokbot_choices(count);
     const struct pick_item *v = NULL;
     *count = models_for(backend, &v);
     return v;
@@ -280,6 +331,10 @@ static void do_model(struct session *s, const char *arg)
             return;
         int count = 0, initial = 0;
         const struct pick_item *choices = model_choices(s, &count);
+        if (!count && !strcmp(session_backend(s), "grokbot")) {
+            reply_note("/model <name> — the Grok Bot gateway did not answer");
+            return;
+        }
         if (!count) {
             reply_note("/model <name> — %s has no model list here", session_backend(s));
             return;
@@ -342,7 +397,7 @@ static void do_effort(struct session *s, const char *arg)
 static void do_backend(struct session *s, const char *arg)
 {
     if (!arg || !*arg) {
-        reply_note("/backend <claude|codex|grok|pi>");
+        reply_note("/backend <claude|codex|grok|pi|grokbot>");
         return;
     }
     if (!known_backend(arg)) {
@@ -360,7 +415,9 @@ static void do_backend(struct session *s, const char *arg)
         return;
     }
     if (!session_switch_backend(s, arg)) {
-        reply_error("could not start %s; still using %s", arg, from);
+        const char *why = session_start_error();
+        reply_error("could not start %s%s%s; still using %s", arg, why ? ": " : "",
+                    why ? why : "", from);
         free(from);
         return;
     }

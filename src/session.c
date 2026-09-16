@@ -969,6 +969,13 @@ static void retire(Backend *b)
         pthread_join(t, NULL);
 }
 
+static char start_error[512];
+
+const char *session_start_error(void)
+{
+    return start_error[0] ? start_error : NULL;
+}
+
 int session_switch_backend(struct session *s, const char *backend)
 {
     if (!s || !backend || !*backend || s->running)
@@ -1003,6 +1010,8 @@ int session_switch_backend(struct session *s, const char *backend)
         replacement->set_hook_cb(replacement, on_hook, s);
 
     if (!replacement->start(replacement, NULL)) {
+        const char *why = replacement->last_error ? replacement->last_error(replacement) : NULL;
+        snprintf(start_error, sizeof start_error, "%s", why ? why : "");
         replacement->close(replacement);
         return 0;
     }
@@ -1151,10 +1160,13 @@ static int restart(struct session *s, const char *resume_id)
 
     Backend *previous = s->agent;
     s->agent = NULL;
+    start_error[0] = '\0';
 
     Backend *b = agent(s);
     if (!b || !b->start(b, resume_id)) {
         if (b) {
+            const char *why = b->last_error ? b->last_error(b) : NULL;
+            snprintf(start_error, sizeof start_error, "%s", why ? why : "");
             b->set_event_cb(b, NULL, NULL);
             b->set_abort_check(b, NULL);
             b->close(b);
@@ -1173,6 +1185,11 @@ static int restart(struct session *s, const char *resume_id)
     const char *id = b->session_id(b);
     if (id)
         set_id(s, id);
+
+    if (!strcmp(s->backend, "grokbot") && b->model && b->model(b)) {
+        snprintf(s->title, sizeof s->title, "%s", b->model(b));
+        status_set_note(s->title);
+    }
     return 1;
 }
 

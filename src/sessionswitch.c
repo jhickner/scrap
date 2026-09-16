@@ -418,7 +418,11 @@ static int spawn_new(const char *backend, const char *model, const char *cwd,
         cwd = here ? session_cwd(here) : NULL;
     int at = workspace_spawn(backend, model, NULL, cwd, NULL);
     if (at < 0) {
-        ui_error("could not start the %s CLI", backend);
+        const char *why = session_start_error();
+        if (why)
+            ui_error("could not start %s: %s", backend, why);
+        else
+            ui_error("could not start the %s CLI", backend);
         ui_put("\n");
         ui_flush();
         return 0;
@@ -453,24 +457,36 @@ static int new_custom(void)
         int models = 0;
         const struct pick_item *list = cmd_model_choices(backend, &models);
         const char *model = NULL;
-        if (models > 1) {
-            int pickedm = pick_run_filter("which model", list, models, 0);
+        char       *typed = NULL;
+        int         named = !strcmp(backend, "grokbot");
+        if (named && !models) {
+            typed = ask_run("a bot or group name", NULL);
+            if (!typed || !*typed) {
+                free(typed);
+                continue;
+            }
+            model = typed;
+        } else if (models > 1 || (named && models)) {
+            int pickedm = pick_run_filter(named ? "which bot or group" : "which model",
+                                          list, models, 0);
             if (pickedm < 0)
                 continue;
             model = list[pickedm].label;
         }
 
-        char *cwd = dirpick_run("a working directory", "~/working");
-        if (!cwd)
+        char *cwd = named ? NULL : dirpick_run("a working directory", "~/working");
+        if (!named && !cwd)
             continue;
 
         char *line = ask_run("a prompt to start with, or nothing", NULL);
         if (!line) {
             free(cwd);
+            free(typed);
             continue;
         }
         int again = spawn_new(backend, model, cwd, line);
         free(cwd);
+        free(typed);
         free(line);
         return again;
     }
@@ -541,7 +557,11 @@ static void ask_new(const struct row *r, const struct live_session *live)
     struct session *was = workspace_current();
     int at = workspace_spawn(backend, model, NULL, cwd, NULL);
     if (at < 0) {
-        ui_error("could not start the %s CLI", backend);
+        const char *why = session_start_error();
+        if (why)
+            ui_error("could not start %s: %s", backend, why);
+        else
+            ui_error("could not start the %s CLI", backend);
         ui_put("\n");
         ui_flush();
         free(line);

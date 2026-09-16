@@ -123,7 +123,8 @@ static void defaults(struct board_cfg *c)
 
     snprintf(c->serving, sizeof c->serving, "claude");
     for (const char *const *b = backend_names(); *b && c->backends_n < BOARD_BACKENDS_MAX; b++)
-        backend_defaults(&c->backends[c->backends_n++], *b);
+        if (strcmp(*b, "grokbot"))
+            backend_defaults(&c->backends[c->backends_n++], *b);
 }
 
 #define BOARD_DIR "board"

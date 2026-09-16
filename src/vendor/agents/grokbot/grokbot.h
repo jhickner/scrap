@@ -212,7 +212,7 @@ static int gb_load_app_session(grokbot *g) {
     if (!enc) { gb_seterr(g, "descriptor missing encrypted payload", NULL, NULL);
                 cJSON_Delete(wrapped); return 0; }
 
-    char *pw = gb_run("/usr/bin/security find-generic-password -w -s 'Grok Bot Safe Storage'");
+    char *pw = gb_run("/usr/bin/security find-generic-password -w -s 'Grok Bot Safe Storage' 2>/dev/null");
     if (!pw) { gb_seterr(g, "keychain lookup failed", NULL, NULL);
                cJSON_Delete(wrapped); return 0; }
     char *clear = gb_decrypt_safe_storage(enc, pw, g);
@@ -245,7 +245,10 @@ static int gb_load_app_session(grokbot *g) {
 }
 #endif
 
+static _Thread_local char gb_open_err[512];
+
 grokbot *grokbot_open(const grokbot_opts *opts) {
+    gb_open_err[0] = 0;
     grokbot *g = calloc(1, sizeof *g);
     if (!g) return NULL;
     const char *url = opts ? opts->gateway_url : NULL;
@@ -258,7 +261,7 @@ grokbot *grokbot_open(const grokbot_opts *opts) {
         size_t L = strlen(g->url);
         if (L && g->url[L - 1] == '/') g->url[L - 1] = 0;
     } else if (!gb_load_app_session(g)) {
-        fprintf(stderr, "grokbot: %s\n", g->err);
+        snprintf(gb_open_err, sizeof gb_open_err, "%s", g->err);
         grokbot_close(g);
         return NULL;
     }
@@ -289,7 +292,10 @@ void grokbot_close(grokbot *g) {
     free(g);
 }
 
-const char *grokbot_error(grokbot *g) { return g ? g->err : "no client"; }
+/* NULL -> why the last grokbot_open on this thread failed */
+const char *grokbot_error(grokbot *g) {
+    return g ? g->err : gb_open_err[0] ? gb_open_err : "no client";
+}
 const char *grokbot_gateway_url(grokbot *g) { return g ? g->url : NULL; }
 
 cJSON *grokbot_call(grokbot *g, const char *method, cJSON *body) {

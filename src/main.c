@@ -69,6 +69,15 @@ static int backend_known(const char *name)
     return 0;
 }
 
+static void start_failed(const char *backend)
+{
+    const char *why = session_start_error();
+    if (why)
+        fprintf(stderr, APP_NAME ": could not start %s: %s\n", backend, why);
+    else
+        fprintf(stderr, APP_NAME ": could not start the %s CLI — is it on PATH?\n", backend);
+}
+
 static void restore_terminal(void)
 {
     viewport_end();
@@ -736,8 +745,7 @@ int main(int argc, char **argv)
 
     if (!interactive) {
         if (!session_start(session)) {
-            fprintf(stderr, APP_NAME ": could not start the %s CLI — is it on PATH?\n",
-                    backend);
+            start_failed(backend);
             session_free(session);
             return 1;
         }
@@ -844,8 +852,7 @@ int main(int argc, char **argv)
         prompt_free(prompt);
         workspace_end();
         tty_raw_end();
-        fprintf(stderr, APP_NAME ": could not start the %s CLI — is it on PATH?\n",
-                backend);
+        start_failed(backend);
         return 1;
     }
 

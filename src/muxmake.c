@@ -58,6 +58,8 @@ static void backend_spec(char *out, size_t cap)
     spec_add(out, cap, &at, "The backends, and what each accepts:\n");
 
     for (const char *const *b = backend_names(); *b; b++) {
+        if (!strcmp(*b, "grokbot"))
+            continue;
         const struct pick_item *models = NULL;
         const struct pick_item *efforts = NULL;
         int                     nmodels = models_for(*b, &models);

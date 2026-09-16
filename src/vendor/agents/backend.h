@@ -216,7 +216,7 @@ struct Backend {
     void *ctx;
 };
 
-/* Open "claude", "codex", "grok", or "pi". model is the driver/CLI model identifier
+/* Open "claude", "codex", "grok", "pi", or "grokbot". model is the driver/CLI model identifier
  * (NULL -> its default). system is applied to every turn (NULL -> none).
  * Returns NULL for an unknown name or allocation failure. */
 Backend *backend_open(const char *name, const char *model, const char *system);
@@ -224,8 +224,8 @@ Backend *backend_open(const char *name, const char *model, const char *system);
 /* As backend_open, with the rest of the options. `opts` may be NULL. */
 Backend *backend_open_ex(const backend_opts *opts);
 
-/* The names backend_open accepts, NULL-terminated. "grokbot" (model = bot or
- * group name) is accepted but not listed. */
+/* The names backend_open accepts, NULL-terminated. For "grokbot" the model is a
+ * bot or group name. */
 const char *const *backend_names(void);
 
 /* Fan n prompts across independent agent sessions. Each worker owns one
@@ -1264,7 +1264,7 @@ static int backend_grokbot_start(Backend *b, const char *resume) {
     }
     x->g = grokbot_open(NULL);
     if (!x->g) {
-        snprintf(x->err, sizeof x->err, "grokbot: gateway session unavailable");
+        snprintf(x->err, sizeof x->err, "grokbot: %s", grokbot_error(NULL));
         return 0;
     }
     grokbot_agent a;
@@ -1489,7 +1489,7 @@ static Backend *backend_grokbot_open(const backend_opts *o) {
 
 /* ---------- dispatch ---------- */
 
-static const char *const BACKEND_NAMES[] = { "claude", "codex", "grok", "pi", NULL };
+static const char *const BACKEND_NAMES[] = { "claude", "codex", "grok", "pi", "grokbot", NULL };
 
 const char *const *backend_names(void) { return BACKEND_NAMES; }
 

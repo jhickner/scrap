@@ -60,6 +60,9 @@ void session_set_browser_login(struct session *s, int on);
 
 void session_set_fork(struct session *s, int on);
 
+/* why the last backend start failed; NULL when unknown */
+const char *session_start_error(void);
+
 int session_start(struct session *s);
 
 /* Starts every session at once, off the main thread. Each is collected with
