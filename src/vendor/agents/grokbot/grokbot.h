@@ -50,6 +50,35 @@ char  *grokbot_send(grokbot *g, const char *ref, const char *prompt,
 cJSON *grokbot_transcript_tail(grokbot *g, const char *ref, int limit);
 cJSON *grokbot_thread(grokbot *g, const char *ref, const char *root_id);
 
+/* Re-reads the app's gateway descriptor (token rotation). 0 when the client
+ * was opened from explicit url/token or the reload failed. */
+int grokbot_reload(grokbot *g);
+
+typedef struct {
+    char  *agent_id;
+    char  *state;     /* running | absent | hibernated | ... */
+    char  *vnc_url;   /* box-local noVNC URL; NULL when there is no desktop */
+    int    display;   /* X display number from token=N; -1 when unknown */
+    int    handoff;   /* bot is waiting for a human on this display */
+    cJSON *raw;
+} grokbot_box;
+
+/* getForeverBoxStatus. Read-only. */
+int  grokbot_box_status(grokbot *g, const char *ref, grokbot_box *out);
+/* ensureForeverBox. Starts the agent's desktop; call only on explicit request. */
+int  grokbot_box_ensure(grokbot *g, const char *ref, grokbot_box *out);
+void grokbot_box_free(grokbot_box *b);
+
+typedef struct {
+    char url[2048];     /* wss://.../websockify?... */
+    char header[1024];  /* "name: value" auth header */
+} grokbot_vnc_endpoint;
+
+/* box NULL -> base desktop (:1, port 6080). Otherwise the box's display via
+ * port 6081; fails when the box has no running desktop. */
+int grokbot_vnc_endpoint_for(grokbot *g, const grokbot_box *box,
+                             grokbot_vnc_endpoint *out);
+
 #endif
 
 #ifdef GROKBOT_IMPLEMENTATION
@@ -71,6 +100,11 @@ struct grokbot {
     char *url;
     char *token;
     cJSON *headers;
+    char *vnc_primary;
+    char *vnc_fork;
+    char *vnc_network_token;
+    char *extra_headers_json;
+    int   from_app;
     char err[512];
 };
 
@@ -233,6 +267,11 @@ static int gb_load_app_session(grokbot *g) {
     g->token = gb_strdup(tok);
     cJSON *h = cJSON_GetObjectItem(d, "headers");
     g->headers = h ? cJSON_Duplicate(h, 1) : NULL;
+    cJSON *vp = cJSON_GetObjectItem(d, "vncProxy");
+    g->vnc_primary = gb_strdup(cJSON_GetStringValue(cJSON_GetObjectItem(vp, "primaryUrl")));
+    g->vnc_fork = gb_strdup(cJSON_GetStringValue(cJSON_GetObjectItem(vp, "forkBaseUrl")));
+    g->vnc_network_token =
+        gb_strdup(cJSON_GetStringValue(cJSON_GetObjectItem(vp, "networkToken")));
     cJSON_Delete(d);
     size_t L = strlen(g->url);
     if (L && g->url[L - 1] == '/') g->url[L - 1] = 0;
@@ -246,6 +285,18 @@ static int gb_load_app_session(grokbot *g) {
 #endif
 
 static _Thread_local char gb_open_err[512];
+
+static void gb_merge_extra_headers(grokbot *g) {
+    cJSON *h = g->extra_headers_json ? cJSON_Parse(g->extra_headers_json) : NULL;
+    if (!h) return;
+    if (!g->headers) g->headers = cJSON_CreateObject();
+    for (cJSON *it = h->child; it; it = it->next) {
+        cJSON_DeleteItemFromObject(g->headers, it->string);
+        cJSON_AddItemToObject(g->headers, it->string,
+                              cJSON_CreateString(cJSON_GetStringValue(it)));
+    }
+    cJSON_Delete(h);
+}
 
 grokbot *grokbot_open(const grokbot_opts *opts) {
     gb_open_err[0] = 0;
@@ -264,32 +315,62 @@ grokbot *grokbot_open(const grokbot_opts *opts) {
         snprintf(gb_open_err, sizeof gb_open_err, "%s", g->err);
         grokbot_close(g);
         return NULL;
+    } else {
+        g->from_app = 1;
     }
     if (opts && opts->extra_headers_json) {
-        cJSON *h = cJSON_Parse(opts->extra_headers_json);
-        if (h) {
-            if (!g->headers) g->headers = cJSON_CreateObject();
-            for (cJSON *it = h->child; it; it = it->next) {
-                cJSON_DeleteItemFromObject(g->headers, it->string);
-                cJSON_AddItemToObject(g->headers, it->string,
-                                      cJSON_CreateString(cJSON_GetStringValue(it)));
-            }
-            cJSON_Delete(h);
-        }
+        g->extra_headers_json = gb_strdup(opts->extra_headers_json);
+        gb_merge_extra_headers(g);
     }
     g->curl = curl_easy_init();
     if (!g->curl) { grokbot_close(g); return NULL; }
     return g;
 }
 
+static void gb_free_secret(char **s) {
+    if (*s) memset(*s, 0, strlen(*s));
+    free(*s);
+    *s = NULL;
+}
+
+static void gb_clear_session(grokbot *g) {
+    gb_free_secret(&g->token);
+    gb_free_secret(&g->vnc_primary);
+    gb_free_secret(&g->vnc_network_token);
+    free(g->url);
+    free(g->vnc_fork);
+    g->url = g->vnc_fork = NULL;
+    cJSON_Delete(g->headers);
+    g->headers = NULL;
+}
+
 void grokbot_close(grokbot *g) {
     if (!g) return;
     if (g->curl) curl_easy_cleanup(g->curl);
-    if (g->token) memset(g->token, 0, strlen(g->token));
-    free(g->url);
-    free(g->token);
-    cJSON_Delete(g->headers);
+    gb_clear_session(g);
+    free(g->extra_headers_json);
     free(g);
+}
+
+int grokbot_reload(grokbot *g) {
+    if (!g || !g->from_app) return 0;
+    char err[sizeof g->err];
+    grokbot fresh = {0};
+    if (!gb_load_app_session(&fresh)) {
+        memcpy(err, fresh.err, sizeof err);
+        gb_clear_session(&fresh);
+        memcpy(g->err, err, sizeof err);
+        return 0;
+    }
+    gb_clear_session(g);
+    g->url = fresh.url;
+    g->token = fresh.token;
+    g->headers = fresh.headers;
+    g->vnc_primary = fresh.vnc_primary;
+    g->vnc_fork = fresh.vnc_fork;
+    g->vnc_network_token = fresh.vnc_network_token;
+    gb_merge_extra_headers(g);
+    return 1;
 }
 
 /* NULL -> why the last grokbot_open on this thread failed */
@@ -298,11 +379,7 @@ const char *grokbot_error(grokbot *g) {
 }
 const char *grokbot_gateway_url(grokbot *g) { return g ? g->url : NULL; }
 
-cJSON *grokbot_call(grokbot *g, const char *method, cJSON *body) {
-    if (!body) body = cJSON_CreateObject();
-    char *payload = cJSON_PrintUnformatted(body);
-    cJSON_Delete(body);
-    if (!payload) return NULL;
+static cJSON *gb_post(grokbot *g, const char *method, const char *payload, long *status_out) {
 
     char url[2048];
     snprintf(url, sizeof url, "%s/api/%s", g->url, method);
@@ -337,9 +414,9 @@ cJSON *grokbot_call(grokbot *g, const char *method, cJSON *body) {
     CURLcode rc = curl_easy_perform(g->curl);
     long status = 0;
     curl_easy_getinfo(g->curl, CURLINFO_RESPONSE_CODE, &status);
+    *status_out = status;
     curl_slist_free_all(hdr);
     memset(auth, 0, sizeof auth);
-    free(payload);
 
     if (rc != CURLE_OK) {
         gb_seterr(g, "%s: %s", method, curl_easy_strerror(rc));
@@ -367,6 +444,19 @@ cJSON *grokbot_call(grokbot *g, const char *method, cJSON *body) {
     free(out.p);
     if (!data) data = cJSON_CreateObject();
     g->err[0] = 0;
+    return data;
+}
+
+cJSON *grokbot_call(grokbot *g, const char *method, cJSON *body) {
+    if (!body) body = cJSON_CreateObject();
+    char *payload = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (!payload) return NULL;
+    long status = 0;
+    cJSON *data = gb_post(g, method, payload, &status);
+    if (!data && (status == 401 || status == 404) && grokbot_reload(g))
+        data = gb_post(g, method, payload, &status);
+    free(payload);
     return data;
 }
 
@@ -641,6 +731,137 @@ cJSON *grokbot_thread(grokbot *g, const char *ref, const char *root_id) {
     if (root_id) cJSON_AddStringToObject(b, "rootId", root_id);
     grokbot_agent_free(&a);
     return grokbot_call(g, "getAgentThread", b);
+}
+
+static int gb_box_call(grokbot *g, const char *method, const char *ref, grokbot_box *out) {
+    memset(out, 0, sizeof *out);
+    out->display = -1;
+    grokbot_agent a;
+    if (!grokbot_resolve(g, ref, &a)) return 0;
+    cJSON *b = cJSON_CreateObject();
+    cJSON_AddStringToObject(b, "id", a.id);
+    out->agent_id = a.id;
+    a.id = NULL;
+    grokbot_agent_free(&a);
+    cJSON *data = grokbot_call(g, method, b);
+    if (!data) { grokbot_box_free(out); out->display = -1; return 0; }
+    out->raw = data;
+    out->state = gb_strdup(gb_str(data, "state"));
+    out->vnc_url = gb_strdup(cJSON_GetStringValue(cJSON_GetObjectItem(data, "vncUrl")));
+    cJSON *h = cJSON_GetObjectItem(data, "handoff");
+    out->handoff = h && !cJSON_IsNull(h);
+    const char *t = out->vnc_url ? strstr(out->vnc_url, "token%3D") : NULL;
+    if (t) out->display = atoi(t + 8);
+    else if (out->vnc_url && (t = strstr(out->vnc_url, "token="))) out->display = atoi(t + 6);
+    return 1;
+}
+
+int grokbot_box_status(grokbot *g, const char *ref, grokbot_box *out) {
+    return gb_box_call(g, "getForeverBoxStatus", ref, out);
+}
+
+int grokbot_box_ensure(grokbot *g, const char *ref, grokbot_box *out) {
+    return gb_box_call(g, "ensureForeverBox", ref, out);
+}
+
+void grokbot_box_free(grokbot_box *b) {
+    if (!b) return;
+    free(b->agent_id); free(b->state); free(b->vnc_url);
+    cJSON_Delete(b->raw);
+    memset(b, 0, sizeof *b);
+}
+
+static int gb_hexval(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* Copies the percent-decoded value of query parameter `key` from url. */
+static int gb_query_param(const char *url, const char *key, char *out, size_t cap) {
+    const char *q = strchr(url, '?');
+    size_t kl = strlen(key);
+    while (q) {
+        q++;
+        if (!strncmp(q, key, kl) && q[kl] == '=') {
+            const char *v = q + kl + 1;
+            size_t n = 0;
+            for (; *v && *v != '&'; v++) {
+                int c = (unsigned char)*v;
+                if (c == '%' && gb_hexval(v[1]) >= 0 && gb_hexval(v[2]) >= 0) {
+                    c = gb_hexval(v[1]) * 16 + gb_hexval(v[2]);
+                    v += 2;
+                } else if (c == '+') {
+                    c = ' ';
+                }
+                if (n + 1 >= cap) return 0;
+                out[n++] = (char)c;
+            }
+            out[n] = 0;
+            return 1;
+        }
+        q = strchr(q, '&');
+    }
+    return 0;
+}
+
+static int gb_url_host(const char *url, char *out, size_t cap) {
+    const char *h = strstr(url, "://");
+    h = h ? h + 3 : url;
+    size_t n = strcspn(h, "/?#");
+    if (!n || n >= cap) return 0;
+    memcpy(out, h, n);
+    out[n] = 0;
+    return 1;
+}
+
+int grokbot_vnc_endpoint_for(grokbot *g, const grokbot_box *box,
+                             grokbot_vnc_endpoint *out) {
+    memset(out, 0, sizeof *out);
+    char host[512];
+    int n;
+    int base = !box || (box->vnc_url && strstr(box->vnc_url, ":6080/"));
+    if (box && (!box->vnc_url || !box->state || strcmp(box->state, "running"))) {
+        gb_seterr(g, "no running desktop (state %s)", box->state ? box->state : "unknown", NULL);
+        return 0;
+    }
+    if (base) {
+        char path[1536], port_token[1024];
+        if (!g->vnc_primary || !gb_url_host(g->vnc_primary, host, sizeof host) ||
+            !gb_query_param(g->vnc_primary, "path", path, sizeof path) ||
+            !gb_query_param(g->vnc_primary, "port_token", port_token, sizeof port_token)) {
+            gb_seterr(g, "descriptor has no usable vncProxy.primaryUrl", NULL, NULL);
+            return 0;
+        }
+        n = snprintf(out->url, sizeof out->url, "wss://%s/%s", host, path);
+        if (n < 0 || (size_t)n >= sizeof out->url) goto toolong;
+        n = snprintf(out->header, sizeof out->header, "x-anyrun-port-token: %s", port_token);
+        memset(port_token, 0, sizeof port_token);
+        if (n < 0 || (size_t)n >= sizeof out->header) goto toolong;
+        return 1;
+    }
+    if (box->display < 0) {
+        gb_seterr(g, "no display number in vncUrl", NULL, NULL);
+        return 0;
+    }
+    if (!g->vnc_fork || !g->vnc_network_token || !gb_url_host(g->vnc_fork, host, sizeof host)) {
+        gb_seterr(g, "descriptor has no usable vncProxy.forkBaseUrl", NULL, NULL);
+        return 0;
+    }
+    n = snprintf(out->url, sizeof out->url,
+                 "wss://%s/websockify?token=%d&network_token=%s"
+                 "&resume_lower_s=900&resume_upper_s=18000",
+                 host, box->display, g->vnc_network_token);
+    if (n < 0 || (size_t)n >= sizeof out->url) goto toolong;
+    n = snprintf(out->header, sizeof out->header, "x-anyrun-network-token: %s",
+                 g->vnc_network_token);
+    if (n < 0 || (size_t)n >= sizeof out->header) goto toolong;
+    return 1;
+toolong:
+    memset(out, 0, sizeof *out);
+    gb_seterr(g, "vnc endpoint exceeds buffer", NULL, NULL);
+    return 0;
 }
 
 #endif

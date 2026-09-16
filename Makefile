@@ -31,9 +31,9 @@ CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           boardtest modelstest boardgridtest boardtiletest viewstest sessionpresenttest \
           workspacetest replboxtest ttytest gitinfotest sidechannelviewtest \
           sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
-          dispatchtest voicetabtest hookstest grokbottailtest
+          dispatchtest voicetabtest hookstest grokbottailtest grokvnctest
 CHECKS += orchstatustest orchinstalltest
-MANUAL_TOOLS := imagetest keydump palette pastetest spintest
+MANUAL_TOOLS := imagetest keydump palette pastetest spintest vncprobe
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,
 # tools/ is driven by hand. Both lists stay explicit so that dropping in a new
@@ -201,6 +201,17 @@ $(BUILD)/transcripttest: tests/transcripttest.c $(BUILD)/transcript.o | $(BUILD)
 $(BUILD)/sessionviewtest: tests/sessionviewtest.c $(BUILD)/sessionview.o $(BUILD)/filediff.o $(BUILD)/highlight.o $(BUILD)/toolstyle.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/sessionpresenttest: tests/sessionpresenttest.c tests/stubs/tabbar.c $(BUILD)/sessionpresent.o $(BUILD)/sessionview.o $(BUILD)/filediff.o $(BUILD)/highlight.o $(BUILD)/md.o $(BUILD)/prompt.o $(BUILD)/status.o $(BUILD)/tasks.o $(BUILD)/transcript.o $(BUILD)/toolstyle.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/bash.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/image.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+
+# grokvnc.h: zlib for ZRLE, Security.framework for TLS.
+VNC_LIBS := -lz
+ifeq ($(shell uname -s),Darwin)
+VNC_LIBS += -framework Security -framework CoreFoundation
+endif
+$(BUILD)/grokvnctest $(BUILD)/vncprobe: TOOL_LIBS = -pthread -lcurl $(VNC_LIBS)
+
+$(BUILD)/grokvnctest: tests/grokvnctest.c src/vendor/vnc/grokvnc.h | $(BUILD)
+
+$(BUILD)/vncprobe: tools/vncprobe.c src/vendor/vnc/grokvnc.h $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/grokbottailtest: tests/grokbottailtest.c $(BUILD)/grokbottail.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
