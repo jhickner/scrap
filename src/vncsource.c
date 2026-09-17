@@ -45,7 +45,7 @@ static void attempt_release(struct attempt *a)
 
 static grokvnc *connect_box(struct attempt *a, char *status, size_t cap)
 {
-    grokbot *g = grokbot_open(NULL);
+    grokbot *g = grokbot_open();
     if (!g) {
         snprintf(status, cap, "grokbot: %s", grokbot_error(NULL));
         return NULL;

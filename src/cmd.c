@@ -121,7 +121,7 @@ static const struct pick_item *grokbot_choices(int *count)
     fetched = now;
     n = 0;
 
-    grokbot *g = grokbot_open(NULL);
+    grokbot *g = grokbot_open();
     cJSON   *list = g ? grokbot_list_agents(g) : NULL;
     cJSON   *a;
     cJSON_ArrayForEach(a, list) {

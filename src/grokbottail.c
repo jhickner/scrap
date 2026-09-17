@@ -168,7 +168,7 @@ struct fetch {
 static void *fetch_run(void *arg)
 {
     struct fetch *f = arg;
-    grokbot *g = grokbot_open(NULL);
+    grokbot *g = grokbot_open();
     cJSON *tail = g ? grokbot_transcript_tail(g, f->bot, f->limit) : NULL;
     if (!tail)
         snprintf(f->err, sizeof f->err, "%s",

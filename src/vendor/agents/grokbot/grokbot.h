@@ -7,12 +7,6 @@
 typedef struct grokbot grokbot;
 
 typedef struct {
-    const char *gateway_url;
-    const char *gateway_token;
-    const char *extra_headers_json;
-} grokbot_opts;
-
-typedef struct {
     char *id;
     char *name;
     char *title;
@@ -21,7 +15,7 @@ typedef struct {
     cJSON *raw;
 } grokbot_agent;
 
-grokbot *grokbot_open(const grokbot_opts *opts);
+grokbot *grokbot_open(void);
 void     grokbot_close(grokbot *g);
 const char *grokbot_error(grokbot *g);
 const char *grokbot_gateway_url(grokbot *g);
@@ -50,8 +44,8 @@ char  *grokbot_send(grokbot *g, const char *ref, const char *prompt,
 cJSON *grokbot_transcript_tail(grokbot *g, const char *ref, int limit);
 cJSON *grokbot_thread(grokbot *g, const char *ref, const char *root_id);
 
-/* Re-reads the app's gateway descriptor (token rotation). 0 when the client
- * was opened from explicit url/token or the reload failed. */
+/* Re-reads the app's gateway descriptor (token rotation). 0 when the reload
+ * failed. */
 int grokbot_reload(grokbot *g);
 
 typedef struct {
@@ -103,8 +97,6 @@ struct grokbot {
     char *vnc_primary;
     char *vnc_fork;
     char *vnc_network_token;
-    char *extra_headers_json;
-    int   from_app;
     char err[512];
 };
 
@@ -286,41 +278,14 @@ static int gb_load_app_session(grokbot *g) {
 
 static _Thread_local char gb_open_err[512];
 
-static void gb_merge_extra_headers(grokbot *g) {
-    cJSON *h = g->extra_headers_json ? cJSON_Parse(g->extra_headers_json) : NULL;
-    if (!h) return;
-    if (!g->headers) g->headers = cJSON_CreateObject();
-    for (cJSON *it = h->child; it; it = it->next) {
-        cJSON_DeleteItemFromObject(g->headers, it->string);
-        cJSON_AddItemToObject(g->headers, it->string,
-                              cJSON_CreateString(cJSON_GetStringValue(it)));
-    }
-    cJSON_Delete(h);
-}
-
-grokbot *grokbot_open(const grokbot_opts *opts) {
+grokbot *grokbot_open(void) {
     gb_open_err[0] = 0;
     grokbot *g = calloc(1, sizeof *g);
     if (!g) return NULL;
-    const char *url = opts ? opts->gateway_url : NULL;
-    const char *tok = opts ? opts->gateway_token : NULL;
-    if (!url) url = getenv("GROK_BOT_GATEWAY_URL");
-    if (!tok) tok = getenv("GROK_BOT_GATEWAY_TOKEN");
-    if (url && tok) {
-        g->url = gb_strdup(url);
-        g->token = gb_strdup(tok);
-        size_t L = strlen(g->url);
-        if (L && g->url[L - 1] == '/') g->url[L - 1] = 0;
-    } else if (!gb_load_app_session(g)) {
+    if (!gb_load_app_session(g)) {
         snprintf(gb_open_err, sizeof gb_open_err, "%s", g->err);
         grokbot_close(g);
         return NULL;
-    } else {
-        g->from_app = 1;
-    }
-    if (opts && opts->extra_headers_json) {
-        g->extra_headers_json = gb_strdup(opts->extra_headers_json);
-        gb_merge_extra_headers(g);
     }
     g->curl = curl_easy_init();
     if (!g->curl) { grokbot_close(g); return NULL; }
@@ -348,12 +313,11 @@ void grokbot_close(grokbot *g) {
     if (!g) return;
     if (g->curl) curl_easy_cleanup(g->curl);
     gb_clear_session(g);
-    free(g->extra_headers_json);
     free(g);
 }
 
 int grokbot_reload(grokbot *g) {
-    if (!g || !g->from_app) return 0;
+    if (!g) return 0;
     char err[sizeof g->err];
     grokbot fresh = {0};
     if (!gb_load_app_session(&fresh)) {
@@ -369,7 +333,6 @@ int grokbot_reload(grokbot *g) {
     g->vnc_primary = fresh.vnc_primary;
     g->vnc_fork = fresh.vnc_fork;
     g->vnc_network_token = fresh.vnc_network_token;
-    gb_merge_extra_headers(g);
     return 1;
 }
 

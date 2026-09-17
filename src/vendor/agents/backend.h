@@ -1179,11 +1179,7 @@ static int backend_grokbot_running(grokbot *g, const char *id) {
 
 static void *backend_grokbot_poll(void *arg) {
     backend_grokbot *x = arg;
-    grokbot_opts o = { .gateway_url = x->g->url, .gateway_token = x->g->token };
-    char *headers = x->g->headers ? cJSON_PrintUnformatted(x->g->headers) : NULL;
-    o.extra_headers_json = headers;
-    grokbot *g = grokbot_open(&o);
-    free(headers);
+    grokbot *g = grokbot_open();
     char *id = strdup(x->agent_id);
     pthread_mutex_lock(&x->lock);
     while (g && id && !x->stop) {
@@ -1258,7 +1254,7 @@ static int backend_grokbot_start(Backend *b, const char *resume) {
     (void)resume;
     backend_grokbot_stop(x);
     x->err[0] = 0;
-    x->g = grokbot_open(NULL);
+    x->g = grokbot_open();
     if (!x->g) {
         snprintf(x->err, sizeof x->err, "%s", grokbot_error(NULL));
         return 0;
