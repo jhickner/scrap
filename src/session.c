@@ -76,6 +76,7 @@ struct session {
     long     context_window;
     int      quiet;
     char    *system_extra;
+    char    *handoff;
     session_event_fn observer;
     void    *observer_ud;
     char     recent[SESSION_RECENT][SESSION_RECENT_MAX];
@@ -884,6 +885,7 @@ void session_free(struct session *s)
     free(s->permission);
     free(s->error_note);
     free(s->system_extra);
+    free(s->handoff);
     transcript_free(&s->transcript);
     vncinset_free(s->inset);
     if (live == s)
@@ -912,6 +914,27 @@ static char *on_hook(void *ud, int hook, const char *tool, const char *input_jso
 {
     (void)ud;
     return hooks_context(hook, tool, input_json);
+}
+
+static char *join_system(const char *const *parts, int n)
+{
+    size_t total = 0;
+    for (int i = 0; i < n; i++)
+        if (parts[i] && *parts[i])
+            total += strlen(parts[i]) + 2;
+    if (!total)
+        return NULL;
+    char *out = malloc(total + 1), *p = out;
+    if (!out)
+        return NULL;
+    for (int i = 0; i < n; i++) {
+        if (!parts[i] || !*parts[i])
+            continue;
+        if (p != out)
+            p += sprintf(p, "\n\n");
+        p += sprintf(p, "%s", parts[i]);
+    }
+    return out;
 }
 
 static Backend *agent(struct session *s)
@@ -945,13 +968,9 @@ static Backend *agent(struct session *s)
           "it with the Read tool first, then write the markdown."
         : NULL;
 
-    char *joined = NULL;
-    if (note && s->system_extra) {
-        size_t n = strlen(note) + strlen(s->system_extra) + 3;
-        if ((joined = malloc(n)))
-            snprintf(joined, n, "%s\n\n%s", note, s->system_extra);
-    }
-    o.system = joined ? joined : s->system_extra ? s->system_extra : note;
+    const char *parts[] = {note, s->system_extra, s->handoff};
+    char *joined = join_system(parts, 3);
+    o.system = joined;
     s->agent = backend_open_ex(&o);
     free(joined);
     if (s->agent) {
@@ -1024,9 +1043,10 @@ int session_switch_backend(struct session *s, const char *backend)
     o.hooks = hooks;
     o.hook_count = hooks_backend(hooks, HOOKS_MAX);
     Backend *replacement = backend_open_ex(&o);
-    free(handoff);
-    if (!replacement)
+    if (!replacement) {
+        free(handoff);
         return 0;
+    }
     if (replacement->set_hook_cb)
         replacement->set_hook_cb(replacement, on_hook, s);
 
@@ -1034,6 +1054,7 @@ int session_switch_backend(struct session *s, const char *backend)
         const char *why = replacement->last_error ? replacement->last_error(replacement) : NULL;
         snprintf(start_error, sizeof start_error, "%s", why ? why : "");
         replacement->close(replacement);
+        free(handoff);
         return 0;
     }
     replacement->set_event_cb(replacement, on_event, s);
@@ -1041,6 +1062,8 @@ int session_switch_backend(struct session *s, const char *backend)
 
     Backend *previous = s->agent;
     s->agent = replacement;
+    free(s->handoff);
+    s->handoff = handoff;
     replace(&s->backend, backend);
     replace(&s->model, NULL);
     replace(&s->effort, NULL);
@@ -1519,6 +1542,7 @@ void session_adopt_id(struct session *s, const char *id)
 static void reset_turns(struct session *s, int flags)
 {
     s->turns = 0;
+    replace(&s->handoff, NULL);
     s->cost_usd = 0;
     s->tokens_in = s->tokens_out = s->tokens_cached = 0;
     s->context_tokens = 0;
@@ -1873,6 +1897,7 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     free(reply);
 
     s->turns++;
+    replace(&s->handoff, NULL);
     charge_turn(s, &m);
     s->tokens_in += m.input_tokens + m.cache_read_tokens + m.cache_creation_tokens;
     s->tokens_out += m.output_tokens;
