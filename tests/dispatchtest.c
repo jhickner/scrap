@@ -21,10 +21,18 @@ static int            spawn_at = 1;
 static int            spawned_n;
 static int            renamed;
 static int            naming_calls;
+static int            turn_running;
+static int            render_n;
+static int            send_n;
+static int            echo_n;
+static int            last_render_at = -1;
+static int            last_send_at = -1;
 static char           last_title[128];
 static char           last_backend[32];
 static char           last_model[64];
 static char           last_cwd[256];
+static char           last_echo[256];
+static char           last_send[256];
 
 static int failures;
 
@@ -35,7 +43,11 @@ static void fail(const char *what)
 }
 
 const char *cmd_default_backend(void) { return "claude"; }
-void        prompt_echo_message(const char *text) { (void)text; }
+void        prompt_echo_message(const char *text)
+{
+    echo_n++;
+    snprintf(last_echo, sizeof last_echo, "%s", text ? text : "");
+}
 
 struct session *workspace_current(void) { return &current_tab; }
 struct session *workspace_at(int index)
@@ -53,15 +65,17 @@ int  workspace_close(int index) { (void)index; return 0; }
 void workspace_show(int index) { (void)index; }
 void workspace_render(int index, void (*fn)(struct session *s, void *ud), void *ud)
 {
-    (void)index;
-    (void)fn;
-    (void)ud;
+    render_n++;
+    last_render_at = index;
+    if (fn)
+        fn(workspace_at(index), ud);
 }
 int workspace_send(int index, const char *line, const char *shown)
 {
-    (void)index;
-    (void)line;
     (void)shown;
+    send_n++;
+    last_send_at = index;
+    snprintf(last_send, sizeof last_send, "%s", line ? line : "");
     return 1;
 }
 
@@ -86,7 +100,7 @@ const char *session_id(const struct session *s)
 int session_turn_running(const struct session *s)
 {
     (void)s;
-    return 0;
+    return turn_running;
 }
 
 enum session_rename session_rename(struct session *s, const char *name)
@@ -110,7 +124,13 @@ static void reset_case(void)
     spawned_n = 0;
     renamed = 0;
     naming_calls = 0;
+    turn_running = 0;
+    render_n = 0;
+    send_n = 0;
+    echo_n = 0;
+    last_render_at = last_send_at = -1;
     last_title[0] = last_backend[0] = last_model[0] = last_cwd[0] = '\0';
+    last_echo[0] = last_send[0] = '\0';
     memset(&spawned, 0, sizeof spawned);
 }
 
@@ -157,6 +177,8 @@ int main(void)
         fail("title is the session name");
     if (naming_calls != 1 || !spawned.skip_naming)
         fail("dispatched title is not auto-replaced");
+    if (render_n != 1 || echo_n != 1 || strcmp(last_echo, "do the thing"))
+        fail("spawn echoes the prompt");
 
     reset_case();
     drop_req(dir, "plain", "{\"backend\":\"claude\",\"prompt\":\"hello\"}");
@@ -187,9 +209,27 @@ int main(void)
             fail("a long title is clipped to 80");
     }
 
+    reset_case();
+    drop_req(dir, "idle-send", "{\"send\":\"idle follow-up\",\"slot\":1}");
+    poll_once();
+    if (send_n != 1 || last_send_at != spawn_at || strcmp(last_send, "idle follow-up"))
+        fail("idle send delivers the line");
+    if (render_n != 1 || last_render_at != spawn_at || echo_n != 1 ||
+        strcmp(last_echo, "idle follow-up"))
+        fail("idle send echoes once as a user turn");
+
+    reset_case();
+    turn_running = 1;
+    drop_req(dir, "busy-send", "{\"send\":\"queued follow-up\",\"slot\":1}");
+    poll_once();
+    if (send_n != 1 || last_send_at != spawn_at || strcmp(last_send, "queued follow-up"))
+        fail("busy send still delivers the line");
+    if (render_n || echo_n)
+        fail("busy send does not echo; send_next does when the turn starts");
+
     {
         char path[512];
-        const char *ids[] = {"titled", "plain", "empty", "long", NULL};
+        const char *ids[] = {"titled", "plain", "empty", "long", "idle-send", "busy-send", NULL};
         for (int i = 0; ids[i]; i++) {
             snprintf(path, sizeof path, "%s/%ld-%s.res", dir, (long)getpid(), ids[i]);
             unlink(path);

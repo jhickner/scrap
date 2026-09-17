@@ -61,11 +61,26 @@ static void fail(const char *what)
     failures++;
 }
 
+static int dump_count(const char *path, const char *needle)
+{
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return -1;
+    char buf[4096];
+    int n = 0;
+    while (fgets(buf, sizeof buf, f))
+        if (strstr(buf, needle))
+            n++;
+    fclose(f);
+    return n;
+}
+
 struct session {
     int running;
     int work;
     int busy;
     const char *cwd;
+    int finish;
 };
 
 int session_turn_running(const struct session *s) { return s && s->running; }
@@ -121,7 +136,14 @@ int session_turn_begin(struct session *s, const char *text)
     s->running = 1;
     return 1;
 }
-int session_turn_pump(struct session *s) { return s && s->running; }
+int session_turn_pump(struct session *s)
+{
+    if (!s || !s->running)
+        return 0;
+    if (s->finish)
+        s->running = 0;
+    return 1;
+}
 void session_turn_wait(struct session *s) { (void)s; }
 int session_idle_pump(struct session *s) { (void)s; return 0; }
 int session_wake_fd(const struct session *s) { (void)s; return -1; }
@@ -271,7 +293,7 @@ int main(void)
             fail("no tab remains");
     }
 
-    struct session z = {0, 0, 0, "/z"}, m = {0, 0, 0, "/m"}, q = {0, 0, 0, "/a"};
+    struct session z = {0, 0, 0, "/z", 0}, m = {0, 0, 0, "/m", 0}, q = {0, 0, 0, "/a", 0};
     if (!workspace_begin(&z, 0))
         fail("open the first tab of the sorted set");
     else if (workspace_open(&m) != 0 || workspace_open(&q) != 0)
@@ -289,6 +311,43 @@ int main(void)
     }
     while (workspace_count())
         workspace_close(0);
+
+    {
+        struct session idle = {0}, busy = {0};
+        char dump[] = "/tmp/mux-ws-echo-XXXXXX";
+        int dfd = mkstemp(dump);
+        if (dfd < 0)
+            fail("temp dump");
+        else
+            close(dfd);
+
+        if (!workspace_begin(&idle, 0) || workspace_open(&busy) < 0)
+            fail("open tabs for send echo");
+        else {
+            if (!workspace_send(0, "idle-dispatch-line", NULL))
+                fail("idle send");
+            if (!workspace_dump(0, dump) || dump_count(dump, "idle-dispatch-line"))
+                fail("idle workspace_send does not echo; the caller does");
+
+            busy.running = 1;
+            if (!workspace_send(1, "queued-dispatch-line", NULL))
+                fail("queue a line while a turn is running");
+            if (workspace_queued(1) != 1)
+                fail("the line is pending");
+            if (!workspace_dump(1, dump) || dump_count(dump, "queued-dispatch-line"))
+                fail("a queued line is not echoed until its turn starts");
+
+            busy.finish = 1;
+            workspace_pump();
+            if (workspace_queued(1))
+                fail("the queued line starts when the turn ends");
+            if (!workspace_dump(1, dump) || dump_count(dump, "queued-dispatch-line") != 1)
+                fail("a queued line is echoed once when its turn starts");
+        }
+        unlink(dump);
+        while (workspace_count())
+            workspace_close(0);
+    }
 
     workspace_end();
     chrome_bind(NULL);

@@ -113,10 +113,14 @@ static void serve(const char *dir, const char *base, const char *text)
             reply(dir, base, "{\"error\": \"bad slot\"}");
         } else if (!line || !*line) {
             reply(dir, base, "{\"error\": \"bad line\"}");
-        } else if (!workspace_send(at, line, NULL)) {
-            reply(dir, base, "{\"error\": \"could not send line\"}");
         } else {
-            reply(dir, base, "{\"ok\":true}");
+            /* send_next echoes a queued line when its turn starts; idle has no such path */
+            if (!session_turn_running(workspace_at(at)))
+                workspace_render(at, echo_prompt, (void *)line);
+            if (!workspace_send(at, line, NULL))
+                reply(dir, base, "{\"error\": \"could not send line\"}");
+            else
+                reply(dir, base, "{\"ok\":true}");
         }
         cJSON_Delete(o);
         return;
