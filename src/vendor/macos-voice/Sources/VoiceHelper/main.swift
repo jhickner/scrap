@@ -269,11 +269,41 @@ let accepter = Thread {
             break
         }
         _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
-        DispatchQueue.main.sync { session.add(fd) }
+        DispatchQueue.main.async { session.add(fd) }
         Thread { readClient(fd) }.start()
     }
 }
 accepter.start()
+
+/* Clients are served from the main queue. Should it stop draining, every new
+   client would connect and wait forever, so the helper exits and is relaunched. */
+final class MainPulse: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending = false
+
+    func arm() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let stuck = pending
+        pending = true
+        return stuck
+    }
+
+    func answer() {
+        lock.lock(); pending = false; lock.unlock()
+    }
+}
+let pulse = MainPulse()
+let watchdog = Thread {
+    while true {
+        Thread.sleep(forTimeInterval: 5)
+        if pulse.arm() {
+            VoiceLog.problem("main queue stopped draining; exiting")
+            exit(1)
+        }
+        DispatchQueue.main.async { pulse.answer() }
+    }
+}
+watchdog.start()
 
 let voiceAuthorized = DispatchSemaphore(value: 0)
 AVSpeechSynthesizer.requestPersonalVoiceAuthorization { status in

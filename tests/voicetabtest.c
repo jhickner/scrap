@@ -164,6 +164,7 @@ int  macos_voice_rate(macos_voice *v, double rate) { (void)v; (void)rate; return
 int  macos_voice_silence(macos_voice *v, double seconds) { (void)v; (void)seconds; return 0; }
 int  macos_voice_focus(macos_voice *v, int focused) { (void)v; (void)focused; return 0; }
 int  macos_voice_resumed(const macos_voice *v) { (void)v; return 0; }
+int  macos_voice_launched(const macos_voice *v) { (void)v; return 1; }
 int  macos_voice_handoff(macos_voice *v) { (void)v; return 0; }
 void macos_voice_protect_handoff(void) {}
 void macos_voice_stop(macos_voice *v) { (void)v; }

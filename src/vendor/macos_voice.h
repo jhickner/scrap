@@ -63,6 +63,8 @@ int  macos_voice_handoff(macos_voice *v);
 /* Call at process entry, before spawning children, to protect an inherited fd. */
 void macos_voice_protect_handoff(void);
 int  macos_voice_resumed(const macos_voice *v);
+/* This client launched the helper, rather than joining one already running. */
+int  macos_voice_launched(const macos_voice *v);
 /* Disconnect this client. The helper exits when the last client leaves. */
 void macos_voice_stop(macos_voice *v);
 /* End the helper for every client, then disconnect. */
@@ -90,6 +92,7 @@ int  macos_voice_reap(const char *helper_path);
 struct macos_voice {
     int fd;
     int resumed;
+    int launched;
     char path[104];
     char *buf; size_t len, cap;
     macos_voice_cb cb; void *ud;
@@ -134,6 +137,7 @@ int macos_voice_handoff(macos_voice *v) {
 }
 
 int macos_voice_resumed(const macos_voice *v) { return v && v->resumed; }
+int macos_voice_launched(const macos_voice *v) { return v && v->launched; }
 
 static int mv_write(macos_voice *v, const char *verb, const char *text) {
     if (!v || v->fd < 0) return -1;
@@ -251,6 +255,7 @@ macos_voice *macos_voice_start(const macos_voice_opts *o, macos_voice_cb cb, voi
     for (int attempt = 0; v->fd < 0 && attempt < 2; attempt++) {
         if (attempt)
             macos_voice_reap(o->helper_path);
+        v->launched = 1;
         pid_t pid = fork();
         if (!pid) {
             const char *av[24]; int n = 0;

@@ -26,6 +26,7 @@
 #endif
 
 #define READY_WAIT_MS 30000
+#define JOIN_WAIT_MS  8000
 #define LINE_MAX_QUEUE 16
 /* room for a dictation held across many turns */
 #define LISTEN_MAX 8192
@@ -1030,6 +1031,7 @@ int voice_start(char *err, size_t size)
 
     cancelled = 0;
     int owned = status_work_begin("starting voice");
+    int reaped = 0;
 
     macos_voice_opts opts = {
         .helper_path = settings_get_str(SETTING_VOICE_HELPER, VOICE_HELPER_PATH),
@@ -1040,6 +1042,7 @@ int voice_start(char *err, size_t size)
         .input       = settings_get_str(SETTING_VOICE_INPUT, NULL),
         .tick        = wait_tick,
     };
+again:
     voice = macos_voice_start(&opts, on_event, NULL);
     if (!voice) {
         if (cancelled)
@@ -1050,7 +1053,10 @@ int voice_start(char *err, size_t size)
         return 0;
     }
 
-    long until = now_ms() + READY_WAIT_MS;
+    /* a helper already running answers a new client at once; one that stays
+       silent has stopped serving its queue and is replaced */
+    int joined = !macos_voice_launched(voice) && !macos_voice_resumed(voice);
+    long until = now_ms() + (joined && !reaped ? JOIN_WAIT_MS : READY_WAIT_MS);
     while (!ready && !failure[0]) {
         long left = until - now_ms();
         if (left <= 0)
@@ -1067,6 +1073,13 @@ int voice_start(char *err, size_t size)
             snprintf(failure, sizeof failure, "start cancelled");
             break;
         }
+    }
+    if (!ready && !failure[0] && joined && !reaped) {
+        reaped = 1;
+        macos_voice_stop(voice);
+        voice = NULL;
+        macos_voice_reap(opts.helper_path);
+        goto again;
     }
     status_work_end(owned);
     if (failure[0] || !ready) {
