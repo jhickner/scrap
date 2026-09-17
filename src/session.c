@@ -1630,7 +1630,7 @@ int session_retarget(struct session *s, const char *model, const char *effort,
     s->effort = next_effort;
     s->cwd = next_cwd;
 
-    if (!restart_spun(s, moved || !s->id[0] ? NULL : s->id)) {
+    if (!restart_spun(s, moved || !s->id[0] || s->handoff ? NULL : s->id)) {
         free(s->model);
         free(s->effort);
         free(s->cwd);
