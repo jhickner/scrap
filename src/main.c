@@ -102,6 +102,8 @@ static int pick_startup_bot(struct session *s)
     if (!count || !frontend_has_keyboard())
         return 0;
     int index = pick_run_filter("select bot", choices, count, 0);
+    viewport_flush();
+    ui_flush();
     return index >= 0 && session_preset_model(s, choices[index].label);
 }
 

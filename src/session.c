@@ -1216,6 +1216,66 @@ static int restart(struct session *s, const char *resume_id)
     return 1;
 }
 
+struct restart_job {
+    struct session *s;
+    const char     *resume_id;
+    int             ok;
+    int             done;
+    pthread_mutex_t mu;
+};
+
+static int restart_job_done(struct restart_job *j)
+{
+    pthread_mutex_lock(&j->mu);
+    int done = j->done;
+    pthread_mutex_unlock(&j->mu);
+    return done;
+}
+
+static void *restart_job_run(void *ud)
+{
+    struct restart_job *j = ud;
+    owner = j->s;
+    restart_shield_thread();
+    int ok = restart(j->s, j->resume_id);
+    pthread_mutex_lock(&j->mu);
+    j->ok = ok;
+    j->done = 1;
+    pthread_mutex_unlock(&j->mu);
+    return NULL;
+}
+
+static void start_word(const struct session *s, char *out, size_t size)
+{
+    snprintf(out, size, "Starting %s\xe2\x80\xa6", s->model ? s->model : "Grok Bot");
+}
+
+/* grokbot starts over the network: run it off-thread under the status spinner */
+static int restart_spun(struct session *s, const char *resume_id)
+{
+    if (strcmp(s->backend, "grokbot"))
+        return restart(s, resume_id);
+    struct restart_job j = {.s = s, .resume_id = resume_id};
+    pthread_mutex_init(&j.mu, NULL);
+    pthread_t t;
+    if (pthread_create(&t, NULL, restart_job_run, &j) != 0) {
+        j.ok = restart(s, resume_id);
+    } else {
+        char word[128];
+        start_word(s, word, sizeof word);
+        int owned = status_work_begin(word);
+        struct timespec slice = {0, SPIN_FRAME_MS * 1000000L};
+        while (!restart_job_done(&j)) {
+            nanosleep(&slice, NULL);
+            status_tick();
+        }
+        pthread_join(t, NULL);
+        status_work_end(owned);
+    }
+    pthread_mutex_destroy(&j.mu);
+    return j.ok;
+}
+
 static int connect_agent(struct session *s)
 {
     char next[4096];
@@ -1313,6 +1373,17 @@ int session_start_wait(struct session *s)
     if (!s)
         return 0;
     if (s->start_threaded) {
+        if (!strcmp(s->backend, "grokbot") && !s->start_finished) {
+            char word[128];
+            start_word(s, word, sizeof word);
+            int owned = status_work_begin(word);
+            struct timespec slice = {0, SPIN_FRAME_MS * 1000000L};
+            while (!s->start_finished) {
+                nanosleep(&slice, NULL);
+                status_tick();
+            }
+            status_work_end(owned);
+        }
         pthread_join(s->start_th, NULL);
         s->start_threaded = 0;
     }
@@ -1535,7 +1606,7 @@ int session_retarget(struct session *s, const char *model, const char *effort,
     s->effort = next_effort;
     s->cwd = next_cwd;
 
-    if (!restart(s, moved || !s->id[0] ? NULL : s->id)) {
+    if (!restart_spun(s, moved || !s->id[0] ? NULL : s->id)) {
         free(s->model);
         free(s->effort);
         free(s->cwd);

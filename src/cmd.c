@@ -346,6 +346,8 @@ static void do_model(struct session *s, const char *arg)
             if (strcmp(choices[i].label, current) == 0)
                 initial = i;
         int index = pick_run_filter("select model", choices, count, initial);
+        viewport_flush();
+        ui_flush();
         if (index < 0)
             return;
         chosen = choices[index].label;
