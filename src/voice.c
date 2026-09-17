@@ -1011,13 +1011,7 @@ int voice_start(char *err, size_t size)
     draft[0] = '\0';
     failure[0] = '\0';
 
-    status_resume();
-    int owned = !status_spinning();
-    status_set_word("starting voice");
-    if (owned)
-        status_begin();
-    else
-        status_tick();
+    int owned = status_work_begin("starting voice");
 
     macos_voice_opts opts = {
         .helper_path = settings_get_str(SETTING_VOICE_HELPER, VOICE_HELPER_PATH),
@@ -1031,8 +1025,7 @@ int voice_start(char *err, size_t size)
     voice = macos_voice_start(&opts, on_event, NULL);
     if (!voice) {
         snprintf(err, size, "could not launch %s", opts.helper_path);
-        if (owned)
-            status_end();
+        status_work_end(owned);
         return 0;
     }
 
@@ -1050,8 +1043,7 @@ int voice_start(char *err, size_t size)
         }
         status_tick();
     }
-    if (owned)
-        status_end();
+    status_work_end(owned);
     if (failure[0] || !ready) {
         snprintf(err, size, "%s", failure[0] ? failure : "helper is still starting");
         macos_voice_stop(voice);

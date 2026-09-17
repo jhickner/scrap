@@ -351,3 +351,21 @@ void status_end(void)
     started = 0;
     alert[0] = '\0';
 }
+
+int status_work_begin(const char *text)
+{
+    status_resume();
+    int owned = !status_spinning();
+    status_set_word(text);
+    if (owned)
+        status_begin();
+    else
+        status_tick();
+    return owned;
+}
+
+void status_work_end(int owned)
+{
+    if (owned)
+        status_end();
+}

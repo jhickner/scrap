@@ -12,6 +12,9 @@ void   status_begin(void);
 void   status_begin_at(double elapsed);
 void   status_end(void);
 
+int    status_work_begin(const char *text);
+void   status_work_end(int owned);
+
 void   status_paint_spin(void);
 void   status_paint_sticky(void);
 int    status_sticky_measure(void);

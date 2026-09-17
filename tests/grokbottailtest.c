@@ -7,6 +7,7 @@
 #include "md.h"
 #include "prompt.h"
 #include "session.h"
+#include "status.h"
 #include "ui.h"
 #include "viewport.h"
 #include "vendor/agents/grokbot/grokbot.h"
@@ -43,6 +44,9 @@ void ui_bar(const char *style, const char *fmt, ...)
 }
 void ui_error(const char *fmt, ...) { (void)fmt; }
 void ui_flush(void) {}
+int status_work_begin(const char *text) { (void)text; return 1; }
+void status_work_end(int owned) { (void)owned; }
+void status_tick(void) {}
 unsigned viewport_item_begin(const struct viewport_entry *e) { (void)e; return 0; }
 void viewport_item_end(void) {}
 
