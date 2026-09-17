@@ -127,12 +127,9 @@ void settings_set_int(const char *key, int value)
 }
 void settings_set_str(const char *key, const char *value) { (void)key; (void)value; }
 
-void status_resume(void) {}
-int  status_spinning(void) { return 0; }
-void status_set_word(const char *text) { (void)text; }
-void status_begin(void) {}
 void status_tick(void) {}
-void status_end(void) {}
+int  status_work_begin(const char *text) { (void)text; return 1; }
+void status_work_end(int owned) { (void)owned; }
 void status_set_alert(const char *text) { (void)text; }
 static char last_note[64];
 void status_set_note(const char *text) { snprintf(last_note, sizeof last_note, "%s", text); }

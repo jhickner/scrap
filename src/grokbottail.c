@@ -1,5 +1,6 @@
 #include "grokbottail.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/time.h>
@@ -8,6 +9,7 @@
 #include "md.h"
 #include "prompt.h"
 #include "session.h"
+#include "status.h"
 #include "ui.h"
 #include "viewport.h"
 #include "vendor/agents/grokbot/grokbot.h"
@@ -154,6 +156,63 @@ static double wall_ms(void)
     return (double)tv.tv_sec * 1000.0 + tv.tv_usec / 1000;
 }
 
+struct fetch {
+    const char     *bot;
+    int             limit;
+    cJSON          *tail;
+    char            err[300];
+    int             done;
+    pthread_mutex_t mu;
+};
+
+static void *fetch_run(void *arg)
+{
+    struct fetch *f = arg;
+    grokbot *g = grokbot_open(NULL);
+    cJSON *tail = g ? grokbot_transcript_tail(g, f->bot, f->limit) : NULL;
+    if (!tail)
+        snprintf(f->err, sizeof f->err, "%s",
+                 g ? grokbot_error(g) : "gateway session unavailable");
+    grokbot_close(g);
+    pthread_mutex_lock(&f->mu);
+    f->tail = tail;
+    f->done = 1;
+    pthread_mutex_unlock(&f->mu);
+    return NULL;
+}
+
+static int fetch_done(struct fetch *f)
+{
+    pthread_mutex_lock(&f->mu);
+    int done = f->done;
+    pthread_mutex_unlock(&f->mu);
+    return done;
+}
+
+static cJSON *fetch_tail(const char *bot, int limit, const char *word,
+                         char *err, size_t size)
+{
+    struct fetch f = {.bot = bot, .limit = limit};
+    pthread_mutex_init(&f.mu, NULL);
+    pthread_t t;
+    if (pthread_create(&t, NULL, fetch_run, &f) != 0) {
+        fetch_run(&f);
+    } else {
+        int owned = status_work_begin(word);
+        struct timespec slice = {0, SPIN_FRAME_MS * 1000000L};
+        while (!fetch_done(&f)) {
+            nanosleep(&slice, NULL);
+            status_tick();
+        }
+        pthread_join(t, NULL);
+        status_work_end(owned);
+    }
+    pthread_mutex_destroy(&f.mu);
+    if (!f.tail)
+        snprintf(err, size, "%s", f.err);
+    return f.tail;
+}
+
 int grokbottail_show(struct session *s, int limit, int only_new)
 {
     if (!grokbottail_applies(s))
@@ -164,17 +223,19 @@ int grokbottail_show(struct session *s, int limit, int only_new)
         limit = GROKBOTTAIL_MAX;
 
     const char *bot = session_model(s);
-    grokbot *g = grokbot_open(NULL);
-    cJSON *tail = g ? grokbot_transcript_tail(g, bot, limit) : NULL;
+    char word[64], err[300];
+    if (only_new)
+        snprintf(word, sizeof word, "Fetching new messages\xe2\x80\xa6");
+    else
+        snprintf(word, sizeof word, "Loading %s history\xe2\x80\xa6", bot);
+    cJSON *tail = fetch_tail(bot, limit, word, err, sizeof err);
     if (!tail) {
         viewport_item_begin(VIEWPORT_ROWS(1, 1));
-        ui_error("grokbot: %s", g ? grokbot_error(g) : "gateway session unavailable");
+        ui_error("grokbot: %s", err);
         viewport_item_end();
         ui_flush();
-        grokbot_close(g);
         return -1;
     }
-    grokbot_close(g);
 
     struct grokbottail_mark since = {0}, mark = {0};
     int have = only_new && session_tail_mark(s, bot, &since);
