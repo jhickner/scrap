@@ -223,7 +223,7 @@ static int gb_load_app_session(grokbot *g) {
     snprintf(path, sizeof path,
              "%s/Library/Application Support/Grok Bot/gateway-descriptor.json", home);
     char *txt = gb_read_file(path);
-    if (!txt) { gb_seterr(g, "no Grok Bot session at %s", path, NULL); return 0; }
+    if (!txt) { gb_seterr(g, "cannot read the Grok Bot gateway descriptor at %s", path, NULL); return 0; }
     cJSON *wrapped = cJSON_Parse(txt);
     free(txt);
     if (!wrapped) { gb_seterr(g, "bad gateway descriptor JSON", NULL, NULL); return 0; }
@@ -419,7 +419,7 @@ static cJSON *gb_post(grokbot *g, const char *method, const char *payload, long 
     memset(auth, 0, sizeof auth);
 
     if (rc != CURLE_OK) {
-        gb_seterr(g, "%s: %s", method, curl_easy_strerror(rc));
+        gb_seterr(g, "cannot reach the Grok Bot gateway (%s: %s)", method, curl_easy_strerror(rc));
         free(out.p);
         return NULL;
     }

@@ -16,6 +16,8 @@
 #include "bash.h"
 #include "chrome.h"
 #include "cmd.h"
+#include "frontend.h"
+#include "pick.h"
 #include "confirm.h"
 #include "gitinfo.h"
 #include "hud.h"
@@ -27,6 +29,7 @@
 #include "handoff.h"
 #include "scrollback.h"
 #include "session.h"
+#include "sessionprefs.h"
 #include "sessionfork.h"
 #include "sessionload.h"
 #include "sessionswitch.h"
@@ -86,6 +89,20 @@ static void restore_terminal(void)
     viewport_end();
     ui_cursor_restore();
     tty_raw_end();
+}
+
+/* grokbot with no saved bot: the user's pick from the gateway list. Returns 0
+   when the backend is left to take the first bot the gateway lists. */
+static int pick_startup_bot(struct session *s)
+{
+    if (strcmp(session_backend(s), "grokbot") || strcmp(session_model(s), "default"))
+        return 1;
+    int                     count = 0;
+    const struct pick_item *choices = cmd_model_choices("grokbot", &count);
+    if (!count || !frontend_has_keyboard())
+        return 0;
+    int index = pick_run_filter("select bot", choices, count, 0);
+    return index >= 0 && session_preset_model(s, choices[index].label);
 }
 
 static void usage(void)
@@ -764,7 +781,7 @@ int main(int argc, char **argv)
 
     if (!session) {
         if (interactive)
-            tty_raw_end();
+            restore_terminal();
         fprintf(stderr, APP_NAME ": could not start the %s CLI — is it on PATH?\n", backend);
         return 1;
     }
@@ -874,12 +891,14 @@ int main(int argc, char **argv)
     if (tabs_arg)
         tabs_prepare(tabs_arg);
 
+    int picked_bot = pick_startup_bot(session);
+
     if (!tabs_start(session)) {
         tabs_drop_all();
         chrome_bind(NULL);
         prompt_free(prompt);
         workspace_end();
-        tty_raw_end();
+        restore_terminal();
         start_failed(backend);
         return 1;
     }
@@ -899,6 +918,15 @@ int main(int argc, char **argv)
 
     if (!resume && !restore_arg && (session_arg || grokbottail_applies(session)))
         sessionload_into(session);
+
+    if (!picked_bot) {
+        prefs_remember_choice("model", "grokbot", session_model_label(session));
+        viewport_item_begin(VIEWPORT_ROWS(1, 1));
+        ui_note("no bot selected, using %s \xc2\xb7 /model to change",
+                session_model_label(session));
+        viewport_item_end();
+        ui_flush();
+    }
 
     for (;;) {
         session = workspace_current();

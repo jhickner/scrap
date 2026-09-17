@@ -225,7 +225,7 @@ Backend *backend_open(const char *name, const char *model, const char *system);
 Backend *backend_open_ex(const backend_opts *opts);
 
 /* The names backend_open accepts, NULL-terminated. For "grokbot" the model is a
- * bot or group name. */
+ * bot or group name; with none, the first the gateway lists. */
 const char *const *backend_names(void);
 
 /* Fan n prompts across independent agent sessions. Each worker owns one
@@ -1258,18 +1258,27 @@ static int backend_grokbot_start(Backend *b, const char *resume) {
     (void)resume;
     backend_grokbot_stop(x);
     x->err[0] = 0;
-    if (!x->st.model) {
-        snprintf(x->err, sizeof x->err, "grokbot: no bot or group name set as model");
-        return 0;
-    }
     x->g = grokbot_open(NULL);
     if (!x->g) {
-        snprintf(x->err, sizeof x->err, "grokbot: %s", grokbot_error(NULL));
+        snprintf(x->err, sizeof x->err, "%s", grokbot_error(NULL));
         return 0;
     }
+    char first[256] = "";
+    const char *ref = x->st.model;
+    if (!ref) {
+        cJSON *list = grokbot_list_agents(x->g);
+        cJSON *a0 = cJSON_GetArrayItem(list, 0);
+        const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(a0, "id"));
+        if (!id) id = cJSON_GetStringValue(cJSON_GetObjectItem(a0, "agentId"));
+        if (id) snprintf(first, sizeof first, "%s", id);
+        else if (list) snprintf(x->err, sizeof x->err, "the Grok Bot gateway lists no bots");
+        else snprintf(x->err, sizeof x->err, "%s", grokbot_error(x->g));
+        cJSON_Delete(list);
+        ref = first;
+    }
     grokbot_agent a;
-    if (!grokbot_resolve(x->g, x->st.model, &a)) {
-        snprintf(x->err, sizeof x->err, "grokbot: %s", grokbot_error(x->g));
+    if (!*ref || !grokbot_resolve(x->g, ref, &a)) {
+        if (*ref) snprintf(x->err, sizeof x->err, "%s", grokbot_error(x->g));
         grokbot_close(x->g);
         x->g = NULL;
         return 0;
@@ -1328,7 +1337,7 @@ static char *backend_grokbot_ask_ex(Backend *b, const char *user, backend_result
     double mark = sent_ms, deadline = backend_grokbot_now_ms() + BACKEND_GROKBOT_TIMEOUT_MS;
     int error = !sent, interrupted = 0, got = 0;
     const char *subtype = "success";
-    if (!sent) snprintf(x->err, sizeof x->err, "grokbot: %s", grokbot_error(x->g));
+    if (!sent) snprintf(x->err, sizeof x->err, "%s", grokbot_error(x->g));
     cJSON_Delete(sent);
 
     while (!error) {
@@ -1370,7 +1379,7 @@ static char *backend_grokbot_ask_ex(Backend *b, const char *user, backend_result
         if (backend_grokbot_now_ms() > deadline) {
             error = 1;
             subtype = "timeout";
-            snprintf(x->err, sizeof x->err, "grokbot: no reply from %s within %d s",
+            snprintf(x->err, sizeof x->err, "no reply from %s within %d s",
                      x->agent_name, BACKEND_GROKBOT_TIMEOUT_MS / 1000);
         }
     }

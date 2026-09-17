@@ -820,6 +820,19 @@ struct session *session_new(const char *backend, const char *cwd, const char *mo
     return s;
 }
 
+int session_preset_model(struct session *s, const char *model)
+{
+    if (!s || s->agent)
+        return 0;
+    char *m = dup_model(s->backend, model);
+    if (model && !m)
+        return 0;
+    free(s->model);
+    s->model = m;
+    prefs_remember_choice("model", s->backend, s->model);
+    return 1;
+}
+
 void session_replay(struct session *s)
 {
     block_cleared();
@@ -1195,6 +1208,8 @@ static int restart(struct session *s, const char *resume_id)
         set_id(s, id);
 
     if (!strcmp(s->backend, "grokbot") && b->model && b->model(b)) {
+        if (!s->model)
+            replace(&s->model, b->model(b));
         snprintf(s->title, sizeof s->title, "%s", b->model(b));
         status_set_note(s->title);
     }

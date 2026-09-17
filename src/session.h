@@ -131,6 +131,8 @@ int session_clear(struct session *s);
 int session_set_cwd(struct session *s, const char *path);
 
 int session_set_model(struct session *s, const char *model);
+/* Set the model of a session that has not started, without a restart. */
+int session_preset_model(struct session *s, const char *model);
 
 /* Point the session at a model, an effort and a directory in one backend
    replacement, rather than one for each. A directory it is already in keeps
