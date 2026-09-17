@@ -981,10 +981,27 @@ static void drain(void)
     }
 }
 
-static void wait_tick(void *ud)
+static int cancelled;
+
+static int cancel_pressed(void)
+{
+    if (!tty_is_raw())
+        return 0;
+    tty_event ev;
+    while (tty_read(&ev, 0)) {
+        if (ev.key == TK_TEXT)
+            free(ev.text);
+        if (ev.key == TK_ESCAPE || (ev.key == TK_CHAR && ev.cp == 3) || ev.key == TK_EOF)
+            cancelled = 1;
+    }
+    return cancelled;
+}
+
+static int wait_tick(void *ud)
 {
     (void)ud;
     status_tick();
+    return cancel_pressed();
 }
 
 int voice_start(char *err, size_t size)
@@ -1011,6 +1028,7 @@ int voice_start(char *err, size_t size)
     draft[0] = '\0';
     failure[0] = '\0';
 
+    cancelled = 0;
     int owned = status_work_begin("starting voice");
 
     macos_voice_opts opts = {
@@ -1024,7 +1042,10 @@ int voice_start(char *err, size_t size)
     };
     voice = macos_voice_start(&opts, on_event, NULL);
     if (!voice) {
-        snprintf(err, size, "could not launch %s", opts.helper_path);
+        if (cancelled)
+            snprintf(err, size, "start cancelled");
+        else
+            snprintf(err, size, "could not launch %s", opts.helper_path);
         status_work_end(owned);
         return 0;
     }
@@ -1042,6 +1063,10 @@ int voice_start(char *err, size_t size)
             break;
         }
         status_tick();
+        if (cancel_pressed()) {
+            snprintf(failure, sizeof failure, "start cancelled");
+            break;
+        }
     }
     status_work_end(owned);
     if (failure[0] || !ready) {

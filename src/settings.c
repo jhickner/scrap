@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "filelock.h"
 #include "text.h"
 
 static struct settings global;
@@ -74,22 +75,42 @@ static int write_entries(FILE *f, void *ud)
     return 1;
 }
 
+static void put(struct settings *s, const char *key, const char *value)
+{
+    int i = find(s, key);
+    if (i < 0) {
+        if (s->count >= MAX_SETTINGS || strlen(key) >= MAX_SETTING_KEY)
+            return;
+        i = s->count++;
+        snprintf(s->entries[i].key, MAX_SETTING_KEY, "%s", key);
+    }
+    snprintf(s->entries[i].value, MAX_SETTING_VALUE, "%s", value);
+}
+
+/* Other windows write the same file: take their entries before adding ours,
+   so a change made elsewhere is not undone by a stale copy. */
 void settings_put(struct settings *s, const char *key, const char *value)
 {
     if (!value)
         return;
-    int i = find(s, key);
-    if (i < 0) {
-        if (!s->path[0] || s->count >= MAX_SETTINGS || strlen(key) >= MAX_SETTING_KEY)
-            return;
-        i = s->count++;
-        snprintf(s->entries[i].key, MAX_SETTING_KEY, "%s", key);
-    } else if (strcmp(s->entries[i].value, value) == 0) {
+    if (!s->path[0]) {
+        put(s, key, value);
         return;
     }
-    snprintf(s->entries[i].value, MAX_SETTING_VALUE, "%s", value);
+    int i = find(s, key);
+    if (i >= 0 && strcmp(s->entries[i].value, value) == 0)
+        return;
 
+    int lock = filelock_acquire(s->path, LOCK_EX);
+    struct settings *fresh = malloc(sizeof *fresh);
+    if (fresh) {
+        settings_load(fresh, s->path);
+        *s = *fresh;
+        free(fresh);
+    }
+    put(s, key, value);
     text_spit(s->path, write_entries, s);
+    filelock_release(lock);
 }
 
 void settings_open(const char *path)

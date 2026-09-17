@@ -31,7 +31,8 @@ CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           boardtest modelstest boardgridtest boardtiletest viewstest sessionpresenttest \
           workspacetest replboxtest ttytest gitinfotest sidechannelviewtest \
           sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
-          dispatchtest voicetabtest grokbottailtest vncinsettest grokvnctest
+          dispatchtest voicetabtest grokbottailtest vncinsettest grokvnctest \
+          settingstest
 CHECKS += orchstatustest orchinstalltest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest vncprobe
 
@@ -218,6 +219,8 @@ $(BUILD)/vncprobe: tools/vncprobe.c src/vendor/vnc/grokvnc.h $(BUILD)/vendor/imp
 $(BUILD)/grokbottailtest: tests/grokbottailtest.c $(BUILD)/grokbottail.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/sessionloadtest: tests/sessionloadtest.c $(BUILD)/sessionload.o $(BUILD)/transcript.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+
+$(BUILD)/settingstest: tests/settingstest.c $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/muxcfgtest: tests/muxcfgtest.c $(BUILD)/muxcfg.o $(BUILD)/models.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 

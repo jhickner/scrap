@@ -161,6 +161,8 @@ void session_remove_listener(session_listener_fn fn, void *ud) { (void)fn; (void
 void prompt_echo_message(const char *text) { (void)text; }
 
 int tty_focused(void) { return focused_window; }
+int tty_is_raw(void) { return 0; }
+int tty_read(tty_event *ev, int timeout_ms) { (void)ev; (void)timeout_ms; return 0; }
 
 /* stands in for the input box: the preview is the whole line there */
 static char box[1024];

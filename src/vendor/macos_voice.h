@@ -28,7 +28,7 @@ typedef struct {
     double      volume;      /* 0-1; 0 leaves the helper default (full)         */
     const char *input;       /* input device name substring; NULL -> default    */
     int         timeout_ms;  /* wait for the helper to connect; 0 -> 15000      */
-    void      (*tick)(void *ud); /* while waiting for the helper to connect     */
+    int       (*tick)(void *ud); /* while waiting; nonzero gives up             */
     void       *tick_ud;
 } macos_voice_opts;
 typedef void (*macos_voice_cb)(void *ud, const char *kind, const char *text);
@@ -236,8 +236,17 @@ macos_voice *macos_voice_start(const macos_voice_opts *o, macos_voice_cb cb, voi
     snprintf(lockpath, sizeof lockpath, "/tmp/macos-voice-%u.lock", (unsigned)getuid());
     int lock = v->fd < 0 ? open(lockpath, O_CREAT | O_RDWR | O_CLOEXEC, 0600) : -1;
     if (lock >= 0) {
-        flock(lock, LOCK_EX);
-        v->fd = mv_connect(v->path); /* the session ahead may have started one */
+        int left = o->timeout_ms > 0 ? o->timeout_ms : 15000;
+        while (flock(lock, LOCK_EX | LOCK_NB) && errno == EWOULDBLOCK) {
+            v->fd = mv_connect(v->path);
+            if (v->fd >= 0) break;
+            if (left <= 0 || (o->tick && o->tick(o->tick_ud))) {
+                close(lock); macos_voice_stop(v); return NULL;
+            }
+            poll(NULL, 0, 90);
+            left -= 90;
+        }
+        if (v->fd < 0) v->fd = mv_connect(v->path); /* the session ahead may have started one */
     }
     for (int attempt = 0; v->fd < 0 && attempt < 2; attempt++) {
         if (attempt)
@@ -264,8 +273,8 @@ macos_voice *macos_voice_start(const macos_voice_opts *o, macos_voice_cb cb, voi
             poll(NULL, 0, slice);
             left -= slice;
             v->fd = mv_connect(v->path);
-            if (o->tick) o->tick(o->tick_ud);
             if (v->fd >= 0) break;
+            if (o->tick && o->tick(o->tick_ud)) { mv_unlock(lock); macos_voice_stop(v); return NULL; }
         }
     }
     mv_unlock(lock);
