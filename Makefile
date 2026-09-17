@@ -31,7 +31,7 @@ CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           boardtest modelstest boardgridtest boardtiletest viewstest sessionpresenttest \
           workspacetest replboxtest ttytest gitinfotest sidechannelviewtest \
           sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
-          dispatchtest voicetabtest hookstest grokbottailtest vncinsettest grokvnctest
+          dispatchtest voicetabtest grokbottailtest vncinsettest grokvnctest
 CHECKS += orchstatustest orchinstalltest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest vncprobe
 
@@ -193,8 +193,6 @@ $(BUILD)/orchstatustest: tests/orchstatustest.c $(BUILD)/orchstatus.o $(BUILD)/v
 $(BUILD)/orchinstalltest: tests/orchinstalltest.c $(BUILD)/orchinstall.o $(BUILD)/orchdata.o $(BUILD)/text.o | $(BUILD)
 
 $(BUILD)/claudetest: tests/claudetest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
-
-$(BUILD)/hookstest: tests/hookstest.c $(BUILD)/hooks.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/pitest: tests/pitest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 

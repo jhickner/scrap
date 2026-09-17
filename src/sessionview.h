@@ -36,9 +36,6 @@ void view_keep_activity(const char *marker, const char *text, enum ui_role role)
 
 void view_keep_tool_call(const char *name, const char *arg, int collapses);
 
-/* Flag the last kept tool call as one a hook injected context into. */
-void view_keep_tool_hooked(void);
-
 void view_keep_break(void);
 
 void view_keep_output(const char *text, enum ui_role role, int error);

@@ -23,15 +23,6 @@
 
 typedef struct Backend Backend;
 
-/* One hook the agent's CLI calls back into the front end for. `event` is the
- * driver's hook event name (claude: "PreToolUse", ...; NULL -> PreToolUse);
- * `tool` its tool matcher: a name, a pipe-separated list ("Edit|Write"), or
- * NULL/"" for every tool. Only claude supports these. */
-typedef struct {
-    const char *event;
-    const char *tool;
-} backend_hook;
-
 /* Nothing here is retained: a backend copies what it needs. */
 typedef struct {
     const char *name;           /* "claude" | "codex" | "grok" | "pi" | "grokbot";
@@ -52,8 +43,6 @@ typedef struct {
     int chrome;                 /* claude: --chrome, Claude in Chrome browser tools */
     const char *plugin_dir;     /* claude: --plugin-dir, one plugin for this session.
                                    Needs allow_customizations for its hooks to run */
-    const backend_hook *hooks;  /* claude: hooks answered by set_hook_cb's function */
-    int hook_count;
 } backend_opts;
 
 /* One interesting event from a turn's stream. Only the fields a kind documents
@@ -72,9 +61,6 @@ typedef enum {
     BACKEND_EV_TASK,        /* id, name (status), text (description or summary),
                                arg (subagent type): a background task the agent
                                started, which outlives the turn that started it */
-    BACKEND_EV_HOOK,        /* name (tool), id (tool call), text (context): a
-                               hook from opts.hooks injected context into the
-                               tool call just reported                          */
 } backend_event_kind;
 
 typedef struct {
@@ -180,16 +166,6 @@ struct Backend {
      * that keeps its input live can pick up a keystroke. */
     void (*set_abort_check)(Backend *b, int (*cb)(void));
 
-    /* The function a registered hook reaches when it fires, called on the
-     * ask() thread (or from idle_pump) with the hook's index in opts.hooks,
-     * the tool it fired for and that tool's input as compact JSON. It returns
-     * malloc'd text to inject into the model's context for that call, or NULL
-     * for nothing. NULL for a driver without hooks. */
-    void (*set_hook_cb)(Backend *b,
-                        char *(*cb)(void *ud, int hook, const char *tool,
-                                    const char *input_json),
-                        void *ud);
-
     /* Some agents run turns between sends — a finished background task wakes
      * the model with no prompt. idle_fd() is an fd that becomes readable when
      * such a turn produces output (-1 while there is nothing to watch, so it is
@@ -267,10 +243,6 @@ typedef struct {
     char *plugin_dir;
     void (*on_event)(void *ud, const backend_event *ev);
     void *event_ud;
-    char *(*on_hook)(void *ud, int hook, const char *tool, const char *input_json);
-    void *hook_ud;
-    backend_hook *hooks;
-    int   hook_count;
     int (*abort)(void);
     /* Assistant and reasoning text arriving in fragments, held until the block
      * it belongs to is complete. */
@@ -301,25 +273,12 @@ static void backend_state_init(backend_state *st, const backend_opts *o) {
     st->no_browser_login = o->no_browser_login;
     st->chrome = o->chrome;
     st->plugin_dir = o->plugin_dir ? strdup(o->plugin_dir) : NULL;
-    if (o->hooks && o->hook_count > 0 &&
-        (st->hooks = calloc((size_t)o->hook_count, sizeof *st->hooks))) {
-        for (int i = 0; i < o->hook_count; i++) {
-            st->hooks[i].event = backend_dup(o->hooks[i].event);
-            st->hooks[i].tool = backend_dup(o->hooks[i].tool);
-        }
-        st->hook_count = o->hook_count;
-    }
 }
 
 static void backend_state_free(backend_state *st) {
     free(st->model); free(st->effort); free(st->system); free(st->cwd); free(st->resume);
     free(st->permission); free(st->session_name); free(st->pending);
     free(st->plugin_dir);
-    for (int i = 0; i < st->hook_count; i++) {
-        free((char *)st->hooks[i].event);
-        free((char *)st->hooks[i].tool);
-    }
-    free(st->hooks);
 }
 
 static void backend_emit(backend_state *st, const backend_event *ev) {
@@ -406,7 +365,6 @@ static void backend_claude_event(void *ud, const claude_event *e) {
     case CLAUDE_EV_INIT:        ev.kind = BACKEND_EV_INIT;        break;
     case CLAUDE_EV_CWD:         ev.kind = BACKEND_EV_CWD;         break;
     case CLAUDE_EV_TASK:        ev.kind = BACKEND_EV_TASK;        break;
-    case CLAUDE_EV_HOOK:        ev.kind = BACKEND_EV_HOOK;        break;
     default: return;
     }
     backend_emit(&x->st, &ev);
@@ -429,18 +387,9 @@ static int backend_claude_start(Backend *b, const char *resume) {
     o.session_name = x->st.session_name;
     o.no_session_persistence = x->st.ephemeral;
     if (x->st.disable_tools) o.tools = "";
-    claude_hook hooks[64];
-    int nh = x->st.hook_count < 64 ? x->st.hook_count : 64;
-    for (int i = 0; i < nh; i++) {
-        hooks[i].event = x->st.hooks[i].event;
-        hooks[i].matcher = x->st.hooks[i].tool;
-    }
-    o.hooks = hooks;
-    o.hook_count = nh;
     claude_client *c = claude_start(&o);
     if (!c) return 0;
     claude_set_event_cb(c, backend_claude_event, b);
-    claude_set_hook_cb(c, x->st.on_hook, x->st.hook_ud);
     claude_set_abort_check(c, x->st.abort);
     if (x->client) claude_stop(x->client);
     x->client = c;
@@ -571,16 +520,6 @@ static void backend_claude_set_abort(Backend *b, int (*cb)(void)) {
     if (x->client) claude_set_abort_check(x->client, cb);
 }
 
-static void backend_claude_set_hook_cb(Backend *b,
-                                       char *(*cb)(void *ud, int hook, const char *tool,
-                                                   const char *input_json),
-                                       void *ud) {
-    backend_claude *x = b->ctx;
-    x->st.on_hook = cb;
-    x->st.hook_ud = ud;
-    if (x->client) claude_set_hook_cb(x->client, cb, ud);
-}
-
 static int backend_claude_set_effort(Backend *b, const char *effort) {
     backend_claude *x = b->ctx;
     if (x->client && !claude_set_effort(x->client, effort)) return 0;
@@ -653,7 +592,6 @@ static Backend *backend_claude_open(const backend_opts *o) {
     b->set_permission = backend_set_permission_generic;
     b->set_event_cb = backend_claude_set_event_cb;
     b->set_abort_check = backend_claude_set_abort;
-    b->set_hook_cb = backend_claude_set_hook_cb;
     b->idle_fd = backend_claude_idle_fd;
     b->idle_pump = backend_claude_idle_pump;
     b->busy = backend_claude_busy;

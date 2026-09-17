@@ -62,7 +62,7 @@ void session_set_tail_mark(struct session *s, const char *bot,
 {
     (void)s; (void)bot; (void)mark;
 }
-grokbot *grokbot_open(const grokbot_opts *o) { (void)o; return NULL; }
+grokbot *grokbot_open(void) { return NULL; }
 void grokbot_close(grokbot *g) { (void)g; }
 const char *grokbot_error(grokbot *g) { (void)g; return ""; }
 cJSON *grokbot_transcript_tail(grokbot *g, const char *ref, int limit)

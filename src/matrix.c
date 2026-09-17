@@ -163,7 +163,6 @@ static void cell_event(void *ud, const backend_event *ev)
     case BACKEND_EV_TRUST:
     case BACKEND_EV_WARNING:
     case BACKEND_EV_TASK:
-    case BACKEND_EV_HOOK:
         break;
 
     case BACKEND_EV_INIT:

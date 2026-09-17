@@ -17,7 +17,6 @@
 #include "app.h"
 #include "gitinfo.h"
 #include "grokbottail.h"
-#include "hooks.h"
 #include "hud.h"
 #include "image.h"
 #include "livelist.h"
@@ -910,12 +909,6 @@ static const char *shunt_plugin_dir(const struct session *s)
     return path;
 }
 
-static char *on_hook(void *ud, int hook, const char *tool, const char *input_json)
-{
-    (void)ud;
-    return hooks_context(hook, tool, input_json);
-}
-
 static char *join_system(const char *const *parts, int n)
 {
     size_t total = 0;
@@ -952,10 +945,6 @@ static Backend *agent(struct session *s)
     o.no_browser_login = s->no_browser_login;
     o.chrome = settings_get_int(SETTING_CHROME, 0);
     o.plugin_dir = shunt_plugin_dir(s);
-    backend_hook hooks[HOOKS_MAX];
-    hooks_load();
-    o.hooks = hooks;
-    o.hook_count = hooks_backend(hooks, HOOKS_MAX);
 
     const char *note = image_available()
         ? "This conversation is displayed in a terminal that renders images inline. "
@@ -976,8 +965,6 @@ static Backend *agent(struct session *s)
     if (s->agent) {
         s->agent->set_event_cb(s->agent, on_event, s);
         s->agent->set_abort_check(s->agent, abort_check);
-        if (s->agent->set_hook_cb)
-            s->agent->set_hook_cb(s->agent, on_hook, s);
     }
     return s->agent;
 }
@@ -1038,17 +1025,11 @@ int session_switch_backend(struct session *s, const char *backend)
     o.no_browser_login = s->no_browser_login;
     o.chrome = settings_get_int(SETTING_CHROME, 0);
     o.plugin_dir = shunt_plugin_dir(s);
-    backend_hook hooks[HOOKS_MAX];
-    hooks_load();
-    o.hooks = hooks;
-    o.hook_count = hooks_backend(hooks, HOOKS_MAX);
     Backend *replacement = backend_open_ex(&o);
     if (!replacement) {
         free(handoff);
         return 0;
     }
-    if (replacement->set_hook_cb)
-        replacement->set_hook_cb(replacement, on_hook, s);
 
     if (!replacement->start(replacement, NULL)) {
         const char *why = replacement->last_error ? replacement->last_error(replacement) : NULL;

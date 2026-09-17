@@ -62,7 +62,6 @@ struct keep {
     enum ui_role   role;
     int            error;
     int            collapses; /* the tool style shows this call as one row in any mode */
-    int            hooked;    /* a hook injected context into this call */
     int            nested;    /* a subagent's work, not the session's own */
     char          *label;     /* which agent, for a nested one */
     char          *row;
@@ -79,18 +78,14 @@ static void keep_free(void *ud)
     free(k);
 }
 
-static void cluster_paint(const char *line, const unsigned char *spans, int hooked);
+static void cluster_paint(const char *line, const unsigned char *spans);
 static void tool_tag(const char *name, char *out, size_t size);
-static void hook_mark_paint(void);
-static int  hook_mark_width(int hooked);
-static void tool_call_paint(const char *name, const char *arg, int hooked);
 static unsigned char *row_spans(const char *name, const char *row, size_t prefix);
 static int cluster_budget(void);
 
 struct sessionview_state {
     int      collapsed;
     unsigned run_start;
-    unsigned last_call;
 };
 
 static char state_owner;
@@ -153,7 +148,7 @@ static void call_collapsed(const struct keep *k)
     }
 
     unsigned char *spans = row_spans(k->a, row, row_prefix(row));
-    cluster_paint(row, spans, k->hooked);
+    cluster_paint(row, spans);
     free(spans);
 }
 
@@ -173,7 +168,7 @@ static void keep_render(void *ud, int cols)
         return;
     }
     if (k->kind == KEEP_CALL && k->spans) {
-        cluster_paint(k->a, k->spans, k->hooked);
+        cluster_paint(k->a, k->spans);
         nest = 0;
         return;
     }
@@ -185,7 +180,7 @@ static void keep_render(void *ud, int cols)
 
     switch (k->kind) {
     case KEEP_ACTIVITY: view_activity(k->a, k->b, k->role);              break;
-    case KEEP_CALL:     tool_call_paint(k->a, k->b, k->hooked);          break;
+    case KEEP_CALL:     view_tool_call(k->a, k->b);                      break;
     case KEEP_OUTPUT:
         if (k->error)
             view_tool_error(k->a);
@@ -242,8 +237,6 @@ static char *keep_encode(void *ud)
     cJSON_AddNumberToObject(o, "role", k->role);
     cJSON_AddNumberToObject(o, "error", k->error);
     cJSON_AddNumberToObject(o, "collapses", k->collapses);
-    if (k->hooked)
-        cJSON_AddNumberToObject(o, "hooked", 1);
     if (k->nested) {
         cJSON_AddNumberToObject(o, "nested", k->nested);
         if (k->label)
@@ -324,7 +317,6 @@ void view_keep_load(const cJSON *st)
     k->role = (enum ui_role)scrollback_int(st, "role");
     k->error = scrollback_int(st, "error");
     k->collapses = scrollback_int(st, "collapses");
-    k->hooked = scrollback_int(st, "hooked");
     if (!k->a || !k->b) {
         keep_free(k);
         return;
@@ -354,24 +346,7 @@ void view_keep_tool_call(const char *name, const char *arg, int collapses)
     k->a = strdup(name ? name : "?");
     k->b = strdup(arg ? arg : "");
     k->collapses = collapses;
-    view_state()->last_call = keep(k);
-}
-
-/* The hook fires after the call it belongs to was drawn, so the mark is added
-   to the kept item and that item redrawn, along with the row it may have been
-   folded into. */
-void view_keep_tool_hooked(void)
-{
-    unsigned mark = view_state()->last_call;
-    struct keep *k = mark ? viewport_item_data(mark) : NULL;
-    if (!k || k->kind != KEEP_CALL || k->hooked)
-        return;
-    k->hooked = 1;
-    free(k->row);
-    k->row = NULL;
-    viewport_item_stale(mark);
-    restate(view_state()->run_start ? view_state()->run_start : mark, 1);
-    viewport_paint();
+    keep(k);
 }
 
 void view_keep_break(void) { view_state()->run_start = 0; }
@@ -443,10 +418,6 @@ static void restate_item(unsigned mark, const char *kind, void *ud, void *ctx)
     if (as_row && c->head && c->head->collapses == k->collapses &&
         strcmp(c->head->a, k->a) == 0 &&
         call_row_extend(c->head->row, k->b, row, sizeof row)) {
-        if (k->hooked && !c->head->hooked) {
-            c->head->hooked = 1;
-            viewport_item_stale(c->head_mark);
-        }
         row_set(c->head, c->head_mark, row);
         viewport_item_hide(mark, 1);
         return;
@@ -635,38 +606,18 @@ static unsigned char *shell_spans(const char *name, const char *text, size_t len
     return spans;
 }
 
-static void hook_mark_paint(void)
-{
-    ui_put(" ");
-    ui_esc(ui_style(UI_CHROME));
-    ui_put(UI_HOOK_MARK);
-    ui_esc(ui_style(UI_RESET));
-}
-
-static int hook_mark_width(int hooked)
-{
-    return hooked ? (int)ui_cells(UI_HOOK_MARK) + 1 : 0;
-}
-
 void view_tool_call(const char *name, const char *arg)
-{
-    tool_call_paint(name, arg, 0);
-}
-
-static void tool_call_paint(const char *name, const char *arg, int hooked)
 {
     char tag[64];
     tool_tag(name, tag, sizeof tag);
 
-    int indent = TOOL_INDENT + nest + (int)ui_cells(tag) + hook_mark_width(hooked) + 1;
+    int indent = TOOL_INDENT + nest + (int)ui_cells(tag) + 1;
     int columns = ui_columns();
 
     nest_pad(TOOL_INDENT);
     ui_esc(ui_style(UI_TOOL));
     ui_put(tag);
     ui_esc(ui_style(UI_RESET));
-    if (hooked)
-        hook_mark_paint();
     ui_put(" ");
 
     if (!arg || !*arg) {
@@ -709,7 +660,7 @@ static int cluster_budget(void)
     return budget < 8 ? 8 : budget;
 }
 
-static void cluster_paint(const char *line, const unsigned char *spans, int hooked)
+static void cluster_paint(const char *line, const unsigned char *spans)
 {
     size_t tag = strcspn(line, "]");
     if (line[tag])
@@ -718,8 +669,7 @@ static void cluster_paint(const char *line, const unsigned char *spans, int hook
     /* one row per call: fill the width and cut mid-word, so a long first token
        does not leave the row nearly empty */
     size_t len = strlen(line);
-    size_t fit = ui_fit_visible(line, len,
-                                (size_t)(cluster_budget() - hook_mark_width(hooked)));
+    size_t fit = ui_fit_visible(line, len, (size_t)cluster_budget());
     if (fit < tag)
         fit = tag;
     if (fit > len)
@@ -729,8 +679,6 @@ static void cluster_paint(const char *line, const unsigned char *spans, int hook
     ui_esc(ui_style(UI_TOOL));
     ui_putn(line, tag);
     ui_esc(ui_style(UI_RESET));
-    if (hooked)
-        hook_mark_paint();
     if (spans)
         ui_put_spans(line + tag, fit - tag, spans + tag, UI_RESET);
     else

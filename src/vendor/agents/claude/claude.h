@@ -27,16 +27,6 @@
 
 typedef struct claude_client claude_client;
 
-/* One hook registered with the CLI at startup. `event` is a Claude Code hook
- * event name ("PreToolUse", "PostToolUse", ...); `matcher` is the CLI's tool
- * matcher for it: a tool name, a pipe-separated list ("Edit|Write"), or
- * NULL/"" for every tool. When it fires the CLI calls back here (see
- * claude_set_hook_cb) instead of running a shell command. */
-typedef struct {
-    const char *event;
-    const char *matcher;
-} claude_hook;
-
 typedef struct {
     const char *cli_path;        /* claude binary; NULL/"" -> "claude" (via PATH) */
     const char *cwd;             /* child working directory; NULL -> inherit      */
@@ -66,8 +56,6 @@ typedef struct {
                                     session; NULL -> flag omitted. Ignored by the
                                     CLI unless allow_customizations is set, which
                                     is what lets the plugin's hooks run.           */
-    const claude_hook *hooks;    /* hooks to register at startup; copied         */
-    int hook_count;
 } claude_opts;
 
 /* Start a persistent headless claude process and prewarm it in the background.
@@ -162,8 +150,6 @@ typedef enum {
     CLAUDE_EV_INIT,        /* name: the model the CLI resolved                 */
     CLAUDE_EV_CWD,         /* text: the directory the session works in now     */
     CLAUDE_EV_TASK,        /* id + name (status) + text: a background task     */
-    CLAUDE_EV_HOOK,        /* name (tool) + id (tool_use) + text: a registered
-                              hook injected context into this tool call        */
 } claude_event_kind;
 
 typedef struct {
@@ -187,19 +173,6 @@ typedef struct {
 void claude_set_event_cb(claude_client *c,
                          void (*cb)(void *ud, const claude_event *ev),
                          void *ud);
-
-/* Register the function the CLI's hook callbacks reach. `hook` indexes the
- * opts.hooks array the client was started with; `tool` is the tool the hook
- * fired for and `input_json` its input as compact JSON (both borrowed, and NULL
- * for events that carry no tool). Return malloc'd text to inject into the
- * model's context for that call, or NULL to inject nothing. Runs on the thread
- * that is reading the stream: the claude_send thread during a turn, the
- * claude_idle_pump caller between turns. The CLI waits on the answer, so it
- * must return promptly. Pass NULL to clear. */
-void claude_set_hook_cb(claude_client *c,
-                        char *(*cb)(void *ud, int hook, const char *tool,
-                                    const char *input_json),
-                        void *ud);
 
 /* How many background tasks the CLI currently has outstanding — subagents and
  * detached bash it started and has not yet been told about. A turn can end with
@@ -297,10 +270,6 @@ struct claude_client {
     int   verbose;
     void (*on_event)(void *ud, const claude_event *ev);
     void *on_event_ud;
-    char *(*on_hook)(void *ud, int hook, const char *tool, const char *input_json);
-    void *on_hook_ud;
-    claude_hook *hooks;       /* registered at startup, strings owned here  */
-    int   hook_count;
     char  session_id[128];
     char  requested[128];     /* --model value, or the settings.json default */
     char  model[128];
@@ -331,13 +300,6 @@ void claude_set_event_cb(claude_client *c,
                          void (*cb)(void *ud, const claude_event *ev),
                          void *ud) {
     if (c) { c->on_event = cb; c->on_event_ud = ud; }
-}
-
-void claude_set_hook_cb(claude_client *c,
-                        char *(*cb)(void *ud, int hook, const char *tool,
-                                    const char *input_json),
-                        void *ud) {
-    if (c) { c->on_hook = cb; c->on_hook_ud = ud; }
 }
 
 const char *claude_model(claude_client *c) {
@@ -583,17 +545,6 @@ claude_client *claude_start(const claude_opts *opts) {
     c->err_fd = err_pipe[0];
     cl_seed_effort(c, &o);
     cl_seed_model(c, &o);
-    if (o.hooks && o.hook_count > 0) {
-        c->hooks = calloc((size_t)o.hook_count, sizeof *c->hooks);
-        if (c->hooks) {
-            for (int i = 0; i < o.hook_count; i++) {
-                const char *ev = o.hooks[i].event, *m = o.hooks[i].matcher;
-                c->hooks[i].event = strdup(ev && *ev ? ev : "PreToolUse");
-                c->hooks[i].matcher = strdup(m ? m : "");
-            }
-            c->hook_count = o.hook_count;
-        }
-    }
     /* Never block the parent on the child's diagnostics. */
     fcntl(c->err_fd, F_SETFL, O_NONBLOCK);
     atomic_init(&c->warm_state, 0);
@@ -668,7 +619,6 @@ static const char *cl_kind_label(claude_event_kind k) {
     case CLAUDE_EV_INIT:        return "init";
     case CLAUDE_EV_TASK:        return "task";
     case CLAUDE_EV_CWD:         return "cwd";
-    case CLAUDE_EV_HOOK:        return "hook";
     }
     return "?";
 }
@@ -850,91 +800,11 @@ static void cl_fill_result(claude_client *c, cJSON *ev) {
     if (sub) snprintf(m->subtype, sizeof m->subtype, "%s", sub);
 }
 
-static int cl_write_json(claude_client *c, cJSON *msg);
-
-/* The initialize request's hook table, in the Agent SDK's shape: one matcher
- * entry per registered hook under its event, each carrying the callback id
- * ("hook_<index>") the CLI echoes back when the hook fires. */
-static cJSON *cl_hook_table(claude_client *c) {
-    cJSON *table = cJSON_CreateObject();
-    for (int i = 0; i < c->hook_count; i++) {
-        const claude_hook *h = &c->hooks[i];
-        cJSON *list = cJSON_GetObjectItemCaseSensitive(table, h->event);
-        if (!list) list = cJSON_AddArrayToObject(table, h->event);
-        cJSON *entry = cJSON_CreateObject();
-        cJSON_AddStringToObject(entry, "matcher", h->matcher);
-        cJSON *ids = cJSON_AddArrayToObject(entry, "hookCallbackIds");
-        char id[32];
-        snprintf(id, sizeof id, "hook_%d", i);
-        cJSON_AddItemToArray(ids, cJSON_CreateString(id));
-        cJSON_AddItemToArray(list, entry);
-    }
-    return table;
-}
-
-/* A hook the client registered has fired: the CLI blocks on the answer, so
- * resolve the callback id, ask the registered function, and reply on the same
- * stream. An unknown id or no function still gets an empty success, which the
- * CLI reads as "nothing to add". */
-static void cl_hook_callback(claude_client *c, cJSON *ev) {
-    const char *request_id = cJSON_GetStringValue(
-        cJSON_GetObjectItemCaseSensitive(ev, "request_id"));
-    cJSON *req = cJSON_GetObjectItemCaseSensitive(ev, "request");
-    if (!request_id || !req) return;
-    const char *id = cJSON_GetStringValue(
-        cJSON_GetObjectItemCaseSensitive(req, "callback_id"));
-    cJSON *input = cJSON_GetObjectItemCaseSensitive(req, "input");
-    int hook = -1;
-    if (id && !strncmp(id, "hook_", 5)) hook = atoi(id + 5);
-
-    char *context = NULL;
-    if (c->on_hook && hook >= 0 && hook < c->hook_count) {
-        const char *tool = input ? cJSON_GetStringValue(
-            cJSON_GetObjectItemCaseSensitive(input, "tool_name")) : NULL;
-        cJSON *tool_input = input ?
-            cJSON_GetObjectItemCaseSensitive(input, "tool_input") : NULL;
-        cJSON *payload = tool_input ? tool_input : input;
-        char *input_json = payload ? cJSON_PrintUnformatted(payload) : NULL;
-        context = c->on_hook(c->on_hook_ud, hook, tool, input_json);
-        free(input_json);
-        if (context && *context) {
-            claude_event out = {.kind = CLAUDE_EV_HOOK, .text = context, .name = tool};
-            out.id = cJSON_GetStringValue(
-                cJSON_GetObjectItemCaseSensitive(req, "tool_use_id"));
-            cl_sink(c, &out);
-        }
-    }
-
-    cJSON *msg = cJSON_CreateObject();
-    cJSON_AddStringToObject(msg, "type", "control_response");
-    cJSON *response = cJSON_AddObjectToObject(msg, "response");
-    cJSON_AddStringToObject(response, "subtype", "success");
-    cJSON_AddStringToObject(response, "request_id", request_id);
-    cJSON *body = cJSON_AddObjectToObject(response, "response");
-    if (context && *context) {
-        cJSON *specific = cJSON_AddObjectToObject(body, "hookSpecificOutput");
-        cJSON_AddStringToObject(specific, "hookEventName", c->hooks[hook].event);
-        cJSON_AddStringToObject(specific, "additionalContext", context);
-    }
-    free(context);
-    cl_write_json(c, msg);
-}
-
 /* Parse one JSONL event line. If it is the turn's `result`, return its text
  * (malloc'd) via *out and return 1. Otherwise return 0. */
 static int cl_handle_line(claude_client *c, const char *line, char **out) {
     cJSON *ev = cJSON_Parse(line);
     if (!ev) return 0;                     /* non-JSON noise (shouldn't hit stdout) */
-    cJSON *type_item = cJSON_GetObjectItemCaseSensitive(ev, "type");
-    const char *type_s = cJSON_GetStringValue(type_item);
-    if (type_s && !strcmp(type_s, "control_request")) {
-        cJSON *req = cJSON_GetObjectItemCaseSensitive(ev, "request");
-        const char *sub = req ? cJSON_GetStringValue(
-            cJSON_GetObjectItemCaseSensitive(req, "subtype")) : NULL;
-        if (sub && !strcmp(sub, "hook_callback")) cl_hook_callback(c, ev);
-        cJSON_Delete(ev);
-        return 0;
-    }
     cl_note_session(c, ev);
     cl_note_effort(c, ev);
     cJSON *type = cJSON_GetObjectItemCaseSensitive(ev, "type");
@@ -1096,7 +966,6 @@ static void *cl_warm(void *arg) {
     cJSON_AddStringToObject(msg, "request_id", "claude_h_initialize");
     cJSON *req = cJSON_AddObjectToObject(msg, "request");
     cJSON_AddStringToObject(req, "subtype", "initialize");
-    if (c->hook_count) cJSON_AddItemToObject(req, "hooks", cl_hook_table(c));
     int ok = cl_write_json(c, msg);
 
     while (ok) {
@@ -1485,11 +1354,6 @@ void claude_stop(claude_client *c) {
     }
     if (c->out_fd >= 0) close(c->out_fd);
     if (c->err_fd >= 0) close(c->err_fd);
-    for (int i = 0; i < c->hook_count; i++) {
-        free((char *)c->hooks[i].event);
-        free((char *)c->hooks[i].matcher);
-    }
-    free(c->hooks);
     free(c->buf);
     free(c);
 }

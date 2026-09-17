@@ -44,9 +44,6 @@ enum ui_group {
 
 #define UI_BAR "\xe2\x96\x8c"
 
-/* drawn on a tool call or prompt a hook injected context into */
-#define UI_HOOK_MARK "\xe2\x9a\x91"
-
 #define UI_CURSOR_SHOW  "\x1b[?25h"
 #define UI_CURSOR_HIDE  "\x1b[?25l"
 #define UI_ERASE_EOL    "\x1b[K"

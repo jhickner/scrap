@@ -228,17 +228,6 @@ void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
         break;
     }
 
-    case BACKEND_EV_HOOK:
-        if (hide) {
-            status_pause();
-            paused = 1;
-        }
-        if (ev->name && *ev->name)
-            view_keep_tool_hooked();
-        else
-            prompt_echo_hooked();
-        break;
-
     case BACKEND_EV_TOOL_RESULT:
         if (ev->failed) {
             if (hide) {
