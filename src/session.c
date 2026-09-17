@@ -29,6 +29,7 @@
 #include "sessionview.h"
 #include "viewport.h"
 #include "settings.h"
+#include "voicetrace.h"
 #include "sidechannel.h"
 #include "status.h"
 #include "tasks.h"
@@ -1049,12 +1050,13 @@ int session_switch_backend(struct session *s, const char *backend)
     replace(&s->model, NULL);
     replace(&s->effort, NULL);
     replace(&s->resolved, NULL);
+    /* a new backend mints a new id; keep the name so the namer does not run */
+    if (s->title[0] && !s->held_title[0])
+        snprintf(s->held_title, sizeof s->held_title, "%s", s->title);
     s->id[0] = '\0';
     const char *id = replacement->session_id(replacement);
-    if (id) {
-        snprintf(s->id, sizeof s->id, "%s", id);
-        agenttabs_forget_hook(id);
-    }
+    if (id)
+        set_id(s, id);
     s->turns = 0;
     s->cost_usd = 0;
     s->tokens_in = s->tokens_out = s->tokens_cached = 0;
@@ -1977,6 +1979,7 @@ int session_turn_begin(struct session *s, const char *text)
         return 0;
 
     turn_prepare(s, text);
+    voice_trace("turn.begin", "tab=%p text=%s", (void *)s, text);
     replace(&s->asked, text);
     s->reply = NULL;
     s->finished = 0;
@@ -2004,6 +2007,8 @@ double session_turn_elapsed(const struct session *s)
 
 void session_interrupt(struct session *s)
 {
+    voice_trace("session.interrupt", "tab=%p running=%d elapsed=%.1f", (void *)s,
+                s ? s->running : 0, session_turn_elapsed(s));
     if (s && s->running)
         s->abort_request = 1;
 }

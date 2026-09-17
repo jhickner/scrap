@@ -480,6 +480,7 @@ static int echo_filter(void *ud, const char *line)
 static int cancel_turn(void *ud)
 {
     (void)ud;
+    voice_trace("key.cancel", "speaking=%d", voice_speaking());
     if (voice_speaking()) {
         voice_mute();
         return 1;
