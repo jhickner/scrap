@@ -94,6 +94,7 @@ public final class VoiceController {
     private let levelPeak: (TimeInterval) -> Float
     private var volatileAt: TimeInterval?
     private var promotedFinal: String?
+    private var volatileSourceText = ""
     private var gateUntil: TimeInterval = 0
     private var echoUntil: TimeInterval = 0
     private var isBusy = false
@@ -263,8 +264,10 @@ public final class VoiceController {
 
     func handle(_ event: VoiceInputEvent, at now: TimeInterval = Date.timeIntervalSinceReferenceDate) {
         switch event {
-        case let .volatile(text):
+        case let .volatile(source):
             guard !suppressCurrentTurn else { return }
+            let text = unpromotedTail(source)
+            guard !text.isEmpty else { return }
             if considerInterrupting(text, isFinal: false) { return }
             guard hearable(text, isFinal: false, at: now) else {
                 dropLeakedDraft()
@@ -272,10 +275,12 @@ public final class VoiceController {
             }
             endpointer.noteVolatile(text, at: now)
             volatileText = text
+            volatileSourceText = source
             volatilePeak = max(volatilePeak, levelPeak(Self.bargeInLevelWindow))
             volatileAt = now
             updateHeardDraft()
-        case let .final(text, confidence):
+        case let .final(source, confidence):
+            let text = unpromotedTail(source)
             defer { volatilePeak = 0 }
             volatileAt = nil
             if suppressCurrentTurn {
@@ -287,13 +292,12 @@ public final class VoiceController {
                 onDrop?()
                 return
             }
-            if let promoted = promotedFinal {
-                promotedFinal = nil
-                if text.hasPrefix(promoted) || promoted.hasPrefix(text) {
-                    VoiceLog.note("dropped final already promoted: \(text)")
-                    volatileText = ""
-                    return
-                }
+            promotedFinal = nil
+            if text.isEmpty {
+                VoiceLog.note("dropped final already promoted: \(source)")
+                volatileText = ""
+                updateHeardDraft()
+                return
             }
             if considerInterrupting(text, isFinal: true, confidence: confidence) { return }
             if TurnEndpointer.isStopCommand(text) {
@@ -331,6 +335,24 @@ public final class VoiceController {
             VoiceLog.problem("recognizer failed: \(message)")
             fail(message)
         }
+    }
+
+    // Promotion commits only the words heard so far, not every future result
+    // for that segment. Match words so punctuation/case and a completed last
+    // word do not make the prefix reappear. Unrelated revisions are kept.
+    private func unpromotedTail(_ text: String) -> String {
+        guard let promoted = promotedFinal else { return text }
+        let words = text.split { !$0.isLetter && !$0.isNumber }
+        let prefix = promoted.split { !$0.isLetter && !$0.isNumber }
+        guard !prefix.isEmpty, !words.isEmpty else { return text }
+        for i in 0..<min(words.count, prefix.count) {
+            let word = words[i].lowercased()
+            let old = prefix[i].lowercased()
+            guard word == old || (i == prefix.count - 1 && word.hasPrefix(old))
+            else { return text }
+        }
+        guard words.count > prefix.count else { return "" }
+        return String(text[words[prefix.count].startIndex...])
     }
 
     private func dropLeakedDraft() {
@@ -433,15 +455,15 @@ public final class VoiceController {
     /* The recognizer sometimes stops after volatile results without ever
        delivering the final, leaving the last partial standing forever. Once a
        volatile has sat past the silence threshold plus a margin, promote it to
-       the final it never got; its real final, should it still come, is dropped
-       as a duplicate. */
+       the final it never got. Later results remove only those promoted words;
+       a delayed final can contain additional speech that must still be kept. */
     func pollStalledVolatile(at now: TimeInterval = Date.timeIntervalSinceReferenceDate) {
         guard !volatileText.isEmpty, let since = volatileAt else { return }
         guard now - since >= endpointer.silenceThreshold + Self.volatileStallTimeout
         else { return }
         let text = volatileText
         VoiceLog.problem("recognizer stalled; promoting volatile to final: \(text)")
-        promotedFinal = text
+        promotedFinal = volatileSourceText
         volatileAt = nil
         volatileText = ""
         switch endpointer.noteFinal(text, at: since) {

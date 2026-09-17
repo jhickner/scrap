@@ -4,6 +4,60 @@ import Testing
 
 @MainActor
 struct VoiceControllerTests {
+    @Test("a stalled phrase's longer final keeps the new words from the recorded incident",
+          arguments: [false, true])
+    func growingFinalAfterPromotion(deliverFirst: Bool) {
+        let voice = VoiceController()
+        var sent: [String] = []
+        voice.onSend = { sent.append($0) }
+        voice.handle(.volatile("kind of comparing and contrast"), at: 100)
+        voice.pollStalledVolatile(at: 110)
+        if deliverFirst { voice.pollTurn(at: 110) }
+        let kept = deliverFirst ? "" : "kind of comparing and contrast "
+        voice.handle(.volatile("kind of comparing and contrasting Some markdown file"), at: 111)
+        #expect(voice.heardDraft == kept + "Some markdown file")
+        voice.handle(.final("kind of comparing and contrasting, Some markdown file store, like, LLM Wiki.",
+                            confidence: 0.81), at: 112)
+        #expect(voice.heardDraft == kept + "Some markdown file store, like, LLM Wiki.")
+        voice.pollTurn(at: 120)
+        #expect(sent.joined(separator: " ") ==
+                "kind of comparing and contrast Some markdown file store, like, LLM Wiki.")
+    }
+
+    @Test("repeated stalls remember the full recognized prefix")
+    func repeatedPromotion() {
+        let voice = VoiceController()
+        voice.handle(.volatile("First sent"), at: 100)
+        voice.pollStalledVolatile(at: 110)
+        voice.handle(.volatile("First sentence. Second sentence"), at: 111)
+        voice.pollStalledVolatile(at: 120)
+        voice.handle(.volatile("First sentence. Second sentence. Third sentence"), at: 121)
+        voice.handle(.final("First sentence. Second sentence. Third sentence.", confidence: nil), at: 122)
+        #expect(voice.heardDraft == "First sent Second sentence Third sentence.")
+    }
+
+    @Test("a punctuation revision of promoted words is not duplicated")
+    func promotedPunctuationRevision() {
+        let voice = VoiceController()
+        voice.handle(.volatile("hello world"), at: 100)
+        voice.pollStalledVolatile(at: 110)
+        voice.handle(.volatile("Hello, world."), at: 111)
+        #expect(voice.heardDraft == "hello world")
+        voice.handle(.final("Hello, world.", confidence: nil), at: 112)
+        #expect(voice.heardDraft == "hello world")
+        voice.handle(.volatile("Next sentence"), at: 113)
+        #expect(voice.heardDraft == "hello world Next sentence")
+    }
+
+    @Test("a rewritten prefix cannot discard new speech")
+    func promotedPrefixRewritten() {
+        let voice = VoiceController()
+        voice.handle(.volatile("Compare the file"), at: 100)
+        voice.pollStalledVolatile(at: 110)
+        voice.handle(.final("Comparing those files reveals another issue.", confidence: nil), at: 111)
+        #expect(voice.heardDraft.contains("reveals another issue."))
+    }
+
     @Test("reply completion preserves an unfinished dictation and its stall recovery")
     func resumeWithVolatile() {
         let voice = VoiceController()
