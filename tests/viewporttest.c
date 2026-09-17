@@ -829,6 +829,42 @@ static void check_suspended_mark(void)
         fail("the entry after a suspended one takes its own mark");
 }
 
+static void owed_render(void *ud, int cols)
+{
+    (void)cols;
+    ui_put(ud);
+    ui_put("\n");
+}
+
+static void check_owed_pad(struct screen *s)
+{
+    viewport_clear();
+    set_size(80, 24);
+
+    viewport_item_begin(&(struct viewport_entry){
+        .render = owed_render, .ud = "OWED-A", .pad_after = 1});
+    owed_render("OWED-A", 80);
+    viewport_item_end();
+    unsigned b = viewport_item_begin(&(struct viewport_entry){
+        .render = owed_render, .ud = "OWED-B", .pad_before = 1});
+    owed_render("OWED-B", 80);
+    viewport_item_end();
+    unsigned c = viewport_item_begin(&(struct viewport_entry){
+        .render = owed_render, .ud = "OWED-C", .pad_before = 1});
+    owed_render("OWED-C", 80);
+    viewport_item_end();
+    viewport_item_pad(b, 0);
+    viewport_item_pad(c, 0);
+    viewport_repad();
+
+    refresh(s, 80, 24);
+    int a = row_with(s, "OWED-A");
+    if (a < 0 || !row_blank(s, a + 1) || row_with(s, "OWED-B") != a + 2)
+        fail("a blank owed by the item before stays when the next item drops its pad");
+    if (row_with(s, "OWED-C") != a + 3)
+        fail("a padless item's own blank is hidden");
+}
+
 int main(void)
 {
     set_size(80, 24);
@@ -874,6 +910,7 @@ int main(void)
     check_stash(&s);
     check_dump();
     check_suspended_mark();
+    check_owed_pad(&s);
 
     fflush(stdout);
     if (failures)

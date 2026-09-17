@@ -22,6 +22,7 @@ struct item {
     int    nrows;
     int    cols;
     int    pad;
+    int    owed;
     int    hidden;
     int    nopad;
     int    borrowed;
@@ -319,12 +320,14 @@ void viewport_scan(unsigned from, viewport_scan_fn fn, void *ctx)
 
 void viewport_repad(void)
 {
-    int hide = 0;
+    int hidden = 0, nopad = 0;
     for (int i = nitems - 1; i >= 0; i--) {
-        if (items[i].pad)
-            items[i].hidden = hide;
-        else
-            hide = items[i].hidden || items[i].nopad;
+        if (items[i].pad) {
+            items[i].hidden = hidden || (nopad && !items[i].owed);
+        } else {
+            hidden = items[i].hidden;
+            nopad = items[i].nopad;
+        }
     }
     dirty = 1;
     layout_changed();
@@ -469,13 +472,14 @@ static int trailing_blanks(void)
     return n;
 }
 
-static void blank_push(void)
+static void blank_push(int owed)
 {
     struct item *it = items_push();
     if (!it)
         return;
     rows_set(it, "", 0);
     it->pad = 1;
+    it->owed = owed;
 }
 
 static void pad_seam(int before, int own)
@@ -487,7 +491,7 @@ static void pad_seam(int before, int own)
         return;
     want -= trailing_blanks() + own;
     for (int i = 0; i < want; i++)
-        blank_push();
+        blank_push(tail_pad > 0);
 }
 
 static void loose_row(const char *body, size_t n)
