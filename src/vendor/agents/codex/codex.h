@@ -48,6 +48,10 @@ codex_client *codex_start(const codex_opts *opts);
  * turn. */
 char *codex_send(codex_client *c, const char *user_text);
 
+/* Start a turn without adding a user message. This lets an embedding drain
+ * model-visible events that Codex queued between turns. */
+char *codex_continue(codex_client *c);
+
 typedef struct {
     int interrupted;   /* the abort predicate ended the turn */
     long context_tokens; /* latest model request, including output */
@@ -67,6 +71,7 @@ typedef struct {
 
 /* As codex_send, but also fills *meta (zeroed first). `meta` may be NULL. */
 char *codex_send_ex(codex_client *c, const char *user_text, codex_result *meta);
+char *codex_continue_ex(codex_client *c, codex_result *meta);
 
 const char *codex_session_id(codex_client *c);
 
@@ -109,6 +114,9 @@ void codex_set_abort_check(codex_client *c, int (*cb)(void));
  * on the UI thread; the pump reports whether sub-agent work is still running. */
 int codex_idle_fd(codex_client *c);
 int codex_idle_pump(codex_client *c);
+/* Consume the coalesced request raised when an idle pump observes one or more
+ * sub-agents complete. */
+int codex_take_continuation(codex_client *c);
 /* Sub-agents spawned on this thread that have not gone idle again. */
 int codex_background_tasks(codex_client *c);
 /* Persist this path as trusted in the user's Codex config. */
@@ -162,6 +170,7 @@ typedef struct {
     char path[128];         /* "/root/review_diff" -- the name it was given */
     char call[64];          /* the spawn call it came from */
     int  running;
+    int  idle_seen;
 } cx_agent;
 
 struct codex_client {
@@ -194,6 +203,8 @@ struct codex_client {
     int warning_mu_ready;
     cx_agent agents[CX_AGENTS_MAX];
     int nagents;
+    int idle_pumping;
+    int continuation_pending;
     pthread_t warm_thread;
     int warm_joinable;
     atomic_int warm_state;     /* 0 while starting, 1 ready, -1 failed */
@@ -373,9 +384,27 @@ static void cx_agent_status(codex_client *c, cJSON *params) {
         cJSON_GetObjectItemCaseSensitive(params, "status"), "type"));
     if (!state) return;
     int running = !strcmp(state, "active");
+    if (running) a->idle_seen = 0;
     if (running == a->running) return;
     a->running = running;
     cx_agent_event(c, a, running ? "running" : "completed");
+    if (!running && !a->idle_seen) {
+        a->idle_seen = 1;
+        if (c->idle_pumping) c->continuation_pending = 1;
+    }
+}
+
+static void cx_agent_completed(codex_client *c, const char *thread) {
+    cx_agent *a = cx_agent_find(c, thread);
+    if (!a) return;
+    if (a->running) {
+        a->running = 0;
+        cx_agent_event(c, a, "completed");
+    }
+    if (!a->idle_seen) {
+        a->idle_seen = 1;
+        if (c->idle_pumping) c->continuation_pending = 1;
+    }
 }
 
 /* App-server mirrors configWarning notifications to stderr with timestamps and
@@ -906,6 +935,7 @@ static void cx_idle_message(codex_client *c, cJSON *msg) {
 
 int codex_idle_pump(codex_client *c) {
     if (!c || c->notice_fd[0] < 0) return 0;
+    c->idle_pumping = 1;
     if (atomic_load_explicit(&c->warm_state, memory_order_acquire) == 1) {
         for (int i = 0; i < 64; i++) {
             cJSON *msg;
@@ -914,6 +944,7 @@ int codex_idle_pump(codex_client *c) {
             cJSON_Delete(msg);
         }
     }
+    c->idle_pumping = 0;
     char bytes[64];
     while (read(c->notice_fd[0], bytes, sizeof bytes) > 0) {}
     pthread_mutex_lock(&c->warning_mu);
@@ -928,6 +959,12 @@ int codex_idle_pump(codex_client *c) {
         free(warning);
     }
     return codex_background_tasks(c) > 0;
+}
+
+int codex_take_continuation(codex_client *c) {
+    if (!c || !c->continuation_pending) return 0;
+    c->continuation_pending = 0;
+    return 1;
 }
 
 int codex_trust_project(codex_client *c, const char *path) {
@@ -1289,14 +1326,17 @@ static void cx_item_event(codex_client *c, cJSON *params, int started,
         cJSON_GetObjectItemCaseSensitive(item, "type")) : NULL;
     if (!type) return;
     if (!strcmp(type, "subAgentActivity")) {
-        if (!started) return;
         const char *kind = cJSON_GetStringValue(
             cJSON_GetObjectItemCaseSensitive(item, "kind"));
-        if (kind && strcmp(kind, "started")) return;
-        cx_agent_spawned(c,
-            cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "agentThreadId")),
-            cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "agentPath")),
-            cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "id")));
+        const char *thread = cJSON_GetStringValue(
+            cJSON_GetObjectItemCaseSensitive(item, "agentThreadId"));
+        if ((!kind || !strcmp(kind, "started")) && started) {
+            cx_agent_spawned(c, thread,
+                cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "agentPath")),
+                cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "id")));
+        } else if (kind && !strcmp(kind, "completed")) {
+            cx_agent_completed(c, thread);
+        }
     } else if (!strcmp(type, "agentMessage")) {
         if (started) return;
         const char *s = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "text"));
@@ -1403,17 +1443,22 @@ static void cx_raw_item_event(codex_client *c, cJSON *params) {
     }
 }
 
-char *codex_send_ex(codex_client *c, const char *user_text, codex_result *meta) {
+static char *cx_send_ex(codex_client *c, const char *user_text, int continuation,
+                        codex_result *meta) {
     if (meta) memset(meta, 0, sizeof *meta);
-    if (!c || !user_text) return NULL;
+    if (!c || (!continuation && !user_text)) return NULL;
     if (!cx_await_ready(c)) return NULL;
     c->fault[0] = '\0';
     if (!c->session_id[0] && !cx_open_thread(c, NULL)) return NULL;
     cJSON *p = cJSON_CreateObject(), *input = cJSON_CreateArray();
-    cJSON *text = cJSON_CreateObject();
-    cJSON_AddStringToObject(text, "type", "text");
-    cJSON_AddStringToObject(text, "text", user_text);
-    cJSON_AddItemToArray(input, text);
+    if (!p || !input) { cJSON_Delete(p); cJSON_Delete(input); return NULL; }
+    if (!continuation) {
+        cJSON *text = cJSON_CreateObject();
+        if (!text) { cJSON_Delete(p); cJSON_Delete(input); return NULL; }
+        cJSON_AddStringToObject(text, "type", "text");
+        cJSON_AddStringToObject(text, "text", user_text);
+        cJSON_AddItemToArray(input, text);
+    }
     cJSON_AddStringToObject(p, "threadId", c->session_id);
     cJSON_AddItemToObject(p, "input", input);
     if (c->effort)
@@ -1503,8 +1548,20 @@ char *codex_send_ex(codex_client *c, const char *user_text, codex_result *meta) 
     return answer ? answer : strdup("");
 }
 
+char *codex_send_ex(codex_client *c, const char *user_text, codex_result *meta) {
+    return cx_send_ex(c, user_text, 0, meta);
+}
+
+char *codex_continue_ex(codex_client *c, codex_result *meta) {
+    return cx_send_ex(c, NULL, 1, meta);
+}
+
 char *codex_send(codex_client *c, const char *user_text) {
     return codex_send_ex(c, user_text, NULL);
+}
+
+char *codex_continue(codex_client *c) {
+    return codex_continue_ex(c, NULL);
 }
 
 /* Poll for the child's exit for up to `ms`. Returns nonzero once reaped. */

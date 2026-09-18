@@ -84,6 +84,7 @@ struct session *session_set_drawing(struct session *s);
 int session_turn(struct session *s, const char *text);
 
 int  session_turn_begin(struct session *s, const char *text);
+int  session_turn_continue_begin(struct session *s);
 int  session_turn_running(const struct session *s);
 int  session_turn_pump(struct session *s);
 int  session_wake_fd(const struct session *s);

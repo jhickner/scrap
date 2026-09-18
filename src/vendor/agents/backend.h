@@ -131,6 +131,10 @@ struct Backend {
     /* As ask(), also filling *meta, which is zeroed first. `meta` may be NULL. */
     char *(*ask_ex)(Backend *b, const char *user, backend_result *meta);
 
+    /* Start a model turn without appending a user message. Drivers expose this
+     * only when their protocol has a native empty-input continuation. */
+    char *(*continue_ex)(Backend *b, backend_result *meta);
+
     /* Context occupancy as the driver knows it right now: during a turn this
      * tracks the latest model request rather than waiting for the turn to end,
      * so a caller painting a live display can follow it. Either output is 0
@@ -178,6 +182,8 @@ struct Backend {
      * NULL for a driver whose agent only speaks when spoken to. */
     int  (*idle_fd)(Backend *b);
     int  (*idle_pump)(Backend *b);
+    /* Consume a coalesced continuation request raised by idle_pump(). */
+    int  (*take_continuation)(Backend *b);
 
     /* Work the agent still has running with no turn in flight — background
      * subagents and detached commands outlive the send that started them, so a
@@ -700,6 +706,25 @@ static char *backend_codex_ask_ex(Backend *b, const char *user, backend_result *
     return reply;
 }
 
+static char *backend_codex_continue_ex(Backend *b, backend_result *meta) {
+    backend_codex *x = b->ctx;
+    if (meta) memset(meta, 0, sizeof *meta);
+    if (!x->client && !backend_codex_start(b, x->st.resume)) return NULL;
+    codex_result cr = {0};
+    char *reply = codex_continue_ex(x->client, &cr);
+    backend_flush(&x->st);
+    if (meta) {
+        meta->context_tokens = cr.context_tokens;
+        meta->context_window = cr.context_window;
+        meta->interrupted = cr.interrupted;
+        meta->input_tokens = cr.input_tokens;
+        meta->output_tokens = cr.output_tokens;
+        meta->cache_read_tokens = cr.cache_read_tokens;
+        meta->cache_creation_tokens = cr.cache_creation_tokens;
+    }
+    return reply;
+}
+
 static void backend_codex_usage(Backend *b, long *tokens, long *window) {
     backend_codex *x = b->ctx;
     codex_usage(x->client, tokens, window);
@@ -764,6 +789,11 @@ static int backend_codex_idle_pump(Backend *b) {
     return x->client ? codex_idle_pump(x->client) : 0;
 }
 
+static int backend_codex_take_continuation(Backend *b) {
+    backend_codex *x = b->ctx;
+    return x->client ? codex_take_continuation(x->client) : 0;
+}
+
 static int backend_codex_busy(Backend *b) {
     backend_codex *x = b->ctx;
     return x->client ? codex_background_tasks(x->client) : 0;
@@ -817,6 +847,7 @@ static Backend *backend_codex_open(const backend_opts *o) {
     b->close = backend_codex_close;
     b->start = backend_codex_start;
     b->ask_ex = backend_codex_ask_ex;
+    b->continue_ex = backend_codex_continue_ex;
     b->usage = backend_codex_usage;
     b->rate_limit = backend_codex_rate_limit;
     b->set_model = backend_set_model_generic;
@@ -827,6 +858,7 @@ static Backend *backend_codex_open(const backend_opts *o) {
     b->set_abort_check = backend_codex_set_abort;
     b->idle_fd = backend_codex_idle_fd;
     b->idle_pump = backend_codex_idle_pump;
+    b->take_continuation = backend_codex_take_continuation;
     b->busy = backend_codex_busy;
     b->session_id = backend_codex_session_id;
     b->model = backend_codex_model;

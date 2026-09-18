@@ -126,6 +126,7 @@ struct session {
     int             wake[2];
     char           *asked;
     char           *reply;
+    int             continuing;
     backend_result  meta;
     double          started;
     double          status_at;   /* when the last status update was asked for */
@@ -513,12 +514,16 @@ int session_idle_pump(struct session *s)
     image_poll();
     unsigned long before = s->spoke;
     int busy = s->agent->idle_pump(s->agent) ? 1 : 0;
+    int continuation = s->agent->take_continuation &&
+                       s->agent->take_continuation(s->agent);
     sessionpresent_expire(&s->present, s->quiet);
     session_set_drawing(was);
 
     /* a turn still open, or one that opened and closed inside this pump */
     stall_watch(s, busy || s->spoke != before);
     tab_busy(s, busy);
+    if (continuation && session_turn_continue_begin(s))
+        return 1;
     return busy;
 }
 
@@ -1838,10 +1843,20 @@ static void turn_prepare(struct session *s, const char *text)
     publish(s, "working");
 }
 
+static void continuation_fallback(struct session *s)
+{
+    s->stall_seen = 0;
+    s->stall_told = 0;
+    s->stall_at = now_seconds();
+    s->heard_at = s->stall_at;
+}
+
 static int turn_finish(struct session *s, char *reply, const backend_result *meta,
                        double elapsed)
 {
     const backend_result m = *meta;
+    int continuing = s->continuing;
+    s->continuing = 0;
     const char *text = s->prompt ? s->prompt : "";
     s->heard_at = 0;
     sessionpresent_turn_end(&s->present);
@@ -1850,9 +1865,11 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
         set_id(s, id);
 
     if (!reply) {
-        replace(&s->failed_prompt, text);
+        replace(&s->failed_prompt, continuing ? NULL : text);
         s->idle_busy = 0;
         publish(s, "errored");
+        if (continuing)
+            continuation_fallback(s);
 
         if (session_reground(s) == GROUND_MOVED)
             replace(&s->error_note,
@@ -1881,9 +1898,13 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     if (*reply)
         replace(&s->last_reply, reply);
     if (m.is_error) {
-        replace(&s->failed_prompt, text);
-    } else {
+        replace(&s->failed_prompt, continuing ? NULL : text);
+        if (continuing)
+            continuation_fallback(s);
+    } else if (!continuing) {
         transcript_add(&s->transcript, s->backend, text, reply, m.interrupted);
+        replace(&s->failed_prompt, NULL);
+    } else {
         replace(&s->failed_prompt, NULL);
     }
     free(reply);
@@ -1976,7 +1997,9 @@ static void *turn_thread(void *ud)
     restart_shield_thread();
 
     memset(&s->meta, 0, sizeof s->meta);
-    s->reply = s->agent->ask_ex(s->agent, s->asked, &s->meta);
+    s->reply = s->continuing
+        ? s->agent->continue_ex(s->agent, &s->meta)
+        : s->agent->ask_ex(s->agent, s->asked, &s->meta);
     s->finished = 1;
     wake_write(s);
     return NULL;
@@ -1998,6 +2021,33 @@ int session_turn_begin(struct session *s, const char *text)
         s->running = 0;
         s->idle_busy = 0;
         replace(&s->failed_prompt, text);
+        publish(s, "errored");
+        return 0;
+    }
+    return 1;
+}
+
+int session_turn_continue_begin(struct session *s)
+{
+    if (!s || !s->agent || !s->agent->continue_ex || s->running || !wake_open(s)) {
+        if (s)
+            continuation_fallback(s);
+        return 0;
+    }
+
+    turn_prepare(s, NULL);
+    voice_trace("turn.continue", "tab=%p", (void *)s);
+    replace(&s->asked, NULL);
+    s->reply = NULL;
+    s->finished = 0;
+    s->continuing = 1;
+    s->running = 1;
+
+    if (pthread_create(&s->thread, NULL, turn_thread, s) != 0) {
+        s->running = 0;
+        s->continuing = 0;
+        s->idle_busy = 0;
+        continuation_fallback(s);
         publish(s, "errored");
         return 0;
     }

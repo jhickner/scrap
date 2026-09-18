@@ -18,6 +18,7 @@ static char warning_text[1024];
 static int trust_events;
 static char trust_path[1024];
 static int task_events;
+static int task_running, task_completed;
 static char task_id[64], task_status[32], task_path[128], task_parent[64];
 
 static long milliseconds(void)
@@ -59,6 +60,8 @@ static void capture_event(void *ud, const codex_event *ev)
         snprintf(trust_path, sizeof trust_path, "%s", ev->text ? ev->text : "");
     } else if (ev->kind == CODEX_EV_TASK) {
         task_events++;
+        if (ev->name && !strcmp(ev->name, "running")) task_running++;
+        if (ev->name && !strcmp(ev->name, "completed")) task_completed++;
         snprintf(task_id, sizeof task_id, "%s", ev->id ? ev->id : "");
         snprintf(task_status, sizeof task_status, "%s", ev->name ? ev->name : "");
         snprintf(task_path, sizeof task_path, "%s", ev->text ? ev->text : "");
@@ -164,11 +167,15 @@ static int mock_server(void)
             turns++;
             cJSON *params = cJSON_GetObjectItemCaseSensitive(msg, "params");
             cJSON *effort = params ? cJSON_GetObjectItemCaseSensitive(params, "effort") : NULL;
+            cJSON *input = params ? cJSON_GetObjectItemCaseSensitive(params, "input") : NULL;
             int valid_effort =
                 (turns == 1 && cJSON_IsString(effort) && !strcmp(effort->valuestring, "high")) ||
                 (turns == 2 && cJSON_IsString(effort) && !strcmp(effort->valuestring, "low")) ||
-                (turns == 3 && cJSON_IsNull(effort));
-            if (!valid_effort) {
+                (turns == 3 && cJSON_IsString(effort) && !strcmp(effort->valuestring, "low")) ||
+                (turns == 4 && cJSON_IsNull(effort));
+            int valid_input = cJSON_IsArray(input) &&
+                cJSON_GetArraySize(input) == (turns == 3 ? 0 : 1);
+            if (!valid_effort || !valid_input) {
                 respond(id, "{}");
                 cJSON_Delete(msg);
                 continue;
@@ -194,7 +201,8 @@ static int mock_server(void)
                    turns * 100, turns * 40, turns * 5, turns * 10);
             printf("{\"method\":\"item/agentMessage/delta\","
                    "\"params\":{\"delta\":\"%s\"}}\n",
-                   turns == 1 ? "partial" : turns == 2 ? "done" : "reset");
+                   turns == 1 ? "partial" : turns == 2 ? "done" :
+                   turns == 3 ? "resumed" : "reset");
             if (turns > 1) {
                 if (turns == 2) {
                     printf("{\"method\":\"rawResponseItem/completed\",\"params\":{"
@@ -246,6 +254,34 @@ static int mock_server(void)
                     printf("{\"method\":\"thread/status/changed\",\"params\":{"
                            "\"threadId\":\"thread-2\","
                            "\"status\":{\"type\":\"active\"}}}\n");
+                    printf("{\"method\":\"item/started\",\"params\":{"
+                           "\"threadId\":\"thread-1\",\"turnId\":\"turn-2\",\"item\":{"
+                           "\"type\":\"subAgentActivity\",\"id\":\"call-agent-2\","
+                           "\"kind\":\"started\",\"agentThreadId\":\"thread-3\","
+                           "\"agentPath\":\"/root/check_tests\"}}}\n");
+                    printf("{\"method\":\"thread/status/changed\",\"params\":{"
+                           "\"threadId\":\"thread-3\","
+                           "\"status\":{\"type\":\"active\"}}}\n");
+                    printf("{\"method\":\"item/started\",\"params\":{"
+                           "\"threadId\":\"thread-1\",\"turnId\":\"turn-2\",\"item\":{"
+                           "\"type\":\"subAgentActivity\",\"id\":\"call-agent-4\","
+                           "\"kind\":\"started\",\"agentThreadId\":\"thread-5\","
+                           "\"agentPath\":\"/root/status_only\"}}}\n");
+                    /* This agent completes while the parent turn is active.
+                       It must not request a concurrent continuation. */
+                    printf("{\"method\":\"item/started\",\"params\":{"
+                           "\"threadId\":\"thread-1\",\"turnId\":\"turn-2\",\"item\":{"
+                           "\"type\":\"subAgentActivity\",\"id\":\"call-agent-3\","
+                           "\"kind\":\"started\",\"agentThreadId\":\"thread-4\","
+                           "\"agentPath\":\"/root/quick_check\"}}}\n");
+                    printf("{\"method\":\"item/started\",\"params\":{"
+                           "\"threadId\":\"thread-1\",\"turnId\":\"turn-2\",\"item\":{"
+                           "\"type\":\"subAgentActivity\",\"id\":\"done-agent-3\","
+                           "\"kind\":\"completed\",\"agentThreadId\":\"thread-4\","
+                           "\"agentPath\":\"/root/quick_check\"}}}\n");
+                    printf("{\"method\":\"thread/status/changed\",\"params\":{"
+                           "\"threadId\":\"thread-4\","
+                           "\"status\":{\"type\":\"idle\"}}}\n");
                     printf("{\"method\":\"item/agentMessage/delta\",\"params\":{"
                            "\"threadId\":\"thread-2\",\"delta\":\"sub\"}}\n");
                     printf("{\"method\":\"turn/completed\",\"params\":{"
@@ -254,10 +290,27 @@ static int mock_server(void)
                 }
                 printf("{\"method\":\"turn/completed\",\"params\":{"
                        "\"turn\":{\"status\":\"completed\"}}}\n");
-                if (turns == 2)
+                if (turns == 2) {
+                    printf("{\"method\":\"item/started\",\"params\":{"
+                           "\"threadId\":\"thread-1\",\"turnId\":\"turn-2\",\"item\":{"
+                           "\"type\":\"subAgentActivity\",\"id\":\"done-agent-1\","
+                           "\"kind\":\"completed\",\"agentThreadId\":\"thread-2\","
+                           "\"agentPath\":\"/root/review_diff\"}}}\n");
+                    printf("{\"method\":\"item/started\",\"params\":{"
+                           "\"threadId\":\"thread-1\",\"turnId\":\"turn-2\",\"item\":{"
+                           "\"type\":\"subAgentActivity\",\"id\":\"done-agent-2\","
+                           "\"kind\":\"completed\",\"agentThreadId\":\"thread-3\","
+                           "\"agentPath\":\"/root/check_tests\"}}}\n");
                     printf("{\"method\":\"thread/status/changed\",\"params\":{"
                            "\"threadId\":\"thread-2\","
                            "\"status\":{\"type\":\"idle\"}}}\n");
+                    printf("{\"method\":\"thread/status/changed\",\"params\":{"
+                           "\"threadId\":\"thread-3\","
+                           "\"status\":{\"type\":\"idle\"}}}\n");
+                    printf("{\"method\":\"thread/status/changed\",\"params\":{"
+                           "\"threadId\":\"thread-5\","
+                           "\"status\":{\"type\":\"idle\"}}}\n");
+                }
             }
             fflush(stdout);
         } else if (method && !strcmp(method, "turn/interrupt")) {
@@ -351,22 +404,33 @@ int main(int argc, char **argv)
     }
     free(reply);
 
-    if (task_events != 1 || strcmp(task_id, "thread-2") ||
-        strcmp(task_status, "running") || strcmp(task_path, "/root/review_diff") ||
-        strcmp(task_parent, "call-agent-1") || codex_background_tasks(client) != 1) {
-        fprintf(stderr, "codextest: spawned sub-agent was not reported (%d, %s, %s, %s, %d)\n",
-                task_events, task_id, task_status, task_parent,
+    if (task_events != 5 || task_running != 4 || task_completed != 1 ||
+        strcmp(task_id, "thread-4") || strcmp(task_status, "completed") ||
+        codex_background_tasks(client) != 3 || codex_take_continuation(client)) {
+        fprintf(stderr, "codextest: active-turn sub-agents were not reported safely "
+                        "(%d, %d, %d, %s, %s, %d)\n",
+                task_events, task_running, task_completed, task_id, task_status,
                 codex_background_tasks(client));
         codex_stop(client);
         return 1;
     }
     if (codex_idle_pump(client) || codex_background_tasks(client) ||
-        task_events != 2 || strcmp(task_status, "completed")) {
-        fprintf(stderr, "codextest: sub-agent going idle was not picked up (%d, %s, %d)\n",
-                task_events, task_status, codex_background_tasks(client));
+        task_events != 8 || task_completed != 4 || strcmp(task_status, "completed") ||
+        !codex_take_continuation(client) || codex_take_continuation(client)) {
+        fprintf(stderr, "codextest: idle completions did not coalesce (%d, %d, %s, %d)\n",
+                task_events, task_completed, task_status,
+                codex_background_tasks(client));
         codex_stop(client);
         return 1;
     }
+    reply = codex_continue(client);
+    if (!reply || strcmp(reply, "resumed")) {
+        fprintf(stderr, "codextest: queued completion did not run as empty input\n");
+        free(reply);
+        codex_stop(client);
+        return 1;
+    }
+    free(reply);
 
     codex_opts fork_opts = { .cli_path = argv[0],
                              .resume_session = "thread-parent",
