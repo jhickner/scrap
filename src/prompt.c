@@ -1091,8 +1091,11 @@ static char *read_loop(struct prompt *p)
         int animating = !resizing && p->animate_busy && p->animate_busy(p->animate_ud);
         /* Nothing to read from is the usual reason to wait forever; work that
            has to be timed rather than woken is the exception. */
-        int polling = !resizing && !animating && p->idle_poll &&
-                      p->idle_poll(p->idle_ud);
+        /* Not !animating: a spinning turn is exactly when a session runs the
+           command that asks this instance to spawn, and that request is only
+           served from idle_render. Gating polling on the spinner deadlocks the
+           turn against its own dispatch until the user interrupts it. */
+        int polling = !resizing && p->idle_poll && p->idle_poll(p->idle_ud);
         int wait = resizing      ? TTY_RESIZE_SETTLE_MS
                    : animating   ? SPIN_FRAME_MS
                    : polling     ? PROMPT_IDLE_POLL_MS
@@ -1108,9 +1111,9 @@ static char *read_loop(struct prompt *p)
                 if (animating && p->animate_tick) {
                     p->animate_tick(p->animate_ud);
                     repaint(p);
-                } else if (polling) {
-                    idle_ready_hook(p);
                 }
+                if (polling)
+                    idle_ready_hook(p);
                 takeover_check(p);
                 restart_check(p);
             }
