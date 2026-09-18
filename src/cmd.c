@@ -1268,15 +1268,18 @@ static void do_tasks(struct session *s, const char *arg)
 
     struct orchstatus_columns widths;
     orchstatus_columns(&widths, ui_columns(), tasks, count);
-    char project_head[16], task_head[16], status_head[16], agent_head[32], age_head[16];
+    char project_head[16], id_head[24], task_head[16], status_head[16];
+    char agent_head[32], age_head[16];
     orchstatus_cell(project_head, sizeof project_head, "PROJECT", (size_t)widths.project);
+    orchstatus_cell(id_head, sizeof id_head, "ID", (size_t)widths.id);
     orchstatus_cell(task_head, sizeof task_head, "TASK", (size_t)widths.task);
     orchstatus_cell(status_head, sizeof status_head, "STATUS", (size_t)widths.status);
     orchstatus_cell(agent_head, sizeof agent_head, "BACKEND / MODEL", (size_t)widths.agent);
     orchstatus_cell(age_head, sizeof age_head, "AGE", (size_t)widths.age);
     ui_esc(ui_style(UI_DIM));
-    ui_printf("  %-*s %-*s %-*s %-*s %-*s\n",
-              widths.project, project_head, widths.task, task_head,
+    ui_printf("  %-*s %-*s %-*s %-*s %-*s %-*s\n",
+              widths.project, project_head, widths.id, id_head,
+              widths.task, task_head,
               widths.status, status_head, widths.agent, agent_head,
               widths.age, age_head);
     ui_esc(ui_style(UI_RESET));
@@ -1284,11 +1287,13 @@ static void do_tasks(struct session *s, const char *arg)
     time_t now = time(NULL);
     for (int i = 0; i < count; i++) {
         struct orch_task *t = &tasks[i];
-        char project[128], desc[512], status[80], agent[220], age[16], age_cell[16];
+        char project[128], id[64], desc[512], status[80], agent[220];
+        char age[16], age_cell[16];
         char full_status[80], full_agent[220];
         orchstatus_status(full_status, sizeof full_status, t);
         orchstatus_agent(full_agent, sizeof full_agent, t);
         orchstatus_cell(project, sizeof project, t->project, (size_t)widths.project);
+        orchstatus_cell(id, sizeof id, t->id, (size_t)widths.id);
         const char *rest = orchstatus_wrap(desc, sizeof desc,
                                            t->desc[0] ? t->desc : t->id,
                                            (size_t)widths.task);
@@ -1296,13 +1301,13 @@ static void do_tasks(struct session *s, const char *arg)
         orchstatus_cell(agent, sizeof agent, full_agent, (size_t)widths.agent);
         orchstatus_age(age, sizeof age, t->updated ? t->updated : t->created, now);
         orchstatus_cell(age_cell, sizeof age_cell, age, (size_t)widths.age);
-        ui_printf("  %-*s %-*s %-*s %-*s %-*s\n",
-                  widths.project, project, widths.task, desc,
+        ui_printf("  %-*s %-*s %-*s %-*s %-*s %-*s\n",
+                  widths.project, project, widths.id, id, widths.task, desc,
                   widths.status, status, widths.agent, agent,
                   widths.age, age_cell);
         while (*rest) {
             rest = orchstatus_wrap(desc, sizeof desc, rest, (size_t)widths.task);
-            ui_printf("  %*s %s\n", widths.project, "", desc);
+            ui_printf("  %*s %*s %s\n", widths.project, "", widths.id, "", desc);
         }
     }
     free(tasks);
