@@ -165,18 +165,23 @@ static int fold_result(const struct orch_rec *rec)
     if (!res)
         return 0;
 
+    /* status and summary are owned by res, so res outlives every use of them. */
     const char *status = result_status(res);
+    const char *summary = result_summary(res);
     const char *next = strcmp(status, "done") ? "failed" : "review";
     char line[1200];
     snprintf(line, sizeof line,
              "orchestrator: task %s in %s reported %s. %s Reconcile it and tell me.",
-             rec->id, rec->project, status, result_summary(res));
-    cJSON_Delete(res);
+             rec->id, rec->project, status, summary);
 
-    if (!orchtask_set_status(rec->project, rec->id, next, NULL, NULL, NULL, NULL, 0))
+    orchtask_set_summary(rec->project, rec->id, summary);
+    if (!orchtask_set_status(rec->project, rec->id, next, NULL, NULL, NULL, NULL, 0)) {
+        cJSON_Delete(res);
         return 0;
+    }
     orchtask_result_drop(rec->id);
     orchtask_log("result", rec->project, rec->id, status);
+    cJSON_Delete(res);
     tell(line);
     return 1;
 }

@@ -192,6 +192,15 @@ int main(void)
     assert(strstr(last_send, "t-win") && strstr(last_send, "built it"));
     /* the result file is consumed, so the same completion is not reported twice */
     assert(!slurp(path));
+    /* the summary outlives the result file, on the record and in the log */
+    cJSON *won = orchtask_find("mux", "t-win", NULL, 0);
+    assert(!strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(won, "summary")), "built it"));
+    cJSON_Delete(won);
+    char logpath[1024];
+    snprintf(logpath, sizeof logpath, "%s/log.jsonl", root);
+    char *logged = slurp(logpath);
+    assert(logged && strstr(logged, "\"ev\":\"result\""));
+    assert(strstr(logged, "\"task\":\"t-win\",\"detail\":\"done\""));
     send_n = 0;
     assert(orch_reconcile() == 0);
     assert(send_n == 0);
