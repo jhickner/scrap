@@ -15,80 +15,84 @@ project task. Projected remaining per backend = `remaining_pct` − Σ inflight
 seed_cost). Dispatch to the highest projected value; on dispatch, append the
 prediction to that backend's `inflight` and bump `dispatches`.
 
-## Spawning
+## Dispatching a project task
 
-Workers are sibling sessions in this mux instance, spawned via the dispatch
-request file (src/dispatch.c in the mux repo):
+    mux orch dispatch <task-id> "<worker prompt>" \
+      --backend claude --model "opus[1m]" --cwd <worktree> --title "<hash> <short desc>"
 
-    printf '{"backend":"claude","model":"opus[1m]","cwd":"<project cwd>","prompt":"<worker prompt>","title":"<task hash> <task short description>"}' \
-      > ~/.config/mux/dispatch/$MUX_PID-<request-key>.req
+That one call does the mechanical part: it picks the instance, writes the
+worker request, waits for the session id, records backend, model, session and
+instance on the task, moves it to `dispatched`, logs the dispatch, and arms the
+completion notification. It answers with the task, the session id and the pid,
+or with an error and no state change.
 
-For a project task, the request key is its task id and the title begins with
-the task id without its `t-` prefix (e.g. `6beac7 deploy rmchores`). For a
-one-off, use a transient `o-` plus 6 random hex key and a descriptive title.
+Instance choice is not yours either: the task's origin instance is preferred,
+then the most recently active instance with a free tab. If no instance has
+room, the dispatch is refused and the task stays queued — say so and move on
+rather than forcing it somewhere.
 
-Poll for `$MUX_PID-<request-key>.res`; mux holds that reply until the backend
-reports its session id, up to 30 seconds, then writes
-`{"session":"<session id>"}`. If no id appears the reply is
-`{"error": "session id unavailable"}` and the worker is unaddressable — treat
-the dispatch as failed. Record the session id in the project task record for
-project work. Delete the .res after reading.
+A task that is already `dispatched` with a live worker is refused. That is
+deliberate: two workers on one task have collided in the same worktree before.
+To redirect live work, send a follow-up instead.
 
-A session id is the only address the dispatch API accepts; there is no
-positional addressing.
+For code tasks, create the worktree first — `.claude/worktrees/<task-id>`,
+branch `worktree-<task-id>` — and pass it as `--cwd`. Tasks whose deps are all
+done dispatch in parallel, each in its own worktree; never serialize
+independent tasks for lack of a commit, make the commit instead.
 
-`{"send":"<text>","session":"<session id>"}` types a message into a live
-worker (reply `{"ok":true,"session":"<id>"}` or `{"error": ...}`); used for
-follow-ups.
+## Follow-ups
 
-The same directory takes `{"close":"<session id>"}` to close a tab; the reply
-is `{"ok":true,"session":"<id>"}` or `{"error": "no such session" | "session
-is in view" | "session is busy"}`. An unknown or already-finished session id
-returns `no such session`; nothing is delivered or closed in that case.
-
-For code tasks, first create a worktree `.claude/worktrees/<task-id>` (branch
-`worktree-<task-id>`) in the project repo and use it as cwd. Tasks whose deps
-are all done dispatch in parallel, each in its own worktree; never serialize
-independent tasks for lack of a commit — make the commit instead.
+`mux orch send <task> "<text>"` types at the task's live worker. If the worker
+is gone, the text is queued on the task instead and the reply says so.
 
 ## One-off non-product work
 
-Ad-hoc research, credential lookup, status investigation, and other
-non-product multi-step requests go to a one-off subagent. Do not create or
-append a project task record, create a worktree, or put the request through
-queued/review/done lifecycle. Give it only the access and scope needed to
-answer the request. Its prompt must write a transient result to
-`~/.config/orchestrator/results/<one-off-key>.json` using the one-off result
-schema in schemas.md. Wait for the result, report it to the user, account for
-actual quota usage, then delete the result file.
+Ad-hoc research, credential lookup, status investigation, and other non-product
+multi-step requests go to a one-off subagent, spawned directly through mux's
+own dispatch directory rather than through `mux orch`:
+
+    printf '{"backend":"claude","model":"opus[1m]","cwd":"<cwd>","prompt":"<prompt>","title":"<short desc>"}' \
+      > ~/.config/mux/dispatch/$MUX_PID-<o-key>.req
+
+Poll for `$MUX_PID-<o-key>.res`; mux holds that reply until the backend reports
+its session id, up to 30 seconds, then answers `{"session":"<id>","addr":"<path>"}`.
+`{"error":"session id unavailable"}` means the worker is unaddressable — treat
+the dispatch as failed. Delete the .res after reading. Do not create a project
+task record, a worktree, or a lifecycle for a one-off. Its prompt must write a
+transient result to `~/.config/orchestrator/results/<o-key>.json` using the
+one-off result schema in schemas.md; read it, report it, delete it.
+
+A session id is the only address the dispatch API accepts; there is no
+positional addressing. `{"send":...}` and `{"close":...}` take one too.
 
 ## Worker prompt
 
 For a project task, always include: the task id and description; the project
-cwd; an instruction to read any spec files; scope limits (touch nothing
-outside scope, no commits unless the task says so); "you are a worker — do not
-invoke the orchestrate skill or dispatch further workers"; and the completion
-contract — "as your final act write
-~/.config/orchestrator/results/<task-id>.json per the result schema in this
-skill's references/schemas.md, with a one-paragraph summary sized for being
-read aloud."
+cwd; an instruction to read any spec files; scope limits (touch nothing outside
+scope, no commits unless the task says so); "you are a worker — do not invoke
+the orchestrate skill or dispatch further workers"; and the completion contract
+— "as your final act write `~/.config/orchestrator/results/<task-id>.json` per
+the result schema in this skill's references/schemas.md, with a one-paragraph
+summary sized for being read aloud."
+
+A worker can name its own session: `$MUX_SESSION_FILE` holds the path of a file
+containing its session id, once the backend has reported one. Tell a worker
+about it only when the work needs it.
 
 For a one-off, include the request and relevant cwd, prohibit product changes,
 commits, and further dispatch, identify it as a one-off subagent rather than a
 project task, and include the transient completion contract above.
 
-## Watcher
+## No watcher
 
-After dispatching, start a background waiter on the result file(s) (a Bash
-run_in_background loop polling `~/.config/orchestrator/results/`, or fswatch
-if available) so completion re-invokes you without user prompting. Reconcile
-project tasks per references/monitor.md when it fires; consume one-off results
-directly as described above. Long dispatches also get a fallback heartbeat:
-if nothing has fired in ~20 minutes, reconcile anyway and probe anything
-overdue.
+Do not start a background waiter, an fswatch, or a polling loop. The instance
+hosting the worker records its ending — finished turn or death — and the
+orchestrator subsystem delivers that to you as a line beginning
+"orchestrator:", then reconciles. A completion that is somehow missed is picked
+up by the periodic reconcile, which runs about every twenty minutes
+(`orchestrator_reconcile_minutes` in mux settings) and on every start.
 
-## After spawning
+## After dispatching
 
-For project work, append the task record update (status `dispatched`, backend,
-model, session, worktree) and a `dispatch` line to log.jsonl. For a one-off,
-do neither. Tell the user in one sentence who got the request.
+Tell the user in one sentence who got the request. The task record and the log
+line are already written.

@@ -4,7 +4,8 @@ Enter when the user says they're stepping away; leave when they return.
 
 ## While away
 
-- Keep dispatching queued work and reconciling results as usual.
+- Keep dispatching queued work as usual; the subsystem keeps reconciling
+  whether or not you are mid-conversation.
 - Hold anything needing a decision — checkpoints, failures wanting a
   redispatch call, ambiguous intake — in a parked list (append task records
   with status `paused` and a note) instead of asking.

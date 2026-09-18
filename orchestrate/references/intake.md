@@ -13,6 +13,6 @@ For "here's a plan for X" or a spoken braindump.
    planning-class model (dispatch it like any task, with the plan text in
    the prompt, asking for task records back as JSON) instead of doing it
    inline.
-5. Append the records, then read back a compact summary: counts by class,
-   the first thing that would dispatch, and any checkpoint. Ask nothing
-   unless the plan genuinely forks.
+5. Add the records with `mux orch add`, then read back a compact summary:
+   counts by class, the first thing that would dispatch, and any checkpoint.
+   Ask nothing unless the plan genuinely forks.

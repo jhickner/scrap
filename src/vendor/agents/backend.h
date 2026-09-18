@@ -31,6 +31,8 @@ typedef struct {
     const char *effort;         /* reasoning/thinking effort; NULL -> its default     */
     const char *system;         /* applied to every turn; NULL -> none                */
     const char *cwd;            /* where the agent runs its tools; NULL -> inherit    */
+    const char *session_file;   /* path exported to the child as MUX_SESSION_FILE, the
+                                   file the host writes this session's id into        */
     const char *resume_session; /* continue a prior session (claude, codex, grok, pi) */
     int fork_session;           /* copy resumed context into a new session id        */
     const char *permission_mode;/* claude: --permission-mode; NULL -> bypassPermissions*/
@@ -237,6 +239,7 @@ int backend_run_pool(const char *name, const char *model, const char *system,
 
 typedef struct {
     char *model, *effort, *system, *cwd, *resume, *permission, *session_name;
+    char *session_file;
     int   allow_customizations, ephemeral, disable_tools, fork_session;
     int   no_browser_login;
     int   chrome;
@@ -263,6 +266,7 @@ static void backend_state_init(backend_state *st, const backend_opts *o) {
     st->effort = backend_dup(o->effort);
     st->system = backend_dup(o->system);
     st->cwd    = backend_dup(o->cwd);
+    st->session_file = backend_dup(o->session_file);
     st->resume = backend_dup(o->resume_session);
     st->permission = backend_dup(o->permission_mode);
     st->session_name = backend_dup(o->session_name);
@@ -278,6 +282,7 @@ static void backend_state_init(backend_state *st, const backend_opts *o) {
 static void backend_state_free(backend_state *st) {
     free(st->model); free(st->effort); free(st->system); free(st->cwd); free(st->resume);
     free(st->permission); free(st->session_name); free(st->pending);
+    free(st->session_file);
     free(st->plugin_dir);
 }
 
@@ -374,6 +379,7 @@ static int backend_claude_start(Backend *b, const char *resume) {
     backend_claude *x = b->ctx;
     claude_opts o = {0};
     o.cwd = x->st.cwd;
+    o.session_file = x->st.session_file;
     o.model = x->st.model;
     o.effort = x->st.effort;
     o.append_system = x->st.system;
@@ -657,6 +663,7 @@ static int backend_codex_start(Backend *b, const char *resume) {
     backend_codex *x = b->ctx;
     codex_opts o = {0};
     o.cwd = x->st.cwd;
+    o.session_file = x->st.session_file;
     o.model = x->st.model;
     o.effort = x->st.effort;
     o.append_system = x->st.system;
@@ -872,6 +879,7 @@ static int backend_grok_start(Backend *b, const char *resume) {
     backend_grok *x = b->ctx;
     grok_opts o = {0};
     o.cwd = x->st.cwd;
+    o.session_file = x->st.session_file;
     o.model = x->st.model;
     o.append_system = x->st.system;
     o.reasoning_effort = x->st.effort ? x->st.effort : getenv("GROK_EFFORT");

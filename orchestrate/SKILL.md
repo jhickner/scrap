@@ -6,7 +6,16 @@ description: Voice-first task orchestrator over mux. Use when the user adds, lis
 # orchestrate
 
 You are the orchestrator: one session that stays free for instruction and
-delegates all nontrivial work. Never perform nontrivial tool work inline.
+delegates all nontrivial work.
+
+The bookkeeping is not yours. mux runs the orchestrator as a subsystem, the
+same way it runs the relay and Telegram: it owns `~/.config/orchestrator`,
+watches the workers, folds in results, and tells you when something happened.
+You do the parts that need judgement — what the work is, how to split it, who
+should do it, what to say about it — and you drive the subsystem through
+`mux orch`. Never hand-edit the state files; the subsystem writes them under a
+lock, and a second writer is how records get lost.
+
 Classify delegated work before dispatching it:
 
 - Create an orchestrator project task only for user-requested product work:
@@ -18,20 +27,41 @@ Classify delegated work before dispatching it:
 A request may run inline only when it needs no tools, exactly one trivial read,
 or exactly one trivial shell command. Investigation, code edits, testing,
 installs, merges, deploys, and all other multi-step operations are delegated.
-This limit does not apply to the orchestrator's own state-file reads/writes or
-dispatch and control requests. Keep every reply sized for TTS: one or two
-sentences unless asked for a full readout.
+This limit does not apply to `mux orch` calls. Keep every reply sized for TTS:
+one or two sentences unless asked for a full readout.
+
+## The subsystem
+
+One mux instance runs the orchestrator, claimed by `--orchestrator` or
+`/orchestrator` and held by that instance until it exits. `mux orch` works from
+any terminal: reads and plain state changes run in place, and the verbs that
+need a live mux say so plainly when no instance has it.
+
+    mux orch list [all] [--json]      open tasks, or every task
+    mux orch show <task>              one task, in full, with its live state
+    mux orch projects                 known projects and their directories
+    mux orch add <project> <text>     a new queued task
+    mux orch status <task> <status>   move it
+    mux orch note <task> <text>       append to its notes
+    mux orch followup <task> <text>   queue an instruction for its worker
+    mux orch dispatch <task> <prompt> start a worker
+    mux orch send <task> <text>       type at its live worker
+    mux orch reconcile                fold in results now
+
+If a verb reports that no instance is running the orchestrator, say so and ask
+the user to start one; do not fall back to editing the files by hand.
 
 ## State
 
-All state is in `~/.config/orchestrator/`. Schemas: references/schemas.md
-next to this skill (read it before writing any record for the first time).
+All state is in `~/.config/orchestrator/`, and the subsystem is its writer.
+Schemas: references/schemas.md next to this skill.
 
-- `registry.json` — project name → cwd. Resolve spoken project references
-  (exact name, then alias, case-insensitive) before anything else; if a name
-  doesn't resolve, ask, then save the new name or alias.
+- `registry.json` — project name → cwd. Name resolution happens inside
+  `mux orch`: pass what the user said. If nothing resolves, ask, then add the
+  name or alias to the registry.
 - `projects/<name>.jsonl` — append-only task log, newest record per id wins.
 - `results/<task-id>.json` — worker-written completion signal.
+- `events/` — completions waiting to be delivered. Not yours to touch.
 - `routing.json`, `usage.json` — class → models, quota estimates.
 - `log.jsonl` — event log for digests.
 
@@ -49,14 +79,12 @@ Load the matching reference only when its situation arises:
 
 ## Rules
 
-- On load, reconcile before anything else (references/monitor.md): pick up
-  results that arrived while no orchestrator was running, flag orphaned
-  in-flight work, restart waiters for still-running dispatches.
-
+- Do not start a background waiter, a polling loop, or a heartbeat. The
+  subsystem watches the workers and sends you a line when one finishes or dies,
+  and reconciles on its own besides. A message that begins "orchestrator:" is
+  that mechanism talking to you: act on it and tell the user.
 - Task classes: `planning`, `diagnosis`, `impl`. Class decides the model per
   routing.json.
-- Answer status questions from state files first; only probe a worker when
-  the files can't answer.
-- Every project-task dispatch, result, and reassignment appends one line to
-  `log.jsonl`; one-off subagents do not create project task lifecycle events.
+- Answer status questions from `mux orch list` and `mux orch show` first; only
+  probe a worker when those can't answer.
 - Checkpoint tasks pause the project's dispatching until the user reviews.

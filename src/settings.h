@@ -21,6 +21,9 @@
    repeated every interval. 0 turns the updates off. */
 #define SETTING_STATUS_INTERVAL "status_seconds"
 
+/* how often the orchestrator reconciles on its own, in minutes */
+#define SETTING_ORCH_RECONCILE  "orchestrator_reconcile_minutes"
+
 #define STATUS_INTERVAL_DEFAULT 300
 
 #define SETTING_BACKEND      "backend"

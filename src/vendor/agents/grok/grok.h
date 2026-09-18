@@ -32,6 +32,7 @@ typedef struct grok_client grok_client;
 typedef struct {
     const char *cli_path;        /* grok binary; NULL/"" -> "grok" (via PATH)   */
     const char *cwd;             /* child working directory; NULL -> inherit    */
+    const char *session_file;    /* MUX_SESSION_FILE for the child; NULL -> unset  */
     const char *model;           /* -m value (e.g. "grok-4.5"); NULL -> default */
     const char *reasoning_effort;/* --reasoning-effort low|medium|high; NULL    */
     const char *append_system;   /* prepended to each user turn; NULL -> none   */
@@ -1210,6 +1211,7 @@ grok_client *grok_start(const grok_opts *opts) {
         if (err_pipe[0] != STDERR_FILENO) close(err_pipe[0]);
         if (err_pipe[1] != STDERR_FILENO) close(err_pipe[1]);
         if (o.cwd && *o.cwd) { if (chdir(o.cwd) != 0) _exit(126); }
+        if (o.session_file && *o.session_file) setenv("MUX_SESSION_FILE", o.session_file, 1);
 
         const char *argv[16];
         int n = 0;

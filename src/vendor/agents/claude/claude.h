@@ -30,6 +30,7 @@ typedef struct claude_client claude_client;
 typedef struct {
     const char *cli_path;        /* claude binary; NULL/"" -> "claude" (via PATH) */
     const char *cwd;             /* child working directory; NULL -> inherit      */
+    const char *session_file;    /* MUX_SESSION_FILE for the child; NULL -> unset  */
     const char *model;           /* --model value; NULL -> CLI default            */
     const char *effort;          /* --effort value; NULL -> CLI default           */
     const char *permission_mode; /* --permission-mode (e.g. "bypassPermissions")  */
@@ -495,6 +496,7 @@ claude_client *claude_start(const claude_opts *opts) {
         if (err_pipe[0] != STDERR_FILENO) close(err_pipe[0]);
         if (err_pipe[1] != STDERR_FILENO) close(err_pipe[1]);
         if (o.cwd && *o.cwd) { if (chdir(o.cwd) != 0) _exit(126); }
+        if (o.session_file && *o.session_file) setenv("MUX_SESSION_FILE", o.session_file, 1);
         if (o.use_subscription) unsetenv("ANTHROPIC_API_KEY");
 
         /* Build argv: headless, streaming both directions. */

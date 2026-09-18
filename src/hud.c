@@ -8,6 +8,7 @@
 #include "app.h"
 #include "gitinfo.h"
 #include "models.h"
+#include "orch.h"
 #include "scrollback.h"
 #include "session.h"
 #include "tg.h"
@@ -108,6 +109,8 @@ static void row_identity(const struct session *s, struct row *r)
         row_add(r, UI_OK, SEP "%s", relay_label());
     if (voice_label())
         row_add(r, UI_OK, SEP "%s", voice_label());
+    if (orch_label())
+        row_add(r, UI_OK, SEP "%s", orch_label());
 }
 
 static void row_location(const struct session *s, struct row *r)

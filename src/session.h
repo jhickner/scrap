@@ -174,6 +174,10 @@ const char *session_rename_error(enum session_rename why);
 const char *session_model(const struct session *s);
 const char *session_id(const struct session *s);
 
+/* The file this session's id is published to, exported to its child as
+   $MUX_SESSION_FILE so the child can name itself. NULL when none was made. */
+const char *session_addr(const struct session *s);
+
 const char *session_saved_model(const char *backend);
 const char *session_saved_effort(const char *backend);
 

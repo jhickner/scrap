@@ -4,18 +4,11 @@
 #include <stddef.h>
 #include <time.h>
 
-struct orch_task {
-    char project[128];
-    char id[64];
-    char desc[512];
-    char status[32];
-    char backend[32];
-    char model[160];
-    char session[160];
-    char live_status[32];
-    time_t created;
-    time_t updated;
-};
+#include "orchtask.h"
+
+/* The /tasks table: how the orchestrator's tasks are laid out on a terminal.
+   The records themselves come from orchtask, which is their only reader and
+   writer; nothing here goes near a file. */
 
 struct orchstatus_columns {
     int project;
@@ -26,22 +19,25 @@ struct orchstatus_columns {
     int age;
 };
 
-/* Load each .jsonl file and retain the last record for each (project, id).
-   Done tasks are omitted unless include_done is nonzero. Open tasks are grouped
-   by project; with include_done, all tasks are ordered most recent first. */
-int orchstatus_load(const char *projects_dir, const char *live_dir,
-                    int include_done, struct orch_task **out);
+/* Group open tasks by project, most recently changed first within each. With
+   include_closed, order everything by recency alone: a finished task is
+   interesting for when it finished, not for whose project it was. */
+void orchstatus_sort(struct orch_rec *recs, int n, int include_closed);
 
-void orchstatus_age(char *out, size_t size, time_t then, time_t now);
+/* The state column: the status, the worker's live state when it has one, and
+   the count of follow-ups waiting for that worker. */
+void orchstatus_status(char *out, size_t size, const struct orch_rec *t);
 
-void orchstatus_status(char *out, size_t size, const struct orch_task *t);
-void orchstatus_agent(char *out, size_t size, const struct orch_task *t);
+/* The task column, before wrapping: the description, marked when the task is a
+   checkpoint, since a checkpoint holds up its project until it is reviewed. */
+void orchstatus_task(char *out, size_t size, const struct orch_rec *t);
+void orchstatus_agent(char *out, size_t size, const struct orch_rec *t);
 
 /* Size the six table columns to their content and fit them within columns,
    including the two-cell indent, five separators, and a one-cell right
    margin. The task column receives the remaining width. */
 void orchstatus_columns(struct orchstatus_columns *out, int columns,
-                        const struct orch_task *tasks, int count);
+                        const struct orch_rec *tasks, int count);
 
 /* Copy the next line of in, broken at whitespace, of at most width bytes.
    Returns the remaining text, empty when done. */
