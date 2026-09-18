@@ -45,8 +45,8 @@ A follow-up goes to the task's existing worker, not through a separate task
 or review cycle. Append the task record with the instruction added to
 `pending` and confirm in one sentence. When that task's result arrives
 (monitor.md), don't move it to `review`: delete the result file, send the
-pending items to the worker's slot in one message via
-`{"send":"<text>","slot":N}` (dispatch.md), restating the completion
+pending items to the worker in one message via
+`{"send":"<text>","session":"<session id>"}` (dispatch.md), restating the completion
 contract so it rewrites the result file, clear `pending`, keep status
 `dispatched`, restart the waiter, and log a `followup` line. The task reaches
 `review` once, after its last follow-up. If the worker's session is gone,

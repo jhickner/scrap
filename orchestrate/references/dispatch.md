@@ -27,17 +27,24 @@ For a project task, the request key is its task id and the title begins with
 the task id without its `t-` prefix (e.g. `6beac7 deploy rmchores`). For a
 one-off, use a transient `o-` plus 6 random hex key and a descriptive title.
 
-Poll for `$MUX_PID-<request-key>.res` (a few seconds); it holds the slot. The
-session id appears in the live registry (`~/.config/mux/live`) shortly after.
-Record it in the project task record only for project work. Delete the .res
-after reading.
+Poll for `$MUX_PID-<request-key>.res`; mux holds that reply until the backend
+reports its session id, up to 30 seconds, then writes
+`{"session":"<session id>"}`. If no id appears the reply is
+`{"error": "session id unavailable"}` and the worker is unaddressable — treat
+the dispatch as failed. Record the session id in the project task record for
+project work. Delete the .res after reading.
 
-`{"send":"<text>","slot":N}` types a message into a live worker's slot
-(reply `{"ok":true}` or `{"error": ...}`); used for follow-ups.
+A session id is the only address the dispatch API accepts; there is no
+positional addressing.
 
-The same directory takes `{"close":"<session id>"}` (or `{"close":<slot>}`)
-to close a tab; the reply is `{"ok":true,"slot":N,"session":"<id>"}` or
-`{"error": "no such slot or session" | "slot is in view" | "slot is busy"}`.
+`{"send":"<text>","session":"<session id>"}` types a message into a live
+worker (reply `{"ok":true,"session":"<id>"}` or `{"error": ...}`); used for
+follow-ups.
+
+The same directory takes `{"close":"<session id>"}` to close a tab; the reply
+is `{"ok":true,"session":"<id>"}` or `{"error": "no such session" | "session
+is in view" | "session is busy"}`. An unknown or already-finished session id
+returns `no such session`; nothing is delivered or closed in that case.
 
 For code tasks, first create a worktree `.claude/worktrees/<task-id>` (branch
 `worktree-<task-id>`) in the project repo and use it as cwd. Tasks whose deps

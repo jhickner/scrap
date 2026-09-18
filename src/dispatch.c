@@ -16,6 +16,8 @@
 
 #define POLL_MS      250
 #define REQUEST_MAX  65536
+/* how long a spawn reply waits for the backend to report its session id */
+#define ID_WAIT_MS   30000
 
 static int dir_path(char *out, size_t size)
 {
@@ -48,45 +50,164 @@ static void reply(const char *dir, const char *base, const char *json)
     rename(tmp, path);
 }
 
+static void reply_error(const char *dir, const char *base, const char *what, const char *id)
+{
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddStringToObject(r, "error", what);
+    if (id)
+        cJSON_AddStringToObject(r, "session", id);
+    char *json = cJSON_PrintUnformatted(r);
+    reply(dir, base, json ? json : "{\"error\": \"oom\"}");
+    free(json);
+    cJSON_Delete(r);
+}
+
 static void echo_prompt(struct session *s, void *ud)
 {
     (void)s;
     prompt_echo_message(ud);
 }
 
-static void close_slot(const char *dir, const char *base, const cJSON *target)
+/* the only address the request API accepts: a backend session id */
+static int index_of_id(const cJSON *target)
 {
-    int at = -1;
-    if (cJSON_IsNumber(target) && target->valuedouble == target->valueint)
-        at = workspace_at(target->valueint) ? target->valueint : -1;
-    else if (cJSON_IsString(target))
-        at = workspace_find_id(target->valuestring);
+    if (!cJSON_IsString(target))
+        return -1;
+    const char *id = target->valuestring;
+    if (!id || !*id)
+        return -1;
+    return workspace_find_id(id);
+}
 
+static void close_session(const char *dir, const char *base, const cJSON *target)
+{
+    if (!cJSON_IsString(target) || !target->valuestring || !*target->valuestring) {
+        reply_error(dir, base, "close takes a session id", NULL);
+        return;
+    }
+    const char *id = target->valuestring;
+    int at = index_of_id(target);
     struct session *s = workspace_at(at);
     if (!s) {
-        reply(dir, base, "{\"error\": \"no such slot or session\"}");
+        reply_error(dir, base, "no such session", id);
         return;
     }
     if (at == workspace_index()) {
-        reply(dir, base, "{\"error\": \"slot is in view\"}");
+        reply_error(dir, base, "session is in view", id);
         return;
     }
     if (session_turn_running(s) || workspace_queued(at)) {
-        reply(dir, base, "{\"error\": \"slot is busy\"}");
+        reply_error(dir, base, "session is busy", id);
         return;
     }
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "ok", 1);
-    cJSON_AddNumberToObject(r, "slot", at);
-    const char *id = session_id(s);
-    if (id)
-        cJSON_AddStringToObject(r, "session", id);
+    cJSON_AddStringToObject(r, "session", id);
     char *json = cJSON_PrintUnformatted(r);
     workspace_close(at);
     reply(dir, base, json ? json : "{\"ok\":true}");
     free(json);
     cJSON_Delete(r);
+}
+
+static void send_session(const char *dir, const char *base, const cJSON *o, const cJSON *send)
+{
+    const char *line = cJSON_GetStringValue(send);
+    cJSON *target = cJSON_GetObjectItem((cJSON *)o, "session");
+    if (!cJSON_IsString(target) || !target->valuestring || !*target->valuestring) {
+        reply_error(dir, base, "send takes a session id", NULL);
+        return;
+    }
+    const char *id = target->valuestring;
+    int at = index_of_id(target);
+    if (!workspace_at(at)) {
+        reply_error(dir, base, "no such session", id);
+        return;
+    }
+    if (!line || !*line) {
+        reply_error(dir, base, "bad line", id);
+        return;
+    }
+
+    /* send_next echoes a queued line when its turn starts; idle has no such path */
+    if (!session_turn_running(workspace_at(at)))
+        workspace_render(at, echo_prompt, (void *)line);
+    if (!workspace_send(at, line, NULL))
+        reply_error(dir, base, "could not send line", id);
+    else {
+        cJSON *r = cJSON_CreateObject();
+        cJSON_AddBoolToObject(r, "ok", 1);
+        cJSON_AddStringToObject(r, "session", id);
+        char *json = cJSON_PrintUnformatted(r);
+        reply(dir, base, json ? json : "{\"ok\":true}");
+        free(json);
+        cJSON_Delete(r);
+    }
+}
+
+/* a spawn whose reply is held until its session id is known, so the caller
+   never has to address the tab by position */
+struct pending {
+    char            base[256];
+    struct session *s;
+    struct timespec since;
+};
+
+static struct pending pendings[WORKSPACE_MAX];
+
+static long since_ms(const struct timespec *then, const struct timespec *now)
+{
+    return (now->tv_sec - then->tv_sec) * 1000 + (now->tv_nsec - then->tv_nsec) / 1000000;
+}
+
+static void reply_spawn(const char *dir, const char *base, const char *id)
+{
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddStringToObject(r, "session", id);
+    char *json = cJSON_PrintUnformatted(r);
+    reply(dir, base, json ? json : "{\"error\": \"oom\"}");
+    free(json);
+    cJSON_Delete(r);
+}
+
+static void hold_spawn(const char *dir, const char *base, struct session *s)
+{
+    for (int i = 0; i < WORKSPACE_MAX; i++) {
+        if (pendings[i].base[0])
+            continue;
+        if ((size_t)snprintf(pendings[i].base, sizeof pendings[i].base, "%s", base) >=
+            sizeof pendings[i].base) {
+            pendings[i].base[0] = '\0';
+            break;
+        }
+        pendings[i].s = s;
+        clock_gettime(CLOCK_MONOTONIC, &pendings[i].since);
+        return;
+    }
+    reply_error(dir, base, "session id unavailable", NULL);
+}
+
+static void settle_pending(const char *dir)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    for (int i = 0; i < WORKSPACE_MAX; i++) {
+        if (!pendings[i].base[0])
+            continue;
+        int at = workspace_index_of(pendings[i].s);
+        const char *id = at >= 0 ? session_id(workspace_at(at)) : NULL;
+        if (id)
+            reply_spawn(dir, pendings[i].base, id);
+        else if (at < 0)
+            reply_error(dir, pendings[i].base, "session ended before it reported an id", NULL);
+        else if (since_ms(&pendings[i].since, &now) < ID_WAIT_MS)
+            continue;
+        else
+            reply_error(dir, pendings[i].base, "session id unavailable", NULL);
+        pendings[i].base[0] = '\0';
+        pendings[i].s = NULL;
+    }
 }
 
 static void serve(const char *dir, const char *base, const char *text)
@@ -99,29 +220,14 @@ static void serve(const char *dir, const char *base, const char *text)
 
     cJSON *target = cJSON_GetObjectItem(o, "close");
     if (target) {
-        close_slot(dir, base, target);
+        close_session(dir, base, target);
         cJSON_Delete(o);
         return;
     }
 
     cJSON *send = cJSON_GetObjectItem(o, "send");
     if (send) {
-        const char *line = cJSON_GetStringValue(send);
-        cJSON *slot = cJSON_GetObjectItem(o, "slot");
-        int at = cJSON_IsNumber(slot) ? slot->valueint : -1;
-        if (!cJSON_IsNumber(slot) || slot->valuedouble != at || !workspace_at(at)) {
-            reply(dir, base, "{\"error\": \"bad slot\"}");
-        } else if (!line || !*line) {
-            reply(dir, base, "{\"error\": \"bad line\"}");
-        } else {
-            /* send_next echoes a queued line when its turn starts; idle has no such path */
-            if (!session_turn_running(workspace_at(at)))
-                workspace_render(at, echo_prompt, (void *)line);
-            if (!workspace_send(at, line, NULL))
-                reply(dir, base, "{\"error\": \"could not send line\"}");
-            else
-                reply(dir, base, "{\"ok\":true}");
-        }
+        send_session(dir, base, o, send);
         cJSON_Delete(o);
         return;
     }
@@ -158,14 +264,10 @@ static void serve(const char *dir, const char *base, const char *text)
     }
 
     const char *id = session_id(workspace_at(at));
-    cJSON *r = cJSON_CreateObject();
-    cJSON_AddNumberToObject(r, "slot", at);
     if (id)
-        cJSON_AddStringToObject(r, "session", id);
-    char *json = cJSON_PrintUnformatted(r);
-    reply(dir, base, json ? json : "{\"error\": \"oom\"}");
-    free(json);
-    cJSON_Delete(r);
+        reply_spawn(dir, base, id);
+    else
+        hold_spawn(dir, base, workspace_at(at));
     cJSON_Delete(o);
 }
 
@@ -182,6 +284,9 @@ void dispatch_poll(void)
     char dir[4200];
     if (!dir_path(dir, sizeof dir))
         return;
+
+    settle_pending(dir);
+
     DIR *d = opendir(dir);
     if (!d)
         return;
