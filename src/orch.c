@@ -34,8 +34,43 @@
 
 static int             owner_lock = -1;
 static char            start_error[256];
-static struct session *told;      /* the session the orchestrator speaks to */
+/* The session the orchestrator speaks to. Held as an id as well as a pointer:
+   a restart replaces the session object, and a bare pointer would dangle, leave
+   nobody to tell, and pile up undeliverable events for good. */
+static struct session *told;
+static char            told_id[128];
 static time_t          next_reconcile;
+
+static void told_remember(struct session *s)
+{
+    told = s;
+    const char *id = s ? session_id(s) : NULL;
+    if (id && *id)
+        snprintf(told_id, sizeof told_id, "%s", id);
+}
+
+/* The id is only known once the backend reports it, so the pointer is the fast
+   path and the id is what survives a restart re-creating the session. */
+static struct session *told_find(void)
+{
+    if (told && workspace_index_of(told) >= 0) {
+        const char *id = session_id(told);
+        if (id && *id && strcmp(told_id, id))
+            snprintf(told_id, sizeof told_id, "%s", id);
+        return told;
+    }
+    if (!told_id[0])
+        return NULL;
+    for (int i = 0; i < workspace_count(); i++) {
+        struct session *s = workspace_at(i);
+        const char *id = s ? session_id(s) : NULL;
+        if (id && !strcmp(id, told_id)) {
+            told = s;
+            return s;
+        }
+    }
+    return NULL;
+}
 
 const char *orch_start_error(void)
 {
@@ -49,13 +84,16 @@ const char *orch_label(void)
 
 struct session *orch_session(void)
 {
-    return told;
+    return told_find();
 }
 
 void orch_forget_session(struct session *s)
 {
-    if (told == s)
-        told = NULL;
+    if (told != s)
+        return;
+    told = NULL;
+    /* a closed tab is gone for good; a restart is handled by told_find */
+    told_id[0] = '\0';
 }
 
 static int claim_orchestrator(void)
@@ -92,14 +130,13 @@ static void echo_line(struct session *s, void *ud)
    unacked so it comes round again. */
 static int tell(const char *line)
 {
-    if (!told || !line || !*line)
+    struct session *t = told_find();
+    if (!t || !line || !*line)
         return 0;
-    int at = workspace_index_of(told);
-    if (at < 0) {
-        told = NULL;
+    int at = workspace_index_of(t);
+    if (at < 0)
         return 0;
-    }
-    if (!session_turn_running(told))
+    if (!session_turn_running(t))
         workspace_render(at, echo_line, (void *)line);
     return workspace_send(at, line, NULL);
 }
@@ -582,7 +619,7 @@ static void serve(const char *dir, const char *base, const char *text)
         cJSON *r = cJSON_CreateObject();
         cJSON_AddNumberToObject(r, "pid", (double)getpid());
         cJSON_AddNumberToObject(r, "open", n < 0 ? 0 : n);
-        const char *id = told ? session_id(told) : NULL;
+        const char *id = told_id[0] ? told_id : NULL;
         cJSON_AddStringToObject(r, "session", id ? id : "");
         char *json = cJSON_PrintUnformatted(r);
         reply(dir, base, json ? json : "{\"error\":\"oom\"}");
@@ -674,12 +711,12 @@ int orch_start(struct session *s)
 {
     start_error[0] = '\0';
     if (owner_lock >= 0) {
-        told = s;
+        told_remember(s);
         return 1;
     }
     if (!claim_orchestrator())
         return 0;
-    told = s;
+    told_remember(s);
     /* reconcile on load: the state files are the truth, and anything that
        happened while nothing was running is found here */
     orch_reconcile();
@@ -692,6 +729,7 @@ void orch_stop(void)
         filelock_release(owner_lock);
     owner_lock = -1;
     told = NULL;
+    told_id[0] = '\0';
     for (int i = 0; i < WORKSPACE_MAX; i++)
         handoffs[i].busy = 0;
 }

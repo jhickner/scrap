@@ -33,6 +33,14 @@ int workspace_index_of(const struct session *s)
 {
     return s == &orchestrator ? orch_at : -1;
 }
+int workspace_count(void)
+{
+    return orch_at >= 0 ? 1 : 0;
+}
+struct session *workspace_at(int index)
+{
+    return index == orch_at && orch_at >= 0 ? &orchestrator : NULL;
+}
 void workspace_render(int index, void (*fn)(struct session *s, void *ud), void *ud)
 {
     (void)index;
