@@ -639,14 +639,6 @@ void workspace_wait_turn(int index)
     leave();
 }
 
-int workspace_polling(void)
-{
-    for (int i = 0; i < ntabs; i++)
-        if (session_stall_armed(tabs[i].s) || session_work_count(tabs[i].s) > 0)
-            return 1;
-    return 0;
-}
-
 int workspace_busy(void)
 {
     for (int i = 0; i < ntabs; i++)

@@ -71,7 +71,6 @@ int  workspace_busy(void);
 /* work whose next step is due at a time rather than on an fd -- a stall being
    timed, a spinner counting out background work -- so the loop has to come back
    for it on its own */
-int  workspace_polling(void);
 
 const char *workspace_status(const struct session *s);
 

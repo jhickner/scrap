@@ -323,7 +323,11 @@ static void side_tick(void *ud)
     if (vncinset_stale(inset_live()))
         viewport_touch();
 }
-static int idle_poll(void *ud)   { (void)ud; return workspace_polling(); }
+/* Dispatch requests and orchestrator work arrive as files, and nothing in the
+   idle fd set wakes the loop for them. An instance with no running session must
+   still tick, or it never answers a spawn and the caller times out against a
+   live mux. dispatch_poll and orch_poll throttle themselves. */
+static int idle_poll(void *ud)   { (void)ud; return 1; }
 static void replay(void *ud)      { (void)ud; session_replay(workspace_current()); }
 static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
 static int clicked(void *ud, int row, int col)
