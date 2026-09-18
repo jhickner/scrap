@@ -15,7 +15,14 @@ prefixed by kind (`t-`, `r-`). Transient one-off request keys use `o-`.
       projects/<name>.jsonl  task log per project
       results/<task-id>.json result written by a project worker
       results/<one-off-key>.json transient result written by a one-off subagent
+      events/              completion events waiting to be delivered, written by
+                           the instance hosting a worker and drained by the
+                           instance running the orchestrator
+      requests/            `mux orch` request and reply files
       log.jsonl            project dispatch/reconcile log (debugging, digests)
+
+Everything here is written by the mux orchestrator subsystem, under a lock per
+file. Read them freely; write them through `mux orch`.
 
 ## registry.json
 
@@ -37,7 +44,8 @@ Name resolution: exact name, then alias, case-insensitive.
       "id": "t-3fa2c1",
       "desc": "implement the project registry + name resolution",
       "class": "planning" | "diagnosis" | "impl",
-      "status": "queued" | "dispatched" | "review" | "done" | "failed" | "paused",
+      "status": "queued" | "dispatched" | "review" | "done" | "failed" |
+                "paused" | "cancelled",
       "created": 1757520000,
       "updated": 1757523600,
       "deps": ["t-9b01aa"],
@@ -45,7 +53,9 @@ Name resolution: exact name, then alias, case-insensitive.
       "backend": "claude",        // set at dispatch
       "model": "opus[1m]",
       "session": "<mux session id>",
-      "pid": 12345,
+      "pid": 12345,                 // the instance the work belongs to: set at
+                                    // creation as the origin, and again at
+                                    // dispatch as the host
       "worktree": ".claude/worktrees/t-3fa2c1",
       "cost_usd": 0.42,
       "pending": ["follow-up tweak for the same worker"],  // optional
@@ -54,9 +64,11 @@ Name resolution: exact name, then alias, case-insensitive.
 
 A status change appends a new full record with the same id. `review` means
 the worker finished and the change awaits user review and merge. `done` means
-complete and merged. `paused` marks a checkpoint hold. `deps` gates dispatch
-on other tasks being `done`. `pending` holds follow-up instructions queued for
-the task's live worker (tasks.md, Follow-ups).
+complete and merged, and is terminal: nothing moves out of it. `cancelled`
+means abandoned; it leaves the open list like `done` but can be reopened.
+`paused` marks a checkpoint hold. `deps` gates dispatch on other tasks being
+`done`. `pending` holds follow-up instructions queued for the task's live
+worker (tasks.md, Follow-ups).
 
 ## Result file (results/<task-id>.json)
 
@@ -84,6 +96,21 @@ or task lifecycle event.
       "status": "done" | "failed",
       "summary": "the requested finding, sized for TTS",
       "finished": 1757523600
+    }
+
+## Completion event (events/<name>.json)
+
+Written by the instance hosting a worker when that worker finishes a turn or
+ends, and deleted by the orchestrator once it has been delivered. Not a
+completion in itself: the result file is still the signal, and a lost event
+costs nothing but time, since reconcile finds the same thing.
+
+    {
+      "task": "t-3fa2c1",
+      "session": "<the worker's session id>",
+      "notify": "<who asked to be told>",
+      "reason": "idle" | "exit",
+      "ts": 1757523600
     }
 
 ## routing.json

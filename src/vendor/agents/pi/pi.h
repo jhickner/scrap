@@ -32,6 +32,7 @@ typedef struct pi_client pi_client;
 typedef struct {
     const char *cli_path;      /* pi binary; NULL/"" -> "pi" via PATH          */
     const char *cwd;           /* child working directory; NULL -> inherit     */
+    const char *session_file;    /* MUX_SESSION_FILE for the child; NULL -> unset  */
     const char *provider;      /* --provider value; NULL -> pi default         */
     const char *model;         /* --model value; NULL -> pi default            */
     const char *effort;        /* --thinking value; NULL -> pi default         */
@@ -492,6 +493,7 @@ pi_client *pi_start(const pi_opts *opts) {
         if (in[0] != STDIN_FILENO) close(in[0]); if (in[1] != STDIN_FILENO) close(in[1]);
         if (out[0] != STDOUT_FILENO) close(out[0]); if (out[1] != STDOUT_FILENO) close(out[1]);
         if (o.cwd && *o.cwd && chdir(o.cwd)) _exit(126);
+        if (o.session_file && *o.session_file) setenv("MUX_SESSION_FILE", o.session_file, 1);
         const char *argv[22]; int n = 0;
         argv[n++] = cli; argv[n++] = "--mode"; argv[n++] = "rpc";
         if (o.resume_session && *o.resume_session) {
@@ -703,6 +705,7 @@ static int pi_backend_start(Backend *b, const char *resume) {
     pi_backend_ctx *cx = b->ctx;
     pi_opts o = {0};
     o.cwd = cx->st.cwd;
+    o.session_file = cx->st.session_file;
     o.model = cx->st.model;
     o.effort = cx->st.effort;
     o.append_system = cx->st.system;

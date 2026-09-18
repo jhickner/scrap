@@ -23,6 +23,7 @@
 #include "restart.h"
 #include "models.h"
 #include "parent.h"
+#include "sessionaddr.h"
 #include "sessionload.h"
 #include "sessionprefs.h"
 #include "sessionpresent.h"
@@ -54,6 +55,7 @@ struct session {
     char    *effort;
     char    *resolved;
     char     id[128];
+    char    *addr;   /* the file this session's id is published to, for the child */
     char     title[128];
     char     stale_title[128];
     char     held_title[128];
@@ -817,6 +819,9 @@ struct session *session_new(const char *backend, const char *cwd, const char *mo
     s->model = dup_model(s->backend, model);
     s->effort = effort ? strdup(effort) : NULL;
     s->thinking = 1;
+    char addr[4300];
+    if (sessionaddr_alloc(addr, sizeof addr))
+        s->addr = strdup(addr);
     tasks_reset(&s->tasks, s->backend);
     return s;
 }
@@ -887,6 +892,8 @@ void session_free(struct session *s)
     free(s->system_extra);
     free(s->handoff);
     transcript_free(&s->transcript);
+    sessionaddr_forget(s->addr);
+    free(s->addr);
     vncinset_free(s->inset);
     if (live == s)
         live = NULL;
@@ -938,6 +945,7 @@ static Backend *agent(struct session *s)
     backend_opts o = {0};
     o.name = s->backend;
     o.cwd = s->cwd;
+    o.session_file = s->addr;
     o.model = s->model;
     o.effort = s->effort;
     o.allow_customizations = s->customizations;
@@ -1154,6 +1162,7 @@ static void set_id(struct session *s, const char *id)
 {
     int changed = strcmp(s->id, id) != 0;
     snprintf(s->id, sizeof s->id, "%s", id);
+    sessionaddr_write(s->addr, s->id);
     if (changed) {
         if (s->parent[0])
             parent_set(s->id, s->parent);
@@ -2207,6 +2216,8 @@ int session_can_set_effort(const struct session *s)
 }
 
 const char *session_id(const struct session *s) { return s->id[0] ? s->id : NULL; }
+
+const char *session_addr(const struct session *s) { return s && s->addr ? s->addr : NULL; }
 
 int session_can_resume(const struct session *s)
 {

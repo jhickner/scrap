@@ -33,7 +33,7 @@ CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
           dispatchtest voicetabtest grokbottailtest vncinsettest grokvnctest \
           settingstest
-CHECKS += orchstatustest orchinstalltest
+CHECKS += orchstatustest orchinstalltest sessionaddrtest orchtasktest orchtargettest orcheventtest orchclitest orchtest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest vncprobe
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,
@@ -189,7 +189,7 @@ $(BUILD)/filedifftest: tests/filedifftest.c $(BUILD)/filediff.o $(BUILD)/ui.o $(
 
 $(BUILD)/taskstest: tests/taskstest.c $(BUILD)/tasks.o $(BUILD)/text.o $(BUILD)/toolstyle.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/orchstatustest: tests/orchstatustest.c $(BUILD)/orchstatus.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/orchstatustest: tests/orchstatustest.c $(BUILD)/orchstatus.o $(BUILD)/orchtask.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/orchinstalltest: tests/orchinstalltest.c $(BUILD)/orchinstall.o $(BUILD)/orchdata.o $(BUILD)/text.o | $(BUILD)
 
@@ -236,7 +236,19 @@ $(BUILD)/viewstest: tests/viewstest.c $(BUILD)/views.o | $(BUILD)
 
 $(BUILD)/workspacetest: tests/workspacetest.c tests/stubs/tabbar.c $(BUILD)/workspace.o $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/dispatchtest: tests/dispatchtest.c $(BUILD)/dispatch.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/orchtest: tests/orchtest.c $(BUILD)/orch.o $(BUILD)/orchevent.o $(BUILD)/orchtask.o $(BUILD)/orchtarget.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+
+$(BUILD)/orchclitest: tests/orchclitest.c $(BUILD)/orchcli.o $(BUILD)/orchtask.o $(BUILD)/orchtarget.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+
+$(BUILD)/orcheventtest: tests/orcheventtest.c $(BUILD)/orchevent.o $(BUILD)/orchtask.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+
+$(BUILD)/orchtargettest: tests/orchtargettest.c $(BUILD)/orchtarget.o $(BUILD)/orchtask.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+
+$(BUILD)/orchtasktest: tests/orchtasktest.c $(BUILD)/orchtask.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+
+$(BUILD)/sessionaddrtest: tests/sessionaddrtest.c $(BUILD)/sessionaddr.o $(BUILD)/text.o | $(BUILD)
+
+$(BUILD)/dispatchtest: tests/dispatchtest.c $(BUILD)/dispatch.o $(BUILD)/orchevent.o $(BUILD)/orchtask.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/highlighttest: tests/highlighttest.c $(BUILD)/highlight.o | $(BUILD)
 

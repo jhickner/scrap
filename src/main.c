@@ -43,6 +43,8 @@
 #include "tabs.h"
 #include "status.h"
 #include "tg.h"
+#include "orch.h"
+#include "orchcli.h"
 #include "relay.h"
 #include "voice.h"
 #include "tty.h"
@@ -124,6 +126,7 @@ static void usage(void)
             "  --tier     with --card: low, med or high\n"
             "  --telegram also answer over Telegram, in the same session\n"
             "  --relay    also answer a phone over WebSocket, in the same session\n"
+            "  --orchestrator  run the task orchestrator in this instance\n"
             "  --connect telegram|relay   the same thing, spelled out\n"
             "  -r         --resume: pick a past conversation to continue\n"
             "  --reopen   bring back the sessions of a window that is gone\n"
@@ -197,6 +200,7 @@ static int idle_render(void *ud)
     sidechannel_poll();
     sidechannel_tick();
     dispatch_poll();
+    orch_poll();
     reap_children();
 
     if (tg_pending() || relay_pending() || voice_pending())
@@ -546,6 +550,11 @@ static int live_command(void *ud, const char *line)
 
 int main(int argc, char **argv)
 {
+    /* `mux orch ...` is the orchestrator's command line, not a prompt: it does
+       its work and exits without opening a session. */
+    if (argc > 1 && !strcmp(argv[1], "orch"))
+        return orchcli_main(argc - 1, argv + 1);
+
     voice_protect_handoff();
     static const struct option LONG_OPTS[] = {
         {"backend", required_argument, NULL, 'b'},
@@ -563,6 +572,7 @@ int main(int argc, char **argv)
         {"tier",    required_argument, NULL, 1},
         {"telegram", no_argument,      NULL, 'T'},
         {"relay",    no_argument,      NULL, 'W'},
+        {"orchestrator", no_argument,  NULL, 'G'},
         {"connect", required_argument, NULL, 'N'},
         {"help",    no_argument,       NULL, 'h'},
         {NULL,      0,                 NULL, 0},
@@ -579,6 +589,7 @@ int main(int argc, char **argv)
     int         reopen_arg = 0;
     int telegram = 0;
     int relay = 0;
+    int orchestrator = 0;
     int card = 0;
     int pin_backend = 0;
     int fork_session = 0;
@@ -603,6 +614,7 @@ int main(int argc, char **argv)
         case 'K': card = 1; break;
         case 'T': telegram = 1; break;
         case 'W': relay = 1; break;
+        case 'G': orchestrator = 1; break;
         case 'N':
             if (!strcmp(optarg, "relay")) {
                 relay = 1;
@@ -722,8 +734,9 @@ int main(int argc, char **argv)
 
     int interactive = optind >= argc;
 
-    if ((telegram || relay) && !interactive) {
-        fprintf(stderr, APP_NAME ": --%s takes no prompt\n", telegram ? "telegram" : "relay");
+    if ((telegram || relay || orchestrator) && !interactive) {
+        fprintf(stderr, APP_NAME ": --%s takes no prompt\n",
+                telegram ? "telegram" : relay ? "relay" : "orchestrator");
         return 2;
     }
 
@@ -781,6 +794,8 @@ int main(int argc, char **argv)
         telegram = 0;
     if (relay && session && !relay_start(session))
         relay = 0;
+    if (orchestrator && session && !orch_start(session))
+        orchestrator = 0;
 
     if (!session) {
         if (interactive)
@@ -1010,6 +1025,7 @@ int main(int argc, char **argv)
     voice_stop();
     tg_stop();
     relay_stop();
+    orch_stop();
     session_set_typeahead(NULL, NULL);
     chrome_bind(NULL);
     prompt_free(prompt);

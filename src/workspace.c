@@ -17,6 +17,7 @@
 #include "tabbar.h"
 #include "text.h"
 #include "tg.h"
+#include "orch.h"
 #include "relay.h"
 #include "ui.h"
 #include "viewport.h"
@@ -413,6 +414,7 @@ static void drop(int index, const struct session *fallback)
         base = NULL;
     tg_forget_session(tabs[index].s);
     relay_forget_session(tabs[index].s);
+    orch_forget_session(tabs[index].s);
     cmd_forget_session(tabs[index].s);
 
     if (index == cur)

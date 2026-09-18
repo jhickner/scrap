@@ -6,6 +6,7 @@
 
 #include "cmd.h"
 #include "dispatch.h"
+#include "orchevent.h"
 #include "prompt.h"
 #include "session.h"
 #include "workspace.h"
@@ -118,6 +119,10 @@ const char *session_id(const struct session *s)
     if (s == &spawned && spawned_id[0])
         return spawned_id;
     return NULL;
+}
+const char *session_addr(const struct session *s)
+{
+    return s == &spawned ? "/tmp/mux-addr-fixture" : NULL;
 }
 int session_turn_running(const struct session *s)
 {
@@ -233,6 +238,8 @@ int main(void)
     snprintf(spawned_id, sizeof spawned_id, "sess-1");
     poll_once();
     expect_res(dir, "titled", "\"session\":\"sess-1\"", "spawn reply carries the session id");
+    expect_res(dir, "titled", "\"addr\":\"/tmp/mux-addr-fixture\"",
+               "spawn reply carries the session address file");
     if (strstr(read_res(dir, "titled"), "slot"))
         fail("spawn reply has no slot");
 
@@ -338,11 +345,94 @@ int main(void)
     expect_res(dir, "dead-send", "no such session", "send to a finished session is an error");
     expect_res(dir, "dead-close", "no such session", "close of a finished session is an error");
 
+
+    /* --- a watched spawn reports its ending ------------------------------ */
+
+    char orchroot[] = "/tmp/mux-dispatch-orch-XXXXXX";
+    if (!mkdtemp(orchroot))
+        fail("orchestrator temp dir");
+    setenv("ORCHESTRATOR_DIR", orchroot, 1);
+
+    reset_case();
+    spawned_open = 1;
+    snprintf(spawned_id, sizeof spawned_id, "sess-idle");
+    drop_req(dir, "watched",
+             "{\"prompt\":\"go\",\"task\":\"t-idle\",\"notify\":\"sess-orch\"}");
+    poll_once();
+    struct orch_event *ev = NULL;
+    if (orchevent_pending(&ev) != 0)
+        fail("a worker that has not run yet has not finished");
+    free(ev);
+
+    turn_running = 1;
+    poll_once();
+    if (orchevent_pending(&ev) != 0)
+        fail("a worker mid-turn has not finished");
+    free(ev);
+
+    turn_running = 0;
+    poll_once();
+    int n = orchevent_pending(&ev);
+    if (n != 1)
+        fail("going idle after a turn reports the completion");
+    else if (strcmp(ev[0].task, "t-idle") || strcmp(ev[0].reason, "idle") ||
+             strcmp(ev[0].notify, "sess-orch") || strcmp(ev[0].session, "sess-idle"))
+        fail("the completion names the task, the worker and who to tell");
+    free(ev);
+
+    /* a second idle turn is the same worker, not a second completion */
+    turn_running = 1;
+    poll_once();
+    turn_running = 0;
+    poll_once();
+    if (orchevent_pending(&ev) != 1)
+        fail("one completion per watched spawn");
+    free(ev);
+
+    /* a worker that dies without finishing a turn is still reported */
+    reset_case();
+    spawned_open = 1;
+    snprintf(spawned_id, sizeof spawned_id, "sess-lost");
+    drop_req(dir, "lost",
+             "{\"prompt\":\"go\",\"task\":\"t-lost\",\"notify\":\"sess-orch\"}");
+    poll_once();
+    spawned_open = 0;
+    poll_once();
+    n = orchevent_pending(&ev);
+    if (n != 2)
+        fail("a worker that ends without a turn is reported");
+    else {
+        int saw = 0;
+        for (int i = 0; i < n; i++)
+            saw |= !strcmp(ev[i].task, "t-lost") && !strcmp(ev[i].reason, "exit");
+        if (!saw)
+            fail("the lost worker is reported as an exit");
+    }
+    free(ev);
+
+    /* a spawn that asked for nothing reports nothing */
+    reset_case();
+    spawned_open = 1;
+    snprintf(spawned_id, sizeof spawned_id, "sess-quiet");
+    drop_req(dir, "unwatched", "{\"prompt\":\"go\",\"task\":\"t-quiet\"}");
+    poll_once();
+    turn_running = 1;
+    poll_once();
+    turn_running = 0;
+    spawned_open = 0;
+    poll_once();
+    n = orchevent_pending(&ev);
+    for (int i = 0; i < n; i++)
+        if (!strcmp(ev[i].task, "t-quiet"))
+            fail("an unwatched spawn is not reported");
+    free(ev);
+
     {
         char path[512];
         const char *ids[] = {"titled", "plain", "empty", "long", "idle-send", "busy-send",
                              "unknown-send", "unaddressed-send", "slot-send", "slot-close",
-                             "unknown-close", "close-id", "dead-send", "dead-close", NULL};
+                             "unknown-close", "close-id", "dead-send", "dead-close",
+                             "watched", "lost", "unwatched", NULL};
         for (int i = 0; ids[i]; i++) {
             snprintf(path, sizeof path, "%s/%ld-%s.res", dir, (long)getpid(), ids[i]);
             unlink(path);

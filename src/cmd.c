@@ -16,11 +16,14 @@
 #include "matrix.h"
 #include "frontend.h"
 #include "hud.h"
+#include "orch.h"
 #include "relay.h"
 #include "models.h"
 #include "muxcfg.h"
 #include "muxmake.h"
 #include "orchstatus.h"
+#include "orchtarget.h"
+#include "orchtask.h"
 #include "pick.h"
 #include "reopen.h"
 #include "prompt.h"
@@ -630,6 +633,28 @@ static void do_relay(struct session *s, const char *arg)
     reply_note("relay off");
 }
 
+static void do_orchestrator(struct session *s, const char *arg)
+{
+    int current = orch_label() != NULL;
+    int on = toggle_arg(arg, "on", "off", current, "/orchestrator");
+    if (on < 0)
+        return;
+    if (on == current && orch_session() == s) {
+        reply_note("orchestrator already %s", on ? "on" : "off");
+        return;
+    }
+    if (on) {
+        if (!orch_start(s))
+            reply_error("%s", orch_start_error() ? orch_start_error()
+                                                 : "could not enable the orchestrator");
+        else
+            reply_note("orchestrator on in this session");
+        return;
+    }
+    orch_stop();
+    reply_note("orchestrator off");
+}
+
 static void do_telegram(struct session *s, const char *arg)
 {
     int current = tg_label() != NULL;
@@ -1229,31 +1254,14 @@ static void do_tasks(struct session *s, const char *arg)
         return;
     }
 
-    const char *home = getenv("HOME");
-    if (!home || !*home) {
-        reply_error("could not find the orchestrator task directory");
-        return;
-    }
-    char projects[4200], live[4200];
-    if (snprintf(projects, sizeof projects, "%s/.config/orchestrator/projects", home)
-            >= (int)sizeof projects) {
-        reply_error("orchestrator task directory path is too long");
-        return;
-    }
-    const char *live_env = getenv("MUX_LIVE_DIR");
-    if (live_env && *live_env)
-        snprintf(live, sizeof live, "%s", live_env);
-    else if (snprintf(live, sizeof live, "%s/.config/mux/live", home)
-                 >= (int)sizeof live) {
-        live[0] = '\0';
-    }
-
-    struct orch_task *tasks = NULL;
-    int count = orchstatus_load(projects, live, all, &tasks);
+    struct orch_rec *tasks = NULL;
+    int count = orchtask_load(NULL, all, &tasks);
     if (count < 0) {
         reply_error("could not read orchestrator tasks");
         return;
     }
+    orchtarget_apply_live(tasks, count);
+    orchstatus_sort(tasks, count, all);
     if (!count) {
         free(tasks);
         reply_note("no %sorchestrator tasks", all ? "" : "open ");
@@ -1286,20 +1294,20 @@ static void do_tasks(struct session *s, const char *arg)
 
     time_t now = time(NULL);
     for (int i = 0; i < count; i++) {
-        struct orch_task *t = &tasks[i];
+        struct orch_rec *t = &tasks[i];
         char project[128], id[64], desc[512], status[80], agent[220];
         char age[16], age_cell[16];
-        char full_status[80], full_agent[220];
+        char full_status[80], full_agent[220], full_task[560];
         orchstatus_status(full_status, sizeof full_status, t);
+        orchstatus_task(full_task, sizeof full_task, t);
         orchstatus_agent(full_agent, sizeof full_agent, t);
         orchstatus_cell(project, sizeof project, t->project, (size_t)widths.project);
         orchstatus_cell(id, sizeof id, t->id, (size_t)widths.id);
-        const char *rest = orchstatus_wrap(desc, sizeof desc,
-                                           t->desc[0] ? t->desc : t->id,
+        const char *rest = orchstatus_wrap(desc, sizeof desc, full_task,
                                            (size_t)widths.task);
         orchstatus_cell(status, sizeof status, full_status, (size_t)widths.status);
         orchstatus_cell(agent, sizeof agent, full_agent, (size_t)widths.agent);
-        orchstatus_age(age, sizeof age, t->updated ? t->updated : t->created, now);
+        orchtask_age(age, sizeof age, t->updated ? t->updated : t->created, now);
         orchstatus_cell(age_cell, sizeof age_cell, age, (size_t)widths.age);
         ui_printf("  %-*s %-*s %-*s %-*s %-*s %-*s\n",
                   widths.project, project, widths.id, id, widths.task, desc,
@@ -1400,6 +1408,8 @@ static const struct cmd COMMANDS[] = {
     {"/sticky", "float the prompt above the spinner", "[on|off]", CMD_LIVE, do_sticky},
     {"/relay", "answer over the phone relay", "[on|off]", CMD_LIVE, do_relay},
     {"/telegram", "answer over Telegram", "[on|off]", CMD_LIVE, do_telegram},
+    {"/orchestrator", "run the task orchestrator in this session", "[on|off]", CMD_LIVE,
+     do_orchestrator},
     {"/voice", "talk instead of typing", "[on|off|listen|mode [wake|auto]|restart|complete|volume|rate|silence]", CMD_LIVE, do_voice},
     {"/image", "tallest an inline image may be drawn", "[rows]", CMD_LIVE, do_image},
     {"/permission", "how the CLI gates tool calls", "[mode]", 0, do_permission},

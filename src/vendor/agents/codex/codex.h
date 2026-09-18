@@ -24,6 +24,7 @@ typedef struct codex_client codex_client;
 typedef struct {
     const char *cli_path;       /* codex binary; NULL/"" -> "codex" via PATH */
     const char *cwd;            /* child working directory; NULL -> inherit   */
+    const char *session_file;    /* MUX_SESSION_FILE for the child; NULL -> unset  */
     const char *model;          /* thread model; NULL -> configured default   */
     const char *effort;         /* turn effort; NULL -> configured default    */
     const char *sandbox;        /* read-only|workspace-write|danger-full-access;
@@ -836,6 +837,7 @@ codex_client *codex_start(const codex_opts *opts) {
         if (err[0] != STDERR_FILENO) close(err[0]);
         if (err[1] != STDERR_FILENO) close(err[1]);
         if (o.cwd && *o.cwd && chdir(o.cwd)) _exit(126);
+        if (o.session_file && *o.session_file) setenv("MUX_SESSION_FILE", o.session_file, 1);
         const char *argv[] = {
             cli, "app-server", "--stdio",
             "--disable", "hooks",

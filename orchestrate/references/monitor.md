@@ -1,28 +1,43 @@
 # Monitoring
 
-## Reconcile (run on any status question, and each loop tick)
+## Who does what
 
-1. Read new files in `~/.config/orchestrator/results/` — a task with
-   non-empty `pending` gets its follow-ups sent instead (tasks.md,
-   Follow-ups); for the rest, append the
-   task update (result `done` → task `review`, `failed` → `failed`, cost;
-   a task becomes `done` only once merged — see tasks.md), remove the backend's matching
-   `inflight` entry in usage.json and fold the observed spend into
-   `task_cost.est` (EMA, bump `n`), append a `result` log line.
-2. Scan `~/.config/mux/live` for recorded session ids: present = still
-   running; gone with no result file = suspect, note it. Finished worker
-   tabs stay open; close one only when the user asks.
-3. Dispatch any queued task whose deps just completed, unless the project is
-   paused on a checkpoint.
+The subsystem folds in results, notices dead workers and keeps the task records
+straight. You read the outcome and say something useful about it. When a line
+arriving in your session begins "orchestrator:", that is the subsystem: it has
+already moved the record, so do not move it again — read the state, tell the
+user, and decide what happens next.
 
-## Restart reconcile
+## Reconcile
 
-The reconcile above is also the crash/restart recovery: state files are the
-only truth, so a fresh session that runs it resumes cleanly. Additionally:
-any usage.json `inflight` entry whose task has a result file gets folded in
-normally; one with no result and no live session is an orphan — mark the
-task `failed` with note "lost across restart" and tell the user. Re-start a
-background waiter for every task still `dispatched`.
+`mux orch reconcile` runs it on demand; the subsystem also runs it on start and
+on a timer. One pass does:
+
+1. Every open task with a result file: `done` → `review`, anything else →
+   `failed`, the result file consumed, a `result` line logged.
+2. Every `dispatched` task whose session is gone from `~/.config/mux/live` with
+   no result: `failed`, noted "worker ended without writing a result".
+3. You are told about each one.
+
+After a reconcile, fold the quota side in yourself: remove the backend's
+matching `inflight` entry in usage.json and fold the observed spend into
+`task_cost.est` (EMA, bump `n`).
+
+A task with queued follow-ups (`pending` non-empty) that reports a result is
+not finished: send the follow-ups with `mux orch send`, restating the
+completion contract so the worker rewrites its result file, and leave the task
+`dispatched`. It reaches `review` after its last follow-up.
+
+Then dispatch any queued task whose deps just completed, unless the project is
+paused on a checkpoint.
+
+## Restart
+
+State files are the truth and reconcile is the recovery: a fresh orchestrator
+session, or a fresh mux, resumes by running it. Completion events are files
+too, so anything that finished while nothing was listening is delivered once
+something is. Any usage.json `inflight` entry whose task has no result and no
+live session is an orphan: fold it out and say so.
 
 ## Daily summary
 
@@ -33,9 +48,9 @@ empty.
 
 ## Digests
 
-Speak only changes: finished, failed, newly stuck. One sentence per item,
-task description not id. Nothing changed → say nothing (loop tick) or "all
-quiet, N still running" (asked).
+Speak only changes: finished, failed, newly stuck. One sentence per item, task
+description not id. Nothing changed → say nothing (a notification you have
+already reported) or "all quiet, N still running" (asked).
 
 ## Probes
 
@@ -46,14 +61,13 @@ than once per task per ~10 minutes.
 
 ## Stuck / failed
 
-A worker gone from the live dir without a result file, or a probe describing
-a loop: mark `failed` with a note, tell the user, and ask whether to
-redispatch (same or different backend) — redispatch costs quota, so it is
-the user's call.
+A worker the subsystem marked failed, or a probe describing a loop: tell the
+user and ask whether to redispatch (same or different backend) — redispatch
+costs quota, so it is the user's call.
 
 ## Checkpoints
 
 When a checkpoint task completes: pause dispatching for that project, say
 what's ready to test, and wait. The reply's final sentence must be a concise
-test pointer: where the change lives and what to exercise. Feedback becomes
-new or amended task records; then resume.
+test pointer: where the change lives and what to exercise. Feedback becomes new
+or amended task records; then resume.

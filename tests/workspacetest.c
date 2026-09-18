@@ -50,6 +50,7 @@ void voice_forget(const struct session *s) { forgotten = (struct session *)s; }
 void tg_forget_session(struct session *s) { (void)s; }
 void relay_refocus(void) {}
 void relay_forget_session(struct session *s) { (void)s; }
+void orch_forget_session(struct session *s) { (void)s; }
 void cmd_forget_session(struct session *s) { (void)s; }
 void view_collapse(int on) { (void)on; }
 
