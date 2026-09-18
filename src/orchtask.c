@@ -643,6 +643,20 @@ int orchtask_note(const char *project, const char *id, const char *note)
     return ok;
 }
 
+int orchtask_set_summary(const char *project, const char *id, const char *summary)
+{
+    char found[128];
+    cJSON *rec = orchtask_find(project, id, found, sizeof found);
+    if (!rec || !summary || !*summary) {
+        cJSON_Delete(rec);
+        return 0;
+    }
+    set_str(rec, "summary", summary);
+    int ok = orchtask_append(project ? project : found, rec);
+    cJSON_Delete(rec);
+    return ok;
+}
+
 int orchtask_add_pending(const char *project, const char *id, const char *text)
 {
     char found[128];

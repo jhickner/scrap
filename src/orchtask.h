@@ -89,6 +89,9 @@ int orchtask_take_pending(const char *project, const char *id, char *out, size_t
 
 int orchtask_note(const char *project, const char *id, const char *note);
 
+/* The worker's own account of what it did, kept on the record. */
+int orchtask_set_summary(const char *project, const char *id, const char *summary);
+
 /* A worker's result file: read it, and take it (read then delete). Caller
    cJSON_Deletes. */
 cJSON *orchtask_result_read(const char *id);
