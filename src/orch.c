@@ -31,6 +31,8 @@
    keeps watching for it this long and records it when it lands. */
 #define DISPATCH_LATE_MS 300000
 #define RECONCILE_DEFAULT_MINUTES 20
+/* how often a tab that could not be closed yet is tried again */
+#define REAP_RETRY_SECONDS 5
 
 static int             owner_lock = -1;
 static char            start_error[256];
@@ -40,6 +42,10 @@ static char            start_error[256];
 static struct session *told;
 static char            told_id[128];
 static time_t          next_reconcile;
+/* what the task store looked like at the last sweep for tabs to close, and
+   when to sweep again for one that would not close yet */
+static long            reap_sig;
+static time_t          reap_retry;
 
 static void told_remember(struct session *s)
 {
@@ -517,6 +523,107 @@ static void settle_handoffs(const char *dir)
     }
 }
 
+/* ---- closing the tabs of finished work ----------------------------------- */
+
+/* A task that reached done or cancelled has nothing left for its worker to do,
+   and the tab it ran in sits there for good unless somebody closes it. failed
+   is not swept: it is still an open status here, its worker can be followed up
+   or redispatched, and its tab is where the user reads what went wrong.
+
+   The tab may be in any instance, so the close goes out on the dispatch
+   protocol, which refuses a session that is in view or mid-turn. That is the
+   wanted behaviour: a tab somebody is reading, or a worker still running, is
+   left where it is and tried again on the next sweep. */
+static void close_worker(const struct orch_rec *rec, long pid)
+{
+    char dir[4200];
+    if (!mux_dispatch_dir(dir, sizeof dir))
+        return;
+
+    cJSON *req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "close", rec->session);
+    char *json = cJSON_PrintUnformatted(req);
+    cJSON_Delete(req);
+    if (!json)
+        return;
+
+    char path[4600], tmp[4700], res[4700];
+    snprintf(path, sizeof path, "%s/%ld-close-%s.req", dir, pid, rec->id);
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    snprintf(res, sizeof res, "%s/%ld-close-%s.res", dir, pid, rec->id);
+    /* the reply is not waited on: the session leaving the live directory is
+       the answer, and a refusal is simply the next sweep's work */
+    unlink(res);
+    FILE *f = fopen(tmp, "w");
+    if (f) {
+        fputs(json, f);
+        fputc('\n', f);
+        fclose(f);
+        rename(tmp, path);
+    }
+    free(json);
+}
+
+static void reap_closed(void)
+{
+    struct orch_rec *recs = NULL;
+    int n = orchtask_load(NULL, 1, &recs);
+    orchtarget_apply_live(recs, n);
+
+    int again = 0;
+    for (int i = 0; i < n; i++) {
+        if (!orchtask_closed(recs[i].status) || !recs[i].live[0])
+            continue;
+        /* a live tab is a reason to come back: this sweep either could not
+           close it, or asked and has not seen it go yet */
+        again = 1;
+        if (!strcmp(recs[i].live, "working"))
+            continue;
+        long pid = orchtarget_session_pid(recs[i].session);
+        if (pid)
+            close_worker(&recs[i], pid);
+    }
+    free(recs);
+    reap_retry = again ? time(NULL) + REAP_RETRY_SECONDS : 0;
+}
+
+/* Reading every task log on a timer would be waste, and the status change that
+   matters here is made by whoever ran the command rather than by this
+   instance. The logs are append-only, so their sizes and times moving is the
+   whole signal. */
+static long store_signature(void)
+{
+    char root[4200], dir[4300];
+    if (!orchtask_root(root, sizeof root))
+        return 0;
+    if ((size_t)snprintf(dir, sizeof dir, "%s/projects", root) >= sizeof dir)
+        return 0;
+    DIR *d = opendir(dir);
+    if (!d)
+        return 0;
+    long sig = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        char path[4600];
+        struct stat st;
+        if ((size_t)snprintf(path, sizeof path, "%s/%s", dir, e->d_name) >= sizeof path)
+            continue;
+        if (!stat(path, &st) && S_ISREG(st.st_mode))
+            sig += (long)st.st_size + (long)st.st_mtime;
+    }
+    closedir(d);
+    return sig;
+}
+
+static void reap_poll(void)
+{
+    long sig = store_signature();
+    if (sig == reap_sig && (!reap_retry || time(NULL) < reap_retry))
+        return;
+    reap_sig = sig;
+    reap_closed();
+}
+
 /* Type a line into a task's live worker: a follow-up. */
 static void serve_send(const char *dir, const char *base, const cJSON *o)
 {
@@ -706,6 +813,7 @@ void orch_poll(void)
     settle_handoffs(dir);
     serve_requests(dir);
     drain_events();
+    reap_poll();
 
     if (time(NULL) >= next_reconcile)
         orch_reconcile();
@@ -734,6 +842,8 @@ void orch_stop(void)
     owner_lock = -1;
     told = NULL;
     told_id[0] = '\0';
+    reap_sig = 0;
+    reap_retry = 0;
     for (int i = 0; i < WORKSPACE_MAX; i++)
         handoffs[i].busy = 0;
 }
