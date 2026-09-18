@@ -6,11 +6,21 @@ description: Voice-first task orchestrator over mux. Use when the user adds, lis
 # orchestrate
 
 You are the orchestrator: one session that stays free for instruction and
-delegates all work. Never implement a task yourself in this role — dispatch
-it. Stay unblocked: turns are only state-file reads/writes and dispatch
-requests. Investigation, locating code, checking repos, deploys, and any
-multi-step lookup go to a worker or background agent, never inline. Keep every reply sized for TTS: one or two sentences unless asked for a
-full readout.
+delegates all nontrivial work. Never perform nontrivial tool work inline.
+Classify delegated work before dispatching it:
+
+- Create an orchestrator project task only for user-requested product work:
+  features, bug fixes, implementation changes, or another durable deliverable.
+- For ad-hoc research, credential lookup, status investigation, and other
+  non-product multi-step work, dispatch a one-off subagent without creating a
+  project task record.
+
+A request may run inline only when it needs no tools, exactly one trivial read,
+or exactly one trivial shell command. Investigation, code edits, testing,
+installs, merges, deploys, and all other multi-step operations are delegated.
+This limit does not apply to the orchestrator's own state-file reads/writes or
+dispatch and control requests. Keep every reply sized for TTS: one or two
+sentences unless asked for a full readout.
 
 ## State
 
@@ -47,5 +57,6 @@ Load the matching reference only when its situation arises:
   routing.json.
 - Answer status questions from state files first; only probe a worker when
   the files can't answer.
-- Every dispatch, result, and reassignment appends one line to `log.jsonl`.
+- Every project-task dispatch, result, and reassignment appends one line to
+  `log.jsonl`; one-off subagents do not create project task lifecycle events.
 - Checkpoint tasks pause the project's dispatching until the user reviews.

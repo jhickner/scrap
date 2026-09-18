@@ -3,8 +3,8 @@
 All state lives in `~/.config/orchestrator/`. Files are JSON or JSONL
 (append-only, one object per line, newest record per id wins — same
 convention as mux board.jsonl).
-Timestamps are unix epoch seconds. Ids are short random hex, prefixed by
-kind (`t-`, `r-`).
+Timestamps are unix epoch seconds. Persistent ids are short random hex,
+prefixed by kind (`t-`, `r-`). Transient one-off request keys use `o-`.
 
 ## Layout
 
@@ -13,8 +13,9 @@ kind (`t-`, `r-`).
       routing.json         class → candidate backends, budgets
       usage.json           per-backend quota estimate
       projects/<name>.jsonl  task log per project
-      results/<task-id>.json result written by the worker
-      log.jsonl            dispatch/reconcile event log (debugging, digests)
+      results/<task-id>.json result written by a project worker
+      results/<one-off-key>.json transient result written by a one-off subagent
+      log.jsonl            project dispatch/reconcile log (debugging, digests)
 
 ## registry.json
 
@@ -69,6 +70,19 @@ specifies path and shape. Presence of the file is the completion signal.
       "files": ["src/registry.c"],
       "commit": "abc1234",          // optional
       "followups": ["suggested new task descriptions"],  // optional
+      "finished": 1757523600
+    }
+
+## One-off result (results/<one-off-key>.json)
+
+A one-off subagent writes this as its final act. It is a transient completion
+signal, not a project task record; read and delete it without appending a task
+or task lifecycle event.
+
+    {
+      "one_off": "o-4bc921",
+      "status": "done" | "failed",
+      "summary": "the requested finding, sized for TTS",
       "finished": 1757523600
     }
 

@@ -5,19 +5,29 @@ object per line, append-only: a change is a new full record with the same id;
 the newest line per id is current. Schema: task record in
 references/schemas.md.
 
+## Scope
+
+Create records here only for user-requested product work: features, bug fixes,
+implementation changes, or another durable deliverable. Ad-hoc research,
+credential lookup, status investigation, and other non-product multi-step work
+are not project tasks; delegate them as one-off subagents per dispatch.md and
+do not append them to a project's JSONL.
+
 ## New project
 
-Create the directory under ~/working, `git init`, add a `.gitignore` for
-build output, and make an initial commit before any task is dispatched, so
-every code task can get its own worktree. Register it in registry.json. When
-a task in a new project completes, commit its files (explicit paths) so the
+Create and dispatch a task to make the directory under ~/working, run `git
+init`, add a `.gitignore` for build output, and make an initial commit. Once
+it completes, register the project in registry.json; do not perform project
+setup inline. Later code tasks can then get their own worktrees. When a task
+in a new project completes, have a worker commit its explicit files so the
 next worktree branches from its work.
 
 ## Add
 
 Resolve the project via registry.json. Generate id `t-` + 6 random hex.
-Append with class (infer: design/review/ambiguity → planning, bug hunting →
-diagnosis, everything else → impl), status `queued`, created/updated = now
+After confirming the request is in scope above, append with class (infer:
+design/review/ambiguity → planning, product bug hunting → diagnosis,
+everything else → impl), status `queued`, created/updated = now
 (unix seconds), deps [] unless the user names an ordering. Confirm in one
 sentence: task, project, class.
 
@@ -57,10 +67,10 @@ mux state of dispatched sessions. Use `/tasks all` to include done tasks.
 
 Append a new record with the changed fields and updated timestamp. `done`
 means complete and merged, never just "worker finished" (that is `review`).
-When the user approves a `review` task: commit its worktree changes (explicit
-paths), merge the branch into the project's main branch, then set `done` with
-the merge commit in notes. Manual complete (user says it's done) sets status
-`done` and notes "closed by user".
+When the user approves a `review` task, dispatch a worker to commit its
+worktree changes (explicit paths) and merge the branch into the project's
+main branch, then set `done` with the merge commit in notes. Manual complete
+(user says it's done) sets status `done` and notes "closed by user".
 Reassign updates backend/model and appends a `reassign` line to log.jsonl.
 
 ## Dependencies
