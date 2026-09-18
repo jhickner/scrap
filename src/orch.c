@@ -27,6 +27,9 @@
 /* how long a dispatch waits for the instance it picked to report a session id.
    mux holds that reply for up to 30 seconds itself. */
 #define DISPATCH_WAIT_MS 40000
+/* a reply that misses that deadline still carries a live worker, so the handoff
+   keeps watching for it this long and records it when it lands. */
+#define DISPATCH_LATE_MS 300000
 #define RECONCILE_DEFAULT_MINUTES 20
 
 static int             owner_lock = -1;
@@ -271,6 +274,7 @@ struct handoff {
     long            pid;
     struct timespec since;
     int             busy;
+    int             late;   /* the caller has been answered; still watching */
 };
 
 static struct handoff handoffs[WORKSPACE_MAX];
@@ -374,9 +378,12 @@ static void serve_dispatch(const char *dir, const char *base, const cJSON *o)
         return;
     }
 
-    char path[4600], tmp[4700];
+    char path[4600], tmp[4700], stale[4700];
     snprintf(path, sizeof path, "%s/%s", h->muxdir, h->muxbase);
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    snprintf(stale, sizeof stale, "%s/%.*s.res", h->muxdir,
+             (int)(strlen(h->muxbase) - 4), h->muxbase);
+    unlink(stale);
     FILE *f = fopen(tmp, "w");
     if (!f) {
         free(text);
@@ -408,11 +415,20 @@ static void settle_handoffs(const char *dir)
         snprintf(res, sizeof res, "%s/%.*s.res", h->muxdir, (int)stem, h->muxbase);
         char *text = text_slurp(res, REQUEST_MAX, NULL);
         if (!text) {
-            if (since_ms(&h->since, &now) < DISPATCH_WAIT_MS)
-                continue;
-            reply_error(dir, h->base, "the instance never answered");
-            orchtask_log("error", h->project, h->task, "dispatch went unanswered");
-            h->busy = 0;
+            long waited = since_ms(&h->since, &now);
+            if (!h->late && waited >= DISPATCH_WAIT_MS) {
+                /* the caller cannot wait forever, but the worker may still be
+                   starting: answer now and keep the handoff watching, so a late
+                   session id lands on the task instead of leaving an untracked
+                   worker and a task that still reads queued. */
+                reply_error(dir, h->base, "the instance never answered");
+                orchtask_log("error", h->project, h->task, "dispatch went unanswered");
+                h->late = 1;
+            }
+            if (h->late && waited >= DISPATCH_LATE_MS) {
+                unlink(res);
+                h->busy = 0;
+            }
             continue;
         }
         unlink(res);
@@ -426,7 +442,19 @@ static void settle_handoffs(const char *dir)
             orchtask_set_status(h->project, h->task, "dispatched",
                                 h->backend[0] ? h->backend : NULL,
                                 h->model[0] ? h->model : NULL, session, NULL, h->pid);
-            orchtask_log("dispatch", h->project, h->task, h->backend);
+            orchtask_log(h->late ? "dispatch-late" : "dispatch", h->project, h->task,
+                         h->backend);
+            if (h->late) {
+                char line[600];
+                snprintf(line, sizeof line,
+                         "orchestrator: task %s in %s reported its session late; "
+                         "its worker is live and the task is now dispatched.",
+                         h->task, h->project);
+                tell(line);
+                cJSON_Delete(o);
+                h->busy = 0;
+                continue;
+            }
             cJSON *r = cJSON_CreateObject();
             cJSON_AddStringToObject(r, "task", h->task);
             cJSON_AddStringToObject(r, "project", h->project);
@@ -439,7 +467,8 @@ static void settle_handoffs(const char *dir)
             free(json);
             cJSON_Delete(r);
         } else {
-            reply_error(dir, h->base, err ? err : "the worker never reported a session");
+            if (!h->late)
+                reply_error(dir, h->base, err ? err : "the worker never reported a session");
             orchtask_log("error", h->project, h->task, err ? err : "no session");
         }
         cJSON_Delete(o);
