@@ -49,19 +49,40 @@ void        prompt_echo_message(const char *text)
     snprintf(last_echo, sizeof last_echo, "%s", text ? text : "");
 }
 
+static char spawned_id[64];
+static int  spawned_open = 1;
+static int  closed_at = -1;
+static int  close_n;
+
 struct session *workspace_current(void) { return &current_tab; }
 struct session *workspace_at(int index)
 {
-    return index == spawn_at ? &spawned : NULL;
+    if (index == 0)
+        return &current_tab;
+    return index == spawn_at && spawned_open ? &spawned : NULL;
 }
 int workspace_index(void) { return 0; }
 int workspace_index_of(const struct session *s)
 {
-    return s == &current_tab ? 0 : spawn_at;
+    if (s == &current_tab)
+        return 0;
+    return s == &spawned && spawned_open ? spawn_at : -1;
 }
-int  workspace_find_id(const char *id) { (void)id; return -1; }
+int workspace_find_id(const char *id)
+{
+    if (id && *id && spawned_open && !strcmp(id, spawned_id))
+        return spawn_at;
+    return -1;
+}
 int  workspace_queued(int index) { (void)index; return 0; }
-int  workspace_close(int index) { (void)index; return 0; }
+int  workspace_close(int index)
+{
+    close_n++;
+    closed_at = index;
+    if (index == spawn_at)
+        spawned_open = 0;
+    return 0;
+}
 void workspace_show(int index) { (void)index; }
 void workspace_render(int index, void (*fn)(struct session *s, void *ud), void *ud)
 {
@@ -94,7 +115,8 @@ int workspace_spawn(const char *backend, const char *model, const char *effort,
 
 const char *session_id(const struct session *s)
 {
-    (void)s;
+    if (s == &spawned && spawned_id[0])
+        return spawned_id;
     return NULL;
 }
 int session_turn_running(const struct session *s)
@@ -131,7 +153,32 @@ static void reset_case(void)
     last_render_at = last_send_at = -1;
     last_title[0] = last_backend[0] = last_model[0] = last_cwd[0] = '\0';
     last_echo[0] = last_send[0] = '\0';
+    close_n = 0;
+    closed_at = -1;
     memset(&spawned, 0, sizeof spawned);
+}
+
+static char *read_res(const char *dir, const char *id)
+{
+    char path[512];
+    snprintf(path, sizeof path, "%s/%ld-%s.res", dir, (long)getpid(), id);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return NULL;
+    static char buf[512];
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    buf[n] = '\0';
+    fclose(f);
+    return buf;
+}
+
+static void expect_res(const char *dir, const char *id, const char *needle, const char *what)
+{
+    const char *res = read_res(dir, id);
+    if (!res || !strstr(res, needle)) {
+        fprintf(stderr, "  reply for %s: %s\n", id, res ? res : "(none)");
+        fail(what);
+    }
 }
 
 static void drop_req(const char *dir, const char *id, const char *json)
@@ -179,6 +226,15 @@ int main(void)
         fail("dispatched title is not auto-replaced");
     if (render_n != 1 || echo_n != 1 || strcmp(last_echo, "do the thing"))
         fail("spawn echoes the prompt");
+    if (read_res(dir, "titled"))
+        fail("spawn reply waits for the session id");
+
+    /* the backend reports its id; the held reply carries it */
+    snprintf(spawned_id, sizeof spawned_id, "sess-1");
+    poll_once();
+    expect_res(dir, "titled", "\"session\":\"sess-1\"", "spawn reply carries the session id");
+    if (strstr(read_res(dir, "titled"), "slot"))
+        fail("spawn reply has no slot");
 
     reset_case();
     drop_req(dir, "plain", "{\"backend\":\"claude\",\"prompt\":\"hello\"}");
@@ -187,6 +243,7 @@ int main(void)
         fail("spawn without title");
     if (renamed || naming_calls)
         fail("omitted title leaves auto-titling");
+    expect_res(dir, "plain", "\"session\":\"sess-1\"", "known id replies at once");
 
     reset_case();
     drop_req(dir, "empty", "{\"title\":\"\",\"prompt\":\"hello\"}");
@@ -210,26 +267,82 @@ int main(void)
     }
 
     reset_case();
-    drop_req(dir, "idle-send", "{\"send\":\"idle follow-up\",\"slot\":1}");
+    drop_req(dir, "idle-send", "{\"send\":\"idle follow-up\",\"session\":\"sess-1\"}");
     poll_once();
     if (send_n != 1 || last_send_at != spawn_at || strcmp(last_send, "idle follow-up"))
-        fail("idle send delivers the line");
+        fail("idle send delivers the line by id");
     if (render_n != 1 || last_render_at != spawn_at || echo_n != 1 ||
         strcmp(last_echo, "idle follow-up"))
         fail("idle send echoes once as a user turn");
+    expect_res(dir, "idle-send", "\"ok\":true", "send by id replies ok");
 
     reset_case();
     turn_running = 1;
-    drop_req(dir, "busy-send", "{\"send\":\"queued follow-up\",\"slot\":1}");
+    drop_req(dir, "busy-send", "{\"send\":\"queued follow-up\",\"session\":\"sess-1\"}");
     poll_once();
     if (send_n != 1 || last_send_at != spawn_at || strcmp(last_send, "queued follow-up"))
         fail("busy send still delivers the line");
     if (render_n || echo_n)
         fail("busy send does not echo; send_next does when the turn starts");
 
+    reset_case();
+    drop_req(dir, "unknown-send", "{\"send\":\"lost\",\"session\":\"sess-nope\"}");
+    poll_once();
+    if (send_n)
+        fail("an unknown id sends nothing");
+    expect_res(dir, "unknown-send", "no such session", "an unknown id is an error");
+
+    reset_case();
+    drop_req(dir, "unaddressed-send", "{\"send\":\"lost\"}");
+    poll_once();
+    if (send_n)
+        fail("a send with no id sends nothing");
+    expect_res(dir, "unaddressed-send", "send takes a session id",
+               "a send with no id is an error");
+
+    reset_case();
+    drop_req(dir, "slot-send", "{\"send\":\"lost\",\"slot\":1}");
+    poll_once();
+    if (send_n)
+        fail("a slot is not an address for send");
+    expect_res(dir, "slot-send", "send takes a session id", "a slot send is an error");
+
+    reset_case();
+    drop_req(dir, "slot-close", "{\"close\":1}");
+    poll_once();
+    if (close_n)
+        fail("a slot is not an address for close");
+    expect_res(dir, "slot-close", "close takes a session id", "a slot close is an error");
+
+    reset_case();
+    drop_req(dir, "unknown-close", "{\"close\":\"sess-nope\"}");
+    poll_once();
+    if (close_n)
+        fail("an unknown id closes nothing");
+    expect_res(dir, "unknown-close", "no such session", "an unknown close id is an error");
+
+    reset_case();
+    drop_req(dir, "close-id", "{\"close\":\"sess-1\"}");
+    poll_once();
+    if (close_n != 1 || closed_at != spawn_at)
+        fail("close by id closes that session");
+    expect_res(dir, "close-id", "\"session\":\"sess-1\"", "close reply names the session");
+
+    /* the session is gone now: further requests for its id must not land */
+    reset_case();
+    drop_req(dir, "dead-send", "{\"send\":\"too late\",\"session\":\"sess-1\"}");
+    drop_req(dir, "dead-close", "{\"close\":\"sess-1\"}");
+    poll_once();
+    if (send_n || close_n)
+        fail("a finished session takes nothing");
+    expect_res(dir, "dead-send", "no such session", "send to a finished session is an error");
+    expect_res(dir, "dead-close", "no such session", "close of a finished session is an error");
+
     {
         char path[512];
-        const char *ids[] = {"titled", "plain", "empty", "long", "idle-send", "busy-send", NULL};
+        const char *ids[] = {"titled", "plain", "empty", "long", "idle-send", "busy-send",
+                             "unknown-send", "unaddressed-send", "slot-send", "slot-close",
+                             "unknown-close", "close-id", "dead-send", "dead-close", NULL};
         for (int i = 0; ids[i]; i++) {
             snprintf(path, sizeof path, "%s/%ld-%s.res", dir, (long)getpid(), ids[i]);
             unlink(path);
