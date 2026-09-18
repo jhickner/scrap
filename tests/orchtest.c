@@ -235,18 +235,40 @@ int main(void)
     assert(orch_reconcile() == 0);
     assert(!strcmp(status_of("t-busy"), "dispatched"));
 
-    /* --- completion events are delivered once, and only once --------------- */
+    /* --- completion events reconcile, and only the fold speaks ------------- */
 
+    /* t-fold has a live session too, so nothing folds until it leaves a result */
+    snprintf(livepath, sizeof livepath, "%s/%ld-1.json", live, (long)getpid());
+    snprintf(record, sizeof record,
+             "{\"pid\":%ld,\"slot\":1,\"id\":\"s-fold\",\"status\":\"working\",\"ts\":9}\n",
+             (long)getpid());
+    write_text(livepath, record);
+    task("t-fold", "dispatched", "s-fold");
+
+    /* an event with nothing to fold says nothing at all: the session is spared
+       a turn, and the event waits for the fold that will come */
     send_n = 0;
-    assert(orchevent_emit("t-busy", "s-busy", "orchestrator", "idle"));
+    assert(orchevent_emit("t-fold", "s-fold", "orchestrator", "idle"));
+    poll_settled();
+    assert(send_n == 0);
+    struct orch_event *ev = NULL;
+    assert(orchevent_pending(&ev) == 1); /* nothing folded, so still pending */
+    free(ev);
+
+    /* once the worker leaves a result, the reconcile folds it and that fold is
+       the single message -- carrying the summary */
+    snprintf(path, sizeof path, "%s/t-fold.json", results);
+    write_text(path, "{\"task\":\"t-fold\",\"status\":\"done\",\"summary\":\"the muffin\"}\n");
     poll_settled();
     assert(send_n == 1);
-    assert(strstr(last_send, "t-busy"));
-    struct orch_event *ev = NULL;
-    assert(orchevent_pending(&ev) == 0); /* delivered, so acked */
+    assert(strstr(last_send, "t-fold") && strstr(last_send, "the muffin"));
+    /* the line asks for nothing: reconciling is the subsystem's job */
+    assert(!strstr(last_send, "Reconcile"));
+    assert(!strcmp(status_of("t-fold"), "review"));
+    assert(orchevent_pending(&ev) == 0); /* folded, so acked */
     free(ev);
     poll_settled();
-    assert(send_n == 1);
+    assert(send_n == 1); /* and never spoken of twice */
 
     /* an event for work nothing knows about is dropped rather than retried */
     assert(orchevent_emit("t-ghost", "s-ghost", "orchestrator", "exit"));
@@ -254,18 +276,6 @@ int main(void)
     assert(orchevent_pending(&ev) == 0);
     free(ev);
     assert(send_n == 1);
-
-    /* an undeliverable event waits instead of being lost */
-    send_fails = 1;
-    assert(orchevent_emit("t-busy", "s-busy", "orchestrator", "exit"));
-    poll_settled();
-    assert(orchevent_pending(&ev) == 1);
-    free(ev);
-    send_fails = 0;
-    poll_settled();
-    assert(send_n == 2);
-    assert(orchevent_pending(&ev) == 0);
-    free(ev);
 
     /* --- requests ---------------------------------------------------------- */
 

@@ -171,7 +171,7 @@ static int fold_result(const struct orch_rec *rec)
     const char *next = strcmp(status, "done") ? "failed" : "review";
     char line[1200];
     snprintf(line, sizeof line,
-             "orchestrator: task %s in %s reported %s. %s Reconcile it and tell me.",
+             "orchestrator: task %s in %s reported %s. %s",
              rec->id, rec->project, status, summary);
 
     orchtask_set_summary(rec->project, rec->id, summary);
@@ -203,7 +203,7 @@ static int fold_lost(const struct orch_rec *rec)
     char line[600];
     snprintf(line, sizeof line,
              "orchestrator: task %s in %s ended without a result and its session is gone. "
-             "Tell me, and ask whether to redispatch.",
+             "Ask whether to redispatch.",
              rec->id, rec->project);
     tell(line);
     return 1;
@@ -228,31 +228,30 @@ int orch_reconcile(void)
 
 /* ---- completion events --------------------------------------------------- */
 
-/* Deliver what the worker instances recorded. An event is acked only once the
-   session has taken the line, so a delivery that cannot happen yet is simply
-   tried again on the next poll. */
+/* A completion event means the worker stopped. Reconciling is this subsystem's
+   job, not the session's: fold_result and fold_lost already speak, with the
+   summary, so the event itself says nothing and costs the session no turn.
+   An event is acked once its task has left dispatched -- folded -- or dropped
+   when the task is unknown; anything else is retried on the next poll. */
 static void drain_events(void)
 {
     struct orch_event *v = NULL;
     int n = orchevent_pending(&v);
+    if (n > 0)
+        orch_reconcile();
+
     for (int i = 0; i < n; i++) {
-        char found[128];
-        cJSON *rec = orchtask_find(NULL, v[i].task, found, sizeof found);
+        cJSON *rec = orchtask_find(NULL, v[i].task, NULL, 0);
         if (!rec) {
             /* an event for work this state knows nothing about: drop it rather
                than retrying it forever */
             orchevent_ack(v[i].id);
             continue;
         }
-        cJSON_Delete(rec);
-
-        char line[800];
-        snprintf(line, sizeof line,
-                 "orchestrator: worker for task %s in %s %s. Reconcile and tell me.",
-                 v[i].task, found,
-                 strcmp(v[i].reason, "exit") ? "finished its turn" : "ended");
-        if (tell(line))
+        const char *st = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(rec, "status"));
+        if (!st || strcmp(st, "dispatched"))
             orchevent_ack(v[i].id);
+        cJSON_Delete(rec);
     }
     free(v);
 }
