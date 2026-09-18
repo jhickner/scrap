@@ -31,12 +31,11 @@ int main(void)
     assert(!strstr(skill, "working/apps/mux"));
     free(skill);
 
-    snprintf(path, sizeof path, "%s/.agents/skills/orchestrate/references/schemas.md",
-             root);
-    char *schemas = slurp(path);
-    assert(schemas);
-    assert(strstr(schemas, "registry.json"));
-    free(schemas);
+    snprintf(path, sizeof path, "%s/.agents/skills/orchestrate/SKILL.md", root);
+    char *mirrored = slurp(path);
+    assert(mirrored);
+    assert(strstr(mirrored, "mux orch dispatch"));
+    free(mirrored);
 
     snprintf(path, sizeof path, "%s/.config/orchestrator/quota.sh", root);
     struct stat st;
