@@ -19,6 +19,7 @@ struct orch_task {
 
 struct orchstatus_columns {
     int project;
+    int id;
     int task;
     int status;
     int agent;
@@ -36,8 +37,8 @@ void orchstatus_age(char *out, size_t size, time_t then, time_t now);
 void orchstatus_status(char *out, size_t size, const struct orch_task *t);
 void orchstatus_agent(char *out, size_t size, const struct orch_task *t);
 
-/* Size the five table columns to their content and fit them within columns,
-   including the two-cell indent, four separators, and a one-cell right
+/* Size the six table columns to their content and fit them within columns,
+   including the two-cell indent, five separators, and a one-cell right
    margin. The task column receives the remaining width. */
 void orchstatus_columns(struct orchstatus_columns *out, int columns,
                         const struct orch_task *tasks, int count);

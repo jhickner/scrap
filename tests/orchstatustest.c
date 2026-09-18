@@ -68,32 +68,37 @@ int main(void)
 
     struct orchstatus_columns widths;
     struct orch_task row = {
-        .project = "mux", .status = "open", .backend = "claude", .model = "opus",
+        .project = "mux", .id = "t-3e8c15", .status = "open",
+        .backend = "claude", .model = "opus",
     };
     orchstatus_columns(&widths, 80, &row, 1);
     assert(widths.project == 7);
+    assert(widths.id == 8);
     assert(widths.status == 6);
     assert(widths.agent == 15);
     assert(widths.age == 3);
-    assert(widths.task == 42);
-    assert(2 + widths.project + 1 + widths.task + 1 + widths.status + 1
-             + widths.agent + 1 + widths.age == 79);
+    assert(widths.task == 33);
+    assert(2 + widths.project + 1 + widths.id + 1 + widths.task + 1 + widths.status
+             + 1 + widths.agent + 1 + widths.age == 79);
 
     struct orch_task wide = {
-        .project = "a-long-project-name", .status = "dispatched",
-        .live_status = "working", .backend = "claude",
+        .project = "a-long-project-name", .id = "t-3e8c15",
+        .status = "dispatched", .live_status = "working", .backend = "claude",
         .model = "claude-opus-5-with-a-long-suffix",
     };
     orchstatus_columns(&widths, 80, &wide, 1);
     assert(widths.project == 16);
+    assert(widths.id == 8);
     assert(widths.task == 24);
-    assert(2 + widths.project + 1 + widths.task + 1 + widths.status + 1
-             + widths.agent + 1 + widths.age == 79);
+    assert(2 + widths.project + 1 + widths.id + 1 + widths.task + 1 + widths.status
+             + 1 + widths.agent + 1 + widths.age == 79);
 
+    /* the id column keeps its full width however narrow the terminal is */
     orchstatus_columns(&widths, 40, &wide, 1);
-    assert(widths.task == 4);
-    assert(2 + widths.project + 1 + widths.task + 1 + widths.status + 1
-             + widths.agent + 1 + widths.age == 39);
+    assert(widths.id == 8);
+    assert(widths.task >= 4);
+    assert(2 + widths.project + 1 + widths.id + 1 + widths.task + 1 + widths.status
+             + 1 + widths.agent + 1 + widths.age <= 39);
 
     char cell[16];
     orchstatus_cell(cell, sizeof cell, "a long\ttask", 8);

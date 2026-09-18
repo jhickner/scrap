@@ -272,6 +272,7 @@ void orchstatus_columns(struct orchstatus_columns *out, int columns,
 {
     *out = (struct orchstatus_columns){
         .project = 7,
+        .id = 2,
         .task = 4,
         .status = 6,
         .agent = 15,
@@ -280,30 +281,32 @@ void orchstatus_columns(struct orchstatus_columns *out, int columns,
     char buf[256];
     for (int i = 0; i < count; i++) {
         fit(&out->project, strlen(tasks[i].project), 16);
+        fit(&out->id, strlen(tasks[i].id), 16);
         orchstatus_status(buf, sizeof buf, &tasks[i]);
         fit(&out->status, strlen(buf), 20);
         orchstatus_agent(buf, sizeof buf, &tasks[i]);
         fit(&out->agent, strlen(buf), 24);
     }
 
-    /* Leave room for the indent, separators, and terminal right margin. */
-    int available = columns - 7;
-    if (available < 13)
-        available = 13;
-    int task = available - out->project - out->status - out->agent - out->age;
+    /* Leave room for the indent, separators, and terminal right margin. The id
+       column is never shrunk: a truncated id cannot be used to name a task. */
+    int available = columns - 8;
+    if (available < 13 + out->id)
+        available = 13 + out->id;
+    int task = available - out->project - out->id - out->status - out->agent - out->age;
     if (task < 24) {
         int need = 24 - task;
         shrink(&out->agent, 10, &need);
         shrink(&out->status, 10, &need);
         shrink(&out->project, 8, &need);
-        task = available - out->project - out->status - out->agent - out->age;
+        task = available - out->project - out->id - out->status - out->agent - out->age;
     }
     if (task < 4) {
         int need = 4 - task;
         shrink(&out->agent, 2, &need);
         shrink(&out->status, 2, &need);
         shrink(&out->project, 2, &need);
-        task = available - out->project - out->status - out->agent - out->age;
+        task = available - out->project - out->id - out->status - out->agent - out->age;
     }
     out->task = task;
 }
