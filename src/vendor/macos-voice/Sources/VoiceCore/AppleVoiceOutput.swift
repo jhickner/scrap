@@ -49,15 +49,13 @@ final class AppleVoiceOutput: VoiceOutput {
         self.rate = rate
         self.volume = volume
         speaker.delegate = speakerDelegate
-        speakerDelegate.onIdle = { [weak self] in self?.onFinished?() }
+        speakerDelegate.onDone = { [weak self] in self?.directDone($0) }
     }
 
     private final class SpeakerDelegate: NSObject, AVSpeechSynthesizerDelegate {
-        var onIdle: (() -> Void)?
-        private(set) var pending = 0
+        var onDone: ((ObjectIdentifier) -> Void)?
 
         func note(_ utterance: AVSpeechUtterance) {
-            pending += 1
             queuedAt[ObjectIdentifier(utterance)] = ContinuousClock.now
         }
 
@@ -70,22 +68,55 @@ final class AppleVoiceOutput: VoiceOutput {
             VoiceLog.note("speech started \(queued.elapsedMilliseconds)ms after queueing, \(utterance.speechString.count) chars")
         }
 
-        func reset() { pending = 0 }
+        func reset() { queuedAt = [:] }
 
-        private func finished() {
-            pending = max(0, pending - 1)
-            guard pending == 0 else { return }
-            let onIdle = onIdle
-            Task { @MainActor in onIdle?() }
+        private func finished(_ utterance: AVSpeechUtterance) {
+            let onDone = onDone
+            let id = ObjectIdentifier(utterance)
+            Task { @MainActor in onDone?(id) }
         }
 
         func speechSynthesizer(
             _ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance
-        ) { finished() }
+        ) { finished(utterance) }
 
         func speechSynthesizer(
             _ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance
-        ) { finished() }
+        ) { finished(utterance) }
+    }
+
+    /* Personal Voice speaks through the synthesizer directly. It is handed one
+       utterance at a time, built with the rate in force when its turn comes:
+       utterances queued ahead inside the synthesizer have lost their rate. */
+    private struct DirectItem {
+        let text: String
+        let preDelay: TimeInterval
+        let postDelay: TimeInterval
+    }
+    private var directQueue: [DirectItem] = []
+    private var directActive: AVSpeechUtterance?
+
+    private func pumpDirect() {
+        guard directActive == nil, !directQueue.isEmpty else { return }
+        let item = directQueue.removeFirst()
+        let utterance = utterance(for: item.text)
+        utterance.preUtteranceDelay = item.preDelay
+        utterance.postUtteranceDelay = item.postDelay
+        directActive = utterance
+        speakerDelegate.note(utterance)
+        VoiceLog.note("speaking utterance, \(item.text.count) chars, \(directQueue.count) queued")
+        speaker.speak(utterance)
+        onSpoken?(item.text)
+    }
+
+    private func directDone(_ id: ObjectIdentifier) {
+        guard let active = directActive, ObjectIdentifier(active) == id else { return }
+        directActive = nil
+        if directQueue.isEmpty {
+            onFinished?()
+        } else {
+            pumpDirect()
+        }
     }
 
     func speak(_ text: String) {
@@ -101,16 +132,13 @@ final class AppleVoiceOutput: VoiceOutput {
 
             let parts = SpokenTextChunker.clamped(trimmed, limit: Self.directUtteranceLimit)
             for (index, part) in parts.enumerated() {
-                let utterance = utterance(for: part)
-
-                if index < parts.count - 1 { utterance.postUtteranceDelay = 0 }
-                utterance.preUtteranceDelay = owedDelay
+                directQueue.append(DirectItem(
+                    text: part,
+                    preDelay: owedDelay,
+                    postDelay: index < parts.count - 1 ? 0 : Self.sentenceGap))
                 owedDelay = 0
-                speakerDelegate.note(utterance)
-                VoiceLog.note("queueing utterance \(index + 1)/\(parts.count), \(part.count) chars")
-                speaker.speak(utterance)
-                onSpoken?(part)
             }
+            pumpDirect()
             return
         }
         queue.append(.text(utterance(for: trimmed)))
@@ -133,13 +161,15 @@ final class AppleVoiceOutput: VoiceOutput {
         owedDelay = 0
         isRendering = false
         renderDeadline = nil
+        directQueue = []
+        directActive = nil
         speaker.stopSpeaking(at: .immediate)
         speakerDelegate.reset()
         engine.stopPlayback()
     }
 
     var hasPendingSpeech: Bool {
-        isRendering || !queue.isEmpty || speakerDelegate.pending > 0 || speaker.isSpeaking
+        isRendering || !queue.isEmpty || directActive != nil || !directQueue.isEmpty || speaker.isSpeaking
     }
 
     /* A render whose completion never arrives pins hasPendingSpeech, and the
@@ -184,7 +214,7 @@ final class AppleVoiceOutput: VoiceOutput {
         utterance.rate = rate
         utterance.volume = volume
 
-        utterance.postUtteranceDelay = 0.12
+        utterance.postUtteranceDelay = Self.sentenceGap
         return utterance
     }
 
