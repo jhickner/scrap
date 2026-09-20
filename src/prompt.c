@@ -1289,26 +1289,25 @@ void prompt_insert(struct prompt *p, const char *text)
 {
     if (!p || !text || !*text)
         return;
-    int at = p->repl.cursor;
+    int cursor = p->repl.cursor;
     int len = (int)strlen(p->preview);
-    /* a line that lands while the next words are previewed goes before them,
-       where they stood: the preview is what was said after it */
-    int before = len && p->preview_at + len == at;
-    if (before) {
-        at = p->preview_at;
-        p->repl.cursor = at;
-    }
+    /* a line that lands while the next words are previewed goes where they
+       stand, whatever was typed around them: the preview is what was said
+       after it */
+    int at = len ? p->preview_at : cursor;
+    p->repl.cursor = at;
     if (at > 0) {
         unsigned char prev = (unsigned char)p->repl.buf[at - 1];
         if (prev != ' ' && prev != '\n' && text[0] != ' ')
             repl_insert_text(&p->repl, " ");
     }
     repl_insert_text(&p->repl, text);
-    if (before) {
+    if (len) {
         if (p->preview[0] != ' ')
             repl_insert_text(&p->repl, " ");
-        p->preview_at = p->repl.cursor;
-        p->repl.cursor = p->preview_at + len;
+        int grew = p->repl.cursor - at;
+        p->preview_at += grew;
+        p->repl.cursor = cursor < at ? cursor : cursor + grew;
     }
     p->frame_ok = 0;
     if (!chrome_modal_active())

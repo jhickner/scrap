@@ -1116,10 +1116,19 @@ static ReplResult handle_char(Repl *r, uint32_t cp) {
         case 5:  r->cursor = line_end(r, r->cursor);   return REPL_CONSUMED; // ctrl-e
         case 23: set_kill(r, word_left(r), r->cursor);             // ctrl-w
                  delete_range(r, word_left(r), r->cursor); return REPL_CONSUMED;
-        case 21: set_kill(r, 0, r->cursor);                        // ctrl-u
-                 delete_range(r, 0, r->cursor);            return REPL_CONSUMED;
-        case 11: set_kill(r, r->cursor, r->len);                   // ctrl-k
-                 delete_range(r, r->cursor, r->len);       return REPL_CONSUMED;
+        case 21: {                                                 // ctrl-u
+            int ls = line_start(r, r->cursor);
+            set_kill(r, ls, r->cursor);
+            delete_range(r, ls, r->cursor);
+            return REPL_CONSUMED;
+        }
+        case 11: {                                                 // ctrl-k
+            int le = line_end(r, r->cursor);
+            if (le == r->cursor && le < r->len) le++;   // at line end: join the next line
+            set_kill(r, r->cursor, le);
+            delete_range(r, r->cursor, le);
+            return REPL_CONSUMED;
+        }
         case 25: yank(r);             return REPL_CONSUMED;  // ctrl-y: yank the kill register
         case 31: do_undo(r);          return REPL_CONSUMED;  // ctrl-_ / ctrl-/: undo
         case 18: start_search(r);     return REPL_CONSUMED;  // ctrl-r: reverse history search
