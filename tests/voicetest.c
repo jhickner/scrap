@@ -135,6 +135,7 @@ void status_set_alert(const char *text) { (void)text; }
 static char last_note[64];
 void status_set_note(const char *text) { snprintf(last_note, sizeof last_note, "%s", text); }
 void status_touch(void) {}
+void chrome_live_label(const char *(*fn)(void)) { (void)fn; }
 
 /* the tab in front, and a second one to switch to */
 static struct session other;
@@ -156,6 +157,7 @@ int  session_turn_running(const struct session *s) { return s && s->running; }
 void session_interrupt(struct session *s) { if (s) s->abort = 1; }
 int  session_last_interrupted(const struct session *s) { (void)s; return 0; }
 const char *session_title(const struct session *s) { (void)s; return "tab"; }
+const char *session_last_reply(const struct session *s) { (void)s; return NULL; }
 int  session_add_listener(session_listener_fn fn, void *ud) { (void)fn; (void)ud; return 1; }
 void session_remove_listener(session_listener_fn fn, void *ud) { (void)fn; (void)ud; }
 

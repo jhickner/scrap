@@ -17,7 +17,19 @@ int  voice_restart(char *err, size_t size);
 int  voice_on(void);
 void voice_set_speak(int on);
 int  voice_speak(void);
-/* Require "listen" to open dictation, "ok done" to send it, "cancel" to drop it. */
+/* auto: send after a pause. wake: "listen" opens a dictation, "ok done" sends
+   it, "cancel" drops it. jev: an endpointing model ends each turn. */
+enum voice_mode {
+    VOICE_MODE_AUTO,
+    VOICE_MODE_WAKE,
+    VOICE_MODE_JEV,
+};
+
+int         voice_mode(void);
+void        voice_set_mode(int mode);
+const char *voice_mode_name(int mode);
+/* the mode named, or -1 */
+int         voice_mode_of(const char *name);
 int  voice_wake(void);
 void voice_set_wake(int on);
 /* start or stop and remember it so later sessions and restarts match */

@@ -16,6 +16,7 @@
 #include "matrix.h"
 #include "frontend.h"
 #include "hud.h"
+#include "jev.h"
 #include "orch.h"
 #include "relay.h"
 #include "models.h"
@@ -675,6 +676,95 @@ static void do_telegram(struct session *s, const char *arg)
     reply_note("telegram off");
 }
 
+static void do_voice_jev(const char *arg)
+{
+    while (*arg == ' ')
+        arg++;
+    const char *backend = settings_get_str(SETTING_VOICE_JEV_BACKEND, VOICE_JEV_BACKEND_DEFAULT);
+    double threshold = atof(settings_get_str(SETTING_VOICE_JEV_THRESHOLD, ""));
+    double hold = atof(settings_get_str(SETTING_VOICE_JEV_HOLD, ""));
+    if (threshold <= 0)
+        threshold = VOICE_JEV_THRESHOLD_DEFAULT;
+    if (hold <= 0)
+        hold = VOICE_JEV_HOLD_DEFAULT;
+    int delay = settings_get_int(SETTING_VOICE_JEV_DELAY, VOICE_JEV_DELAY_DEFAULT);
+
+    if (!*arg) {
+        reply_note("voice jev backend %s, threshold %g, hold %g, delay %dms",
+                   backend, threshold, hold, delay);
+        return;
+    }
+
+    const char *rest;
+    if (!strncmp(arg, "backend", 7) && (!arg[7] || arg[7] == ' ')) {
+        rest = arg + 7;
+        while (*rest == ' ')
+            rest++;
+        if (!*rest) {
+            reply_note("voice jev backend %s", backend);
+            return;
+        }
+        if (!jev_set_backend(rest)) {
+            reply_error("/voice jev backend takes experiential or typesafe");
+            return;
+        }
+        settings_set_str(SETTING_VOICE_JEV_BACKEND, rest);
+        reply_note("voice jev backend %s", rest);
+        return;
+    }
+
+    int is_hold = !strncmp(arg, "hold", 4) && (!arg[4] || arg[4] == ' ');
+    if (is_hold || (!strncmp(arg, "threshold", 9) && (!arg[9] || arg[9] == ' '))) {
+        rest = arg + (is_hold ? 4 : 9);
+        while (*rest == ' ')
+            rest++;
+        if (!*rest) {
+            reply_note("voice jev %s %g", is_hold ? "hold" : "threshold",
+                       is_hold ? hold : threshold);
+            return;
+        }
+        char  *end;
+        double n = strtod(rest, &end);
+        while (*end == ' ')
+            end++;
+        if (*end || n <= 0 || n > 1) {
+            reply_error("/voice jev %s takes a number from 0 to 1",
+                        is_hold ? "hold" : "threshold");
+            return;
+        }
+        char text[32];
+        snprintf(text, sizeof text, "%g", n);
+        settings_set_str(is_hold ? SETTING_VOICE_JEV_HOLD : SETTING_VOICE_JEV_THRESHOLD, text);
+        reply_note("voice jev %s %g", is_hold ? "hold" : "threshold", n);
+        return;
+    }
+
+    if (!strncmp(arg, "delay", 5) && (!arg[5] || arg[5] == ' ')) {
+        rest = arg + 5;
+        while (*rest == ' ')
+            rest++;
+        if (!*rest) {
+            reply_note("voice jev delay %dms", delay);
+            return;
+        }
+        char *end;
+        long  n = strtol(rest, &end, 10);
+        if (!strncmp(end, "ms", 2))
+            end += 2;
+        while (*end == ' ')
+            end++;
+        if (*end || n < 0 || n > VOICE_JEV_DELAY_MAX) {
+            reply_error("/voice jev delay takes milliseconds from 0 to %d", VOICE_JEV_DELAY_MAX);
+            return;
+        }
+        settings_set_int(SETTING_VOICE_JEV_DELAY, (int)n);
+        reply_note("voice jev delay %ldms", n);
+        return;
+    }
+
+    reply_error("/voice jev takes backend, threshold, hold, delay, or nothing to show them");
+}
+
 static void do_voice(struct session *s, const char *arg)
 {
     (void)s;
@@ -685,16 +775,26 @@ static void do_voice(struct session *s, const char *arg)
         while (*rest == ' ')
             rest++;
         if (!*rest) {
-            reply_note("voice mode %s", voice_wake() ? "wake" : "auto");
+            reply_note("voice mode %s", voice_mode_name(voice_mode()));
             return;
         }
-        if (strcmp(rest, "wake") && strcmp(rest, "auto")) {
-            reply_error("/voice mode takes wake or auto");
+        int mode = voice_mode_of(rest);
+        if (mode < 0) {
+            reply_error("/voice mode takes auto, wake or jev");
             return;
         }
-        voice_set_wake(!strcmp(rest, "wake"));
-        reply_note(voice_wake() ? "voice mode wake: say listen to start, ok done to send, cancel to drop"
-                               : "voice mode auto: send after a pause");
+        voice_set_mode(mode);
+        if (mode == VOICE_MODE_WAKE)
+            reply_note("voice mode wake: say listen to start, ok done to send, cancel to drop");
+        else if (mode == VOICE_MODE_JEV)
+            reply_note("voice mode jev: %s ends each turn", jev_backend());
+        else
+            reply_note("voice mode auto: send after a pause");
+        return;
+    }
+
+    if (arg && !strncmp(arg, "jev", 3) && (!arg[3] || arg[3] == ' ')) {
+        do_voice_jev(arg + 3);
         return;
     }
 
@@ -808,7 +908,7 @@ static void do_voice(struct session *s, const char *arg)
         speak = 0;
 
     } else {
-        reply_error("/voice takes on, off, listen, mode, restart, complete, volume, rate, silence, or nothing to flip it");
+        reply_error("/voice takes on, off, listen, mode, jev, restart, complete, volume, rate, silence, or nothing to flip it");
         return;
     }
 
@@ -819,6 +919,8 @@ static void do_voice(struct session *s, const char *arg)
     }
     if (!want)
         reply_note("voice off");
+    else if (voice_mode() == VOICE_MODE_JEV)
+        reply_note("voice on: jev ends each turn");
     else if (voice_wake())
         reply_note("voice on: say listen to start, ok done to send, cancel to drop");
     else
@@ -1410,7 +1512,7 @@ static const struct cmd COMMANDS[] = {
     {"/telegram", "answer over Telegram", "[on|off]", CMD_LIVE, do_telegram},
     {"/orchestrator", "run the task orchestrator in this session", "[on|off]", CMD_LIVE,
      do_orchestrator},
-    {"/voice", "talk instead of typing", "[on|off|listen|mode [wake|auto]|restart|complete|volume|rate|silence]", CMD_LIVE, do_voice},
+    {"/voice", "talk instead of typing", "[on|off|listen|mode [auto|wake|jev]|jev|restart|complete|volume|rate|silence]", CMD_LIVE, do_voice},
     {"/image", "tallest an inline image may be drawn", "[rows]", CMD_LIVE, do_image},
     {"/permission", "how the CLI gates tool calls", "[mode]", 0, do_permission},
     {"/settings", "show and change every setting", NULL, 0, do_settings},

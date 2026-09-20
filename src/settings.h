@@ -41,6 +41,9 @@
    prefer */
 #define SETTING_VOICE          "voice"
 #define SETTING_VOICE_SPEAK    "voice_speak"
+/* auto, wake or jev; voice_wake is the older flag and still read when the mode
+   is not set */
+#define SETTING_VOICE_MODE     "voice_mode"
 #define SETTING_VOICE_WAKE     "voice_wake"
 #define SETTING_VOICE_VOLUME   "voice_volume"
 #define SETTING_VOICE_HELPER   "voice_helper"
@@ -59,6 +62,20 @@
 
 #define VOICE_RATE_MIN        20
 #define VOICE_RATE_MAX       200
+
+/* jev mode: the endpointing backend, the noul at which a turn is submitted,
+   the noul at which a hold keeps it open, and the shortest gap between calls */
+#define SETTING_VOICE_JEV_BACKEND   "voice_jev_backend"
+#define SETTING_VOICE_JEV_THRESHOLD "voice_jev_threshold"
+#define SETTING_VOICE_JEV_HOLD      "voice_jev_hold_threshold"
+#define SETTING_VOICE_JEV_DELAY     "voice_jev_delay"
+
+#define VOICE_JEV_BACKEND_DEFAULT   "typesafe"
+#define VOICE_JEV_THRESHOLD_DEFAULT 0.8
+#define VOICE_JEV_HOLD_DEFAULT      0.5
+#define VOICE_JEV_CANCEL            0.8
+#define VOICE_JEV_DELAY_DEFAULT     100
+#define VOICE_JEV_DELAY_MAX         2000
 /* say the session name when a turn ends while this pane is unfocused */
 #define SETTING_VOICE_COMPLETE "voice_complete"
 

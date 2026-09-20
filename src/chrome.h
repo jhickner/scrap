@@ -8,6 +8,8 @@ struct prompt;
 void chrome_bind(struct prompt *p);
 
 void chrome_paint(void);
+/* a one-line label painted live above the input, or NULL for none */
+void chrome_live_label(const char *(*fn)(void));
 
 int  chrome_paint_spin(void);
 

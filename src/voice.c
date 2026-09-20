@@ -10,6 +10,8 @@
 #include <unistd.h>
 
 #include "app.h"
+#include "chrome.h"
+#include "jev.h"
 #include "prompt.h"
 #include "session.h"
 #include "settings.h"
@@ -95,7 +97,7 @@ static int          mic_off_pending;
 static char         failure[256];
 static char        *queue[LINE_MAX_QUEUE];
 static int          nqueue;
-static char         label[32];
+static char         label[64];
 static void       (*heard_fn)(void *ud, const char *text);
 static void        *heard_ud;
 static const char *(*draft_fn)(void *ud);
@@ -112,6 +114,7 @@ static int          erased;
 static char         shown[LISTEN_MAX];
 
 static void listen_append(const char *text);
+static void listen_clear(void);
 
 static void show(const char *text)
 {
@@ -397,12 +400,58 @@ static int is_early_resume_command(const char *text)
 
 static int listening(void) { return armed && mic; }
 
-int voice_wake(void) { return settings_get_int(SETTING_VOICE_WAKE, 0); }
+const char *voice_mode_name(int mode)
+{
+    return mode == VOICE_MODE_JEV ? "jev" : mode == VOICE_MODE_WAKE ? "wake" : "auto";
+}
+
+int voice_mode_of(const char *name)
+{
+    if (!name)
+        return -1;
+    for (int i = VOICE_MODE_AUTO; i <= VOICE_MODE_JEV; i++)
+        if (!strcmp(name, voice_mode_name(i)))
+            return i;
+    return -1;
+}
+
+int voice_mode(void)
+{
+    int mode = voice_mode_of(settings_get_str(SETTING_VOICE_MODE, NULL));
+    if (mode >= 0)
+        return mode;
+    return settings_get_int(SETTING_VOICE_WAKE, 0) ? VOICE_MODE_WAKE : VOICE_MODE_AUTO;
+}
+
+int voice_wake(void) { return voice_mode() == VOICE_MODE_WAKE; }
+
+static void jev_clear(void);
+static const char *jev_judged(void);
+static const char *jev_row(void);
+
+/* jev keeps the helper from ending a turn on its own, so its silence goes to
+   the longest it takes */
+static double helper_silence(void)
+{
+    return voice_mode() == VOICE_MODE_JEV ? VOICE_SILENCE_MAX : voice_silence();
+}
+
+void voice_set_mode(int mode)
+{
+    if (mode < VOICE_MODE_AUTO || mode > VOICE_MODE_JEV)
+        return;
+    settings_set_str(SETTING_VOICE_MODE, voice_mode_name(mode));
+    settings_set_int(SETTING_VOICE_WAKE, mode == VOICE_MODE_WAKE);
+    jev_clear();
+    listen_clear();
+    if (voice)
+        macos_voice_silence(voice, helper_silence());
+    status_touch();
+}
 
 void voice_set_wake(int on)
 {
-    settings_set_int(SETTING_VOICE_WAKE, !!on);
-    status_touch();
+    voice_set_mode(on ? VOICE_MODE_WAKE : VOICE_MODE_AUTO);
 }
 
 static void chime(const char *name)
@@ -517,6 +566,278 @@ static void listen_clear(void)
 {
     listen_mode = 0;
     listen_buf[0] = '\0';
+}
+
+/* jev mode. The helper has no way to end a listening turn, so every turn ends
+   here: the composed transcript is asked about as the words arrive, and when
+   jev answers ready it is queued and the words already sent are stripped from
+   the rest of that helper utterance. Finals only ever add to the held text. */
+static char jev_held[LISTEN_MAX];
+static char jev_utter[LISTEN_MAX];
+/* the helper utterance as it arrived, and the part of it already submitted */
+static char jev_raw[LISTEN_MAX];
+static char jev_sent[LISTEN_MAX];
+/* held and utterance together: what jev judges and what gets submitted */
+static char jev_text[LISTEN_MAX];
+static char jev_asked[LISTEN_MAX];
+/* the last line submitted from here, the user side of recent_turns */
+static char jev_line[LISTEN_MAX];
+static char jev_verdict[48];
+static long jev_changed;
+static long jev_fired;
+static int  jev_dirty;
+
+static double jev_threshold(void)
+{
+    double n = atof(settings_get_str(SETTING_VOICE_JEV_THRESHOLD, ""));
+    return n > 0 ? n : VOICE_JEV_THRESHOLD_DEFAULT;
+}
+
+static double jev_hold_threshold(void)
+{
+    double n = atof(settings_get_str(SETTING_VOICE_JEV_HOLD, ""));
+    return n > 0 ? n : VOICE_JEV_HOLD_DEFAULT;
+}
+
+static long jev_delay(void)
+{
+    int n = settings_get_int(SETTING_VOICE_JEV_DELAY, VOICE_JEV_DELAY_DEFAULT);
+    if (n < 0)
+        n = 0;
+    return n > VOICE_JEV_DELAY_MAX ? VOICE_JEV_DELAY_MAX : n;
+}
+
+static void jev_clear(void)
+{
+    jev_held[0] = jev_utter[0] = jev_raw[0] = jev_sent[0] = '\0';
+    jev_text[0] = jev_asked[0] = jev_verdict[0] = '\0';
+    jev_dirty = 0;
+    jev_reset();
+}
+
+static void jev_compose(void)
+{
+    if (jev_held[0] && jev_utter[0])
+        snprintf(jev_text, sizeof jev_text, "%s %s", jev_held, jev_utter);
+    else
+        snprintf(jev_text, sizeof jev_text, "%s", jev_held[0] ? jev_held : jev_utter);
+}
+
+static void jev_append(const char *text)
+{
+    while (*text == ' ')
+        text++;
+    size_t len = strlen(text);
+    while (len && (text[len - 1] == ' ' || text[len - 1] == '\n'))
+        len--;
+    if (!len)
+        return;
+    size_t n = strlen(jev_held);
+    if (n + len + 2 > sizeof jev_held)
+        return;
+    int gap = n && jev_held[n - 1] != ' ';
+    snprintf(jev_held + n, sizeof jev_held - n, "%s%.*s", gap ? " " : "", (int)len, text);
+}
+
+static void jev_turns(char *out, size_t n)
+{
+    const struct session *s = workspace_current();
+    const char           *reply = s ? session_last_reply(s) : NULL;
+    out[0] = '\0';
+    if (jev_line[0])
+        snprintf(out, n, "user: %s\n", jev_line);
+    size_t at = strlen(out);
+    if (reply && *reply && at < n)
+        snprintf(out + at, n - at, "assistant: %s", reply);
+}
+
+static void jev_fire(void)
+{
+    char turns[LISTEN_MAX];
+    jev_turns(turns, sizeof turns);
+    const char *text = jev_judged();
+    if (!jev_ask(text, turns, now_ms() - jev_changed))
+        return;
+    jev_fired = now_ms();
+    jev_dirty = 0;
+    snprintf(jev_asked, sizeof jev_asked, "%s", text);
+    voice_trace("jev.ask", "text=%s", text);
+}
+
+/* the words of this turn are gone from here; what the helper is still saying
+   of them is stripped from the partials that follow */
+static void jev_forget(void)
+{
+    snprintf(jev_sent, sizeof jev_sent, "%s", jev_raw);
+    jev_held[0] = jev_utter[0] = jev_text[0] = jev_asked[0] = '\0';
+    jev_dirty = 0;
+    jev_reset();
+}
+
+/* the turn leaves the preview and the box; the caller frees what was in them */
+static char *jev_end(void)
+{
+    if (heard_fn)
+        show(jev_text);
+    const char *cur = draft_fn ? draft_fn(draft_ud) : NULL;
+    char       *line = strdup(cur && *cur ? cur : jev_text);
+    if (cur && claim_fn)
+        claim_fn(claim_ud, cur);
+    if (heard_fn)
+        show("");
+    jev_forget();
+    draft[0] = '\0';
+    return line;
+}
+
+static void jev_submit(void)
+{
+    if (!jev_text[0])
+        return;
+    char *line = jev_end();
+    if (line && *line) {
+        snprintf(jev_line, sizeof jev_line, "%s", line);
+        enqueue(line);
+    }
+    free(line);
+}
+
+static void jev_discard(void)
+{
+    free(jev_end());
+    chime("interrupted");
+}
+
+static void jev_answer(const struct jev_result *r)
+{
+    if (r->error) {
+        snprintf(jev_verdict, sizeof jev_verdict, "jev error %ldms", r->rtt_ms);
+        voice_trace("jev.error", "rtt=%ld text=%s", r->rtt_ms, r->text);
+        jev_dirty = jev_text[0] != '\0';
+        jev_fired = now_ms();
+        status_touch();
+        return;
+    }
+    int cancel = r->cancel >= VOICE_JEV_CANCEL;
+    int holding = r->hold >= jev_hold_threshold() && r->release < jev_threshold();
+    int ready = !cancel && !holding && r->ready >= jev_threshold();
+    voice_trace("jev.answer",
+                "ready=%.2f cancel=%.2f hold=%.2f release=%.2f rtt=%ld tok=%ld/%ld verdict=%s text=%s",
+                r->ready, r->cancel, r->hold, r->release, r->rtt_ms, r->in_tok, r->out_tok,
+                cancel ? "cancel" : ready ? "ready" : holding ? "hold" : "wait", r->text);
+    snprintf(jev_verdict, sizeof jev_verdict, "jev %.2f %s %ldms", r->ready,
+             cancel ? "CANCEL" : ready ? "READY" : holding ? "HOLD" : "wait", r->rtt_ms);
+    status_touch();
+    if (cancel)
+        jev_discard();
+    else if (ready)
+        jev_submit();
+}
+
+/* delay_ms is the shortest gap between calls rather than a wait after the last
+   partial: the poll loop has no timer of its own, and a turn must not wait for
+   the next idle tick to be judged */
+static void jev_tick(void)
+{
+    if (voice_mode() != VOICE_MODE_JEV)
+        return;
+    struct jev_result r;
+    if (jev_pump(&r))
+        jev_answer(&r);
+    if (!jev_dirty || jev_busy() || !jev_text[0] || !strcmp(jev_judged(), jev_asked))
+        return;
+    if (now_ms() - jev_fired < jev_delay())
+        return;
+    jev_set_backend(settings_get_str(SETTING_VOICE_JEV_BACKEND, VOICE_JEV_BACKEND_DEFAULT));
+    if (!jev_key()[0]) {
+        snprintf(jev_verdict, sizeof jev_verdict, "jev: no %s key", jev_backend());
+        jev_dirty = 0;
+        status_touch();
+        return;
+    }
+    jev_fire();
+}
+
+static void jev_heard(void)
+{
+    jev_compose();
+    hearing = jev_text[0] != '\0';
+    heard(jev_text);
+}
+
+/* an edit made in the box replaces everything dictated so far; the utterance
+   still arriving continues after it, its words up to now being dropped */
+static void jev_adopt_edit(void)
+{
+    const char *cur = box_edit();
+    if (!cur)
+        return;
+    if (!*cur) {
+        char raw[LISTEN_MAX];
+        snprintf(raw, sizeof raw, "%s", jev_raw);
+        jev_clear();
+        snprintf(jev_raw, sizeof jev_raw, "%s", raw);
+        snprintf(jev_sent, sizeof jev_sent, "%s", raw);
+        shown[0] = '\0';
+        voice_trace("jev.edit", "text=");
+        return;
+    }
+    snprintf(shown, sizeof shown, "%s", cur);
+    snprintf(jev_held, sizeof jev_held, "%s", cur);
+    size_t n = strlen(jev_held);
+    while (n && isspace((unsigned char)jev_held[n - 1]))
+        jev_held[--n] = '\0';
+    jev_utter[0] = '\0';
+    snprintf(jev_sent, sizeof jev_sent, "%s", jev_raw);
+    if (claim_fn)
+        claim_fn(claim_ud, cur);
+    jev_changed = now_ms();
+    jev_dirty = 1;
+    voice_trace("jev.edit", "text=%s", jev_held);
+}
+
+/* what jev judges: the box when it holds the dictation plus typed additions */
+static const char *jev_judged(void)
+{
+    const char *cur = draft_fn ? draft_fn(draft_ud) : NULL;
+    if (cur && *cur && shown[0] && strstr(cur, shown))
+        return cur;
+    return jev_text;
+}
+
+static void jev_partial(const char *text)
+{
+    char was[LISTEN_MAX];
+    snprintf(was, sizeof was, "%s", jev_text);
+    jev_adopt_edit();
+    snprintf(jev_raw, sizeof jev_raw, "%s", text ? text : "");
+    const char *rest = jev_strip_prefix(jev_sent, jev_raw);
+    snprintf(jev_utter, sizeof jev_utter, "%s", rest ? rest : "");
+    jev_heard();
+    if (!jev_text[0])
+        return;
+    if (strcmp(was, jev_text))
+        jev_changed = now_ms();
+    jev_dirty = 1;
+    jev_tick();
+}
+
+static void jev_final(const char *text)
+{
+    jev_adopt_edit();
+    const char *rest = jev_strip_prefix(jev_sent, text ? text : "");
+    jev_sent[0] = jev_raw[0] = jev_utter[0] = '\0';
+    if (rest && *rest) {
+        jev_append(rest);
+        jev_changed = now_ms();
+        jev_dirty = 1;
+    }
+    jev_heard();
+    jev_tick();
+    /* the helper waits for a reply to the turn it just delivered; nothing here
+       answers one, so it is let out of that wait */
+    if (voice && !speaking)
+        macos_voice_cancel(voice);
 }
 
 static int held_find(const struct session *s)
@@ -791,6 +1112,11 @@ static void handle_event(void *ud, const char *kind, const char *text)
             discard_speech();
             return;
         }
+        if (voice_mode() == VOICE_MODE_JEV) {
+            forget_stale();
+            jev_partial(text);
+            return;
+        }
         if (text && *text) {
             forget_stale();
             hearing = 1;
@@ -836,6 +1162,18 @@ static void handle_event(void *ud, const char *kind, const char *text)
                 macos_voice_cancel(voice);
             if (is_resume_command(text))
                 set_paused(0);
+            return;
+        }
+        if (voice_mode() == VOICE_MODE_JEV) {
+            forget_stale();
+            if (erased) {
+                erased = 0;
+                hearing = 0;
+                if (voice && !speaking)
+                    macos_voice_cancel(voice);
+                return;
+            }
+            jev_final(text);
             return;
         }
         char edit[LISTEN_MAX];
@@ -908,6 +1246,12 @@ static void handle_event(void *ud, const char *kind, const char *text)
     } else if (!strcmp(kind, "dropped")) {
         /* the erased turn ends here when the helper discards its final */
         carry_clear();
+        if (voice_mode() == VOICE_MODE_JEV) {
+            jev_raw[0] = jev_utter[0] = jev_sent[0] = '\0';
+            jev_heard();
+            erased = 0;
+            return;
+        }
         discard_speech();
         erased = 0;
     } else if (!strcmp(kind, "cancelled")) {
@@ -915,6 +1259,11 @@ static void handle_event(void *ud, const char *kind, const char *text)
            that phrase cancels the whole dictation, not just the last turn */
         carry_clear();
         erased = 0;
+        if (voice_mode() == VOICE_MODE_JEV) {
+            jev_clear();
+            discard_speech();
+            return;
+        }
         if (listening() && listen_mode) {
             draft[0] = '\0';
             listen_discard();
@@ -980,6 +1329,7 @@ static void drain(void)
         mic_off_pending = 0;
         voice_mic_off(0);
     }
+    jev_tick();
 }
 
 static int cancelled;
@@ -1009,6 +1359,7 @@ int voice_start(char *err, size_t size)
 {
     if (voice)
         return 1;
+    chrome_live_label(jev_row);
     ready = 0;
     speaking = 0;
     /* a window that is not in front must not take the microphone from the one
@@ -1024,6 +1375,7 @@ int voice_start(char *err, size_t size)
     command_early = 0;
     forget_stale();
     listen_clear();
+    jev_clear();
     held_clear();
     carry_clear();
     draft[0] = '\0';
@@ -1037,7 +1389,7 @@ int voice_start(char *err, size_t size)
         .helper_path = settings_get_str(SETTING_VOICE_HELPER, VOICE_HELPER_PATH),
         .voice       = settings_get_str(SETTING_VOICE_NAME, NULL),
         .rate        = voice_rate() / 100.0 * AV_RATE_DEFAULT,
-        .silence     = voice_silence(),
+        .silence     = helper_silence(),
         .volume      = voice_volume() / 100.0,
         .input       = settings_get_str(SETTING_VOICE_INPUT, NULL),
         .tick        = wait_tick,
@@ -1100,7 +1452,7 @@ again:
     macos_voice_volume(voice, voice_volume() / 100.0);
     macos_voice_rate(voice, voice_rate() / 100.0 * AV_RATE_DEFAULT);
     /* the helper may already be running for another client, with its silence */
-    macos_voice_silence(voice, voice_silence());
+    macos_voice_silence(voice, helper_silence());
     session_add_listener(on_session_event, NULL);
     return 1;
 }
@@ -1108,6 +1460,7 @@ again:
 /* end_helper quits the shared process for every client, not just this one. */
 static void teardown(int end_helper)
 {
+    chrome_live_label(NULL);
     if (!voice)
         return;
     session_remove_listener(on_session_event, NULL);
@@ -1131,6 +1484,7 @@ static void teardown(int end_helper)
     command_early = 0;
     forget_stale();
     listen_clear();
+    jev_clear();
     held_clear();
     carry_clear();
     draft[0] = '\0';
@@ -1244,7 +1598,7 @@ void voice_set_silence(double seconds)
     snprintf(text, sizeof text, "%g", seconds);
     settings_set_str(SETTING_VOICE_SILENCE, text);
     if (voice)
-        macos_voice_silence(voice, seconds);
+        macos_voice_silence(voice, helper_silence());
 }
 
 int voice_apply(int on, int speak_on, char *err, size_t size)
@@ -1288,6 +1642,7 @@ void voice_set_mic(int on)
     paused = 0;
     command_early = 0;
     listen_clear();
+    jev_clear();
     carry_clear();
     heard("");
     if (voice) {
@@ -1331,6 +1686,13 @@ void voice_on_claim(int (*fn)(void *ud, const char *text), void *ud)
     claim_ud = ud;
 }
 
+/* the jev verdict changes with every word, so it is painted live above the
+   input rather than in the hud, which is filled once per session */
+static const char *jev_row(void)
+{
+    return voice && voice_mode() == VOICE_MODE_JEV ? voice_label() : NULL;
+}
+
 const char *voice_label(void)
 {
     if (!voice)
@@ -1345,6 +1707,8 @@ const char *voice_label(void)
         snprintf(label, sizeof label, "voice unfocused");
     else if (listen_mode)
         snprintf(label, sizeof label, "voice dictation");
+    else if (voice_mode() == VOICE_MODE_JEV)
+        snprintf(label, sizeof label, "%s", jev_verdict[0] ? jev_verdict : "voice jev");
     else if (voice_wake())
         snprintf(label, sizeof label, "voice: say listen");
     else if (!speak)
@@ -1356,11 +1720,16 @@ const char *voice_label(void)
 
 int voice_fds(int *out, int max)
 {
-    int fd = macos_voice_fd(voice);
-    if (!voice || fd < 0 || max < 1)
+    if (!voice || max < 1)
         return 0;
-    out[0] = fd;
-    return 1;
+    int n = 0;
+    int fd = macos_voice_fd(voice);
+    if (fd >= 0)
+        out[n++] = fd;
+    /* the answer to a jev request has to wake the loop too, or the turn it
+       ends waits for the next idle tick */
+    n += jev_fds(out + n, max - n);
+    return n;
 }
 
 int voice_pending(void)
@@ -1486,6 +1855,7 @@ void voice_leave(struct session *s)
         release_fn(release_ud);
     clear_queue();
     listen_clear();
+    jev_clear();
     shown[0] = '\0';
     status_touch();
 }
@@ -1512,7 +1882,11 @@ void voice_commit(struct session *s)
         remember_stale(draft);
         /* A wake word can still be only a partial when focus or the mic changes.
            Neither edge is the dictation's end phrase, so it stays open */
-        if (listen_mode || listen_wake(draft))
+        if (voice_mode() == VOICE_MODE_JEV) {
+            if (jev_text[0])
+                enqueue(jev_text);
+            jev_clear();
+        } else if (listen_mode || listen_wake(draft))
             listen_hold_draft();
         else if (!voice_wake() && is_stop_command(draft)) {
             if (session_turn_running(s))
@@ -1551,6 +1925,7 @@ void voice_draft_sent(void)
         remember_stale(draft);
     erased = 0;
     listen_clear();
+    jev_forget();
     hold_drop_for(SENT_HOLD_MS);
     hearing = 0;
     heard("");
@@ -1563,6 +1938,7 @@ static void drop_input(void)
     int cut = draft[0] != 0;
     hold_drop();
     clear_queue();
+    jev_clear();
     erased = 0;
     listen_clear();
     hearing = 0;

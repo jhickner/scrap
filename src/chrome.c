@@ -94,13 +94,27 @@ struct above {
     int side;
     int sticky;
     int queued;
+    int voice;
 };
 
 struct heights {
     int side;
     int sticky;
     int queued;
+    int voice;
 };
+
+static const char *(*live_fn)(void);
+
+void chrome_live_label(const char *(*fn)(void))
+{
+    live_fn = fn;
+}
+
+static const char *voice_row(void)
+{
+    return live_fn ? live_fn() : NULL;
+}
 
 static struct heights above_measure(int cols)
 {
@@ -108,6 +122,7 @@ static struct heights above_measure(int cols)
     h.side = sidechannel_rows();
     h.sticky = status_sticky_measure();
     h.queued = prompt_queued_rows(bound, cols);
+    h.voice = voice_row() != NULL;
     return h;
 }
 
@@ -122,6 +137,8 @@ static int above_height(const struct above *a, const struct heights *h)
         rows += h->sticky + (drawn++ ? 1 : 0);
     if (a->queued && h->queued > 0)
         rows += h->queued + (drawn++ ? 1 : 0);
+    if (a->voice && h->voice > 0)
+        rows += h->voice + (drawn++ ? 1 : 0);
     return rows ? rows + 1 : 0;
 }
 
@@ -288,7 +305,7 @@ void chrome_paint(void)
     int tabs = tabbar_rows(cols);
 
     struct heights h = above_measure(cols);
-    struct above a = {1, 1, 1};
+    struct above a = {1, 1, 1, 1};
     fit_above(&a, &h, tty_rows() - 1 - input_rows - spinning - gap - tabs);
 
     block_begin();
@@ -315,6 +332,16 @@ void chrome_paint(void)
         if (drawn)
             ui_put("\n");
         prompt_paint_queued(bound, chrome_rows_left());
+        drawn = 1;
+    }
+    if (a.voice && h.voice > 0) {
+        if (drawn)
+            ui_put("\n");
+        ui_esc(UI_ERASE_EOL);
+        ui_esc(ui_style(UI_DIM));
+        ui_put(voice_row());
+        ui_esc(ui_style(UI_RESET));
+        ui_put("\n");
     }
 
     if (ui_sink_rows() - gap > 0) {

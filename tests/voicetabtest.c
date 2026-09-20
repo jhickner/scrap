@@ -63,6 +63,7 @@ int session_work_count(const struct session *s) { return s ? s->work : 0; }
 int session_busy(const struct session *s) { return s && (s->busy || s->running); }
 int session_compact(const struct session *s) { (void)s; return 0; }
 const char *session_title(const struct session *s) { (void)s; return "tab"; }
+const char *session_last_reply(const struct session *s) { (void)s; return NULL; }
 const char *session_cwd(const struct session *s) { return s && s->cwd ? s->cwd : "."; }
 const char *session_id(const struct session *s) { (void)s; return NULL; }
 const char *session_backend(const struct session *s) { (void)s; return "grok"; }
