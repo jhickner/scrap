@@ -69,6 +69,7 @@ struct session {
     struct transcript transcript;
     char    *last_block;
     int      turns;
+    int      saved;      /* the id has a turn on disk, so it can be resumed */
     double   cost_usd;
     long     tokens_in, tokens_out;
     /* The cache-read share of tokens_in. Broken out because it is billed at a
@@ -1190,6 +1191,13 @@ static void set_id(struct session *s, const char *id)
     agenttabs_forget_hook(id);
 }
 
+/* A CLI mints its id before anything is written under it, so an id with no
+   turn yet resumes to nothing: start over instead. */
+static const char *saved_id(const struct session *s)
+{
+    return s->id[0] && s->saved ? s->id : NULL;
+}
+
 /* A child is handed its directory, model, effort and permission mode on its
    command line, so anything that changes one of them starts a replacement
    rather than telling the running child and restarting it. The session keeps
@@ -1226,6 +1234,7 @@ static int restart(struct session *s, const char *resume_id)
     const char *id = b->session_id(b);
     if (id)
         set_id(s, id);
+    s->saved = resume_id && !strcmp(s->id, resume_id);
 
     if (!strcmp(s->backend, "grokbot") && b->model && b->model(b)) {
         if (!s->model)
@@ -1301,7 +1310,7 @@ static int connect_agent(struct session *s)
     char next[4096];
     if (!dir_alive(s->cwd) && ground_target(s->cwd, next, sizeof next))
         replace(&s->cwd, next);
-    return restart(s, s->id[0] ? s->id : NULL);
+    return restart(s, saved_id(s));
 }
 
 int session_start(struct session *s)
@@ -1418,7 +1427,7 @@ int session_trust_project(struct session *s)
     Backend *b = agent(s);
     if (!b || !b->trust_project || !b->trust_project(b, s->cwd))
         return 0;
-    return restart(s, s->id[0] ? s->id : NULL);
+    return restart(s, saved_id(s));
 }
 
 int session_take_trust_request(struct session *s)
@@ -1507,7 +1516,7 @@ static int swap_and_restart(struct session *s, char **slot, const char *next)
         *slot = previous;
         return 0;
     }
-    if (restart(s, s->id[0] ? s->id : NULL)) {
+    if (restart(s, saved_id(s))) {
         free(previous);
         return 1;
     }
@@ -1527,8 +1536,10 @@ int session_set_permission(struct session *s, const char *mode)
 
 void session_adopt_id(struct session *s, const char *id)
 {
-    if (s && id && *id)
+    if (s && id && *id) {
         set_id(s, id);
+        s->saved = 1;
+    }
 }
 
 #define RESET_BLOCK   (1 << 0)
@@ -1627,7 +1638,7 @@ int session_retarget(struct session *s, const char *model, const char *effort,
     s->effort = next_effort;
     s->cwd = next_cwd;
 
-    if (!restart_spun(s, moved || !s->id[0] || s->handoff ? NULL : s->id)) {
+    if (!restart_spun(s, moved || s->handoff ? NULL : saved_id(s))) {
         free(s->model);
         free(s->effort);
         free(s->cwd);
@@ -1789,7 +1800,7 @@ static int session_reground(struct session *s)
 
     if (dir_alive(s->cwd)) {
         replace(&s->workdir, NULL);
-        if (restart(s, s->id[0] ? s->id : NULL)) {
+        if (restart(s, saved_id(s))) {
             char home[512];
             shorten(s->cwd, home, sizeof home);
             session_warn(s, "%s is gone — restarted in %s", shown, home);
@@ -1910,6 +1921,8 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     free(reply);
 
     s->turns++;
+    if (!m.is_error || m.interrupted)
+        s->saved = 1;
     replace(&s->handoff, NULL);
     charge_turn(s, &m);
     s->tokens_in += m.input_tokens + m.cache_read_tokens + m.cache_creation_tokens;
