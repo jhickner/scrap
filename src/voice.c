@@ -607,6 +607,14 @@ static long jev_delay(void)
     return n > VOICE_JEV_DELAY_MAX ? VOICE_JEV_DELAY_MAX : n;
 }
 
+static long jev_silence(void)
+{
+    int n = settings_get_int(SETTING_VOICE_JEV_SILENCE, VOICE_JEV_SILENCE_DEFAULT);
+    if (n < 0)
+        n = 0;
+    return n > VOICE_JEV_SILENCE_MAX ? VOICE_JEV_SILENCE_MAX : n;
+}
+
 static void jev_clear(void)
 {
     jev_held[0] = jev_utter[0] = jev_raw[0] = jev_sent[0] = '\0';
@@ -728,10 +736,18 @@ static void jev_answer(const struct jev_result *r)
     snprintf(jev_verdict, sizeof jev_verdict, "jev %.2f %s %ldms", r->ready,
              cancel ? "CANCEL" : ready ? "READY" : holding ? "HOLD" : "wait", r->rtt_ms);
     status_touch();
-    if (cancel)
+    if (cancel) {
         jev_discard();
-    else if (ready)
-        jev_submit();
+        return;
+    }
+    if (!ready)
+        return;
+    if (strcmp(jev_judged(), jev_asked)) {
+        voice_trace("jev.stale", "asked=%s now=%s", jev_asked, jev_judged());
+        jev_dirty = 1;
+        return;
+    }
+    jev_submit();
 }
 
 /* delay_ms is the shortest gap between calls rather than a wait after the last
@@ -746,7 +762,7 @@ static void jev_tick(void)
         jev_answer(&r);
     if (!jev_dirty || jev_busy() || !jev_text[0] || !strcmp(jev_judged(), jev_asked))
         return;
-    if (now_ms() - jev_fired < jev_delay())
+    if (now_ms() - jev_fired < jev_delay() || now_ms() - jev_changed < jev_silence())
         return;
     jev_set_backend(settings_get_str(SETTING_VOICE_JEV_BACKEND, VOICE_JEV_BACKEND_DEFAULT));
     if (!jev_key()[0]) {

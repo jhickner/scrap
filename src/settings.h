@@ -64,11 +64,13 @@
 #define VOICE_RATE_MAX       200
 
 /* jev mode: the endpointing backend, the noul at which a turn is submitted,
-   the noul at which a hold keeps it open, and the shortest gap between calls */
+   the noul at which a hold keeps it open, the shortest gap between calls, and
+   how long the transcript must stay unchanged before it is judged */
 #define SETTING_VOICE_JEV_BACKEND   "voice_jev_backend"
 #define SETTING_VOICE_JEV_THRESHOLD "voice_jev_threshold"
 #define SETTING_VOICE_JEV_HOLD      "voice_jev_hold_threshold"
 #define SETTING_VOICE_JEV_DELAY     "voice_jev_delay"
+#define SETTING_VOICE_JEV_SILENCE   "voice_jev_silence"
 
 #define VOICE_JEV_BACKEND_DEFAULT   "typesafe"
 #define VOICE_JEV_THRESHOLD_DEFAULT 0.8
@@ -76,6 +78,8 @@
 #define VOICE_JEV_CANCEL            0.8
 #define VOICE_JEV_DELAY_DEFAULT     100
 #define VOICE_JEV_DELAY_MAX         2000
+#define VOICE_JEV_SILENCE_DEFAULT   400
+#define VOICE_JEV_SILENCE_MAX       3000
 /* say the session name when a turn ends while this pane is unfocused */
 #define SETTING_VOICE_COMPLETE "voice_complete"
 

@@ -688,10 +688,11 @@ static void do_voice_jev(const char *arg)
     if (hold <= 0)
         hold = VOICE_JEV_HOLD_DEFAULT;
     int delay = settings_get_int(SETTING_VOICE_JEV_DELAY, VOICE_JEV_DELAY_DEFAULT);
+    int silence = settings_get_int(SETTING_VOICE_JEV_SILENCE, VOICE_JEV_SILENCE_DEFAULT);
 
     if (!*arg) {
-        reply_note("voice jev backend %s, threshold %g, hold %g, delay %dms",
-                   backend, threshold, hold, delay);
+        reply_note("voice jev backend %s, threshold %g, hold %g, delay %dms, silence %dms",
+                   backend, threshold, hold, delay, silence);
         return;
     }
 
@@ -762,7 +763,30 @@ static void do_voice_jev(const char *arg)
         return;
     }
 
-    reply_error("/voice jev takes backend, threshold, hold, delay, or nothing to show them");
+    if (!strncmp(arg, "silence", 7) && (!arg[7] || arg[7] == ' ')) {
+        rest = arg + 7;
+        while (*rest == ' ')
+            rest++;
+        if (!*rest) {
+            reply_note("voice jev silence %dms", silence);
+            return;
+        }
+        char *end;
+        long  n = strtol(rest, &end, 10);
+        if (!strncmp(end, "ms", 2))
+            end += 2;
+        while (*end == ' ')
+            end++;
+        if (*end || n < 0 || n > VOICE_JEV_SILENCE_MAX) {
+            reply_error("/voice jev silence takes milliseconds from 0 to %d", VOICE_JEV_SILENCE_MAX);
+            return;
+        }
+        settings_set_int(SETTING_VOICE_JEV_SILENCE, (int)n);
+        reply_note("voice jev silence %ldms", n);
+        return;
+    }
+
+    reply_error("/voice jev takes backend, threshold, hold, delay, silence, or nothing to show them");
 }
 
 static void do_voice(struct session *s, const char *arg)
