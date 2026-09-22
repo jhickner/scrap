@@ -123,8 +123,8 @@ int main(void)
     prompt_claim_preview(p, "hello");
     prompt_insert(p, "ab");
     prompt_set_preview(p, "hello there");
-    eq_line(p, "a moved preview updates the copy nearest where it was",
-            "abx hello y hello there");
+    eq_line(p, "a line typed under a claimed preview lands before it",
+            "x hello y ab hello there");
     tty_event home = {0};
     home.key = TK_HOME;
     prompt_live_key(p, &home);

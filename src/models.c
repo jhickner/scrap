@@ -1,6 +1,7 @@
 #include "models.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +25,9 @@ struct list {
 };
 
 static struct list cache[6];
+
+static time_t claude_stamp(void);
+static void   describe(char *out, size_t cap, const char *name, double context);
 
 static int grow(struct list *l)
 {
@@ -157,15 +161,20 @@ static time_t backend_stamp(const char *backend)
              + pi_env_stamp();
     if (!strcmp(backend, "codex"))
         return home_stamp(".codex/models_cache.json");
+    if (!strcmp(backend, "grok"))
+        return home_stamp(".grok/models_cache.json");
+    if (!strcmp(backend, "claude"))
+        return claude_stamp();
     return 0;
 }
 
+/* Fallbacks for a machine where the CLI has not written its catalogue yet. */
 static const struct pick_item CLAUDE[] = {
-    {"claude-opus-5[1m]", "opus with a 1M-token context"},
-    {"claude-opus-5", "most capable"},
+    {"claude-opus-5-5[1m]", "Opus 5.5 with a 1M-token context"},
+    {"claude-opus-5-5", "most capable"},
+    {"claude-opus-5", "the prior generation"},
     {"claude-sonnet-5", "balanced speed and capability"},
     {"claude-haiku-4-5", "fastest"},
-    {"claude-fable-5-1", "compact"},
 };
 
 static const struct pick_item GROK[] = {
@@ -177,6 +186,128 @@ static void fill_static(struct list *l, const struct pick_item *v, int n)
 {
     for (int i = 0; i < n; i++)
         push(l, v[i].label, v[i].detail);
+}
+
+/* Claude Code caches the model catalogue it was served, one file per surface;
+   "cc" is the CLI. Take the newest. */
+static int claude_catalog_path(char *out, size_t cap)
+{
+    const char *home = getenv("HOME");
+    if (!home || !*home)
+        return 0;
+
+    char dir[4096];
+    snprintf(dir, sizeof dir, "%s/.claude/cache/model-catalog", home);
+    DIR *d = opendir(dir);
+    if (!d)
+        return 0;
+
+    time_t         best = 0;
+    int            found = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        size_t n = strlen(e->d_name);
+        if (n < 9 || strcmp(e->d_name + n - 8, "-cc.json"))
+            continue;
+
+        char        path[4096];
+        struct stat st;
+        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+        if (stat(path, &st) || st.st_mtime < best)
+            continue;
+        best = st.st_mtime;
+        found = snprintf(out, cap, "%s", path) < (int)cap;
+    }
+    closedir(d);
+    return found;
+}
+
+static time_t claude_stamp(void)
+{
+    char        path[4096];
+    struct stat st;
+    if (!claude_catalog_path(path, sizeof path) || stat(path, &st))
+        return 0;
+    return st.st_mtime;
+}
+
+/* The catalogue does not say which models take the long context, and only the
+   frontier ones do. Haiku is the odd one out. */
+static int claude_has_1m(const char *id, const char *section)
+{
+    return section && !strcmp(section, "main") && !strstr(id, "haiku");
+}
+
+static int fill_claude(struct list *l)
+{
+    char path[4096];
+    if (!claude_catalog_path(path, sizeof path))
+        return 0;
+
+    char *text = text_slurp(path, 1 << 22, NULL);
+    if (!text)
+        return 0;
+
+    cJSON *root = cJSON_Parse(text);
+    cJSON *config = cJSON_GetObjectItem(cJSON_GetObjectItem(root, "catalog"), "config");
+    int    before = l->n;
+    cJSON *m;
+    cJSON_ArrayForEach(m, cJSON_GetObjectItem(config, "models")) {
+        const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(m, "id"));
+        if (!id || !*id)
+            continue;
+        const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(m, "name"));
+        const char *why = cJSON_GetStringValue(cJSON_GetObjectItem(m, "description"));
+        const char *section = cJSON_GetStringValue(cJSON_GetObjectItem(m, "section"));
+
+        char detail[DETAIL_BYTES];
+        if (name && *name && why && *why)
+            snprintf(detail, sizeof detail, "%s \xc2\xb7 %s", name, why);
+        else
+            snprintf(detail, sizeof detail, "%s", why && *why ? why : (name ? name : ""));
+        push(l, id, detail);
+
+        if (!claude_has_1m(id, section))
+            continue;
+        char variant[LABEL_BYTES], long_ctx[DETAIL_BYTES];
+        snprintf(variant, sizeof variant, "%s[1m]", id);
+        snprintf(long_ctx, sizeof long_ctx, "%s \xc2\xb7 1M-token context",
+                 name && *name ? name : id);
+        push(l, variant, long_ctx);
+    }
+    cJSON_Delete(root);
+    free(text);
+    return l->n > before;
+}
+
+static int fill_grok(struct list *l)
+{
+    char *text = home_slurp(".grok/models_cache.json");
+    if (!text)
+        return 0;
+
+    cJSON *root = cJSON_Parse(text);
+    int    before = l->n;
+    cJSON *entry;
+    cJSON_ArrayForEach(entry, cJSON_GetObjectItem(root, "models")) {
+        cJSON *info = cJSON_GetObjectItem(entry, "info");
+        if (cJSON_IsTrue(cJSON_GetObjectItem(info, "hidden")))
+            continue;
+
+        const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(info, "id"));
+        if (!id || !*id)
+            id = entry->string;
+        const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(info, "name"));
+        const char *why = cJSON_GetStringValue(cJSON_GetObjectItem(info, "description"));
+
+        char detail[DETAIL_BYTES];
+        describe(detail, sizeof detail, why && *why ? why : name,
+                 cJSON_GetNumberValue(cJSON_GetObjectItem(info, "context_window")));
+        push(l, id, detail);
+    }
+    cJSON_Delete(root);
+    free(text);
+    return l->n > before;
 }
 
 static void fill_codex(struct list *l)
@@ -597,13 +728,15 @@ int models_for(const char *backend, const struct pick_item **out)
     push(l, "default", detail);
 
     if (!strcmp(backend, "claude")) {
-        fill_static(l, CLAUDE, (int)(sizeof CLAUDE / sizeof *CLAUDE));
+        if (!fill_claude(l))
+            fill_static(l, CLAUDE, (int)(sizeof CLAUDE / sizeof *CLAUDE));
     } else if (!strcmp(backend, "codex")) {
         fill_codex(l);
     } else if (!strcmp(backend, "pi")) {
         fill_pi(l);
     } else if (!strcmp(backend, "grok")) {
-        fill_static(l, GROK, (int)(sizeof GROK / sizeof *GROK));
+        if (!fill_grok(l))
+            fill_static(l, GROK, (int)(sizeof GROK / sizeof *GROK));
     }
 
     *out = l->items;

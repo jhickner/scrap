@@ -109,6 +109,92 @@ static int native_store(void)
     return 0;
 }
 
+static const char CC_CATALOG[] =
+    "{\"version\":2,\"catalog\":{\"surface\":\"cc\",\"config\":{\"models\":[\n"
+    "  {\"id\":\"claude-opus-9\",\"name\":\"Opus 9\",\"description\":\"For complex tasks\",\n"
+    "   \"section\":\"main\"},\n"
+    "  {\"id\":\"claude-haiku-9\",\"name\":\"Haiku 9\",\"description\":\"Fastest\",\n"
+    "   \"section\":\"main\"},\n"
+    "  {\"id\":\"claude-opus-8\",\"name\":\"Opus 8\",\"section\":\"overflow\"}\n"
+    "]}}}\n";
+
+static const char GROK_CACHE[] =
+    "{\"models\":{\n"
+    "  \"grok-9\": {\"info\": {\"id\":\"grok-9\",\"name\":\"Grok 9\",\n"
+    "     \"description\":\"latest\",\"context_window\":500000,\"hidden\":false}},\n"
+    "  \"grok-secret\": {\"info\": {\"id\":\"grok-secret\",\"name\":\"Secret\",\n"
+    "     \"hidden\":true}}\n"
+    "}}\n";
+
+static char *temp_home(void)
+{
+    static char home[] = "/tmp/mux-modelstest-home-XXXXXX";
+    return mkdtemp(home);
+}
+
+static int mkpath(const char *home, const char *rest)
+{
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s", home, rest);
+    return !mkdir(path, 0700);
+}
+
+static int cli_catalogs(void)
+{
+    char *home = temp_home();
+    if (!home)
+        return fail("could not make a temp home");
+    setenv("HOME", home, 1);
+
+    char path[512];
+    if (!mkpath(home, ".claude") || !mkpath(home, ".claude/cache") ||
+        !mkpath(home, ".claude/cache/model-catalog") || !mkpath(home, ".grok"))
+        return fail("could not make the cache dirs");
+
+    snprintf(path, sizeof path, "%s/.claude/cache/model-catalog/org-cc.json", home);
+    if (!write_file(path, CC_CATALOG))
+        return fail("could not write a claude catalog");
+    snprintf(path, sizeof path, "%s/.grok/models_cache.json", home);
+    if (!write_file(path, GROK_CACHE))
+        return fail("could not write a grok cache");
+
+    const struct pick_item *items = NULL;
+    int n = models_for("claude", &items);
+    if (!has_label(items, n, "claude-opus-9") || !has_label(items, n, "claude-opus-8"))
+        return fail("the claude catalog was not read");
+    if (!has_label(items, n, "claude-opus-9[1m]"))
+        return fail("a main model had no 1m variant");
+    if (has_label(items, n, "claude-haiku-9[1m]") ||
+        has_label(items, n, "claude-opus-8[1m]"))
+        return fail("a 1m variant was offered where it is not available");
+    if (has_label(items, n, "claude-opus-5"))
+        return fail("the static fallback ran with a catalog present");
+
+    items = NULL;
+    n = models_for("grok", &items);
+    if (!has_label(items, n, "grok-9"))
+        return fail("the grok cache was not read");
+    if (has_label(items, n, "grok-secret"))
+        return fail("a hidden grok model was listed");
+    if (has_label(items, n, "grok-4.6"))
+        return fail("the static fallback ran with a grok cache present");
+
+    char rm[600];
+    snprintf(rm, sizeof rm, "rm -rf %s", home);
+    (void)system(rm);
+
+    /* With the caches gone the static lists carry the picker. */
+    items = NULL;
+    n = models_for("claude", &items);
+    if (!has_label(items, n, "claude-opus-5-5"))
+        return fail("claude lost its fallback list");
+    items = NULL;
+    n = models_for("grok", &items);
+    if (!has_label(items, n, "grok-4.6"))
+        return fail("grok lost its fallback list");
+    return 0;
+}
+
 int main(void)
 {
     char path[4096];
@@ -139,6 +225,9 @@ int main(void)
     }
 
     if (native_store())
+        return 1;
+
+    if (cli_catalogs())
         return 1;
 
     puts("modelstest: ok");
