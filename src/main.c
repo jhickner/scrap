@@ -45,6 +45,7 @@
 #include "status.h"
 #include "tg.h"
 #include "orch.h"
+#include "agentsync.h"
 #include "orchcli.h"
 #include "relay.h"
 #include "voice.h"
@@ -562,6 +563,8 @@ int main(int argc, char **argv)
        its work and exits without opening a session. */
     if (argc > 1 && !strcmp(argv[1], "orch"))
         return orchcli_main(argc - 1, argv + 1);
+    if (argc > 1 && !strcmp(argv[1], "sync"))
+        return agentsync_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "version")) {
         printf(APP_NAME " %s\n", MUX_VERSION);
         return 0;

@@ -33,7 +33,7 @@ CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
           dispatchtest voicetabtest grokbottailtest vncinsettest grokvnctest \
           settingstest jevtest
-CHECKS += orchstatustest orchinstalltest sessionaddrtest orchtasktest orchtargettest orcheventtest orchclitest orchtest
+CHECKS += agentsynctest orchstatustest orchinstalltest sessionaddrtest orchtasktest orchtargettest orcheventtest orchclitest orchtest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest vncprobe
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,
@@ -203,6 +203,8 @@ $(BUILD)/filedifftest: tests/filedifftest.c $(BUILD)/filediff.o $(BUILD)/ui.o $(
 $(BUILD)/taskstest: tests/taskstest.c $(BUILD)/tasks.o $(BUILD)/text.o $(BUILD)/toolstyle.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/orchstatustest: tests/orchstatustest.c $(BUILD)/orchstatus.o $(BUILD)/orchtask.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+
+$(BUILD)/agentsynctest: tests/agentsynctest.c $(BUILD)/agentsync.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/orchinstalltest: tests/orchinstalltest.c $(BUILD)/orchinstall.o $(BUILD)/orchdata.o $(BUILD)/text.o | $(BUILD)
 
