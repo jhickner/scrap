@@ -49,7 +49,8 @@ endif
 CHECK_BINS  := $(addprefix $(BUILD)/,$(CHECKS))
 MANUAL_BINS := $(addprefix $(BUILD)/,$(MANUAL_TOOLS))
 TOOLS       := $(CHECK_BINS) $(MANUAL_BINS)
-SRC     := $(wildcard src/*.c) $(wildcard src/vendor/*.c)
+SRC     := $(wildcard src/*.c) $(wildcard src/vendor/*.c) $(wildcard src/vendor/mermaid/*.c)
+MERMAID_OBJ := $(patsubst src/%.c,$(BUILD)/%.o,$(wildcard src/vendor/mermaid/*.c))
 OBJ     := $(patsubst src/%.c,$(BUILD)/%.o,$(SRC))
 DEP     := $(OBJ:.o=.d)
 
@@ -95,7 +96,7 @@ $(BIN): $(OBJ)
 
 # -MMD -MP emits the .d files that keep object files in step with header edits.
 # -Isrc/vendor lets the agent drivers find the single shared cJSON.h.
-$(BUILD)/%.o: src/%.c | $(BUILD) $(BUILD)/vendor
+$(BUILD)/%.o: src/%.c | $(BUILD) $(BUILD)/vendor $(BUILD)/vendor/mermaid
 	$(CC) $(ALL_CFLAGS) -MMD -MP -c -o $@ $<
 
 -include $(DEP)
@@ -199,9 +200,9 @@ $(BUILD)/pitest: tests/pitest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o |
 
 $(BUILD)/agenttabstest: tests/agenttabstest.c $(BUILD)/agenttabs.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/imagetest: tools/imagetest.c $(BUILD)/image.o $(BUILD)/md.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
+$(BUILD)/imagetest: tools/imagetest.c $(BUILD)/image.o $(BUILD)/md.o $(MERMAID_OBJ) $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/mdtest: tests/mdtest.c $(BUILD)/md.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/image.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/mdtest: tests/mdtest.c $(BUILD)/md.o $(MERMAID_OBJ) $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/image.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/pastetest: tools/pastetest.c $(BUILD)/paste.o $(BUILD)/text.o | $(BUILD)
 
@@ -209,7 +210,7 @@ $(BUILD)/transcripttest: tests/transcripttest.c $(BUILD)/transcript.o | $(BUILD)
 
 $(BUILD)/sessionviewtest: tests/sessionviewtest.c $(BUILD)/sessionview.o $(BUILD)/filediff.o $(BUILD)/highlight.o $(BUILD)/toolstyle.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/sessionpresenttest: tests/sessionpresenttest.c tests/stubs/tabbar.c $(BUILD)/sessionpresent.o $(BUILD)/sessionview.o $(BUILD)/filediff.o $(BUILD)/highlight.o $(BUILD)/md.o $(BUILD)/prompt.o $(BUILD)/status.o $(BUILD)/tasks.o $(BUILD)/transcript.o $(BUILD)/toolstyle.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/bash.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/image.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/sessionpresenttest: tests/sessionpresenttest.c tests/stubs/tabbar.c $(BUILD)/sessionpresent.o $(BUILD)/sessionview.o $(BUILD)/filediff.o $(BUILD)/highlight.o $(BUILD)/md.o $(MERMAID_OBJ) $(BUILD)/prompt.o $(BUILD)/status.o $(BUILD)/tasks.o $(BUILD)/transcript.o $(BUILD)/toolstyle.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/bash.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/image.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 
 $(BUILD)/grokvnctest: tests/grokvnctest.c src/vendor/vnc/grokvnc.h | $(BUILD)
@@ -281,8 +282,8 @@ voice-helper: | $(BUILD)
 
 .PHONY: voice-helper
 
-$(BUILD) $(BUILD)/vendor:
-	@mkdir -p $(BUILD)/vendor
+$(BUILD) $(BUILD)/vendor $(BUILD)/vendor/mermaid:
+	@mkdir -p $(BUILD)/vendor/mermaid
 
 clean:
 	rm -rf $(BUILD)

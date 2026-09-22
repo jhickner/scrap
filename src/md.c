@@ -1,4 +1,5 @@
 #include "md.h"
+#include "vendor/mermaid/mermaid.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -746,6 +747,35 @@ static void render_code_line(const char *line, int indent)
     ui_put("\n");
 }
 
+static void render_mermaid(const char *src, int indent)
+{
+    int width = ui_columns() - indent;
+    MermaidArt *art = mermaid_render(src, width > 20 ? width : 20);
+    if (!art) {
+        for (const char *p = src; *p;) {
+            const char *nl = strchr(p, '\n');
+            char *line = strndup(p, nl ? (size_t)(nl - p) : strlen(p));
+            render_code_line(line, indent);
+            free(line);
+            if (!nl)
+                break;
+            p = nl + 1;
+        }
+        return;
+    }
+    size_t first = 0, last = art->n;
+    while (first < last && !*art->lines[first])
+        first++;
+    while (last > first && !*art->lines[last - 1])
+        last--;
+    for (size_t i = first; i < last; i++) {
+        ui_pad(indent);
+        put_safe(art->lines[i]);
+        ui_put("\n");
+    }
+    mermaid_art_free(art);
+}
+
 struct kept {
     char *text;
     int   indent;
@@ -810,13 +840,16 @@ void md_render(const char *text, int indent)
 {
     int in_code = 0;
     int code_ansi = 0;
+    int code_mermaid = 0;
     int blank_pending = 0;
     int wrote_any = 0;
+    char *mermaid = NULL;
+    size_t mermaid_len = 0;
 
     while (*text) {
         char *line = take_line(&text);
         if (!line)
-            return;
+            break;
 
         const char *body;
         int lead = leading_indent(line, &body);
@@ -824,6 +857,29 @@ void md_render(const char *text, int indent)
         if (strncmp(body, "```", 3) == 0 || strncmp(body, "~~~", 3) == 0) {
             in_code = !in_code;
             code_ansi = in_code && strncmp(body + 3, "ansi", 4) == 0;
+            if (in_code && strncmp(body + 3, "mermaid", 7) == 0) {
+                code_mermaid = 1;
+            } else if (code_mermaid) {
+                code_mermaid = 0;
+                if (blank_pending && wrote_any)
+                    ui_put("\n");
+                blank_pending = 0;
+                render_mermaid(mermaid ? mermaid : "", indent + 2);
+                wrote_any = 1;
+                free(mermaid);
+                mermaid = NULL;
+                mermaid_len = 0;
+            }
+            free(line);
+            continue;
+        }
+        if (code_mermaid) {
+            size_t n = strlen(line);
+            mermaid = realloc(mermaid, mermaid_len + n + 2);
+            memcpy(mermaid + mermaid_len, line, n);
+            mermaid_len += n;
+            mermaid[mermaid_len++] = '\n';
+            mermaid[mermaid_len] = 0;
             free(line);
             continue;
         }
@@ -918,6 +974,15 @@ void md_render(const char *text, int indent)
         }
         wrote_any = 1;
         free(line);
+    }
+    if (mermaid) {
+        if (blank_pending && wrote_any)
+            ui_put("\n");
+        for (char *p = mermaid, *nl; (nl = strchr(p, '\n')); p = nl + 1) {
+            *nl = 0;
+            render_code_line(p, indent + 2);
+        }
+        free(mermaid);
     }
 }
 
