@@ -36,6 +36,7 @@
 #include "sessionview.h"
 #include "settings.h"
 #include "voicetrace.h"
+#include "version.h"
 #include "dispatch.h"
 #include "orchinstall.h"
 #include "sidechannel.h"
@@ -135,6 +136,9 @@ static void usage(void)
             "  --restore f  take over the screen from a restarting mux (used by /restart)\n"
             "  --tabs f   reopen the sessions a restarting mux was holding (used by /restart)\n"
             "  -h         this help\n"
+            "  -V, --version  print the version and exit\n"
+            "\n"
+            "  " APP_NAME " version   the same, as a subcommand\n"
             "\n"
             "With a prompt on the command line, answer it and exit.\n",
             choices);
@@ -558,6 +562,10 @@ int main(int argc, char **argv)
        its work and exits without opening a session. */
     if (argc > 1 && !strcmp(argv[1], "orch"))
         return orchcli_main(argc - 1, argv + 1);
+    if (argc > 1 && !strcmp(argv[1], "version")) {
+        printf(APP_NAME " %s\n", MUX_VERSION);
+        return 0;
+    }
 
     voice_protect_handoff();
     static const struct option LONG_OPTS[] = {
@@ -579,6 +587,7 @@ int main(int argc, char **argv)
         {"orchestrator", no_argument,  NULL, 'G'},
         {"connect", required_argument, NULL, 'N'},
         {"help",    no_argument,       NULL, 'h'},
+        {"version", no_argument,       NULL, 'V'},
         {NULL,      0,                 NULL, 0},
     };
 
@@ -601,7 +610,7 @@ int main(int argc, char **argv)
     int resume = 0;
     int opt;
 
-    while ((opt = getopt_long(argc, argv, "b:m:e:C:srh", LONG_OPTS, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "b:m:e:C:srhV", LONG_OPTS, NULL)) != -1) {
         switch (opt) {
         case 'b': backend = optarg; pin_backend = 1; break;
         case 'm': model = optarg; break;
@@ -619,6 +628,7 @@ int main(int argc, char **argv)
         case 'T': telegram = 1; break;
         case 'W': relay = 1; break;
         case 'G': orchestrator = 1; break;
+        case 'V': printf(APP_NAME " %s\n", MUX_VERSION); return 0;
         case 'N':
             if (!strcmp(optarg, "relay")) {
                 relay = 1;

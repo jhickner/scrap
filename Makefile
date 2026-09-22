@@ -118,6 +118,18 @@ src/orchdata.c: FORCE tools/gen-embed.sh
 	 tools/gen-embed.sh orchestrate orchdata.h orch_files orch_files_n > $$tmp; \
 	 if ! cmp -s $$tmp $@; then mv $$tmp $@; fi
 
+# Version is the commit count, so it advances with every commit, plus the
+# short hash. Only main.o includes it.
+$(BUILD)/version.h: FORCE | $(BUILD)
+	@tmp=$@.tmp; trap 'rm -f $$tmp' EXIT HUP INT TERM; \
+	 n=$$(git rev-list --count HEAD 2>/dev/null || echo 0); \
+	 h=$$(git rev-parse --short HEAD 2>/dev/null || echo unknown); \
+	 printf '#define MUX_VERSION "0.%s+%s"\n' "$$n" "$$h" > $$tmp; \
+	 if ! cmp -s $$tmp $@; then mv $$tmp $@; fi
+
+$(BUILD)/main.o: $(BUILD)/version.h
+$(BUILD)/main.o: ALL_CFLAGS += -I$(BUILD)
+
 FORCE:
 
 # Harnesses are built only when asked for: the default target is the app alone.
