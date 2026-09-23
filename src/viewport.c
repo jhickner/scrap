@@ -1340,6 +1340,8 @@ void viewport_flush(void)
    in front. */
 static void put_row(const char *row, int W)
 {
+    if (!strncmp(row, "\x1b[K", 3))
+        row += 3;
     size_t n = strlen(row);
     if (strstr(row, "\x1b[K") || ui_cells_visible(row, n) >= (size_t)W) {
         direct_str("\x1b[0m\x1b[K");
