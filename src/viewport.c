@@ -69,6 +69,7 @@ static int    chrome_top = -1;
 static int held;
 static int active;
 static int home_row, home_col;   /* main-screen cursor when the alt screen went up */
+static int home_rows, home_cols; /* screen size at that moment */
 static int handed;
 static int suspended;
 static int scrolled;
@@ -1608,8 +1609,10 @@ static void home_mark(void)
     if (tty_cursor_position(&row, &col)) {
         home_row = row;
         home_col = col;
-        char env[32];
-        snprintf(env, sizeof env, "%d;%d", row, col);
+        home_rows = tty_rows();
+        home_cols = tty_screen_columns();
+        char env[48];
+        snprintf(env, sizeof env, "%d;%d;%d;%d", row, col, home_rows, home_cols);
         setenv("MUX_HOME_CURSOR", env, 1);
     } else {
         home_row = home_col = 0;
@@ -1618,7 +1621,10 @@ static void home_mark(void)
 
 static void home_return(void)
 {
-    if (home_row <= 0 || home_col <= 0)
+    /* a resize reflows the main screen and moves the shell's line; the
+       terminal's own restore tracks that, the saved row does not */
+    if (home_row <= 0 || home_col <= 0 || home_rows != tty_rows() ||
+        home_cols != tty_screen_columns())
         return;
     char esc[32];
     snprintf(esc, sizeof esc, "\x1b[%d;%dH", home_row, home_col);
@@ -1680,10 +1686,13 @@ void viewport_inherit(void)
         return;
     active = 1;
     const char *env = getenv("MUX_HOME_CURSOR");
-    int         row = 0, col = 0;
-    if (env && sscanf(env, "%d;%d", &row, &col) == 2 && row > 0 && col > 0) {
+    int         row = 0, col = 0, rows = 0, cols = 0;
+    if (env && sscanf(env, "%d;%d;%d;%d", &row, &col, &rows, &cols) == 4 && row > 0 &&
+        col > 0) {
         home_row = row;
         home_col = col;
+        home_rows = rows;
+        home_cols = cols;
     }
     direct_str(MOUSE_ON);
     fflush(stdout);
