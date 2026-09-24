@@ -230,6 +230,38 @@ int main(void)
     request("GET", "/v1/capacity", NULL, NULL);
     if (cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(call.out, "free")) != 0)
         fail("capacity reports no free slots");
+    if (cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(call.out, "usage")) != 0)
+        fail("capacity usage is empty before any reading");
+
+    /* subscription usage */
+    clear_events();
+    backend_rate_limit limit = {.available = 1, .used_percent = 42, .resets_at = 1790000000, .window_minutes = 300};
+    apicore_usage("claude", &limit);
+    if (!saw("usage", "\"used_percent\":42,\"resets_at\":1790000000,\"window_minutes\":300,\"updated_at\":") ||
+        !saw("usage", "\"backend\":\"claude\""))
+        fail("a new reading emits a usage event");
+    clear_events();
+    apicore_usage("claude", &limit);
+    limit.available = 0;
+    limit.used_percent = 99;
+    apicore_usage("claude", &limit);
+    if (nevents)
+        fail("an unchanged or unavailable reading emits nothing");
+    limit.available = 1;
+    limit.used_percent = 43;
+    apicore_usage("claude", &limit);
+    if (!saw("usage", "\"used_percent\":43"))
+        fail("a changed reading emits a usage event");
+    request("GET", "/v1/capacity", NULL, NULL);
+    cJSON *usage = cJSON_GetObjectItemCaseSensitive(call.out, "usage");
+    cJSON *claude = cJSON_GetObjectItemCaseSensitive(usage, "claude");
+    if (cJSON_GetArraySize(usage) != 1 ||
+        cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(claude, "used_percent")) != 43 ||
+        cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(claude, "resets_at")) != 1790000000 ||
+        cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(claude, "window_minutes")) != 300 ||
+        cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(claude, "updated_at")) <= 0)
+        fail("capacity reports the latest reading per backend");
+
     if (request("GET", "/v1/agents/ag_99", NULL, NULL) != 404 || request("GET", "/v1/nope", NULL, NULL) != 404 ||
         request("PUT", "/v1/agents", NULL, NULL) != 405 || request("GET", "/v1/agents/ag_1/runs/run_6", NULL, NULL) != 404)
         fail("unknown routes, ids, methods, and another agent's run");

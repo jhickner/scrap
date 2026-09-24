@@ -32,6 +32,10 @@ void apicore_tick(void);
 void apicore_turn_begin(struct session *s);
 void apicore_turn_done(struct session *s);
 
+/* record a backend's subscription usage reading; emits a usage event when it
+   differs from the last one recorded for that backend */
+void apicore_usage(const char *backend, const backend_rate_limit *limit);
+
 /* a session_add_listener callback */
 void apicore_event(void *ud, struct session *s, const backend_event *ev);
 

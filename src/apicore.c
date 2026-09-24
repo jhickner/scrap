@@ -19,6 +19,7 @@
 #define RUNS_MAX    4096
 #define ID_WAIT_MS  30000
 #define TOOL_TEXT_MAX 4096
+#define USAGE_MAX   16
 
 enum { RUN_QUEUED, RUN_RUNNING, RUN_FINISHED, RUN_ERROR, RUN_CANCELLED };
 static const char *const RUN_STATUS[] = {"queued", "running", "finished", "error", "cancelled"};
@@ -50,12 +51,21 @@ struct agent {
     int              held_run;
 };
 
+struct usage {
+    char name[32];
+    int  used_percent;
+    long resets_at, window_minutes;
+    long updated_at;
+};
+
 static struct agent     agents[AGENTS_MAX];
 static int              nagents;
 static struct run       runs[RUNS_MAX];
 static int              nruns;
 static apicore_reply_fn on_reply;
 static apicore_emit_fn  on_emit;
+static struct usage     usages[USAGE_MAX];
+static int              nusages;
 
 static void now_iso(char out[32])
 {
@@ -266,6 +276,44 @@ static void note_agent(struct agent *a)
     cJSON_AddStringToObject(o, "status", st);
     put_str(o, "model", agent_model(a));
     emit("agent", o);
+}
+
+static cJSON *usage_reading_json(const struct usage *u)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "used_percent", u->used_percent);
+    cJSON_AddNumberToObject(o, "resets_at", (double)u->resets_at);
+    cJSON_AddNumberToObject(o, "window_minutes", (double)u->window_minutes);
+    cJSON_AddNumberToObject(o, "updated_at", (double)u->updated_at);
+    return o;
+}
+
+void apicore_usage(const char *backend, const backend_rate_limit *limit)
+{
+    if (!backend || !*backend || !limit || !limit->available)
+        return;
+    struct usage *u = NULL;
+    for (int i = 0; i < nusages && !u; i++)
+        if (!strcmp(usages[i].name, backend))
+            u = &usages[i];
+    int changed = 1;
+    if (u)
+        changed = u->used_percent != limit->used_percent || u->resets_at != limit->resets_at ||
+                  u->window_minutes != limit->window_minutes;
+    else if (nusages < USAGE_MAX) {
+        u = &usages[nusages++];
+        snprintf(u->name, sizeof u->name, "%s", backend);
+    } else
+        return;
+    u->used_percent = limit->used_percent;
+    u->resets_at = limit->resets_at;
+    u->window_minutes = limit->window_minutes;
+    u->updated_at = (long)time(NULL);
+    if (!changed)
+        return;
+    cJSON *o = usage_reading_json(u);
+    cJSON_AddStringToObject(o, "backend", u->name);
+    emit("usage", o);
 }
 
 static void run_status(struct run *r, int status)
@@ -580,6 +628,9 @@ static void capacity(struct apicall *c)
     cJSON *list = cJSON_AddArrayToObject(o, "backends");
     for (const char *const *b = backend_names(); b && *b; b++)
         cJSON_AddItemToArray(list, cJSON_CreateString(*b));
+    cJSON *usage = cJSON_AddObjectToObject(o, "usage");
+    for (int i = 0; i < nusages; i++)
+        cJSON_AddItemToObject(usage, usages[i].name, usage_reading_json(&usages[i]));
     finish(c, 200, o);
 }
 
@@ -771,5 +822,5 @@ void apicore_reset(void)
         free(runs[i].result);
         free(runs[i].error);
     }
-    nagents = nruns = 0;
+    nagents = nruns = nusages = 0;
 }
