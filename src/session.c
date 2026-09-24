@@ -416,6 +416,7 @@ static void tab_busy(struct session *s, int busy)
 }
 
 static void name_poll(struct session *s);
+static void status_update_tick(struct session *s);
 
 /* Background work outstanding with no turn in flight, and how long it has been
    there. A backend that counts its own is the authority: the table can be left
@@ -522,6 +523,8 @@ int session_idle_pump(struct session *s)
 
     /* a turn still open, or one that opened and closed inside this pump */
     stall_watch(s, busy || s->spoke != before);
+    if (s == live)
+        status_update_tick(s);
     tab_busy(s, busy);
     if (continuation && session_turn_continue_begin(s))
         return 1;
@@ -752,14 +755,21 @@ static void status_update_done(void *ud, const char *answer)
         replace(&s->status_last, answer);
 }
 
-/* Every status interval of a running turn, fork a side turn that says what the
-   agent has done since the last update. */
+/* Every status interval of a running turn or outstanding background work, fork
+   a side turn that says what the agent has done since the last update. */
 static void status_update_tick(struct session *s)
 {
-    if (!s || !s->running || s->status_open)
+    if (!s || s->status_open)
         return;
+    double since = s->status_at;
+    if (!s->running) {
+        if (!s->work_at)
+            return;
+        if (s->work_at > since)
+            since = s->work_at;
+    }
     int every = settings_get_int(SETTING_STATUS_INTERVAL, STATUS_INTERVAL_DEFAULT);
-    if (every <= 0 || now_seconds() - s->status_at < every)
+    if (every <= 0 || now_seconds() - since < every)
         return;
     s->status_at = now_seconds();
     if (sidechannel_status(s, s->status_last, status_update_done, s))

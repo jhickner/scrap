@@ -52,8 +52,9 @@ struct side {
 };
 
 #define STATUS_PREAMBLE                                                          \
-    "You are a read-only fork of an agent in the middle of a long turn. The "   \
-    "original agent is still running and was not interrupted; any tool call "   \
+    "You are a read-only fork of an agent in the middle of a long turn or "     \
+    "waiting on background work (subagents, shell commands). The original "     \
+    "agent is still running and was not interrupted; any tool call "            \
     "that looks cut off is still in progress there. Give the user a one or "    \
     "two sentence status update on what the agent has been doing and where it " \
     "is now, based on the conversation so far. Plain prose, no lists, no "      \
