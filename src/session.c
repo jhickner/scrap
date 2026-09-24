@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "agenttabs.h"
+#include "apicore.h"
 #include "block.h"
 #include "app.h"
 #include "gitinfo.h"
@@ -509,7 +510,7 @@ static void usage_poll(struct session *s)
     s->agent->rate_limit(s->agent, &limit);
     if (limit.available) {
         agenttabs_usage(s, limit.used_percent, limit.resets_at, limit.window_minutes);
-
+        apicore_usage(session_backend(s), &limit);
     }
 }
 
