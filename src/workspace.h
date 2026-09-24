@@ -16,6 +16,9 @@ int  workspace_index_of(const struct session *s);
 
 int  workspace_spawn(const char *backend, const char *model, const char *effort,
                      const char *cwd, const char *id);
+/* the same, with NAME=VALUE entries added to the child's environment */
+int  workspace_spawn_env(const char *backend, const char *model, const char *effort,
+                         const char *cwd, const char *id, const char *const *env);
 
 /* a configured session with no child yet, for a caller that starts a batch of
    them at once before opening their tabs */
@@ -42,6 +45,8 @@ int  workspace_queued(int index);
 const char *workspace_pending_at(int index, int i);
 
 char *workspace_unqueue(int index);
+/* drop the first queued line equal to line; 1 if one was dropped */
+int  workspace_dequeue(int index, const char *line);
 
 void workspace_settle(struct session *s);
 

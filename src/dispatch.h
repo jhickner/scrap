@@ -16,4 +16,14 @@
    the backend reports one, which is how a child names itself. */
 void dispatch_poll(void);
 
+/* open a background tab, name it, and send it a first line; focus stays on
+   the tab in view. every argument but backend may be NULL. returns the new
+   tab's index, or -1 if the CLI did not start */
+int dispatch_spawn(const char *backend, const char *model, const char *effort, const char *cwd,
+                   const char *title, const char *const *env, const char *prompt);
+
+/* send a line to the tab at index, echoing it first when the tab is idle
+   (a queued line is echoed when its turn starts). returns workspace_send's result */
+int dispatch_send(int at, const char *line);
+
 #endif

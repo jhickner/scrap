@@ -56,6 +56,8 @@ struct session {
     char    *resolved;
     char     id[128];
     char    *addr;   /* the file this session's id is published to, for the child */
+    char   **env;    /* NAME=VALUE entries added to the child's environment */
+    backend_result last_result;
     char     title[128];
     char     stale_title[128];
     char     held_title[128];
@@ -849,6 +851,9 @@ void session_free(struct session *s)
     free(s->last_reply);
     free(s->failed_prompt);
     free(s->last_block);
+    for (char **e = s->env; e && *e; e++)
+        free(*e);
+    free(s->env);
     sessionpresent_free(&s->present);
     free(s->prompt);
     free(s->status_last);
@@ -903,6 +908,35 @@ static char *join_system(const char *const *parts, int n)
     return out;
 }
 
+int session_set_env(struct session *s, const char *const *env)
+{
+    if (s->agent)
+        return 0;
+    size_t n = 0;
+    while (env && env[n])
+        n++;
+    char **copy = calloc(n + 1, sizeof *copy);
+    if (!copy)
+        return 0;
+    for (size_t i = 0; i < n; i++)
+        if (!(copy[i] = strdup(env[i]))) {
+            while (i)
+                free(copy[--i]);
+            free(copy);
+            return 0;
+        }
+    for (char **e = s->env; e && *e; e++)
+        free(*e);
+    free(s->env);
+    s->env = copy;
+    return 1;
+}
+
+const backend_result *session_last_result(const struct session *s)
+{
+    return &s->last_result;
+}
+
 static Backend *agent(struct session *s)
 {
     if (s->agent)
@@ -919,6 +953,7 @@ static Backend *agent(struct session *s)
     o.no_browser_login = s->no_browser_login;
     o.chrome = settings_get_int(SETTING_CHROME, 0);
     o.plugin_dir = shunt_plugin_dir(s);
+    o.env = (const char *const *)s->env;
 
     const char *note = image_available()
         ? "This conversation is displayed in a terminal that renders images inline. "
@@ -999,6 +1034,7 @@ int session_switch_backend(struct session *s, const char *backend)
     o.no_browser_login = s->no_browser_login;
     o.chrome = settings_get_int(SETTING_CHROME, 0);
     o.plugin_dir = shunt_plugin_dir(s);
+    o.env = (const char *const *)s->env;
     Backend *replacement = backend_open_ex(&o);
     if (!replacement) {
         free(handoff);
@@ -1797,6 +1833,7 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
                        double elapsed)
 {
     const backend_result m = *meta;
+    s->last_result = m;
     int continuing = s->continuing;
     s->continuing = 0;
     const char *text = s->prompt ? s->prompt : "";

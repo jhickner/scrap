@@ -110,6 +110,7 @@ int session_set_permission(struct session *s, const char *mode)
 }
 void session_adopt_id(struct session *s, const char *id) { (void)s; (void)id; }
 int session_start(struct session *s) { (void)s; return 1; }
+int session_set_env(struct session *s, const char *const *env) { (void)s; (void)env; return 1; }
 void session_free(struct session *s) { (void)s; }
 struct session *session_new(const char *backend, const char *cwd, const char *model,
                             const char *effort)
@@ -335,6 +336,14 @@ int main(void)
                 fail("the line is pending");
             if (!workspace_dump(1, dump) || dump_count(dump, "queued-dispatch-line"))
                 fail("a queued line is not echoed until its turn starts");
+
+            if (!workspace_send(1, "second-line", NULL) || !workspace_send(1, "third-line", NULL))
+                fail("queue two more lines");
+            if (workspace_dequeue(1, "missing-line") || !workspace_dequeue(1, "second-line"))
+                fail("dequeue removes only a matching line");
+            if (workspace_queued(1) != 2 || strcmp(workspace_pending_at(1, 1), "third-line"))
+                fail("dequeue keeps the order of the rest");
+            workspace_dequeue(1, "third-line");
 
             busy.finish = 1;
             workspace_pump();

@@ -130,10 +130,7 @@ static void send_session(const char *dir, const char *base, const cJSON *o, cons
         return;
     }
 
-    /* send_next echoes a queued line when its turn starts; idle has no such path */
-    if (!session_turn_running(workspace_at(at)))
-        workspace_render(at, echo_prompt, (void *)line);
-    if (!workspace_send(at, line, NULL))
+    if (!dispatch_send(at, line))
         reply_error(dir, base, "could not send line", id);
     else {
         cJSON *r = cJSON_CreateObject();
@@ -212,6 +209,37 @@ static void settle_pending(const char *dir)
     }
 }
 
+int dispatch_spawn(const char *backend, const char *model, const char *effort, const char *cwd,
+                   const char *title, const char *const *env, const char *prompt)
+{
+    struct session *was = workspace_current();
+    int at = workspace_spawn_env(backend, model, effort, cwd, NULL, env);
+    if (at < 0)
+        return -1;
+
+    if (title) {
+        char name[81];
+        struct session *s = workspace_at(at);
+        snprintf(name, sizeof name, "%s", title);
+        if (session_rename(s, name) == SESSION_RENAME_OK)
+            session_set_naming(s, 0);
+    }
+
+    workspace_show(workspace_index_of(was));
+    at = workspace_index_of(workspace_at(at));
+    if (prompt)
+        dispatch_send(at, prompt);
+    return at;
+}
+
+int dispatch_send(int at, const char *line)
+{
+    /* a queued line is echoed when its turn starts; an idle tab has no such path */
+    if (!session_turn_running(workspace_at(at)))
+        workspace_render(at, echo_prompt, (void *)line);
+    return workspace_send(at, line, NULL);
+}
+
 static void serve(const char *dir, const char *base, const char *text)
 {
     cJSON *o = cJSON_Parse(text);
@@ -238,31 +266,14 @@ static void serve(const char *dir, const char *base, const char *text)
     if (!backend)
         backend = cmd_default_backend();
 
-    struct session *was = workspace_current();
-    int at = workspace_spawn(backend, field(o, "model"), field(o, "effort"),
-                             field(o, "cwd"), NULL);
+    int at = dispatch_spawn(backend, field(o, "model"), field(o, "effort"), field(o, "cwd"),
+                            field(o, "title"), NULL, field(o, "prompt"));
     if (at < 0) {
         char out[300];
         snprintf(out, sizeof out, "{\"error\": \"could not start the %s CLI\"}", backend);
         reply(dir, base, out);
         cJSON_Delete(o);
         return;
-    }
-
-    const char *title = field(o, "title");
-    if (title) {
-        char name[81];
-        struct session *s = workspace_at(at);
-        snprintf(name, sizeof name, "%s", title);
-        if (session_rename(s, name) == SESSION_RENAME_OK)
-            session_set_naming(s, 0);
-    }
-
-    workspace_show(workspace_index_of(was));
-    const char *prompt = field(o, "prompt");
-    if (prompt) {
-        workspace_render(at, echo_prompt, (void *)prompt);
-        workspace_send(at, prompt, NULL);
     }
 
     const char *id = session_id(workspace_at(at));

@@ -201,13 +201,19 @@ struct session *workspace_prepare(const char *backend, const char *model, const 
 int workspace_spawn(const char *backend, const char *model, const char *effort,
                     const char *cwd, const char *id)
 {
+    return workspace_spawn_env(backend, model, effort, cwd, id, NULL);
+}
+
+int workspace_spawn_env(const char *backend, const char *model, const char *effort,
+                        const char *cwd, const char *id, const char *const *env)
+{
     if (ntabs >= WORKSPACE_MAX)
         return -1;
 
     struct session *s = workspace_prepare(backend, model, effort, cwd, id);
     if (!s)
         return -1;
-    if (!session_start(s)) {
+    if ((env && !session_set_env(s, env)) || !session_start(s)) {
         session_free(s);
         return -1;
     }
@@ -664,6 +670,24 @@ const char *workspace_pending_at(int index, int i)
         return NULL;
     const struct pending *p = &tabs[index].pending[i];
     return p->shown ? p->shown : p->line;
+}
+
+int workspace_dequeue(int index, const char *line)
+{
+    if (index < 0 || index >= ntabs || !line)
+        return 0;
+    struct tab *t = &tabs[index];
+    for (int i = 0; i < t->npending; i++) {
+        if (strcmp(t->pending[i].line, line))
+            continue;
+        free(t->pending[i].line);
+        free(t->pending[i].shown);
+        for (int j = i + 1; j < t->npending; j++)
+            t->pending[j - 1] = t->pending[j];
+        t->npending--;
+        return 1;
+    }
+    return 0;
 }
 
 char *workspace_unqueue(int index)

@@ -34,6 +34,13 @@ void session_remove_listener(session_listener_fn fn, void *ud);
 
 void session_set_system_extra(struct session *s, const char *text);
 
+/* NAME=VALUE entries added to the child's environment. Only before the child
+   starts; returns 0 once it has. */
+int session_set_env(struct session *s, const char *const *env);
+
+/* The last finished turn's usage and error flags. Zeroed before the first. */
+const backend_result *session_last_result(const struct session *s);
+
 void session_set_abort_hook(struct session *s, int (*fn)(void *ud), void *ud);
 
 void session_set_naming(struct session *s, int on);

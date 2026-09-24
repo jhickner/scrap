@@ -85,6 +85,7 @@ int session_set_permission(struct session *s, const char *mode)
 }
 void session_adopt_id(struct session *s, const char *id) { (void)s; (void)id; }
 int session_start(struct session *s) { (void)s; return 1; }
+int session_set_env(struct session *s, const char *const *env) { (void)s; (void)env; return 1; }
 void session_free(struct session *s) { (void)s; }
 struct session *session_new(const char *backend, const char *cwd, const char *model,
                             const char *effort)

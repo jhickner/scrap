@@ -120,6 +120,11 @@ static int mock_cli(int argc, char **argv)
             result("done");
         }
 
+        else if (text && !strcmp(text, "env")) {
+            const char *v = getenv("CLAUDETEST_ENV");
+            result(v ? v : "unset");
+        }
+
         else if (text && !strcmp(text, "reauth")) {
             const char *marker = getenv("CLAUDETEST_AUTH_MARKER");
             if (marker && access(marker, F_OK) == 0 &&
@@ -172,8 +177,10 @@ int main(int argc, char **argv)
     if (argc > 1 && (!strcmp(argv[1], "--print") || !strcmp(argv[1], "auth")))
         return mock_cli(argc, argv);
 
+    static const char *const child_env[] = {"CLAUDETEST_ENV=worker-7", NULL};
     claude_opts opts = {
         .cli_path = argv[0],
+        .env = child_env,
         .session_name = "title helper",
         .tools = "",
         .no_session_persistence = 1,
@@ -219,6 +226,15 @@ int main(int argc, char **argv)
         claude_stop(client);
         return 1;
     }
+
+    reply = claude_send(client, "env");
+    if (!reply || strcmp(reply, "worker-7") || getenv("CLAUDETEST_ENV")) {
+        fprintf(stderr, "claudetest: env did not reach only the child (%s)\n", reply ? reply : "none");
+        free(reply);
+        claude_stop(client);
+        return 1;
+    }
+    free(reply);
 
     claude_result meta = {0};
     reply = claude_send_ex(client, "race", &meta);

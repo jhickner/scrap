@@ -33,7 +33,7 @@ CHECKS := kittywraptest overlaytest viewporttest imagerowtest chrometest imagefi
           sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
           dispatchtest voicetabtest grokbottailtest vncinsettest grokvnctest \
           settingstest jevtest
-CHECKS += agentsynctest sessionaddrtest
+CHECKS += agentsynctest sessionaddrtest apitest apihttptest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest vncprobe
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,
@@ -91,6 +91,15 @@ else ifneq ($(wildcard /usr/include/jpeglib.h),)
 endif
 LIBS += $(JPEG_LIBS)
 
+# libmicrohttpd serves the worker API (api.c): brew install libmicrohttpd.
+MHD_CFLAGS := $(shell pkg-config --cflags libmicrohttpd 2>/dev/null)
+MHD_LIBS   := $(shell pkg-config --libs libmicrohttpd 2>/dev/null)
+ifeq ($(MHD_LIBS),)
+  $(error libmicrohttpd not found: brew install libmicrohttpd)
+endif
+ALL_CFLAGS += $(MHD_CFLAGS)
+LIBS += $(MHD_LIBS)
+
 $(BIN): $(OBJ)
 	$(CC) $(ALL_CFLAGS) -o $@ $(OBJ) $(LDFLAGS) $(LIBS)
 
@@ -128,6 +137,7 @@ JPEG_TOOLS := imagerowtest vncinsettest imagefittest imagetest mdtest sessionpre
 
 $(addprefix $(BUILD)/,$(FULL_LIB_TOOLS)): TOOL_LIBS = $(LIBS)
 $(addprefix $(BUILD)/,$(JPEG_TOOLS)): TOOL_LIBS = $(JPEG_LIBS) -pthread -lcurl $(VNC_LIBS)
+$(BUILD)/apihttptest: TOOL_LIBS = $(MHD_LIBS) -pthread -lcurl
 
 # vendor/impl.o carries the grokbot backend, which links libcurl.
 TOOL_LIBS ?= -pthread -lcurl $(VNC_LIBS)
@@ -235,6 +245,9 @@ $(BUILD)/workspacetest: tests/workspacetest.c tests/stubs/tabbar.c $(BUILD)/work
 $(BUILD)/sessionaddrtest: tests/sessionaddrtest.c $(BUILD)/sessionaddr.o $(BUILD)/text.o | $(BUILD)
 
 $(BUILD)/dispatchtest: tests/dispatchtest.c $(BUILD)/dispatch.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+
+$(BUILD)/apitest: tests/apitest.c tests/stubs/apistubs.c $(BUILD)/apicore.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/apihttptest: tests/apihttptest.c tests/stubs/apistubs.c $(BUILD)/api.o $(BUILD)/apicore.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/highlighttest: tests/highlighttest.c $(BUILD)/highlight.o | $(BUILD)
 

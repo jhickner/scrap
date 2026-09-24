@@ -39,6 +39,7 @@
 #include "tg.h"
 #include "agentsync.h"
 #include "relay.h"
+#include "api.h"
 #include "voice.h"
 #include "tty.h"
 #include "ui.h"
@@ -116,6 +117,7 @@ static void usage(void)
             "  --telegram also answer over Telegram, in the same session\n"
             "  --relay    also answer a phone over WebSocket, in the same session\n"
             "  --connect telegram|relay   the same thing, spelled out\n"
+            "  --api      serve the worker API (config: ~/.config/mux/api)\n"
             "  -r         --resume: pick a past conversation to continue\n"
             "  --reopen   bring back the sessions of a window that is gone\n"
             "  --session id  resume a specific conversation (used by the fork commands)\n"
@@ -143,6 +145,7 @@ static int idle_fds(void *ud, int *out, int max)
     n += sidechannel_fds(out + n, max - n);
     n += voice_fds(out + n, max - n);
     n += relay_fds(out + n, max - n);
+    n += api_fds(out + n, max - n);
     return n + tg_fds(out + n, max - n);
 }
 
@@ -181,6 +184,7 @@ static int idle_render(void *ud)
     if (tg_pending() || relay_pending() || voice_pending())
         tty_wake();
     relay_poll(NULL);
+    api_poll();
     struct session *drew = session_set_drawing(workspace_current());
     image_poll();
     session_set_drawing(drew);
@@ -473,12 +477,14 @@ static int discard_voice(void *ud)
 
 static void turn_done(struct session *s)
 {
+    api_turn_done(s);
     voice_turn_done(s);
     cmd_run_deferred(s);
 }
 
 static void turn_begin(struct session *s)
 {
+    api_turn_begin(s);
     voice_turn_begin(s);
 }
 
@@ -537,6 +543,7 @@ int main(int argc, char **argv)
         {"reopen",  no_argument,       NULL, 'O'},
         {"telegram", no_argument,      NULL, 'T'},
         {"relay",    no_argument,      NULL, 'W'},
+        {"api",      no_argument,      NULL, 'A'},
         {"connect", required_argument, NULL, 'N'},
         {"help",    no_argument,       NULL, 'h'},
         {"version", no_argument,       NULL, 'V'},
@@ -553,6 +560,7 @@ int main(int argc, char **argv)
     int         reopen_arg = 0;
     int telegram = 0;
     int relay = 0;
+    int api_on = 0;
     int pin_backend = 0;
     int fork_session = 0;
     int safe_mode = 0;
@@ -574,6 +582,7 @@ int main(int argc, char **argv)
         case 'O': reopen_arg = 1; break;
         case 'T': telegram = 1; break;
         case 'W': relay = 1; break;
+        case 'A': api_on = 1; break;
         case 'V': printf(APP_NAME " %s\n", MUX_VERSION); return 0;
         case 'N':
             if (!strcmp(optarg, "relay")) {
@@ -643,9 +652,9 @@ int main(int argc, char **argv)
 
     int interactive = optind >= argc;
 
-    if ((telegram || relay) && !interactive) {
+    if ((telegram || relay || api_on) && !interactive) {
         fprintf(stderr, APP_NAME ": --%s takes no prompt\n",
-                telegram ? "telegram" : "relay");
+                telegram ? "telegram" : relay ? "relay" : "api");
         return 2;
     }
 
@@ -703,6 +712,8 @@ int main(int argc, char **argv)
         telegram = 0;
     if (relay && session && !relay_start(session))
         relay = 0;
+    if (api_on && session && !api_start())
+        api_on = 0;
 
     if (!session) {
         if (interactive)
@@ -926,6 +937,7 @@ int main(int argc, char **argv)
     voice_stop();
     tg_stop();
     relay_stop();
+    api_stop();
     session_set_typeahead(NULL, NULL);
     chrome_bind(NULL);
     prompt_free(prompt);

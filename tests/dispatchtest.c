@@ -100,11 +100,12 @@ int workspace_send(int index, const char *line, const char *shown)
     return 1;
 }
 
-int workspace_spawn(const char *backend, const char *model, const char *effort,
-                    const char *cwd, const char *id)
+int workspace_spawn_env(const char *backend, const char *model, const char *effort,
+                        const char *cwd, const char *id, const char *const *env)
 {
     (void)effort;
     (void)id;
+    (void)env;
     spawned_n++;
     memset(&spawned, 0, sizeof spawned);
     snprintf(last_backend, sizeof last_backend, "%s", backend ? backend : "");
