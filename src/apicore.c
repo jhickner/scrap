@@ -215,12 +215,20 @@ static cJSON *run_json(const struct run *r)
     return o;
 }
 
+/* The model the CLI resolved once its tab has one, else the one asked for. */
+static const char *agent_model(struct agent *a)
+{
+    int at = tab_of(a);
+    const char *m = at >= 0 ? session_model(workspace_at(at)) : NULL;
+    return m && strcmp(m, "default") ? m : a->model;
+}
+
 static cJSON *agent_json(struct agent *a)
 {
     cJSON *o = cJSON_CreateObject();
     put_id(o, "id", "ag_", a->id);
     put_str(o, "backend", a->backend);
-    put_str(o, "model", a->model);
+    put_str(o, "model", agent_model(a));
     put_str(o, "effort", a->effort);
     put_str(o, "cwd", a->cwd);
     put_str(o, "title", a->title);
@@ -256,6 +264,7 @@ static void note_agent(struct agent *a)
     now_iso(a->updated);
     cJSON *o = event_base(a, NULL);
     cJSON_AddStringToObject(o, "status", st);
+    put_str(o, "model", agent_model(a));
     emit("agent", o);
 }
 
@@ -710,11 +719,21 @@ void apicore_event(void *ud, struct session *s, const backend_event *ev)
     case BACKEND_EV_THINKING:    name = "thinking";    break;
     case BACKEND_EV_TOOL:        name = "tool_call";   break;
     case BACKEND_EV_TOOL_RESULT: name = "tool_result"; break;
+    case BACKEND_EV_INIT:        name = "agent";       break;
     default: return;
     }
     struct agent *a = agent_for(s);
     if (!a)
         return;
+    if (ev->kind == BACKEND_EV_INIT) {
+        if (!ev->name || !*ev->name)
+            return;
+        cJSON *o = event_base(a, NULL);
+        cJSON_AddStringToObject(o, "status", agent_status(a));
+        put_str(o, "model", ev->name);
+        emit(name, o);
+        return;
+    }
     cJSON *o = event_base(a, running_run(a));
     if (ev->parent && *ev->parent)
         cJSON_AddStringToObject(o, "parent", ev->parent);

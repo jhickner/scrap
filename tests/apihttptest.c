@@ -1,8 +1,10 @@
 #include <curl/curl.h>
+#include <microhttpd.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "api.h"
@@ -162,6 +164,88 @@ static void sse_open(struct sse *s, int frames, const char *last_id)
     usleep(100000);
 }
 
+/* a fake dlv: backends lists one existing host, backend_set records its body */
+static char dlv_set[4096];
+
+static enum MHD_Result dlv_handle(void *cls, struct MHD_Connection *c, const char *url, const char *method,
+                                  const char *version, const char *data, size_t *size, void **st)
+{
+    (void)cls; (void)method; (void)version;
+    if (!*st) {
+        *st = calloc(1, 4096);
+        return MHD_YES;
+    }
+    char *body = *st;
+    if (*size) {
+        strncat(body, data, *size < 4000 - strlen(body) ? *size : 4000 - strlen(body));
+        *size = 0;
+        return MHD_YES;
+    }
+    const char *auth = MHD_lookup_connection_value(c, MHD_HEADER_KIND, "Authorization");
+    const char *reply = "{\"error\":{\"message\":\"bad key\"}}";
+    unsigned code = 401;
+    if (auth && !strcmp(auth, "Bearer dlv-key")) {
+        code = 200;
+        if (!strcmp(url, "/dlv/v1/backends"))
+            reply = "{\"backends\":{\"mux\":{\"settings\":{\"hosts\":[{\"name\":\"other\",\"url\":\"http://10.0.0.9:8791\"},"
+                    "{\"name\":\"testhost\",\"url\":\"http://stale:1\"}]}}}}";
+        else {
+            snprintf(dlv_set, sizeof dlv_set, "%s", body);
+            reply = "{}";
+        }
+    }
+    struct MHD_Response *r = MHD_create_response_from_buffer(strlen(reply), (void *)reply, MHD_RESPMEM_MUST_COPY);
+    enum MHD_Result ret = MHD_queue_response(c, code, r);
+    MHD_destroy_response(r);
+    free(body);
+    *st = NULL;
+    return ret;
+}
+
+int gethostname(char *name, size_t len)
+{
+    snprintf(name, len, "testhost.local");
+    return 0;
+}
+
+static void test_register_dlv(void)
+{
+    char home[] = "/tmp/apihttptest.XXXXXX", path[256], msg[512];
+    if (!mkdtemp(home))
+        return fail("mkdtemp");
+    setenv("HOME", home, 1);
+    if (api_register_dlv(msg, sizeof msg) != 0)
+        fail("no dlv client config means no registration");
+    struct MHD_Daemon *d = MHD_start_daemon(MHD_USE_INTERNAL_POLLING_THREAD, 18794, NULL, NULL, dlv_handle, NULL, MHD_OPTION_END);
+    snprintf(path, sizeof path, "%s/.config", home);
+    mkdir(path, 0700);
+    snprintf(path, sizeof path, "%s/.config/dlv", home);
+    mkdir(path, 0700);
+    snprintf(path, sizeof path, "%s/.config/dlv/client.json", home);
+    FILE *f = fopen(path, "w");
+    fputs("{\"url\":\"http://127.0.0.1:18794/dlv\",\"key\":\"dlv-key\"}", f);
+    fclose(f);
+    if (api_register_dlv(msg, sizeof msg) != 1 || !strstr(msg, "registered with dlv as testhost"))
+        fail(msg);
+    cJSON *set = cJSON_Parse(dlv_set);
+    cJSON *hosts = cJSON_GetObjectItem(cJSON_GetObjectItem(set, "settings"), "hosts");
+    char want[128];
+    snprintf(want, sizeof want, "%s", base);
+    if (cJSON_GetArraySize(hosts) != 2 || strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(hosts, 0), "name")), "other") ||
+        strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(hosts, 1), "url")), want))
+        fail("registration keeps other hosts and replaces its own entry with the API url");
+    if (strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(set, "secrets"), "host_tokens"), "testhost")), TOKEN))
+        fail("registration sends the API token as the host token");
+    cJSON_Delete(set);
+    f = fopen(path, "w");
+    fputs("{\"url\":\"http://127.0.0.1:18794/dlv\",\"key\":\"wrong\"}", f);
+    fclose(f);
+    if (api_register_dlv(msg, sizeof msg) != -1 || !strstr(msg, "bad key"))
+        fail("a rejected key says why");
+    MHD_stop_daemon(d);
+    unlink(path);
+}
+
 int main(void)
 {
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -229,6 +313,8 @@ int main(void)
         fail("delete of the tab in view is 409 over HTTP");
     if (req("DELETE", "/v1/agents/ag_1?force=1", NULL, &b) != 200 || !strstr(b.s, "\"status\":\"exited\""))
         fail("force delete over HTTP");
+
+    test_register_dlv();
 
     free(b.s);
     stop_loop = 1;

@@ -858,7 +858,11 @@ int main(int argc, char **argv)
             nl = strchr(line, '\n');
             ui_note("%.*s", nl ? (int)(nl - line) : (int)strlen(line), line);
         }
-        if (conn && copy_to_clipboard(conn))
+        char reg[512];
+        int registered = api_register_dlv(reg, sizeof reg);
+        if (registered)
+            ui_note("%s", reg);
+        if (registered != 1 && conn && copy_to_clipboard(conn))
             ui_note("copied \xc2\xb7 paste it into dlv \xe2\x86\x92 Hosts");
         free(conn);
         viewport_item_end();

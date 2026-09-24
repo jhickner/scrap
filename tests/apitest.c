@@ -125,6 +125,15 @@ int main(void)
     if (!saw("assistant", "\"run_id\":\"run_1\",\"text\":\"working on it\"") || !saw("tool_call", "\"name\":\"Bash\""))
         fail("assistant and tool events carry the run");
 
+    /* the model the CLI resolves is reported as the agent's model */
+    backend_event init = {.kind = BACKEND_EV_INIT, .name = "claude-opus-5-5"};
+    apicore_event(NULL, tabs[0], &init);
+    if (!saw("agent", "\"model\":\"claude-opus-5-5\""))
+        fail("the resolved model is an agent event");
+    snprintf(tabs[0]->model, sizeof tabs[0]->model, "claude-opus-5-5");
+    if (request("GET", "/v1/agents/ag_1", NULL, NULL) != 200 || strcmp(out_str("model", NULL), "claude-opus-5-5"))
+        fail("the agent reads back its resolved model");
+
     /* a second run queues behind the first */
     if (request("POST", "/v1/agents/ag_1/runs", NULL, "{\"prompt\":{\"text\":\"second\"}}") != 201 ||
         strcmp(out_str("status", NULL), "queued"))

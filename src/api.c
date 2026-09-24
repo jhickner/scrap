@@ -1,6 +1,7 @@
 #include "api.h"
 
 #include <arpa/inet.h>
+#include <curl/curl.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <microhttpd.h>
@@ -419,6 +420,14 @@ int api_start(void)
 const char *api_url(void) { return api.active ? api.url : NULL; }
 const char *api_token(void) { return api.active ? api.token : NULL; }
 
+static const char *api_connect_json_buf(char *out, size_t n)
+{
+    char *s = api_connect_json();
+    snprintf(out, n, "%s", s ? s : "");
+    free(s);
+    return out;
+}
+
 char *api_connect_json(void)
 {
     if (!api.active)
@@ -433,6 +442,119 @@ char *api_connect_json(void)
     char *s = cJSON_Print(o);
     cJSON_Delete(o);
     return s;
+}
+
+struct buf {
+    char *p;
+    size_t n;
+};
+
+static size_t buf_write(char *d, size_t sz, size_t nm, void *u)
+{
+    struct buf *b = u;
+    char *p = realloc(b->p, b->n + sz * nm + 1);
+    if (!p)
+        return 0;
+    memcpy(p + b->n, d, sz * nm);
+    b->p = p;
+    b->n += sz * nm;
+    b->p[b->n] = 0;
+    return sz * nm;
+}
+
+/* POST {base}/v1/{verb} with a dlv key; the parsed reply, or NULL with err set. */
+static cJSON *dlv_call(const char *base, const char *key, const char *verb, const cJSON *body, char *err, size_t en)
+{
+    char url[1024], auth[600];
+    snprintf(url, sizeof url, "%s/v1/%s", base, verb);
+    snprintf(auth, sizeof auth, "Authorization: Bearer %s", key);
+    char *json = cJSON_PrintUnformatted(body);
+    struct buf b = {0};
+    struct curl_slist *h = curl_slist_append(NULL, auth);
+    h = curl_slist_append(h, "Content-Type: application/json");
+    CURL *c = curl_easy_init();
+    curl_easy_setopt(c, CURLOPT_URL, url);
+    curl_easy_setopt(c, CURLOPT_HTTPHEADER, h);
+    curl_easy_setopt(c, CURLOPT_POSTFIELDS, json);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, buf_write);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &b);
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, 5L);
+    curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
+    CURLcode rc = curl_easy_perform(c);
+    long status = 0;
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_cleanup(c);
+    curl_slist_free_all(h);
+    free(json);
+    cJSON *r = b.p ? cJSON_Parse(b.p) : NULL;
+    free(b.p);
+    if (rc != CURLE_OK)
+        snprintf(err, en, "%s", curl_easy_strerror(rc));
+    else if (status != 200) {
+        const char *m = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(r, "error"), "message"));
+        snprintf(err, en, "%s: %s", verb, m ? m : "request failed");
+    } else
+        return r;
+    cJSON_Delete(r);
+    return NULL;
+}
+
+int api_register_dlv(char *msg, size_t n)
+{
+    char path[4200];
+    const char *home = getenv("HOME");
+    snprintf(path, sizeof path, "%s/.config/dlv/client.json", home ? home : ".");
+    FILE *f = api.active ? fopen(path, "rb") : NULL;
+    if (!f)
+        return 0;
+    char text[8192];
+    text[fread(text, 1, sizeof text - 1, f)] = 0;
+    fclose(f);
+    char line[1024];
+    cJSON *cfg = cJSON_Parse(text), *conn = cJSON_Parse(api_connect_json_buf(line, sizeof line));
+    const char *base = cJSON_GetStringValue(cJSON_GetObjectItem(cfg, "url"));
+    const char *key = cJSON_GetStringValue(cJSON_GetObjectItem(cfg, "key"));
+    const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(conn, "name"));
+    int ok = 0;
+    if (!base || !key || !name) {
+        snprintf(msg, n, "dlv: %s has no url and key", path);
+        goto done;
+    }
+    char err[256] = "";
+    cJSON *empty = cJSON_CreateObject(), *cur = dlv_call(base, key, "backends", empty, err, sizeof err);
+    cJSON_Delete(empty);
+    if (!cur) {
+        snprintf(msg, n, "dlv: not registered (%s)", err);
+        goto done;
+    }
+    cJSON *hosts = cJSON_CreateArray(), *h;
+    cJSON *old = cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(cur, "backends"), "mux"), "settings"), "hosts");
+    cJSON_ArrayForEach(h, old) {
+        const char *hn = cJSON_GetStringValue(cJSON_GetObjectItem(h, "name"));
+        if (!hn || strcmp(hn, name))
+            cJSON_AddItemToArray(hosts, cJSON_Duplicate(h, 1));
+    }
+    cJSON *me = cJSON_CreateObject();
+    cJSON_AddStringToObject(me, "name", name);
+    cJSON_AddStringToObject(me, "url", api.url);
+    cJSON_AddItemToArray(hosts, me);
+    cJSON *body = cJSON_CreateObject();
+    cJSON_AddStringToObject(body, "name", "mux");
+    cJSON_AddItemToObject(cJSON_AddObjectToObject(body, "settings"), "hosts", hosts);
+    cJSON_AddStringToObject(cJSON_AddObjectToObject(cJSON_AddObjectToObject(body, "secrets"), "host_tokens"), name, api.token);
+    cJSON *r = dlv_call(base, key, "backend_set", body, err, sizeof err);
+    ok = r != NULL;
+    if (ok)
+        snprintf(msg, n, "registered with dlv as %s at %s", name, base);
+    else
+        snprintf(msg, n, "dlv: not registered (%s)", err);
+    cJSON_Delete(r);
+    cJSON_Delete(body);
+    cJSON_Delete(cur);
+done:
+    cJSON_Delete(cfg);
+    cJSON_Delete(conn);
+    return ok ? 1 : -1;
 }
 
 void api_stop(void)

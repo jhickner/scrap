@@ -15,6 +15,7 @@ struct session {
     char          *reply;
     backend_result result;
     char           env[4][64];
+    char           model[64];
 };
 
 extern struct session *tabs[WORKSPACE_MAX];

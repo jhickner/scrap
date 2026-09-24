@@ -60,6 +60,7 @@ int workspace_close(int i)
     return 1;
 }
 const char *session_id(const struct session *s) { return s->id[0] ? s->id : NULL; }
+const char *session_model(const struct session *s) { return s->model[0] ? s->model : "default"; }
 int session_turn_running(const struct session *s) { return s && s->running; }
 void session_interrupt(struct session *s) { s->interrupted = 1; }
 const char *session_last_reply(const struct session *s) { return s->reply; }
