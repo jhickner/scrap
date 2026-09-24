@@ -67,6 +67,7 @@ static struct {
     int                stopping;
     struct MHD_Daemon *daemon;
     char               token[256];
+    char               url[64];
     int                wake[2];
     pthread_mutex_t    lock;
     pthread_cond_t     cond;     /* job replies and new events */
@@ -411,8 +412,27 @@ int api_start(void)
     session_add_listener(apicore_event, NULL);
     api.active = 1;
     restart_flag("--api");
-    fprintf(stderr, APP_NAME ": worker API on http://%s:%d\n", bind, port);
+    snprintf(api.url, sizeof api.url, "http://%s:%d", bind, port);
     return 1;
+}
+
+const char *api_url(void) { return api.active ? api.url : NULL; }
+const char *api_token(void) { return api.active ? api.token : NULL; }
+
+char *api_connect_json(void)
+{
+    if (!api.active)
+        return NULL;
+    char host[256] = "";
+    gethostname(host, sizeof host - 1);
+    host[strcspn(host, ".")] = 0;
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "name", host);
+    cJSON_AddStringToObject(o, "url", api.url);
+    cJSON_AddStringToObject(o, "token", api.token);
+    char *s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    return s;
 }
 
 void api_stop(void)

@@ -850,6 +850,18 @@ int main(int argc, char **argv)
     if (!resume && !restore_arg && (session_arg || grokbottail_applies(session)))
         sessionload_into(session);
 
+    if (api_on && interactive) {
+        viewport_item_begin(VIEWPORT_ROWS(1, 1));
+        char *conn = api_connect_json();
+        ui_note("worker API %s", api_url());
+        ui_note("token %s", api_token());
+        if (conn && copy_to_clipboard(conn))
+            ui_note("connection JSON copied \xc2\xb7 paste it into dlv \xe2\x86\x92 Workers");
+        free(conn);
+        viewport_item_end();
+        ui_flush();
+    }
+
     if (!picked_bot) {
         prefs_remember_choice("model", "grokbot", session_model_label(session));
         viewport_item_begin(VIEWPORT_ROWS(1, 1));

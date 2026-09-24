@@ -249,7 +249,7 @@ static void help_heading(const char *text)
     ui_put("\n");
 }
 
-static int copy_to_clipboard(const char *text)
+int copy_to_clipboard(const char *text)
 {
 #if defined(__APPLE__)
     const char *tool = "pbcopy";

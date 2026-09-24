@@ -40,4 +40,6 @@ void cmd_forget_session(struct session *s);
 
 int cmd_resume(struct session *s);
 
+int copy_to_clipboard(const char *text);
+
 #endif
