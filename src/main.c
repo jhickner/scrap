@@ -7,12 +7,6 @@
 
 #include "agenttabs.h"
 #include "app.h"
-#include "board.h"
-#include "boardcfg.h"
-#include "boardname.h"
-#include "boardview.h"
-#include "child.h"
-#include "boardwork.h"
 #include "bash.h"
 #include "chrome.h"
 #include "cmd.h"
@@ -38,21 +32,17 @@
 #include "voicetrace.h"
 #include "version.h"
 #include "dispatch.h"
-#include "orchinstall.h"
 #include "sidechannel.h"
 #include "reopen.h"
 #include "tabs.h"
 #include "status.h"
 #include "tg.h"
-#include "orch.h"
 #include "agentsync.h"
-#include "orchcli.h"
 #include "relay.h"
 #include "voice.h"
 #include "tty.h"
 #include "ui.h"
 #include "viewport.h"
-#include "views.h"
 #include "workspace.h"
 #include "vendor/agents/backend.h"
 #include "vendor/repl.h"
@@ -123,12 +113,8 @@ static void usage(void)
             "  -e effort  reasoning/thinking effort (default: the last /effort pick, else the CLI's own)\n"
             "  -C dir     working directory for the agent's tools\n"
             "  -s         safe mode: skip skills, CLAUDE.md, MCP servers, hooks\n"
-            "  --card     put the rest of the line on the board and leave\n"
-            "             -b and --tier pin the worker; a card id retargets it\n"
-            "  --tier     with --card: low, med or high\n"
             "  --telegram also answer over Telegram, in the same session\n"
             "  --relay    also answer a phone over WebSocket, in the same session\n"
-            "  --orchestrator  run the task orchestrator in this instance\n"
             "  --connect telegram|relay   the same thing, spelled out\n"
             "  -r         --resume: pick a past conversation to continue\n"
             "  --reopen   bring back the sessions of a window that is gone\n"
@@ -172,20 +158,6 @@ static void bash_ready(void *ud)
     workspace_drain();
 }
 
-static void reap_children(void)
-{
-    char key[CHILD_KEY_MAX];
-    for (;;) {
-        char *out = NULL;
-        int   ok = 0;
-        if (!child_reap(key, sizeof key, &out, &ok))
-            break;
-        (void)ok;
-        boardname_take(key, out);
-        free(out);
-    }
-}
-
 static void offer_project_trust(struct session *s)
 {
     if (!session_take_trust_request(s))
@@ -205,8 +177,6 @@ static int idle_render(void *ud)
     sidechannel_poll();
     sidechannel_tick();
     dispatch_poll();
-    orch_poll();
-    reap_children();
 
     if (tg_pending() || relay_pending() || voice_pending())
         tty_wake();
@@ -321,17 +291,16 @@ static void side_tick(void *ud)
     (void)ud;
     sidechannel_poll();
     sidechannel_tick();
-    reap_children();
     image_poll();
     workspace_pump();
     status_tick();
     if (vncinset_stale(inset_live()))
         viewport_touch();
 }
-/* Dispatch requests and orchestrator work arrive as files, and nothing in the
-   idle fd set wakes the loop for them. An instance with no running session must
-   still tick, or it never answers a spawn and the caller times out against a
-   live mux. dispatch_poll and orch_poll throttle themselves. */
+/* Dispatch requests arrive as files, and nothing in the idle fd set wakes the
+   loop for them. An instance with no running session must still tick, or it
+   never answers a spawn and the caller times out against a live mux.
+   dispatch_poll throttles itself. */
 static int idle_poll(void *ud)   { (void)ud; return 1; }
 static void replay(void *ud)      { (void)ud; session_replay(workspace_current()); }
 static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
@@ -349,18 +318,7 @@ static int clicked(void *ud, int row, int col)
 
 static void switcher(void *ud)
 {
-    struct session *here = workspace_current();
-    views_last(here ? session_cwd(here) : NULL);
-    if (!workspace_count())
-        prompt_stop(ud);
-}
-
-static void board(void *ud)
-{
-    struct session *here = workspace_current();
-    if (!here)
-        return;
-    views_board(session_cwd(here));
+    sessionswitch_run();
     if (!workspace_count())
         prompt_stop(ud);
 }
@@ -464,7 +422,6 @@ static int idle_restart(void *ud)
     (void)ud;
 
     sidechannel_close_all();
-    child_close_all();
     tabs_admit(1);
 
     if (!restart_exec(workspace_current())) {
@@ -523,7 +480,6 @@ static void turn_done(struct session *s)
 static void turn_begin(struct session *s)
 {
     voice_turn_begin(s);
-    boardwork_spoke_to(s);
 }
 
 static int tab_queued(void *ud)
@@ -559,10 +515,6 @@ static int live_command(void *ud, const char *line)
 
 int main(int argc, char **argv)
 {
-    /* `mux orch ...` is the orchestrator's command line, not a prompt: it does
-       its work and exits without opening a session. */
-    if (argc > 1 && !strcmp(argv[1], "orch"))
-        return orchcli_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "sync"))
         return agentsync_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "version")) {
@@ -583,11 +535,8 @@ int main(int argc, char **argv)
         {"restore", required_argument, NULL, 'R'},
         {"tabs",    required_argument, NULL, 'B'},
         {"reopen",  no_argument,       NULL, 'O'},
-        {"card",    no_argument,       NULL, 'K'},
-        {"tier",    required_argument, NULL, 1},
         {"telegram", no_argument,      NULL, 'T'},
         {"relay",    no_argument,      NULL, 'W'},
-        {"orchestrator", no_argument,  NULL, 'G'},
         {"connect", required_argument, NULL, 'N'},
         {"help",    no_argument,       NULL, 'h'},
         {"version", no_argument,       NULL, 'V'},
@@ -597,7 +546,6 @@ int main(int argc, char **argv)
     const char *backend = "claude";
     const char *model = NULL;
     const char *effort = NULL;
-    const char *tier = NULL;
     const char *dir = NULL;
     const char *session_arg = NULL;
     const char *restore_arg = NULL;
@@ -605,8 +553,6 @@ int main(int argc, char **argv)
     int         reopen_arg = 0;
     int telegram = 0;
     int relay = 0;
-    int orchestrator = 0;
-    int card = 0;
     int pin_backend = 0;
     int fork_session = 0;
     int safe_mode = 0;
@@ -618,7 +564,6 @@ int main(int argc, char **argv)
         case 'b': backend = optarg; pin_backend = 1; break;
         case 'm': model = optarg; break;
         case 'e': effort = optarg; break;
-        case 1:   tier = optarg; break;
         case 'C': dir = optarg; break;
         case 's': safe_mode = 1; break;
         case 'r': resume = 1; break;
@@ -627,10 +572,8 @@ int main(int argc, char **argv)
         case 'R': restore_arg = optarg; break;
         case 'B': tabs_arg = optarg; break;
         case 'O': reopen_arg = 1; break;
-        case 'K': card = 1; break;
         case 'T': telegram = 1; break;
         case 'W': relay = 1; break;
-        case 'G': orchestrator = 1; break;
         case 'V': printf(APP_NAME " %s\n", MUX_VERSION); return 0;
         case 'N':
             if (!strcmp(optarg, "relay")) {
@@ -655,15 +598,6 @@ int main(int argc, char **argv)
     }
     if (effort && !strcmp(effort, "default"))
         effort = NULL;
-    if (tier && !card) {
-        fprintf(stderr, APP_NAME ": --tier is for --card\n");
-        return 2;
-    }
-    if (tier && boardcfg_tier_from_name(tier) >= BOARD_TIERS) {
-        fprintf(stderr, APP_NAME ": --tier takes low, med or high\n");
-        return 2;
-    }
-
     sessionfork_set_program(argv[0]);
 
     if (resume && optind < argc) {
@@ -682,47 +616,6 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (card) {
-        const char *card_backend = pin_backend ? backend : NULL;
-        const char *card_tier = tier;
-        int         rest = argc - optind;
-
-        if (rest == 1 && (card_backend || card_tier) &&
-            board_pin(argv[optind], card_backend, card_tier)) {
-            printf("%s\n", argv[optind]);
-            return 0;
-        }
-        if (rest <= 0) {
-            fprintf(stderr, APP_NAME ": --card takes a task description\n");
-            return 2;
-        }
-        size_t need = 1;
-        for (int i = optind; i < argc; i++)
-            need += strlen(argv[i]) + 1;
-        char *text = malloc(need);
-        if (!text) {
-            fprintf(stderr, APP_NAME ": out of memory\n");
-            return 1;
-        }
-        text[0] = '\0';
-        for (int i = optind; i < argc; i++) {
-            if (i > optind)
-                strcat(text, " ");
-            strcat(text, argv[i]);
-        }
-        char id[16] = {0};
-        int  ok = boardview_capture(text, cwd, id, sizeof id);
-        if (ok && (card_backend || card_tier))
-            ok = board_pin(id, card_backend, card_tier);
-        free(text);
-        if (!ok) {
-            fprintf(stderr, APP_NAME ": could not write to the board\n");
-            return 1;
-        }
-        printf("%s\n", id);
-        return 0;
-    }
-
     char config[4096];
     int have_config = path_config_dir(config, sizeof config);
     if (have_config) {
@@ -730,7 +623,6 @@ int main(int argc, char **argv)
         snprintf(path, sizeof path, "%s/settings", config);
         settings_open(path);
     }
-    orch_install();
 
     if (!pin_backend)
         backend = cmd_default_backend();
@@ -751,9 +643,9 @@ int main(int argc, char **argv)
 
     int interactive = optind >= argc;
 
-    if ((telegram || relay || orchestrator) && !interactive) {
+    if ((telegram || relay) && !interactive) {
         fprintf(stderr, APP_NAME ": --%s takes no prompt\n",
-                telegram ? "telegram" : relay ? "relay" : "orchestrator");
+                telegram ? "telegram" : "relay");
         return 2;
     }
 
@@ -811,8 +703,6 @@ int main(int argc, char **argv)
         telegram = 0;
     if (relay && session && !relay_start(session))
         relay = 0;
-    if (orchestrator && session && !orch_start(session))
-        orchestrator = 0;
 
     if (!session) {
         if (interactive)
@@ -889,14 +779,11 @@ int main(int argc, char **argv)
     prompt_set_cycle(prompt, cycle_session, NULL);
     prompt_set_collapse(prompt, collapse_tools, NULL);
     view_collapse(session_compact(session));
-    prompt_set_board(prompt, board, prompt);
     prompt_set_cancel(prompt, cancel_turn, NULL);
     prompt_set_discard(prompt, discard_voice, NULL);
     workspace_on_finish(turn_done);
 
-    workspace_on_settled(boardwork_finished);
     workspace_on_turn(turn_begin);
-    livelist_on_card(boardwork_card_of);
     prompt_set_replay(prompt, replay, NULL);
     prompt_set_blank(prompt, blank_line, NULL);
     vncinset_set_opener(vncsource_open);
@@ -945,8 +832,6 @@ int main(int argc, char **argv)
         unlink(tabs_arg);
         tabs_admit(0);
     }
-
-    boardwork_reattach();
 
     if (reopen_arg)
         reopen_run();
@@ -1037,12 +922,10 @@ int main(int argc, char **argv)
     }
 
     sidechannel_close_all();
-    child_close_all();
     tabs_admit(1);
     voice_stop();
     tg_stop();
     relay_stop();
-    orch_stop();
     session_set_typeahead(NULL, NULL);
     chrome_bind(NULL);
     prompt_free(prompt);

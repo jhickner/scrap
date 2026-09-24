@@ -54,20 +54,9 @@ enum ui_group {
 #define UI_ALT_ON       "\x1b[?1049h"
 #define UI_ALT_OFF      "\x1b[?1049l"
 
-#define UI_BOX_TL "\xe2\x95\xad"
-#define UI_BOX_TR "\xe2\x95\xae"
-#define UI_BOX_BL "\xe2\x95\xb0"
-#define UI_BOX_BR "\xe2\x95\xaf"
-#define UI_BOX_H  "\xe2\x94\x80"
-#define UI_BOX_V  "\xe2\x94\x82"
-#define UI_BOX_ML "\xe2\x94\x9c"
-#define UI_BOX_MR "\xe2\x94\xa4"
-
 void        ui_init(void);
 
 void ui_pad(int cells);
-
-void ui_box_rule(enum ui_role role, const char *left, const char *right, int width);
 
 const char *ui_style(enum ui_role role);
 

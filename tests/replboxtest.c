@@ -45,8 +45,7 @@ static void scroll_window(void)
     replbox_scroll(&b, 10);
     eq("room to spare", replbox_top(&b), 0);
 
-    Repl *r = replbox_repl(&b);
-    r->cursor = 0;
+    b.repl.cursor = 0;
     b.fresh = 0;
     replbox_render(&b, rows);
     replbox_scroll(&b, 2);
@@ -83,9 +82,6 @@ static void line_out(void)
     replbox_width(&b, 40);
     type(&b, "hello");
     eq("line", strcmp(replbox_line(&b), "hello"), 0);
-    replbox_reset(&b);
-    eq("reset", strcmp(replbox_line(&b), ""), 0);
-    eq("reset scrolls back", replbox_top(&b), 0);
     replbox_free(&b);
 }
 

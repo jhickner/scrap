@@ -9,7 +9,6 @@ int  workspace_begin(struct session *first, int safe_mode);
 void workspace_end(void);
 
 struct session *workspace_current(void);
-struct session *workspace_base(void);
 struct session *workspace_at(int index);
 int  workspace_count(void);
 int  workspace_index(void);
@@ -18,15 +17,10 @@ int  workspace_index_of(const struct session *s);
 int  workspace_spawn(const char *backend, const char *model, const char *effort,
                      const char *cwd, const char *id);
 
-/* the standing prompt has to be set before the backend is built, so a caller
-   that wants one cannot set it on the tab it gets back */
-int  workspace_spawn_ex(const char *backend, const char *model, const char *effort,
-                        const char *cwd, const char *id, const char *system);
-
 /* a configured session with no child yet, for a caller that starts a batch of
    them at once before opening their tabs */
 struct session *workspace_prepare(const char *backend, const char *model, const char *effort,
-                                  const char *cwd, const char *id, const char *system);
+                                  const char *cwd, const char *id);
 
 int  workspace_open(struct session *s);
 
@@ -41,7 +35,6 @@ int  workspace_find_id(const char *id);
 int  workspace_dump(int index, const char *path);
 
 int  workspace_close(int index);
-int  workspace_close_to_base(int index);
 
 int  workspace_send(int index, const char *line, const char *shown);
 int  workspace_queued(int index);
@@ -55,8 +48,6 @@ void workspace_settle(struct session *s);
 void workspace_wait_turn(int index);
 
 void workspace_on_finish(void (*fn)(struct session *s));
-
-void workspace_on_settled(void (*fn)(struct session *s));
 
 void workspace_on_turn(void (*fn)(struct session *s));
 

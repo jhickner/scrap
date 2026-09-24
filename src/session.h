@@ -15,7 +15,6 @@ struct tasktab;
 typedef int (*session_key_fn)(void *ud, tty_event *ev);
 void session_set_typeahead(session_key_fn fn, void *ud);
 
-int session_poll_input(void);
 
 struct session *session_new(const char *backend, const char *cwd, const char *model,
                             const char *effort);
@@ -33,21 +32,11 @@ typedef void (*session_listener_fn)(void *ud, struct session *s, const backend_e
 int  session_add_listener(session_listener_fn fn, void *ud);
 void session_remove_listener(session_listener_fn fn, void *ud);
 
-#define SESSION_RECENT     4
-#define SESSION_RECENT_MAX 160
-
-int session_recent(const struct session *s, const char **out, int max);
-int session_recent_seq(const struct session *s);
-
 void session_set_system_extra(struct session *s, const char *text);
 
 void session_set_abort_hook(struct session *s, int (*fn)(void *ud), void *ud);
 
 void session_set_naming(struct session *s, int on);
-
-/* the session this one was opened from; held until this one has an id of its
-   own to hang it under */
-void session_set_parent(struct session *s, const char *parent_id);
 
 void session_set_thinking(struct session *s, int on);
 int  session_thinking(const struct session *s);
@@ -92,7 +81,6 @@ double session_turn_elapsed(const struct session *s);
 
 #define SESSION_QUIET_SECONDS 60.0
 
-double session_quiet(const struct session *s);
 
 void session_turn_wait(struct session *s);
 
@@ -134,12 +122,6 @@ int session_set_cwd(struct session *s, const char *path);
 int session_set_model(struct session *s, const char *model);
 /* Set the model of a session that has not started, without a restart. */
 int session_preset_model(struct session *s, const char *model);
-
-/* Point the session at a model, an effort and a directory in one backend
-   replacement, rather than one for each. A directory it is already in keeps
-   the conversation: the child is started on the session it resumes. */
-int session_retarget(struct session *s, const char *model, const char *effort,
-                     const char *cwd);
 
 int session_set_effort(struct session *s, const char *effort);
 const char *session_effort(const struct session *s);
@@ -265,7 +247,6 @@ const struct transcript *session_transcript(const struct session *s);
 const char *session_last_error(const struct session *s);
 int         session_last_interrupted(const struct session *s);
 
-double session_cost(const struct session *s);
 
 long session_tokens_in(const struct session *s);
 long session_tokens_out(const struct session *s);

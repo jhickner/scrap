@@ -50,7 +50,6 @@ void voice_forget(const struct session *s) { forgotten = (struct session *)s; }
 void tg_forget_session(struct session *s) { (void)s; }
 void relay_refocus(void) {}
 void relay_forget_session(struct session *s) { (void)s; }
-void orch_forget_session(struct session *s) { (void)s; }
 void cmd_forget_session(struct session *s) { (void)s; }
 void view_collapse(int on) { (void)on; }
 
@@ -109,7 +108,6 @@ int session_set_permission(struct session *s, const char *mode)
     (void)mode;
     return 1;
 }
-void session_set_system_extra(struct session *s, const char *text) { (void)s; (void)text; }
 void session_adopt_id(struct session *s, const char *id) { (void)s; (void)id; }
 int session_start(struct session *s) { (void)s; return 1; }
 void session_free(struct session *s) { (void)s; }

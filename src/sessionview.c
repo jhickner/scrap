@@ -82,6 +82,8 @@ static void cluster_paint(const char *line, const unsigned char *spans);
 static void tool_tag(const char *name, char *out, size_t size);
 static unsigned char *row_spans(const char *name, const char *row, size_t prefix);
 static int cluster_budget(void);
+static void view_activity(const char *marker, const char *text, enum ui_role role);
+static void view_tool_output(const char *text, enum ui_role role);
 
 struct sessionview_state {
     int      collapsed;
@@ -555,7 +557,7 @@ int view_tool_path(const char *input_json, const char *cwd, char *out, size_t si
     return found != NULL;
 }
 
-void view_activity(const char *marker, const char *text, enum ui_role role)
+static void view_activity(const char *marker, const char *text, enum ui_role role)
 {
     int indent = TOOL_INDENT + nest + (int)ui_cells(marker) + 1;
     int columns = ui_columns();
@@ -780,7 +782,7 @@ void view_tool_error(const char *text)
     }
 }
 
-void view_tool_output(const char *text, enum ui_role role)
+static void view_tool_output(const char *text, enum ui_role role)
 {
     if (!text || !*text)
         return;

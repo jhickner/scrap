@@ -17,11 +17,6 @@ void text_block(const char *in, char *out, size_t size);
 
 void text_chomp(char *s);
 
-/* append to buf, clamping at size rather than running past it */
-__attribute__((format(printf, 4, 5)))
-void text_appendf(char *buf, size_t size, size_t *at, const char *fmt, ...);
-
-int text_split_commas(char *list, const char **out, int max);
 
 __attribute__((format(printf, 1, 2)))
 char *text_dsprintf(const char *fmt, ...);

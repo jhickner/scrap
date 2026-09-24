@@ -27,13 +27,13 @@ MANUAL_NAMES := $(patsubst tools/%.c,%,$(wildcard tools/*.c))
 CHECKS := kittywraptest overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           reflowtest toolstyletest sessionlisttest claudetest codextest \
           groktest filedifftest pitest agenttabstest statustest transcripttest \
-          sessionviewtest sessionloadtest highlighttest muxcfgtest telegramtest \
-          boardtest modelstest boardgridtest boardtiletest viewstest sessionpresenttest \
+          sessionviewtest sessionloadtest highlighttest telegramtest \
+          modelstest sessionpresenttest \
           workspacetest replboxtest ttytest gitinfotest sidechannelviewtest \
           sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
           dispatchtest voicetabtest grokbottailtest vncinsettest grokvnctest \
           settingstest jevtest
-CHECKS += agentsynctest orchstatustest orchinstalltest sessionaddrtest orchtasktest orchtargettest orcheventtest orchclitest orchtest
+CHECKS += agentsynctest sessionaddrtest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest vncprobe
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,
@@ -102,22 +102,6 @@ $(BUILD)/%.o: src/%.c | $(BUILD) $(BUILD)/vendor $(BUILD)/vendor/mermaid
 -include $(DEP)
 -include $(wildcard $(BUILD)/*.d)
 
-# The role and kind files under board/ are the only place they are defined:
-# this bakes them into the binary, and nothing is read from the config. Generate
-# to a temporary file every time so deleting an input cannot disappear from the
-# prerequisite list; preserve the target timestamp when its contents are equal.
-src/boarddefaults.c: FORCE tools/gen-defaults.sh
-	@tmp=$@.tmp; trap 'rm -f $$tmp' EXIT HUP INT TERM; \
-	 tools/gen-defaults.sh board > $$tmp; \
-	 if ! cmp -s $$tmp $@; then mv $$tmp $@; fi
-
-# Skill, quota.sh, and routing seed under orchestrate/ are compiled in and
-# written out on startup, so a binary-only deploy still has the machinery.
-src/orchdata.c: FORCE tools/gen-embed.sh
-	@tmp=$@.tmp; trap 'rm -f $$tmp' EXIT HUP INT TERM; \
-	 tools/gen-embed.sh orchestrate orchdata.h orch_files orch_files_n > $$tmp; \
-	 if ! cmp -s $$tmp $@; then mv $$tmp $@; fi
-
 # Version is the commit count, so it advances with every commit, plus the
 # short hash. Only main.o includes it.
 $(BUILD)/version.h: FORCE | $(BUILD)
@@ -138,8 +122,8 @@ FORCE:
 tests: $(TOOLS)
 manual: $(MANUAL_BINS)
 
-FULL_LIB_TOOLS := spintest chrometest ttytest keydump gitinfotest muxcfgtest \
-                  telegramtest boardgridtest workspacetest replboxtest voicetabtest
+FULL_LIB_TOOLS := spintest chrometest ttytest keydump gitinfotest \
+                  telegramtest workspacetest replboxtest voicetabtest
 JPEG_TOOLS := imagerowtest vncinsettest imagefittest imagetest mdtest sessionpresenttest
 
 $(addprefix $(BUILD)/,$(FULL_LIB_TOOLS)): TOOL_LIBS = $(LIBS)
@@ -170,7 +154,7 @@ $(BUILD)/imagerowtest: tests/imagerowtest.c $(BUILD)/image.o $(BUILD)/viewport.o
 
 $(BUILD)/vncinsettest: tests/vncinsettest.c $(BUILD)/vncinset.o $(BUILD)/overlay.o $(BUILD)/image.o $(BUILD)/viewport.o $(BUILD)/ui.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/scrollback.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/overlaytest: tests/overlaytest.c $(BUILD)/overlay.o $(BUILD)/menu.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/overlaytest: tests/overlaytest.c $(BUILD)/overlay.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/viewporttest: tests/viewporttest.c $(BUILD)/viewport.o $(BUILD)/ui.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
@@ -202,11 +186,9 @@ $(BUILD)/filedifftest: tests/filedifftest.c $(BUILD)/filediff.o $(BUILD)/ui.o $(
 
 $(BUILD)/taskstest: tests/taskstest.c $(BUILD)/tasks.o $(BUILD)/text.o $(BUILD)/toolstyle.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/orchstatustest: tests/orchstatustest.c $(BUILD)/orchstatus.o $(BUILD)/orchtask.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/agentsynctest: tests/agentsynctest.c $(BUILD)/agentsync.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/orchinstalltest: tests/orchinstalltest.c $(BUILD)/orchinstall.o $(BUILD)/orchdata.o $(BUILD)/text.o | $(BUILD)
 
 $(BUILD)/claudetest: tests/claudetest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
@@ -237,33 +219,22 @@ $(BUILD)/sessionloadtest: tests/sessionloadtest.c $(BUILD)/sessionload.o $(BUILD
 
 $(BUILD)/settingstest: tests/settingstest.c $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/muxcfgtest: tests/muxcfgtest.c $(BUILD)/muxcfg.o $(BUILD)/models.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/telegramtest: tests/telegramtest.c $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/boardtest: tests/boardtest.c $(BUILD)/board.o $(BUILD)/boardname.o $(BUILD)/boardstep.o $(BUILD)/boardcfg.o $(BUILD)/boarddefaults.o $(BUILD)/boardflow.o $(BUILD)/boardlog.o $(BUILD)/mdcfg.o $(BUILD)/replyjson.o $(BUILD)/child.o $(BUILD)/gitcmd.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/boardgridtest: tests/boardgridtest.c tests/stubs/tabbar.c $(BUILD)/boardgrid.o $(BUILD)/menu.o $(BUILD)/overlay.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/status.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/frontend.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/boardtiletest: tests/boardtiletest.c $(BUILD)/boardtile.o $(BUILD)/text.o | $(BUILD)
-
-$(BUILD)/viewstest: tests/viewstest.c $(BUILD)/views.o | $(BUILD)
 
 $(BUILD)/workspacetest: tests/workspacetest.c tests/stubs/tabbar.c $(BUILD)/workspace.o $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/orchtest: tests/orchtest.c $(BUILD)/orch.o $(BUILD)/orchevent.o $(BUILD)/orchtask.o $(BUILD)/orchtarget.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/orchclitest: tests/orchclitest.c $(BUILD)/orchcli.o $(BUILD)/orchtask.o $(BUILD)/orchtarget.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/orcheventtest: tests/orcheventtest.c $(BUILD)/orchevent.o $(BUILD)/orchtask.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/orchtargettest: tests/orchtargettest.c $(BUILD)/orchtarget.o $(BUILD)/orchtask.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/orchtasktest: tests/orchtasktest.c $(BUILD)/orchtask.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/sessionaddrtest: tests/sessionaddrtest.c $(BUILD)/sessionaddr.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/dispatchtest: tests/dispatchtest.c $(BUILD)/dispatch.o $(BUILD)/orchevent.o $(BUILD)/orchtask.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/dispatchtest: tests/dispatchtest.c $(BUILD)/dispatch.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/highlighttest: tests/highlighttest.c $(BUILD)/highlight.o | $(BUILD)
 

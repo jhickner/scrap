@@ -8,7 +8,6 @@
 #include <unistd.h>
 
 #include "cmd.h"
-#include "orchevent.h"
 #include "prompt.h"
 #include "session.h"
 #include "text.h"
@@ -147,76 +146,6 @@ static void send_session(const char *dir, const char *base, const cJSON *o, cons
     }
 }
 
-/* A spawn can ask to have its ending reported: "notify" names the session to
-   tell, "task" the work it was given. The worker is watched from here rather
-   than hooked into the session, because both endings matter and only one of
-   them is an event the session reports: a worker that dies without writing a
-   result is the silent failure this exists to catch.
-
-   "Idle" fires once, on the first turn that starts and then ends, so a
-   follow-up sent later does not report the task finished a second time. The
-   completion itself is still the result file; this only says when to look. */
-struct watch {
-    struct session *s;
-    char            task[64];
-    char            notify[160];
-    char            session[160];
-    int             ran;   /* a turn has been seen running */
-};
-
-static struct watch watches[WORKSPACE_MAX];
-
-static void watch_add(struct session *s, const char *task, const char *notify)
-{
-    for (int i = 0; i < WORKSPACE_MAX; i++) {
-        if (watches[i].s)
-            continue;
-        watches[i].s = s;
-        snprintf(watches[i].task, sizeof watches[i].task, "%s", task);
-        snprintf(watches[i].notify, sizeof watches[i].notify, "%s", notify ? notify : "");
-        watches[i].session[0] = '\0';
-        watches[i].ran = 0;
-        return;
-    }
-}
-
-static void watch_drop(struct watch *w)
-{
-    w->s = NULL;
-    w->task[0] = w->notify[0] = w->session[0] = '\0';
-    w->ran = 0;
-}
-
-static void watch_poll(void)
-{
-    for (int i = 0; i < WORKSPACE_MAX; i++) {
-        struct watch *w = &watches[i];
-        if (!w->s)
-            continue;
-
-        int at = workspace_index_of(w->s);
-        if (at < 0) {
-            /* gone: it either finished and was closed, or it died */
-            orchevent_emit(w->task, w->session, w->notify, "exit");
-            watch_drop(w);
-            continue;
-        }
-
-        const char *id = session_id(workspace_at(at));
-        if (id)
-            snprintf(w->session, sizeof w->session, "%s", id);
-
-        if (session_turn_running(workspace_at(at)) || workspace_queued(at)) {
-            w->ran = 1;
-            continue;
-        }
-        if (!w->ran)
-            continue;
-        orchevent_emit(w->task, w->session, w->notify, "idle");
-        watch_drop(w);
-    }
-}
-
 /* a spawn whose reply is held until its session id is known, so the caller
    never has to address the tab by position */
 struct pending {
@@ -336,11 +265,6 @@ static void serve(const char *dir, const char *base, const char *text)
         workspace_send(at, prompt, NULL);
     }
 
-    const char *task = field(o, "task");
-    const char *notify = field(o, "notify");
-    if (task && notify)
-        watch_add(workspace_at(at), task, notify);
-
     const char *id = session_id(workspace_at(at));
     if (id)
         reply_spawn(dir, base, id, session_addr(workspace_at(at)));
@@ -364,7 +288,6 @@ void dispatch_poll(void)
         return;
 
     settle_pending(dir);
-    watch_poll();
 
     DIR *d = opendir(dir);
     if (!d)

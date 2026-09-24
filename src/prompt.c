@@ -11,7 +11,6 @@
 #include "bash.h"
 #include "chrome.h"
 #include "block.h"
-#include "edit.h"
 #include "files.h"
 #include "scrollback.h"
 #include "settings.h"
@@ -26,6 +25,9 @@
 #include "replkeys.h"
 #include "text.h"
 #include "terminalrun.h"
+
+/* the ceiling on an $EDITOR round trip */
+#define EDIT_MAX_BYTES (1u << 22)
 
 struct prompt {
     Repl         repl;
@@ -70,8 +72,6 @@ struct prompt {
     void        *switcher_ud;
     int        (*click)(void *ud, int row, int col);
     void        *click_ud;
-    void       (*board)(void *ud);
-    void        *board_ud;
     void       (*mic)(void *ud);
     void        *mic_ud;
     void       (*split)(void *ud, int quiet);
@@ -667,7 +667,7 @@ static const struct prompt_key SHORTCUTS[] = {
     {"ctrl-g", "edit the prompt in $EDITOR"},
     {"ctrl-v", "paste text, or a clipboard image as a file path"},
     {"space (empty)", "turn the microphone on or off"},
-    {"tab", "accept the completion, else open the board"},
+    {"tab", "accept the completion, else open /sessions"},
     {"@", "complete a file path from the working directory"},
     {"up / down", "move through the completion list, else browse history"},
     {"ctrl-r", "search history"},
@@ -815,12 +815,12 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             return KEY_OK;
         }
 
-        if (p->board && p->repl.len == 0 && !overlay_open(p)) {
+        if (p->switcher && p->repl.len == 0 && !overlay_open(p)) {
             if (live)
                 status_pause();
             viewport_defer();
             chrome_clear();
-            p->board(p->board_ud);
+            p->switcher(p->switcher_ud);
             if (live)
                 status_resume();
         }
@@ -992,12 +992,6 @@ void prompt_set_switcher(struct prompt *p, void (*fn)(void *ud), void *ud)
 {
     p->switcher = fn;
     p->switcher_ud = ud;
-}
-
-void prompt_set_board(struct prompt *p, void (*fn)(void *ud), void *ud)
-{
-    p->board = fn;
-    p->board_ud = ud;
 }
 
 void prompt_set_mic(struct prompt *p, void (*fn)(void *ud), void *ud)

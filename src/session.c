@@ -82,12 +82,9 @@ struct session {
     char    *handoff;
     session_event_fn observer;
     void    *observer_ud;
-    char     recent[SESSION_RECENT][SESSION_RECENT_MAX];
-    int      recent_n;
     int    (*abort_hook)(void *ud);
     void    *abort_ud;
     int      skip_naming;
-    char     parent[128];
     int      thinking;
     int      compact;
     int      customizations;
@@ -180,54 +177,8 @@ static void charge_turn(struct session *s, const backend_result *m);
 static void retire(Backend *b);
 static int dir_alive(const char *path);
 static int ground_target(const char *gone, char *out, size_t size);
-
-/* a line cut to fit can end mid-sequence */
-static void clip_utf8(char *s)
-{
-    size_t i = 0, whole = 0;
-    while (s[i]) {
-        unsigned char c = (unsigned char)s[i];
-        size_t len = c < 0x80 ? 1 : (c & 0xe0) == 0xc0 ? 2 :
-                     (c & 0xf0) == 0xe0 ? 3 : (c & 0xf8) == 0xf0 ? 4 : 1;
-        for (size_t j = 1; j < len; j++)
-            if (((unsigned char)s[i + j] & 0xc0) != 0x80) {
-                s[whole] = '\0';
-                return;
-            }
-        i += len;
-        whole = i;
-    }
-    s[whole] = '\0';
-}
-
-/* What the session itself is doing. A subagent's work runs under a call that is
-   already recorded, so counting it here would report the wrong actor. */
-static void note_recent(struct session *s, const backend_event *ev)
-{
-    char line[SESSION_RECENT_MAX];
-
-    if (ev->parent && *ev->parent)
-        return;
-
-    if (ev->kind == BACKEND_EV_TOOL) {
-        char what[1024] = "";
-        view_tool_argument(ev, s->cwd, what, sizeof what);
-        snprintf(line, sizeof line, "%s%s%s", ev->name ? ev->name : "tool",
-                 what[0] ? "  " : "", what);
-    } else if (ev->kind == BACKEND_EV_ASSISTANT && ev->text && *ev->text) {
-        snprintf(line, sizeof line, "%s", ev->text);
-    } else {
-        return;
-    }
-
-    for (char *p = line; *p; p++)
-        if (*p == '\n' || *p == '\r' || *p == '\t')
-            *p = ' ';
-    clip_utf8(line);
-
-    snprintf(s->recent[s->recent_n % SESSION_RECENT], SESSION_RECENT_MAX, "%s", line);
-    s->recent_n++;
-}
+static int session_retarget(struct session *s, const char *model, const char *effort,
+                            const char *cwd);
 
 static void render_event(struct session *s, const backend_event *ev)
 {
@@ -255,8 +206,6 @@ static void render_event(struct session *s, const backend_event *ev)
     if (ev->kind == BACKEND_EV_ASSISTANT && ev->text && *ev->text &&
         !(ev->parent && *ev->parent))
         replace(&s->last_block, ev->text);
-
-    note_recent(s, ev);
 
     s->task_change = tasks_note(&s->tasks, ev, &s->task_repeat);
     if (s->task_change && !tasks_done(s->task_change))
@@ -715,7 +664,7 @@ static const char *spin_effort(const struct session *s)
 
 /* A tool the backend is still running explains any amount of silence; nothing
  * else does. */
-double session_quiet(const struct session *s)
+static double session_quiet(const struct session *s)
 {
     if (!s || !s->heard_at || s->tool_open)
         return 0;
@@ -723,7 +672,7 @@ double session_quiet(const struct session *s)
     return quiet > 0 ? quiet : 0;
 }
 
-int session_poll_input(void)
+static int session_poll_input(void)
 {
     if (!tty_is_raw())
         return 0;
@@ -1097,25 +1046,6 @@ const struct transcript *session_transcript(const struct session *s)
     return s ? &s->transcript : NULL;
 }
 
-int session_recent_seq(const struct session *s)
-{
-    return s ? s->recent_n : 0;
-}
-
-int session_recent(const struct session *s, const char **out, int max)
-{
-    if (!s || max <= 0)
-        return 0;
-    int have = s->recent_n < SESSION_RECENT ? s->recent_n : SESSION_RECENT;
-    if (have > max)
-        have = max;
-
-    int n = 0;
-    for (int i = have; i > 0; i--)
-        out[n++] = s->recent[(s->recent_n - i) % SESSION_RECENT];
-    return n;
-}
-
 int session_add_listener(session_listener_fn fn, void *ud)
 {
     for (int i = 0; i < LISTENERS_MAX; i++) {
@@ -1154,13 +1084,6 @@ void session_set_abort_hook(struct session *s, int (*fn)(void *ud), void *ud)
 
 void session_set_naming(struct session *s, int on) { s->skip_naming = !on; }
 
-void session_set_parent(struct session *s, const char *parent_id)
-{
-    snprintf(s->parent, sizeof s->parent, "%s", parent_id ? parent_id : "");
-    if (s->id[0])
-        parent_set(s->id, s->parent);
-}
-
 void session_set_thinking(struct session *s, int on) { s->thinking = on; }
 
 int session_thinking(const struct session *s) { return s->thinking; }
@@ -1180,8 +1103,6 @@ static void set_id(struct session *s, const char *id)
     snprintf(s->id, sizeof s->id, "%s", id);
     sessionaddr_write(s->addr, s->id);
     if (changed) {
-        if (s->parent[0])
-            parent_set(s->id, s->parent);
         if (s->held_title[0]) {
             title_set(s->id, s->held_title);
             s->held_title[0] = '\0';
@@ -1613,8 +1534,8 @@ int session_set_cwd(struct session *s, const char *path)
 /* Setting a model, an effort and a directory one at a time restarts the child
    for each. This asks for all three at once: one replacement, started with
    what it needs on its command line. */
-int session_retarget(struct session *s, const char *model, const char *effort,
-                     const char *cwd)
+static int session_retarget(struct session *s, const char *model, const char *effort,
+                            const char *cwd)
 {
     if (!s)
         return 0;
@@ -2355,11 +2276,6 @@ double session_turn_started(const struct session *s) { return s ? s->started : 0
 const char *session_failed_prompt(const struct session *s)
 {
     return s ? s->failed_prompt : NULL;
-}
-
-double session_cost(const struct session *s)
-{
-    return s ? s->cost_usd : 0;
 }
 
 long session_tokens_in(const struct session *s)

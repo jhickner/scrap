@@ -20,11 +20,7 @@ const char *view_tool_arg_value(const cJSON *input);
 
 int  view_tool_path(const char *input_json, const char *cwd, char *out, size_t size);
 
-void view_activity(const char *marker, const char *text, enum ui_role role);
-
 void view_tool_call(const char *name, const char *arg);
-
-void view_tool_output(const char *text, enum ui_role role);
 
 void view_tool_error(const char *text);
 

@@ -9,22 +9,12 @@
 #include <string.h>
 
 #include "app.h"
-#include "board.h"
-#include "boardview.h"
-#include "boardwork.h"
 #include "chrome.h"
-#include "matrix.h"
 #include "frontend.h"
 #include "hud.h"
 #include "jev.h"
-#include "orch.h"
 #include "relay.h"
 #include "models.h"
-#include "muxcfg.h"
-#include "muxmake.h"
-#include "orchstatus.h"
-#include "orchtarget.h"
-#include "orchtask.h"
 #include "pick.h"
 #include "reopen.h"
 #include "prompt.h"
@@ -38,9 +28,9 @@
 #include "sessionload.h"
 #include "sessionview.h"
 #include "viewport.h"
-#include "views.h"
 #include "workspace.h"
 #include "vendor/agents/grokbot/grokbot.h"
+#include "sessionswitch.h"
 #include "sidechannel.h"
 #include "settings.h"
 #include "settingsui.h"
@@ -166,7 +156,7 @@ static const struct pick_item *model_choices(const struct session *s, int *count
     return cmd_model_choices(session_backend(s), count);
 }
 
-const struct pick_item *cmd_effort_choices(const char *backend, int *count)
+static const struct pick_item *cmd_effort_choices(const char *backend, int *count)
 {
     if (!strcmp(backend, "claude")) {
         *count = COUNT(CLAUDE_EFFORTS);
@@ -512,46 +502,6 @@ static void do_permission(struct session *s, const char *arg)
     reply_note("tool calls: %s", session_permission_desc(index));
 }
 
-static void do_mux(struct session *s, const char *arg);
-
-static void do_mux(struct session *s, const char *arg)
-{
-    if (arg && !strcmp(arg, "config")) {
-        muxcfg_run();
-        return;
-    }
-    if (arg && !strncmp(arg, "make ", 5)) {
-        if (muxmake_run(arg + 5))
-            do_mux(s, NULL);
-        return;
-    }
-    if (!arg || !*arg) {
-        if (matrix_reopen(s))
-            return;
-        struct mux_spec v[MUX_MAX];
-        int             n = muxcfg_load(v, MUX_MAX);
-        reply_note("/mux <prompt> — asks the whole matrix at once; "
-                   "/mux config to change it, /mux make <what> to have one "
-                   "laid out for you");
-        viewport_item_begin(VIEWPORT_ROWS(1, 1));
-        ui_note("%s", muxcfg_active());
-        ui_put("\n");
-        for (int i = 0; i < n; i++) {
-            char label[160];
-            muxcfg_label(&v[i], label, sizeof label);
-            if (*v[i].prompt)
-                ui_note("  %s — %s", label, v[i].prompt);
-            else
-                ui_note("  %s", label);
-            ui_put("\n");
-        }
-        viewport_item_end();
-        ui_flush();
-        return;
-    }
-    matrix_run(s, arg);
-}
-
 static void do_btw(struct session *s, const char *arg)
 {
     if (!arg || !*arg) {
@@ -632,28 +582,6 @@ static void do_relay(struct session *s, const char *arg)
     }
     relay_stop();
     reply_note("relay off");
-}
-
-static void do_orchestrator(struct session *s, const char *arg)
-{
-    int current = orch_label() != NULL;
-    int on = toggle_arg(arg, "on", "off", current, "/orchestrator");
-    if (on < 0)
-        return;
-    if (on == current && orch_session() == s) {
-        reply_note("orchestrator already %s", on ? "on" : "off");
-        return;
-    }
-    if (on) {
-        if (!orch_start(s))
-            reply_error("%s", orch_start_error() ? orch_start_error()
-                                                 : "could not enable the orchestrator");
-        else
-            reply_note("orchestrator on in this session");
-        return;
-    }
-    orch_stop();
-    reply_note("orchestrator off");
 }
 
 static void do_telegram(struct session *s, const char *arg)
@@ -1296,71 +1224,11 @@ static void do_reopen(struct session *s, const char *arg)
 
 static void do_sessions(struct session *s, const char *arg)
 {
+    (void)s;
     (void)arg;
     if (!can_pick("/sessions"))
         return;
-    views_sessions(session_cwd(s));
-}
-
-static void do_card(struct session *s, const char *arg)
-{
-    if (!arg || !*arg) {
-        reply_error("/card <text> \xe2\x80\x94 nothing to put on the board");
-        return;
-    }
-    char id[16] = {0};
-    if (boardview_capture(arg, session_cwd(s), id, sizeof id))
-        reply_note("card %s", id);
-    else
-        reply_error("could not write to the board");
-}
-
-static void do_close(struct session *s, const char *arg)
-{
-    (void)arg;
-
-    const char *id = boardwork_card_of(s);
-    if (!id) {
-        reply_error("/close \xe2\x80\x94 this session is not working a card");
-        return;
-    }
-
-    char why[256] = "";
-    if (!boardview_close(id, why, sizeof why))
-        reply_error("%s", why);
-    else if (why[0])
-        reply_note("card %s closed \xc2\xb7 %s", id, why);
-    else
-        reply_note("card %s closed", id);
-}
-
-static void do_run(struct session *s, const char *arg)
-{
-    const char *held = boardwork_card_of(s);
-    if (!held) {
-        reply_error("/run \xe2\x80\x94 this session is not working a card");
-        return;
-    }
-
-    char id[BOARD_ID_MAX];
-    snprintf(id, sizeof id, "%s", held);
-
-    char why[512] = "";
-    if (!boardview_trigger(id, arg, why, sizeof why)) {
-        reply_error("%s", why);
-        return;
-    }
-
-    reply_note("card %s runs %s next", id, arg);
-    boardwork_step(id);
-}
-
-static void do_board(struct session *s, const char *arg)
-{
-    (void)arg;
-    if (!can_pick("/board"))
-        return;
-    views_board(session_cwd(s));
+    sessionswitch_run();
 }
 
 static void do_status(struct session *s, const char *arg)
@@ -1369,84 +1237,6 @@ static void do_status(struct session *s, const char *arg)
     /* the repo may have moved from outside this session since the last turn */
     gitinfo_forget();
     hud_print(s);
-}
-
-static void do_tasks(struct session *s, const char *arg)
-{
-    (void)s;
-    int all = arg && (!strcmp(arg, "all") || !strcmp(arg, "--all"));
-    if (arg && *arg && !all) {
-        reply_error("/tasks [all] \xe2\x80\x94 expected all or no argument");
-        return;
-    }
-
-    struct orch_rec *tasks = NULL;
-    int count = orchtask_load(NULL, all, &tasks);
-    if (count < 0) {
-        reply_error("could not read orchestrator tasks");
-        return;
-    }
-    orchtarget_apply_live(tasks, count);
-    orchstatus_sort(tasks, count, all);
-    if (!count) {
-        free(tasks);
-        reply_note("no %sorchestrator tasks", all ? "" : "open ");
-        return;
-    }
-
-    viewport_item_begin(VIEWPORT_ROWS(1, 1));
-    char title[80];
-    snprintf(title, sizeof title, "%d %sorchestrator task%s", count,
-             all ? "" : "open ", count == 1 ? "" : "s");
-    help_heading(title);
-
-    struct orchstatus_columns widths;
-    orchstatus_columns(&widths, ui_columns(), tasks, count);
-    char project_head[16], id_head[24], task_head[16], status_head[16];
-    char agent_head[32], age_head[16];
-    orchstatus_cell(project_head, sizeof project_head, "PROJECT", (size_t)widths.project);
-    orchstatus_cell(id_head, sizeof id_head, "ID", (size_t)widths.id);
-    orchstatus_cell(task_head, sizeof task_head, "TASK", (size_t)widths.task);
-    orchstatus_cell(status_head, sizeof status_head, "STATUS", (size_t)widths.status);
-    orchstatus_cell(agent_head, sizeof agent_head, "BACKEND / MODEL", (size_t)widths.agent);
-    orchstatus_cell(age_head, sizeof age_head, "AGE", (size_t)widths.age);
-    ui_esc(ui_style(UI_DIM));
-    ui_printf("  %-*s %-*s %-*s %-*s %-*s %-*s\n",
-              widths.project, project_head, widths.id, id_head,
-              widths.task, task_head,
-              widths.status, status_head, widths.agent, agent_head,
-              widths.age, age_head);
-    ui_esc(ui_style(UI_RESET));
-
-    time_t now = time(NULL);
-    for (int i = 0; i < count; i++) {
-        struct orch_rec *t = &tasks[i];
-        char project[128], id[64], desc[512], status[80], agent[220];
-        char age[16], age_cell[16];
-        char full_status[80], full_agent[220], full_task[560];
-        orchstatus_status(full_status, sizeof full_status, t);
-        orchstatus_task(full_task, sizeof full_task, t);
-        orchstatus_agent(full_agent, sizeof full_agent, t);
-        orchstatus_cell(project, sizeof project, t->project, (size_t)widths.project);
-        orchstatus_cell(id, sizeof id, t->id, (size_t)widths.id);
-        const char *rest = orchstatus_wrap(desc, sizeof desc, full_task,
-                                           (size_t)widths.task);
-        orchstatus_cell(status, sizeof status, full_status, (size_t)widths.status);
-        orchstatus_cell(agent, sizeof agent, full_agent, (size_t)widths.agent);
-        orchtask_age(age, sizeof age, t->updated ? t->updated : t->created, now);
-        orchstatus_cell(age_cell, sizeof age_cell, age, (size_t)widths.age);
-        ui_printf("  %-*s %-*s %-*s %-*s %-*s %-*s\n",
-                  widths.project, project, widths.id, id, widths.task, desc,
-                  widths.status, status, widths.agent, agent,
-                  widths.age, age_cell);
-        while (*rest) {
-            rest = orchstatus_wrap(desc, sizeof desc, rest, (size_t)widths.task);
-            ui_printf("  %*s %*s %s\n", widths.project, "", widths.id, "", desc);
-        }
-    }
-    free(tasks);
-    viewport_item_end();
-    ui_flush();
 }
 
 static void do_session(struct session *s, const char *arg)
@@ -1499,7 +1289,7 @@ static void do_fork_t(struct session *s, const char *arg)
     }
 
     struct session *f = workspace_prepare(backend, session_model_label(s), session_effort(s),
-                                          session_cwd(s), id, NULL);
+                                          session_cwd(s), id);
     if (!f) {
         reply_error("could not start the %s CLI", backend);
         return;
@@ -1523,8 +1313,6 @@ static const struct cmd COMMANDS[] = {
     {"/backend", "continue with another backend", "<name>", 0, do_backend},
     {"/default", "set the default backend", "[name]", CMD_LIVE, do_default},
     {"/cd", "work in another directory, starting fresh there", "<path>", 0, do_cd},
-    {"/mux", "ask the whole matrix the same thing", "<prompt>|config|make <what>",
-     0, do_mux},
     {"/btw", "answer this on the side, without waiting", "<prompt>",
      CMD_SELF_ECHOES | CMD_LIVE, do_btw},
     {"/thinking", "show or hide the model's reasoning", "[on|off]", CMD_LIVE,
@@ -1534,8 +1322,6 @@ static const struct cmd COMMANDS[] = {
     {"/sticky", "float the prompt above the spinner", "[on|off]", CMD_LIVE, do_sticky},
     {"/relay", "answer over the phone relay", "[on|off]", CMD_LIVE, do_relay},
     {"/telegram", "answer over Telegram", "[on|off]", CMD_LIVE, do_telegram},
-    {"/orchestrator", "run the task orchestrator in this session", "[on|off]", CMD_LIVE,
-     do_orchestrator},
     {"/voice", "talk instead of typing", "[on|off|listen|mode [auto|wake|jev]|jev|restart|complete|volume|rate|silence]", CMD_LIVE, do_voice},
     {"/image", "tallest an inline image may be drawn", "[rows]", CMD_LIVE, do_image},
     {"/permission", "how the CLI gates tool calls", "[mode]", 0, do_permission},
@@ -1551,13 +1337,6 @@ static const struct cmd COMMANDS[] = {
     {"/fw", "fork into a tmux window", NULL, CMD_LIVE, do_fork_w},
     {"/ft", "fork into a new tab", NULL, CMD_LIVE, do_fork_t},
     {"/split", "open a shell split in this directory", "[h|v|w]", 0, do_split},
-    {"/card", "add a card to the board", "<text>", CMD_LIVE, do_card},
-    {"/board", "show the cards, by column", NULL, CMD_LIVE, do_board},
-    {"/close", "close this session's card", NULL, CMD_LIVE, do_close},
-    {"/run", "queue actions on this session's card", "[<action>, ...]", CMD_LIVE,
-     do_run},
-    {"/tasks", "show orchestrator tasks across every project", "[all]", CMD_LIVE,
-     do_tasks},
     {"/status", "reprint the status bar", NULL, CMD_LIVE, do_status},
     {"/session", "show this session's info and totals", NULL, CMD_LIVE, do_session},
     {"/rename", "name this session, or ask the model to name it again", "[name]",

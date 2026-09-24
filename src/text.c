@@ -31,44 +31,6 @@ char *text_dsprintf(const char *fmt, ...)
     return out;
 }
 
-void text_appendf(char *buf, size_t size, size_t *at, const char *fmt, ...)
-{
-    if (*at + 1 >= size)
-        return;
-    va_list ap;
-    va_start(ap, fmt);
-    int w = vsnprintf(buf + *at, size - *at, fmt, ap);
-    va_end(ap);
-    if (w < 0)
-        return;
-    *at = (size_t)w < size - *at ? *at + (size_t)w : size - 1;
-}
-
-/* "implement, merge" -> the names it lists, trimmed. Eats its argument. */
-int text_split_commas(char *list, const char **out, int max)
-{
-    if (!list)
-        return 0;
-
-    int n = 0;
-    for (char *at = list; *at && n < max;) {
-        while (*at == ' ' || *at == ',')
-            at++;
-        char *start = at;
-        while (*at && *at != ',')
-            at++;
-        char *end = at;
-        if (*at)
-            at++;
-        while (end > start && end[-1] == ' ')
-            end--;
-        *end = '\0';
-        if (*start)
-            out[n++] = start;
-    }
-    return n;
-}
-
 void text_trunc(char *out, size_t size, const char *in)
 {
     size_t i = 0;

@@ -8,7 +8,6 @@
 #include "ask.h"
 #include "cmd.h"
 #include "image.h"
-#include "muxcfg.h"
 #include "pick.h"
 #include "session.h"
 #include "settings.h"
@@ -17,7 +16,7 @@
 #include "ui.h"
 #include "voice.h"
 
-enum kind { S_FLAG, S_PERMISSION, S_ROWS, S_COLOR, S_MATRIX, S_BACKEND, S_CHOICE, S_NOUL };
+enum kind { S_FLAG, S_PERMISSION, S_ROWS, S_COLOR, S_BACKEND, S_CHOICE, S_NOUL };
 
 struct entry {
     const char *name;
@@ -110,8 +109,6 @@ static const struct entry ENTRIES[] = {
     {.name = "emphasis colour", .kind = S_COLOR,
      .about = "headings, bold, code, and the spinner",
      .group = UI_GROUP_EMPHASIS},
-    {.name = "mux matrix", .kind = S_MATRIX,
-     .about = "the backends /mux fans out over"},
     {.name = "backend", .kind = S_BACKEND,
      .about = "the CLI mux starts on"},
 };
@@ -220,9 +217,6 @@ static void value_of(const struct session *s, int at, char *out, size_t cap)
     }
     case S_COLOR:
         snprintf(out, cap, "%s", ui_swatch(e->group));
-        break;
-    case S_MATRIX:
-        snprintf(out, cap, "%s", muxcfg_active());
         break;
     case S_BACKEND:
         snprintf(out, cap, "%s", cmd_default_backend());
@@ -388,9 +382,6 @@ static void edit(struct session *s, int at)
         break;
     case S_COLOR:
         edit_color(e);
-        break;
-    case S_MATRIX:
-        muxcfg_run();
         break;
     case S_BACKEND:
         edit_backend();

@@ -16,7 +16,6 @@
 #include "dirpick.h"
 #include "handoff.h"
 #include "hud.h"
-#include "boardwork.h"
 #include "livelist.h"
 #include "models.h"
 #include "parent.h"
@@ -44,7 +43,6 @@ static int show_all;
 
 #define KEY_CTRL(c) ((c) & 0x1f)
 
-#define WORKER_MARK "\xe2\x97\x86"
 
 #define MAX_ROWS 128
 
@@ -60,7 +58,6 @@ struct row {
     int  at;
     int  spin;
     char mark[4];
-    char card[16];
     char id[128];
     char parent[128];
     char cwd[512];
@@ -87,12 +84,9 @@ static void tab_rows(struct row *rows, int *n)
         r->at = i;
 
         path_home_relative(session_cwd(s), r->cwd, sizeof r->cwd);
-        const char *card = boardwork_card_of(s);
         snprintf(r->label, sizeof r->label, "%s %s",
                  i == workspace_index() ? "\xe2\x96\xb8" : "\xc2\xb7",
                  title && *title ? title : "untitled");
-        if (card)
-            snprintf(r->card, sizeof r->card, "%s", card);
         snprintf(r->id, sizeof r->id, "%s", session_id(s) ? session_id(s) : "");
         if (r->id[0])
             parent_of(r->id, r->parent, sizeof r->parent);
@@ -165,13 +159,7 @@ static void fill_live(struct row *r, const struct live_session *v)
 
     snprintf(r->label, sizeof r->label, "%s",
              v->title[0] ? v->title : "untitled");
-    snprintf(r->card, sizeof r->card, "%s", v->card);
-    if (v->card[0])
-        snprintf(r->detail, sizeof r->detail, "card %s \xc2\xb7 %s %s",
-                 v->card, v->backend,
-                 models_short_name(v->backend, v->label[0] ? v->label : v->model));
-    else
-        snprintf(r->detail, sizeof r->detail, "%s %s",
+    snprintf(r->detail, sizeof r->detail, "%s %s",
                  v->backend,
                  models_short_name(v->backend, v->label[0] ? v->label : v->model));
     if (where[0])
@@ -607,7 +595,6 @@ struct listing {
     int                  n;
     unsigned char       *spin;
     const char         **marks;
-    const char         **icons;
     const char         **leads;
     const char         **tails;
     struct live_session **live;
@@ -621,7 +608,6 @@ static void sync_columns(struct listing *l)
     for (int i = 0; i < l->n; i++) {
         l->spin[i] = (unsigned char)l->rows[i].spin;
         l->marks[i] = l->rows[i].mark;
-        l->icons[i] = l->rows[i].card[0] ? WORKER_MARK : "";
         l->leads[i] = l->rows[i].cwd;
         l->tails[i] = l->rows[i].when;
     }
@@ -632,7 +618,7 @@ static unsigned long listing_sig(const struct listing *l)
     unsigned long h = 5381;
     for (int i = 0; i < l->n; i++) {
         const struct row *r = &l->rows[i];
-        const char *parts[] = {r->label, r->detail, r->mark, r->card, r->when};
+        const char *parts[] = {r->label, r->detail, r->mark, r->when};
         for (size_t p = 0; p < sizeof parts / sizeof *parts; p++)
             for (const char *c = parts[p]; c && *c; c++)
                 h = h * 33 + (unsigned char)*c;
@@ -661,11 +647,8 @@ static int relist(void *ud)
         struct row *r = &l->rows[i];
         if (r->kind == ROW_TAB) {
             struct session *s = r->at < workspace_count() ? workspace_at(r->at) : NULL;
-            if (s) {
+            if (s)
                 row_status(r, workspace_status(s));
-                const char *card = boardwork_card_of(s);
-                snprintf(r->card, sizeof r->card, "%s", card ? card : "");
-            }
             continue;
         }
         if (r->kind != ROW_LIVE)
@@ -682,7 +665,6 @@ static int relist(void *ud)
         } else {
             r->spin = 0;
             r->mark[0] = '\0';
-            r->card[0] = '\0';
             r->when[0] = '\0';
         }
     }
@@ -707,17 +689,14 @@ static int switch_once(void)
     unsigned char *heading = calloc(MAX_ROWS, 1);
     unsigned char *spin = calloc(MAX_ROWS, 1);
     const char **marks = calloc(MAX_ROWS, sizeof *marks);
-    const char **icons = calloc(MAX_ROWS, sizeof *icons);
     const char **leads = calloc(MAX_ROWS, sizeof *leads);
     const char **tails = calloc(MAX_ROWS, sizeof *tails);
-    if (!found || !rows || !heading || !spin || !marks || !icons || !leads ||
-        !tails) {
+    if (!found || !rows || !heading || !spin || !marks || !leads || !tails) {
         free(found);
         free(rows);
         free(heading);
         free(spin);
         free(marks);
-        free(icons);
         free(leads);
         free(tails);
         free(live);
@@ -757,7 +736,6 @@ static int switch_once(void)
         free(heading);
         free(spin);
         free(marks);
-        free(icons);
         free(leads);
         free(tails);
         free(live);
@@ -772,17 +750,17 @@ static int switch_once(void)
                           KEY_ALL, KEY_HERE, KEY_PULL,
                           KEY_CTRL(KEY_CLOSE), KEY_CTRL(KEY_NEW), KEY_CTRL(KEY_ASK),
                           KEY_CTRL(KEY_GO), KEY_CTRL(KEY_RENAME),
-                          '\n', PICK_KEY_RIGHT, '\t', 0};
+                          '\n', PICK_KEY_RIGHT, 0};
     int pressed = 0;
 
     char title[256];
     snprintf(title, sizeof title, "sessions");
-    struct listing listing = {rows, n, spin, marks, icons, leads, tails, &live,
+    struct listing listing = {rows, n, spin, marks, leads, tails, &live,
                               &nlive, 0, 0};
     sync_columns(&listing);
     listing.sig = listing_sig(&listing);
     struct pick_live shown = {.heading = heading, .spin = spin, .mark = marks,
-                              .icon = icons, .lead = leads, .tail = tails,
+                              .lead = leads, .tail = tails,
                               .align = 1, .tick = relist, .ud = &listing};
     int picked = pick_run_live(title, items, n, initial, &shown, PICK_SEARCH_SLASH,
                                shortcuts, &pressed);
@@ -791,7 +769,7 @@ static int switch_once(void)
     if (picked >= 0)
         chosen = rows[picked];
 
-    if (pressed > 0 && pressed < 0x20 && pressed != '\n' && pressed != '\t' &&
+    if (pressed > 0 && pressed < 0x20 && pressed != '\n' &&
         pressed != PICK_KEY_RIGHT)
         pressed |= 0x60;
 
@@ -805,7 +783,6 @@ static int switch_once(void)
     free(heading);
     free(spin);
     free(marks);
-    free(icons);
     free(leads);
     free(tails);
 
@@ -820,11 +797,6 @@ static int switch_once(void)
         yank_all(live, nlive);
         free(live);
         return 0;
-    }
-
-    if (pressed == '\t') {
-        free(live);
-        return SESSIONSWITCH_BOARD;
     }
 
     if (picked < 0) {
@@ -922,12 +894,10 @@ static int switch_once(void)
     return 0;
 }
 
-int sessionswitch_run(void)
+void sessionswitch_run(void)
 {
-    int r;
-    while ((r = switch_once()) == 1)
+    while (switch_once())
         ;
-    return r;
 }
 
 static int gave_last;

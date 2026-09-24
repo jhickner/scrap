@@ -6,7 +6,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "boardwork.h"
 #include "chrome.h"
 #include "hud.h"
 #include "scrollback.h"
@@ -67,7 +66,7 @@ void tabs_prepare(const char *path)
         if (!backend || !*backend || !id || !*id)
             continue;
 
-        struct session *s = workspace_prepare(backend, model, effort, cwd, id, NULL);
+        struct session *s = workspace_prepare(backend, model, effort, cwd, id);
         if (!s)
             continue;
         tabs_queue(s, screen);
@@ -148,10 +147,8 @@ void tabs_admit(int all)
     }
     if (!left)
         npending_tabs = 0;
-    if (taken) {
-        boardwork_reattach();
+    if (taken)
         chrome_paint();
-    }
 }
 
 int tabs_pending(void)

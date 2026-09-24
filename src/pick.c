@@ -7,8 +7,6 @@
 
 #include "chrome.h"
 #include "frontend.h"
-#include "menu.h"
-#include "overlay.h"
 #include "paste.h"
 #include "status.h"
 #include "text.h"
@@ -41,15 +39,6 @@ struct view {
     char query[64];
     short hit[HIT_MAX];
 };
-
-/* the indent a menu box hangs at, under the label of the row it belongs to */
-#define MENU_INDENT 6
-
-static struct menu *open_menu(const struct view *v)
-{
-    struct menu *m = v->live ? v->live->menu : NULL;
-    return m && m->open && m->n ? m : NULL;
-}
 
 static int item_heading(const struct view *v, int i)
 {
@@ -336,34 +325,9 @@ static int run(const char *title, const struct pick_item *items, int count,
                int initial, const struct pick_live *live, const char *shortcuts,
                int *pressed, int filter, int slash, const char *seed);
 
-static void paint_under(struct view *v, struct menu *box, int *box_row);
-
 static void paint(void *ud)
 {
     struct view *v = ud;
-    struct menu *box = open_menu(v);
-    if (!box) {
-        paint_under(v, NULL, NULL);
-        return;
-    }
-
-    int width = menu_width(box);
-    int room = ui_columns() - MENU_INDENT - 1;
-    if (width > room)
-        width = room;
-
-    int   row = 0;
-    ui_sink_begin();
-    paint_under(v, box, &row);
-    char *under = ui_sink_end();
-
-    struct overlay o = menu_overlay(box, row, MENU_INDENT, width);
-    overlay_put(under, &o);
-    free(under);
-}
-
-static void paint_under(struct view *v, struct menu *box, int *box_row)
-{
     const struct pick_item *items = v->items;
     int count = v->count, sel = v->sel;
     char title[192];
@@ -384,16 +348,6 @@ static void paint_under(struct view *v, struct menu *box, int *box_row)
         v->top = sel - v->visible + 1;
     if (v->top < 0)
         v->top = 0;
-
-    if (box) {
-        int under = sel + menu_rows(box);
-        if (under >= v->top + v->visible)
-            v->top = under - v->visible + 1;
-        if (v->top > sel)
-            v->top = sel;
-        if (v->top < 0)
-            v->top = 0;
-    }
 
     int    columns = ui_columns();
     int    rows = 0;
@@ -498,21 +452,6 @@ static void paint_under(struct view *v, struct menu *box, int *box_row)
             status = 2;
         }
 
-        if (v->live && v->live->icon) {
-            const char *icon = v->live->icon[i];
-            if (icon && *icon) {
-                ui_esc(ui_style(v->live->icon_role
-                                ? (enum ui_role)v->live->icon_role[i]
-                                : UI_ACCENT));
-                ui_put(icon);
-                ui_esc(ui_style(selected ? UI_ACCENT : UI_RESET));
-                ui_put(" ");
-            } else {
-                ui_put("  ");
-            }
-            status += 2;
-        }
-
         size_t label_budget = columns > 5 + (int)status + (int)lead_used
                                   ? (size_t)(columns - 5 - (int)status - (int)lead_used)
                                   : 1;
@@ -573,8 +512,6 @@ static void paint_under(struct view *v, struct menu *box, int *box_row)
         }
         ui_put("\n");
         rows++;
-        if (selected && box_row)
-            *box_row = rows;
     }
 
     if (!count) {
@@ -622,12 +559,6 @@ int pick_run_live(const char *title, const struct pick_item *items, int count,
 {
     return run(title, items, count, initial, live, shortcuts, pressed, 1,
                search == PICK_SEARCH_SLASH, NULL);
-}
-
-int pick_run_keys(const char *title, const struct pick_item *items, int count,
-                  int initial, const char *shortcuts, int *pressed)
-{
-    return run(title, items, count, initial, NULL, shortcuts, pressed, 0, 0, NULL);
 }
 
 /* the length with any partial sequence at the end dropped: the query is
@@ -764,34 +695,6 @@ static int run(const char *title, const struct pick_item *items, int count,
             goto done;
         }
 
-        struct menu *m = open_menu(&v);
-        if (m) {
-            if (ev.key == TK_TEXT)
-                free(ev.text);
-            switch (menu_feed(m, &ev)) {
-            case MENU_PICK:
-                result = v.order[v.sel];
-                if (pressed)
-                    *pressed = PICK_KEY_MENU;
-                goto done;
-            case MENU_CLOSE:
-                if (ev.key == TK_EOF)
-                    goto done;
-                m->open = 0;
-                refilter(&v);
-                chrome_paint();
-                break;
-            case MENU_USED:
-                if (ev.key == TK_RESIZE)
-                    refilter(&v);
-                chrome_paint();
-                break;
-            default:
-                break;
-            }
-            continue;
-        }
-
         int typing = filter && (!slash || v.searching);
         if (ev.key == TK_TEXT) {
             int took = filter && paste_into(&v, ev.text, ev.text ? strlen(ev.text) : 0);
@@ -842,14 +745,6 @@ static int run(const char *title, const struct pick_item *items, int count,
             result = v.order[v.sel];
             if (pressed && shortcuts && strchr(shortcuts, PICK_KEY_RIGHT))
                 *pressed = PICK_KEY_RIGHT;
-            else if (pressed && v.live && v.live->menu)
-                *pressed = PICK_KEY_MENU;
-            goto done;
-        case TK_TAB:
-            if (!shortcuts || !strchr(shortcuts, '\t'))
-                break;
-            if (pressed)
-                *pressed = '\t';
             goto done;
         case TK_NEWLINE:
 
@@ -865,8 +760,6 @@ static int run(const char *title, const struct pick_item *items, int count,
             if (!v.count || row_heading(&v, v.sel))
                 break;
             result = v.order[v.sel];
-            if (pressed && v.live && v.live->menu)
-                *pressed = PICK_KEY_MENU;
             goto done;
         case TK_ESCAPE:
             if (filter && (v.searching || v.query[0])) {

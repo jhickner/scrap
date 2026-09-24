@@ -15,7 +15,6 @@ struct live_session {
     char parent[128];
     char title[200];
     char status[16];
-    char card[16];
     int  unseen;
     char pane[32];
     char window[32];
@@ -26,8 +25,6 @@ struct live_session {
 };
 
 void livelist_begin(void);
-
-void livelist_on_card(const char *(*fn)(const struct session *s));
 
 void livelist_publish(const struct session *s, const char *status);
 

@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "menu.h"
 #include "overlay.h"
 #include "ui.h"
 
@@ -54,14 +53,15 @@ static void want(const char *text, int at, const char *expect)
         fail(expect, got);
 }
 
+static void paint_box(void *ud, int at, int width)
+{
+    (void)ud;
+    for (int i = 0; i < width; i++)
+        ui_put(i == 0 || i == width - 1 ? "|" : at ? " " : "-");
+}
+
 int main(void)
 {
-    struct menu m = {0};
-    menu_add(&m, "implement", 0);
-    menu_add(&m, "plan", 0);
-    menu_add(&m, "attach", 1);
-    m.open = 1;
-
     const char *under = "one\n"
                         "two two two two two two\n"
                         "\n"
@@ -71,29 +71,29 @@ int main(void)
                         "seven seven seven seven\n"
                         "eight eight eight eight\n";
 
-    struct overlay o = menu_overlay(&m, 2, 4, menu_width(&m));
+    struct overlay o = {.row = 2, .col = 4, .w = 6, .rows = 3, .paint_row = paint_box};
     char          *drawn = composited(&o, under);
 
     want(drawn, 0, "one");
     want(drawn, 1, "two two two two two two");
-    want(drawn, 2, "    ╭─────────────╮");
-    want(drawn, 3, "four│ → implement │ four");
-    want(drawn, 4, "five│   plan      │ five");
-    want(drawn, 7, "eigh╰─────────────╯ight");
+    want(drawn, 2, "    |----|");
+    want(drawn, 3, "four|    |four four four");
+    want(drawn, 4, "five|    |five five five");
+    want(drawn, 5, "six six six six six six");
     free(drawn);
 
     /* the box runs past the end of what it stands on */
-    o = menu_overlay(&m, 7, 4, menu_width(&m));
+    o.row = 7;
     drawn = composited(&o, under);
-    want(drawn, 7, "eigh╭─────────────╮ight");
-    want(drawn, 8, "    │ → implement │");
-    want(drawn, 12, "    ╰─────────────╯");
+    want(drawn, 7, "eigh|----|t eight eight");
+    want(drawn, 8, "    |    |");
+    want(drawn, 9, "    |    |");
     free(drawn);
 
     /* what a raw terminal was painted with carries returns */
     const char *raw = "one\r\ntwo two two two two two\r\n\r\n"
                       "four four four four four\r\n";
-    o = menu_overlay(&m, 2, 4, menu_width(&m));
+    o.row = 2;
     drawn = drawn_raw(&o, raw);
     for (const char *p = strchr(drawn, '\r'); p; p = strchr(p + 1, '\r'))
         if (p[1] != '\n')
@@ -101,47 +101,8 @@ int main(void)
     free(drawn);
 
     drawn = composited(&o, raw);
-    want(drawn, 2, "    ╭─────────────╮");
-    want(drawn, 3, "four│ → implement │ four");
-    free(drawn);
-
-    struct menu cycled = {0};
-    menu_add(&cycled, "implement", 0);
-    menu_add(&cycled, "plan", 0);
-    menu_add(&cycled, "attach", 1);
-    cycled.extra[0] = 1;
-    cycled.extra[1] = 1;
-    static const char *backends[] = {"claude", "grok"};
-    cycled.choices = backends;
-    cycled.choices_n = 2;
-    cycled.choice = 0;
-    snprintf(cycled.suffix, sizeof cycled.suffix, "%s", backends[0]);
-    cycled.open = 1;
-
-    o = menu_overlay(&cycled, 2, 4, menu_width(&cycled));
-    drawn = composited(&o, under);
-    want(drawn, 2, "    ╭──────────────────────╮");
-    want(drawn, 3, "four│ → implement · claude │");
-    want(drawn, 4, "five│   plan               │");
-    free(drawn);
-
-    menu_step(&cycled, 1);
-    o = menu_overlay(&cycled, 2, 4, menu_width(&cycled));
-    drawn = composited(&o, under);
-    want(drawn, 3, "four│   implement          │");
-    want(drawn, 4, "five│ → plan · claude      │");
-    free(drawn);
-
-    menu_steer(&cycled, 1);
-    o = menu_overlay(&cycled, 2, 4, menu_width(&cycled));
-    drawn = composited(&o, under);
-    want(drawn, 4, "five│ → plan · grok        │");
-    free(drawn);
-
-    menu_step(&cycled, 1);
-    o = menu_overlay(&cycled, 2, 4, menu_width(&cycled));
-    drawn = composited(&o, under);
-    want(drawn, 6, "seve│ → attach             │");
+    want(drawn, 2, "    |----|");
+    want(drawn, 3, "four|    |four four four");
     free(drawn);
 
     printf(failures ? "overlaytest: %d failed\n" : "overlaytest: ok\n", failures);

@@ -104,7 +104,7 @@ static int reopen_window(const struct live_session *list, int n, long pid)
             break;
 
         struct session *s = workspace_prepare(v->backend, v->model, v->effort,
-                                              v->cwd, v->id, NULL);
+                                              v->cwd, v->id);
         if (!s)
             continue;
         if (!tabs_queue(s, NULL)) {

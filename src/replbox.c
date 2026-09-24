@@ -51,7 +51,7 @@ int replbox_render(struct replbox *b, int rows)
     return 1;
 }
 
-int replbox_caret(const struct replbox *b)
+static int replbox_caret(const struct replbox *b)
 {
     if (!b->fresh || !b->frame.have_cursor)
         return -1;
@@ -119,16 +119,4 @@ void replbox_set_text(struct replbox *b, const char *text)
         return;
     repl_insert_text(&b->repl, text);
     b->fresh = 0;
-}
-
-void replbox_reset(struct replbox *b)
-{
-    repl_reset(&b->repl);
-    b->fresh = 0;
-    b->top = 0;
-}
-
-Repl *replbox_repl(struct replbox *b)
-{
-    return &b->repl;
 }

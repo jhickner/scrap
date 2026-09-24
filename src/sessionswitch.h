@@ -1,9 +1,7 @@
 #ifndef SESSIONSWITCH_H
 #define SESSIONSWITCH_H
 
-#define SESSIONSWITCH_BOARD 2
-
-int  sessionswitch_run(void);
+void sessionswitch_run(void);
 
 int  sessionswitch_gave_last(void);
 void sessionswitch_serve_request(void);

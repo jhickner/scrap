@@ -17,7 +17,6 @@
 #include "tabbar.h"
 #include "text.h"
 #include "tg.h"
-#include "orch.h"
 #include "relay.h"
 #include "ui.h"
 #include "viewport.h"
@@ -45,9 +44,7 @@ static struct tab tabs[WORKSPACE_MAX];
 static int        ntabs;
 static int        cur;
 static int        safe;
-static struct session *base;
 static void     (*on_finish)(struct session *s);
-static void     (*on_settled)(struct session *s);
 static void     (*on_turn)(struct session *s);
 
 static void follow(const struct session *s);
@@ -55,11 +52,6 @@ static void follow(const struct session *s);
 void workspace_on_finish(void (*fn)(struct session *s))
 {
     on_finish = fn;
-}
-
-void workspace_on_settled(void (*fn)(struct session *s))
-{
-    on_settled = fn;
 }
 
 void workspace_on_turn(void (*fn)(struct session *s))
@@ -103,11 +95,6 @@ struct session *workspace_current(void)
     return ntabs ? tabs[cur].s : NULL;
 }
 
-struct session *workspace_base(void)
-{
-    return base;
-}
-
 struct session *workspace_at(int index)
 {
     return index >= 0 && index < ntabs ? tabs[index].s : NULL;
@@ -126,7 +113,6 @@ int workspace_begin(struct session *first, int safe_mode)
     safe = safe_mode;
     ntabs = 0;
     cur = 0;
-    base = first;
     if (workspace_open(first) != 0)
         return 0;
     follow(first);
@@ -147,7 +133,6 @@ void workspace_end(void)
     }
     memset(tabs, 0, sizeof tabs);
     ntabs = 0;
-    base = NULL;
 }
 
 /* the tab bar and the session list read in the same order, so a tab lands
@@ -192,14 +177,8 @@ int workspace_open(struct session *s)
     return at;
 }
 
-int workspace_spawn(const char *backend, const char *model, const char *effort,
-                    const char *cwd, const char *id)
-{
-    return workspace_spawn_ex(backend, model, effort, cwd, id, NULL);
-}
-
 struct session *workspace_prepare(const char *backend, const char *model, const char *effort,
-                                 const char *cwd, const char *id, const char *system)
+                                 const char *cwd, const char *id)
 {
     if (!model || !strcmp(model, "default"))
         model = session_saved_model(backend);
@@ -216,18 +195,16 @@ struct session *workspace_prepare(const char *backend, const char *model, const 
     session_set_permission(s, session_permission_name(
         settings_get_int(SETTING_PERMISSION, session_permission_default())));
     session_adopt_id(s, id);
-    if (system && *system)
-        session_set_system_extra(s, system);
     return s;
 }
 
-int workspace_spawn_ex(const char *backend, const char *model, const char *effort,
-                       const char *cwd, const char *id, const char *system)
+int workspace_spawn(const char *backend, const char *model, const char *effort,
+                    const char *cwd, const char *id)
 {
     if (ntabs >= WORKSPACE_MAX)
         return -1;
 
-    struct session *s = workspace_prepare(backend, model, effort, cwd, id, system);
+    struct session *s = workspace_prepare(backend, model, effort, cwd, id);
     if (!s)
         return -1;
     if (!session_start(s)) {
@@ -405,16 +382,13 @@ int workspace_dump(int index, const char *path)
     return ok;
 }
 
-static void drop(int index, const struct session *fallback)
+static void drop(int index)
 {
     if (index == cur)
         voice_leave(tabs[index].s);
     voice_forget(tabs[index].s);
-    if (tabs[index].s == base)
-        base = NULL;
     tg_forget_session(tabs[index].s);
     relay_forget_session(tabs[index].s);
-    orch_forget_session(tabs[index].s);
     cmd_forget_session(tabs[index].s);
 
     if (index == cur)
@@ -443,8 +417,7 @@ static void drop(int index, const struct session *fallback)
     if (index < cur) {
         cur--;
     } else if (index == cur) {
-        int at = workspace_index_of(fallback);
-        cur = at >= 0 ? at : (index > 0 ? index - 1 : 0);
+        cur = index > 0 ? index - 1 : 0;
 
         viewport_adopt(tabs[cur].screen);
         block_forget();
@@ -464,15 +437,7 @@ int workspace_close(int index)
 {
     if (index < 0 || index >= ntabs)
         return ntabs;
-    drop(index, NULL);
-    return ntabs;
-}
-
-int workspace_close_to_base(int index)
-{
-    if (index < 0 || index >= ntabs)
-        return ntabs;
-    drop(index, base);
+    drop(index);
     return ntabs;
 }
 
@@ -554,21 +519,6 @@ static int pump(int hold, int screen)
 
         if (running && !session_turn_running(s)) {
             tabs[i].finished = 1;
-            if (on_settled)
-                on_settled(s);
-
-            /* the callback may close a tab -- a card whose last action
-               finished lets go of its session -- which frees that session and
-               shifts every tab after it down a slot */
-            if (i >= ntabs || tabs[i].s != s) {
-                int at = workspace_index_of(s);
-                if (at < 0) {
-                    i--;
-                    continue;
-                }
-                i = at;
-            }
-
             if (i != cur)
                 session_set_unseen(s, 1);
         }
