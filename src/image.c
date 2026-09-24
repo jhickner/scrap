@@ -42,6 +42,7 @@ static void term_move_cursor(int col, int row) { printf("\x1b[%d;%dH", row + 1, 
 #include "text.h"
 
 #define IMAGE_MAX_BYTES (16u * 1024u * 1024u)
+#define IMAGE_PROBE_MS  500
 
 static int image_ready;
 static int image_ok;
@@ -68,8 +69,10 @@ void image_init(void)
         return;
     kg_init();
     viewport_sync_placeholders(kg_placeholder_redraw_active());
-    if (kg_passthrough())
+    if (kg_passthrough()) {
         kg_tmux_allow_passthrough();
+        kg_probe(IMAGE_PROBE_MS);
+    }
     image_ok = 1;
 }
 

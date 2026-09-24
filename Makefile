@@ -24,7 +24,7 @@ ALL_CFLAGS += -DVOICE_HELPER_PATH='"$(VOICE_HELPER_DIR)/VoiceHelper.app"'
 
 CHECK_NAMES  := $(patsubst tests/%.c,%,$(wildcard tests/*.c))
 MANUAL_NAMES := $(patsubst tools/%.c,%,$(wildcard tools/*.c))
-CHECKS := overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
+CHECKS := kittywraptest overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
           reflowtest toolstyletest sessionlisttest claudetest codextest \
           groktest filedifftest pitest agenttabstest statustest transcripttest \
           sessionviewtest sessionloadtest highlighttest muxcfgtest telegramtest \

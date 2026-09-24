@@ -79,6 +79,14 @@ void kg_set_passthrough(bool on);
 // True if escapes are currently being wrapped for tmux.
 bool kg_passthrough(void);
 
+// Number of tmux layers between this process and the terminal, each needing
+// its own passthrough wrapper: 0 none, 1 plain tmux, 2 tmux over ssh inside
+// another tmux. Clamped to KG_DEPTH_MAX. kg_probe() sets it when it detects
+// nesting.
+#define KG_DEPTH_MAX 3
+void kg_set_passthrough_depth(int depth);
+int kg_passthrough_depth(void);
+
 // Bracket a block of placeholder cells written straight to the terminal, so
 // that tmux 3.7 and later put them on screen.
 //
@@ -292,6 +300,13 @@ bool kg_supported(void);
 // that stays silent yields -1 rather than 0, and the caller should fall back to
 // kg_supported(). The cost is waiting out timeout_ms when there is no support.
 //
+// Under tmux a second query goes out alongside the first, wrapped one layer
+// deeper. An inner tmux reached over ssh unwraps one layer and forwards the
+// rest to the outer tmux, which drops a bare graphics escape, so only the
+// deeper query gets through. The terminal answers in order, so a deeper answer
+// with no shallower one before it means nesting, and the passthrough depth is
+// raised to match.
+//
 // Returns 1 (supported), 0 (answered, but not supported), or -1 (no answer
 // within timeout_ms, or stdin/stdout is not a terminal).
 int kg_probe(int timeout_ms);
@@ -361,11 +376,38 @@ static const uint32_t kg_diacritics[] = {
 
 int kg_max_rowcolumn(void) { return KG_DIACRITIC_COUNT - 1; }
 
-static bool kg_wrap = false;
+static int kg_depth = 0;
 static bool kg_redraw = false;
 
-void kg_set_passthrough(bool on) { kg_wrap = on; }
-bool kg_passthrough(void) { return kg_wrap; }
+// The passthrough wrapper for kg_depth layers, outermost first: each layer's
+// ESCs are doubled once per layer enclosing it.
+static char kg_open[48], kg_close[32];
+static int kg_open_n = 0, kg_close_n = 0;
+
+static int kg_put_escs(char *dst, int n) {
+    memset(dst, '\x1b', (size_t)n);
+    return n;
+}
+
+void kg_set_passthrough_depth(int depth) {
+    if (depth < 0) depth = 0;
+    if (depth > KG_DEPTH_MAX) depth = KG_DEPTH_MAX;
+    kg_depth = depth;
+    kg_open_n = kg_close_n = 0;
+    for (int k = 0; k < depth; k++) {
+        kg_open_n += kg_put_escs(kg_open + kg_open_n, 1 << k);
+        memcpy(kg_open + kg_open_n, "Ptmux;", 6);
+        kg_open_n += 6;
+    }
+    for (int k = depth - 1; k >= 0; k--) {
+        kg_close_n += kg_put_escs(kg_close + kg_close_n, 1 << k);
+        kg_close[kg_close_n++] = '\\';
+    }
+}
+
+int kg_passthrough_depth(void) { return kg_depth; }
+void kg_set_passthrough(bool on) { kg_set_passthrough_depth(on ? 1 : 0); }
+bool kg_passthrough(void) { return kg_depth > 0; }
 
 // "tmux 3.7b" / "tmux next-3.8" -> 307 / 308. 0 when it cannot be parsed.
 static int kg_tmux_version(void) {
@@ -383,8 +425,8 @@ static int kg_tmux_version(void) {
 }
 
 void kg_init(void) {
-    kg_wrap = getenv("TMUX") != NULL;
-    kg_redraw = kg_wrap && kg_tmux_version() >= 307;
+    kg_set_passthrough_depth(getenv("TMUX") != NULL);
+    kg_redraw = kg_depth && kg_tmux_version() >= 307;
 }
 
 // Unwrapped on purpose: these are addressed to tmux, not to the terminal.
@@ -409,7 +451,8 @@ static int kg_batch_depth = 0;      // nested kg_batch_begin() calls
 static bool kg_batch_open = false;  // a passthrough DCS is open, unterminated
 static size_t kg_batch_len = 0;     // payload bytes written into it
 
-// The DCS payload with its ESCs doubled, which is what tmux forwards.
+// The DCS payload with each ESC repeated once per layer: every tmux on the way
+// halves the run.
 static void kg_emit_escaped(const char *seq, int n) {
     // Copy runs between ESCs rather than testing every byte: the payload is
     // mostly base64, which cannot contain one, so a quarter-megabyte frame is a
@@ -419,7 +462,7 @@ static void kg_emit_escaped(const char *seq, int n) {
         const char *e = memchr(seq, '\x1b', (size_t)(end - seq));
         if (!e) break;
         term_write_n(seq, (int)(e - seq) + 1);
-        term_write_n("\x1b", 1);           // tmux eats one ESC of each pair
+        term_write_n("\x1b\x1b\x1b\x1b\x1b\x1b\x1b", (1 << kg_depth) - 1);
         seq = e + 1;
     }
     term_write_n(seq, (int)(end - seq));
@@ -430,17 +473,17 @@ static void kg_emit_escaped(const char *seq, int n) {
 // the whole APC sequence, ESC ... ST included. Inside a batch the wrapper is
 // shared with the escapes either side of it.
 static void kg_emit(const char *seq, int n) {
-    if (!kg_wrap) {
+    if (!kg_depth) {
         term_write_n(seq, n);
         return;
     }
     if (kg_batch_depth) {
         if (kg_batch_open && kg_batch_len + (size_t)n > KG_WRAP_MAX) {
-            term_write("\x1b\\");
+            term_write_n(kg_close, kg_close_n);
             kg_batch_open = false;
         }
         if (!kg_batch_open) {
-            term_write("\x1bPtmux;");
+            term_write_n(kg_open, kg_open_n);
             kg_batch_open = true;
             kg_batch_len = 0;
         }
@@ -448,16 +491,16 @@ static void kg_emit(const char *seq, int n) {
         kg_batch_len += (size_t)n;
         return;
     }
-    term_write("\x1bPtmux;");
+    term_write_n(kg_open, kg_open_n);
     kg_emit_escaped(seq, n);
-    term_write("\x1b\\");
+    term_write_n(kg_close, kg_close_n);
 }
 
 // Closing here rather than on the next kg_emit() keeps the invariant that no
 // unterminated DCS outlives the call that opened it: tmux resets one only after
 // 5s, so anything written meanwhile would be swallowed.
 static void kg_batch_close(void) {
-    if (kg_batch_open) term_write("\x1b\\");
+    if (kg_batch_open) term_write_n(kg_close, kg_close_n);
     kg_batch_open = false;
     kg_batch_len = 0;
 }
@@ -470,11 +513,15 @@ void kg_batch_end(void) {
     kg_batch_close();
 }
 
-// Under tmux the abandoned payload sits inside a passthrough DCS, so the inner
-// ST goes in with its ESC doubled and the DCS is closed after it: ESC ESC \ ESC
-// \, five bytes. Without tmux it is the bare ST.
-#define KG_ABORT_SEQ_TMUX "\x1b\x1b\\\x1b\\"
-#define KG_ABORT_SEQ      "\x1b\\"
+// Under tmux the abandoned payload sits inside the passthrough wrapper, so the
+// inner ST goes in with its ESC repeated once per layer and the wrapper is
+// closed after it. Without tmux it is the bare ST.
+static int kg_abort_seq(char *dst) {
+    int n = kg_put_escs(dst, 1 << kg_depth);
+    dst[n++] = '\\';
+    memcpy(dst + n, kg_close, (size_t)kg_close_n);
+    return n + kg_close_n;
+}
 
 // Both of these close the passthrough DCS outright, so an abandoned batch ends
 // with them rather than leaking its wrapper into whatever is written next.
@@ -485,14 +532,16 @@ static void kg_batch_forget(void) {
 }
 
 void kg_abort(void) {
-    term_write(kg_wrap ? KG_ABORT_SEQ_TMUX : KG_ABORT_SEQ);
+    char seq[48];
+    term_write_n(seq, kg_abort_seq(seq));
     term_flush();
     kg_batch_forget();
 }
 
 bool kg_abort_fd(int fd) {
-    const char *seq = kg_wrap ? KG_ABORT_SEQ_TMUX : KG_ABORT_SEQ;
-    size_t n = kg_wrap ? sizeof KG_ABORT_SEQ_TMUX - 1 : sizeof KG_ABORT_SEQ - 1;
+    char buf[48];
+    const char *seq = buf;
+    size_t n = (size_t)kg_abort_seq(buf);
     kg_batch_forget();
     for (int try = 0; try < 3 && n; try++) {
         ssize_t w = write(fd, seq, n);
@@ -912,6 +961,20 @@ bool kg_supported(void) {
 }
 
 #define KG_PROBE_GRAPHICS "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"
+#define KG_PROBE_DEEPER   "\x1b_Gi=32,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"
+
+// `seq` wrapped for kg_depth layers, into `dst`, which must hold it.
+static int kg_wrap_into(char *dst, const char *seq) {
+    int n = 0;
+    memcpy(dst, kg_open, (size_t)kg_open_n);
+    n += kg_open_n;
+    for (const char *p = seq; *p; p++) {
+        if (*p == '\x1b') n += kg_put_escs(dst + n, (1 << kg_depth) - 1);
+        dst[n++] = *p;
+    }
+    memcpy(dst + n, kg_close, (size_t)kg_close_n);
+    return n + kg_close_n;
+}
 
 static bool kg_write_all(int fd, const char *s, size_t n) {
     while (n) {
@@ -943,15 +1006,17 @@ int kg_probe(int timeout_ms) {
     // Built here rather than as a literal because the graphics half needs tmux
     // wrapping, and because the device attributes request is only useful when
     // tmux is not in the way to answer it locally.
-    char query[256];
+    char query[1024];
     int qn = 0;
-    if (kg_wrap) {
-        qn += snprintf(query + qn, sizeof query - qn, "\x1bPtmux;");
-        for (const char *p = KG_PROBE_GRAPHICS; *p; p++) {
-            if (*p == '\x1b') query[qn++] = '\x1b';
-            query[qn++] = *p;
+    int depth = kg_depth;
+    bool deeper = depth > 0 && depth < KG_DEPTH_MAX;
+    if (depth) {
+        qn += kg_wrap_into(query + qn, KG_PROBE_GRAPHICS);
+        if (deeper) {
+            kg_set_passthrough_depth(depth + 1);
+            qn += kg_wrap_into(query + qn, KG_PROBE_DEEPER);
+            kg_set_passthrough_depth(depth);
         }
-        qn += snprintf(query + qn, sizeof query - qn, "\x1b\\");
     } else {
         qn += snprintf(query + qn, sizeof query - qn, "%s%s",
                        KG_PROBE_GRAPHICS, "\x1b[c");
@@ -982,11 +1047,15 @@ int kg_probe(int timeout_ms) {
 
             char *da;
             if (strstr(buf, "_Gi=31;OK")) result = 1;
+            else if (deeper && strstr(buf, "_Gi=32;OK")) {
+                kg_set_passthrough_depth(depth + 1);
+                result = 1;
+            }
             // The device attributes reply (CSI ? … c) is answered by every
             // terminal and comes after the graphics response would have, so
             // seeing it complete means there wasn't one. Only true without tmux
             // in between - see the note on kg_probe().
-            else if (!kg_wrap && (da = strstr(buf, "\x1b[?")) != NULL &&
+            else if (!depth && (da = strstr(buf, "\x1b[?")) != NULL &&
                      memchr(da, 'c', len - (size_t)(da - buf))) result = 0;
             else if (len == sizeof buf - 1) break;
         }
