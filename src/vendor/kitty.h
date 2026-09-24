@@ -962,6 +962,7 @@ bool kg_supported(void) {
 
 #define KG_PROBE_GRAPHICS "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"
 #define KG_PROBE_DEEPER   "\x1b_Gi=32,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"
+#define KG_PROBE_GRACE_MS 100
 
 // `seq` wrapped for kg_depth layers, into `dst`, which must hold it.
 static int kg_wrap_into(char *dst, const char *seq) {
@@ -1029,7 +1030,7 @@ int kg_probe(int timeout_ms) {
         struct timeval start;
         gettimeofday(&start, NULL);
 
-        while (result == -1) {
+        for (;;) {
             int left = timeout_ms - kg_elapsed_ms(&start);
             if (left <= 0) break;
 
@@ -1045,18 +1046,30 @@ int kg_probe(int timeout_ms) {
             len += (size_t)n;
             buf[len] = '\0';
 
-            char *da;
-            if (strstr(buf, "_Gi=31;OK")) result = 1;
-            else if (deeper && strstr(buf, "_Gi=32;OK")) {
-                kg_set_passthrough_depth(depth + 1);
+            // The deeper reply trails the shallower one. Left unread, it is
+            // echoed once the terminal mode is restored.
+            char *da, *g32 = deeper ? strstr(buf, "_Gi=32;") : NULL;
+            if (g32 && strstr(g32, "\x1b\\")) {
+                if (strstr(buf, "_Gi=31;OK")) result = 1;
+                else if (strstr(buf, "_Gi=32;OK")) {
+                    kg_set_passthrough_depth(depth + 1);
+                    result = 1;
+                }
+                break;
+            }
+            if (result == 1) continue;
+            if (strstr(buf, "_Gi=31;OK")) {
                 result = 1;
+                if (!deeper) break;
+                int grace = kg_elapsed_ms(&start) + KG_PROBE_GRACE_MS;
+                if (grace < timeout_ms) timeout_ms = grace;
             }
             // The device attributes reply (CSI ? … c) is answered by every
             // terminal and comes after the graphics response would have, so
             // seeing it complete means there wasn't one. Only true without tmux
             // in between - see the note on kg_probe().
             else if (!depth && (da = strstr(buf, "\x1b[?")) != NULL &&
-                     memchr(da, 'c', len - (size_t)(da - buf))) result = 0;
+                     memchr(da, 'c', len - (size_t)(da - buf))) { result = 0; break; }
             else if (len == sizeof buf - 1) break;
         }
     }
