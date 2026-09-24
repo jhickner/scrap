@@ -81,8 +81,8 @@ bool kg_passthrough(void);
 
 // Number of tmux layers between this process and the terminal, each needing
 // its own passthrough wrapper: 0 none, 1 plain tmux, 2 tmux over ssh inside
-// another tmux. Clamped to KG_DEPTH_MAX. kg_probe() sets it when it detects
-// nesting.
+// another tmux. Clamped to KG_DEPTH_MAX. kg_init() sets it from the terminal
+// type tmux reports for its client.
 #define KG_DEPTH_MAX 3
 void kg_set_passthrough_depth(int depth);
 int kg_passthrough_depth(void);
@@ -300,13 +300,6 @@ bool kg_supported(void);
 // that stays silent yields -1 rather than 0, and the caller should fall back to
 // kg_supported(). The cost is waiting out timeout_ms when there is no support.
 //
-// Under tmux a second query goes out alongside the first, wrapped one layer
-// deeper. An inner tmux reached over ssh unwraps one layer and forwards the
-// rest to the outer tmux, which drops a bare graphics escape, so only the
-// deeper query gets through. The terminal answers in order, so a deeper answer
-// with no shallower one before it means nesting, and the passthrough depth is
-// raised to match.
-//
 // Returns 1 (supported), 0 (answered, but not supported), or -1 (no answer
 // within timeout_ms, or stdin/stdout is not a terminal).
 int kg_probe(int timeout_ms);
@@ -424,8 +417,20 @@ static int kg_tmux_version(void) {
     return maj * 100 + min;
 }
 
+// 2 when tmux reports its own client is another tmux, 1 otherwise. Asked of
+// tmux rather than probed with a query, whose late reply would reach the pane
+// as input. Sees one level out, so deeper nesting still reads as 2.
+static int kg_tmux_depth(void) {
+    FILE *p = popen("tmux display -p '#{client_termtype}' 2>/dev/null", "r");
+    if (!p) return 1;
+    char buf[64] = "";
+    bool got = fgets(buf, sizeof buf, p) != NULL;
+    pclose(p);
+    return got && !strncmp(buf, "tmux ", 5) ? 2 : 1;
+}
+
 void kg_init(void) {
-    kg_set_passthrough_depth(getenv("TMUX") != NULL);
+    kg_set_passthrough_depth(getenv("TMUX") ? kg_tmux_depth() : 0);
     kg_redraw = kg_depth && kg_tmux_version() >= 307;
 }
 
@@ -961,8 +966,6 @@ bool kg_supported(void) {
 }
 
 #define KG_PROBE_GRAPHICS "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"
-#define KG_PROBE_DEEPER   "\x1b_Gi=32,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"
-#define KG_PROBE_GRACE_MS 100
 
 // `seq` wrapped for kg_depth layers, into `dst`, which must hold it.
 static int kg_wrap_into(char *dst, const char *seq) {
@@ -1007,17 +1010,10 @@ int kg_probe(int timeout_ms) {
     // Built here rather than as a literal because the graphics half needs tmux
     // wrapping, and because the device attributes request is only useful when
     // tmux is not in the way to answer it locally.
-    char query[1024];
+    char query[256];
     int qn = 0;
-    int depth = kg_depth;
-    bool deeper = depth > 0 && depth < KG_DEPTH_MAX;
-    if (depth) {
+    if (kg_depth) {
         qn += kg_wrap_into(query + qn, KG_PROBE_GRAPHICS);
-        if (deeper) {
-            kg_set_passthrough_depth(depth + 1);
-            qn += kg_wrap_into(query + qn, KG_PROBE_DEEPER);
-            kg_set_passthrough_depth(depth);
-        }
     } else {
         qn += snprintf(query + qn, sizeof query - qn, "%s%s",
                        KG_PROBE_GRAPHICS, "\x1b[c");
@@ -1030,7 +1026,7 @@ int kg_probe(int timeout_ms) {
         struct timeval start;
         gettimeofday(&start, NULL);
 
-        for (;;) {
+        while (result == -1) {
             int left = timeout_ms - kg_elapsed_ms(&start);
             if (left <= 0) break;
 
@@ -1046,30 +1042,14 @@ int kg_probe(int timeout_ms) {
             len += (size_t)n;
             buf[len] = '\0';
 
-            // The deeper reply trails the shallower one. Left unread, it is
-            // echoed once the terminal mode is restored.
-            char *da, *g32 = deeper ? strstr(buf, "_Gi=32;") : NULL;
-            if (g32 && strstr(g32, "\x1b\\")) {
-                if (strstr(buf, "_Gi=31;OK")) result = 1;
-                else if (strstr(buf, "_Gi=32;OK")) {
-                    kg_set_passthrough_depth(depth + 1);
-                    result = 1;
-                }
-                break;
-            }
-            if (result == 1) continue;
-            if (strstr(buf, "_Gi=31;OK")) {
-                result = 1;
-                if (!deeper) break;
-                int grace = kg_elapsed_ms(&start) + KG_PROBE_GRACE_MS;
-                if (grace < timeout_ms) timeout_ms = grace;
-            }
+            char *da;
+            if (strstr(buf, "_Gi=31;OK")) result = 1;
             // The device attributes reply (CSI ? … c) is answered by every
             // terminal and comes after the graphics response would have, so
             // seeing it complete means there wasn't one. Only true without tmux
             // in between - see the note on kg_probe().
-            else if (!depth && (da = strstr(buf, "\x1b[?")) != NULL &&
-                     memchr(da, 'c', len - (size_t)(da - buf))) { result = 0; break; }
+            else if (!kg_depth && (da = strstr(buf, "\x1b[?")) != NULL &&
+                     memchr(da, 'c', len - (size_t)(da - buf))) result = 0;
             else if (len == sizeof buf - 1) break;
         }
     }
