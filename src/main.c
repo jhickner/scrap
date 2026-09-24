@@ -854,9 +854,12 @@ int main(int argc, char **argv)
         viewport_item_begin(VIEWPORT_ROWS(1, 1));
         char *conn = api_connect_json();
         ui_note("worker API %s", api_url());
-        ui_note("token %s", api_token());
+        for (char *line = conn, *nl; line && *line; line = nl ? nl + 1 : NULL) {
+            nl = strchr(line, '\n');
+            ui_note("%.*s", nl ? (int)(nl - line) : (int)strlen(line), line);
+        }
         if (conn && copy_to_clipboard(conn))
-            ui_note("connection JSON copied \xc2\xb7 paste it into dlv \xe2\x86\x92 Workers");
+            ui_note("copied \xc2\xb7 paste it into dlv \xe2\x86\x92 Hosts");
         free(conn);
         viewport_item_end();
         ui_flush();

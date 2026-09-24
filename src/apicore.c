@@ -269,6 +269,8 @@ static void run_status(struct run *r, int status)
     struct agent *a = &agents[r->agent];
     cJSON *o = event_base(a, r);
     cJSON_AddStringToObject(o, "status", RUN_STATUS[status]);
+    if (r->error)
+        cJSON_AddStringToObject(o, "error", r->error);
     emit("status", o);
     if (status > RUN_RUNNING)
         emit("done", event_base(a, r));

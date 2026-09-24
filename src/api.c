@@ -430,7 +430,7 @@ char *api_connect_json(void)
     cJSON_AddStringToObject(o, "name", host);
     cJSON_AddStringToObject(o, "url", api.url);
     cJSON_AddStringToObject(o, "token", api.token);
-    char *s = cJSON_PrintUnformatted(o);
+    char *s = cJSON_Print(o);
     cJSON_Delete(o);
     return s;
 }

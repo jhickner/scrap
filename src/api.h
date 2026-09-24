@@ -12,7 +12,7 @@ void api_stop(void);
 int  api_active(void);
 const char *api_url(void);
 const char *api_token(void);
-/* {"name","url","token"} for attaching this host in dlv; caller frees */
+/* {"name","url","token"}, one field per line, for attaching this host in dlv; caller frees */
 char *api_connect_json(void);
 
 int  api_fds(int *out, int max);

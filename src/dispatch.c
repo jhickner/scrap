@@ -213,6 +213,9 @@ int dispatch_spawn(const char *backend, const char *model, const char *effort, c
                    const char *title, const char *const *env, const char *prompt)
 {
     struct session *was = workspace_current();
+    char here[4096];
+    if (!cwd && getcwd(here, sizeof here))
+        cwd = here;
     int at = workspace_spawn_env(backend, model, effort, cwd, NULL, env);
     if (at < 0)
         return -1;
