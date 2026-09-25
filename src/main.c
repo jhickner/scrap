@@ -17,6 +17,7 @@
 #include "gitinfo.h"
 #include "hud.h"
 #include "image.h"
+#include "docview.h"
 #include "imageview.h"
 #include "livelist.h"
 #include "prompt.h"
@@ -341,7 +342,7 @@ static int clicked(void *ud, int row, int col)
             workspace_show(tab);
         return 1;
     }
-    return imageview_click(row, col);
+    return imageview_click(row, col) || docview_click(row, col);
 }
 
 static void switcher(void *ud)
