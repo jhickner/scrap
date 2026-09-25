@@ -1129,6 +1129,42 @@ uint32_t viewport_image_at(int row, int col)
     return 0;
 }
 
+char *viewport_link_at(int row, int col)
+{
+    int at = row - 1;
+    if (at < 0 || at >= shown.n || col < 1)
+        return NULL;
+
+    const char *s = shown.row[at];
+    size_t      n = strlen(s);
+    const char *url = NULL;
+    size_t      url_len = 0;
+    size_t      cells = 0;
+
+    for (size_t i = 0; i < n;) {
+        enum ui_esc_kind kind;
+        size_t           end = ui_esc_span(s, n, i, &kind);
+
+        if (kind == UI_ESC_OSC8) {
+            const char *semi = memchr(s + i + 4, ';', end - i - 4);
+            url = semi ? semi + 1 : NULL;
+            url_len = 0;
+            while (url && url + url_len < s + end && url[url_len] != '\x1b' &&
+                   url[url_len] != '\a')
+                url_len++;
+            if (!url_len)
+                url = NULL;
+        } else if (kind == UI_ESC_TEXT) {
+            size_t wide = ui_cells_n(s + i, end - i);
+            if (url && (size_t)col > cells && (size_t)col <= cells + wide)
+                return strndup(url, url_len);
+            cells += wide;
+        }
+        i = end;
+    }
+    return NULL;
+}
+
 static int window_pending(struct item *pending)
 {
     if (open_len && !open_wrapped) {

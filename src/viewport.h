@@ -71,6 +71,8 @@ int   viewport_item_last(unsigned mark);
 
 uint32_t viewport_image_at(int row, int col);
 
+char *viewport_link_at(int row, int col);
+
 void  viewport_item_update(unsigned mark);
 
 void viewport_item_hide(unsigned mark, int on);

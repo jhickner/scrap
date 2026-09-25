@@ -736,6 +736,38 @@ static void render_image(const char *path, int indent)
     ui_put("\n");
 }
 
+static char *view_line(const char *body)
+{
+    if (strncmp(body, "@view /", 7) != 0)
+        return NULL;
+    const char *path = body + 6;
+    size_t      n = strlen(path);
+    while (n && isspace((unsigned char)path[n - 1]))
+        n--;
+    return strndup(path, n);
+}
+
+static void render_view(const char *path, int indent)
+{
+    const char *slash = strrchr(path, '/');
+    ui_pad(indent);
+    if (ui_color()) {
+        ui_esc("\x1b]8;;file://");
+        put_safe(path);
+        ui_esc("\x1b\\");
+    }
+    ui_esc(ui_style(UI_LINK));
+    ui_put("\xe2\x96\xa4 ");
+    put_safe(slash && slash[1] ? slash + 1 : path);
+    ui_esc(ui_style(UI_RESET));
+    if (ui_color())
+        ui_esc("\x1b]8;;\x1b\\");
+    ui_esc(ui_style(UI_DIM));
+    ui_put("  click to view");
+    ui_esc(ui_style(UI_RESET));
+    ui_put("\n");
+}
+
 static void render_code_line(const char *line, int indent)
 {
     ui_pad(indent);
@@ -902,6 +934,15 @@ void md_render(const char *text, int indent)
         if (blank_pending) {
             ui_put("\n");
             blank_pending = 0;
+        }
+
+        char *doc = view_line(body);
+        if (doc) {
+            render_view(doc, indent);
+            free(doc);
+            wrote_any = 1;
+            free(line);
+            continue;
         }
 
         char *img = image_line(body);

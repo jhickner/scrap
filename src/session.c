@@ -939,8 +939,14 @@ static Backend *agent(struct session *s)
           "it with the Read tool first, then write the markdown."
         : NULL;
 
-    const char *parts[] = {note, s->system_extra, s->handoff};
-    char *joined = join_system(parts, 3);
+    const char *view =
+        "To present a long text file to the user, such as a plan, write it to disk "
+        "and output `@view /abs/path.md` alone on its own line instead of repeating "
+        "its contents. The user can open it in a full-screen pager; markdown is "
+        "rendered.";
+
+    const char *parts[] = {note, view, s->system_extra, s->handoff};
+    char *joined = join_system(parts, 4);
     o.system = joined;
     s->agent = backend_open_ex(&o);
     free(joined);
