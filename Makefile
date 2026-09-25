@@ -288,7 +288,12 @@ clean:
 	rm -f src/*.o src/*.d src/vendor/*.o src/vendor/*.d $(BIN) \
 	      src/*.o.tmp src/vendor/*.o.tmp
 
+map: map/MAP.md
+
+map/MAP.md: $(wildcard src/*.c src/*.h) $(BUILD)/version.h
+	cmap -o map -x src/vendor src -- $(ALL_CFLAGS) -I$(BUILD)
+
 strip-comments:
 	stripcomments -i -x vendor src tests tools
 
-.PHONY: all install clean check FORCE manual tests strip-comments
+.PHONY: all install clean check FORCE manual tests strip-comments map
