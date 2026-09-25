@@ -1245,6 +1245,12 @@ static void do_session(struct session *s, const char *arg)
     session_report(s);
 }
 
+static void do_tokenomics(struct session *s, const char *arg)
+{
+    (void)arg;
+    session_tokenomics(s);
+}
+
 static void do_restart(struct session *s, const char *arg)
 {
     (void)s;
@@ -1339,6 +1345,8 @@ static const struct cmd COMMANDS[] = {
     {"/split", "open a shell split in this directory", "[h|v|w]", 0, do_split},
     {"/status", "reprint the status bar", NULL, CMD_LIVE, do_status},
     {"/session", "show this session's info and totals", NULL, CMD_LIVE, do_session},
+    {"/tokenomics", "token and cache breakdown for this session, per turn", NULL,
+     CMD_LIVE, do_tokenomics},
     {"/rename", "name this session, or ask the model to name it again", "[name]",
      0, do_rename},
     {"/tail", "show bot messages that arrived since the last shown", "[count]", 0,

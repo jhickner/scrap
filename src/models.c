@@ -483,6 +483,7 @@ static int rates_of(cJSON *models, const char *id, struct model_rates *out)
         out->input = per_million(pricing, "prompt");
         out->output = per_million(pricing, "completion");
         out->cache_read = per_million(pricing, "input_cache_read");
+        out->cache_write = per_million(pricing, "input_cache_write");
         return out->input > 0 || out->output > 0;
     }
     return 0;
@@ -543,6 +544,7 @@ static int store_rates(const char *model, struct model_rates *out)
         out->input = cJSON_GetNumberValue(cJSON_GetObjectItem(cost, "input"));
         out->output = cJSON_GetNumberValue(cJSON_GetObjectItem(cost, "output"));
         out->cache_read = cJSON_GetNumberValue(cJSON_GetObjectItem(cost, "cacheRead"));
+        out->cache_write = cJSON_GetNumberValue(cJSON_GetObjectItem(cost, "cacheWrite"));
         ok = out->input > 0 || out->output > 0;
         break;
     }

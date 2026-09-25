@@ -78,6 +78,8 @@ struct session {
     /* The cache-read share of tokens_in. Broken out because it is billed at a
        fraction of fresh input, so the two move very differently. */
     long     tokens_cached;
+    struct sessionpresent_tokens *ledger;
+    int      ledger_n, ledger_cap;
     long     context_tokens;
     long     context_window;
     int      quiet;
@@ -177,6 +179,8 @@ struct session *session_set_drawing(struct session *s)
 static struct { session_listener_fn fn; void *ud; } listeners[LISTENERS_MAX];
 static void remember_model(const struct session *s);
 static void charge_turn(struct session *s, const backend_result *m);
+static void ledger_add(struct session *s, const backend_result *m, const char *prompt,
+                       double cost);
 static void retire(Backend *b);
 static int dir_alive(const char *path);
 static int ground_target(const char *gone, char *out, size_t size);
@@ -850,6 +854,7 @@ void session_free(struct session *s)
     free(s->effort);
     free(s->resolved);
     free(s->last_reply);
+    free(s->ledger);
     free(s->failed_prompt);
     free(s->last_block);
     for (char **e = s->env; e && *e; e++)
@@ -1521,6 +1526,7 @@ static void reset_turns(struct session *s, int flags)
     replace(&s->handoff, NULL);
     s->cost_usd = 0;
     s->tokens_in = s->tokens_out = s->tokens_cached = 0;
+    s->ledger_n = 0;
     s->context_tokens = 0;
     if (flags & RESET_WORKDIR)
         replace(&s->workdir, NULL);
@@ -1893,7 +1899,9 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     if (!m.is_error || m.interrupted)
         s->saved = 1;
     replace(&s->handoff, NULL);
+    double cost_before = s->cost_usd;
     charge_turn(s, &m);
+    ledger_add(s, &m, text, s->cost_usd - cost_before);
     s->tokens_in += m.input_tokens + m.cache_read_tokens + m.cache_creation_tokens;
     s->tokens_out += m.output_tokens;
     s->tokens_cached += m.cache_read_tokens;
@@ -2162,6 +2170,69 @@ const char *session_saved_effort(const char *backend)
 /* A backend that prices its own turns reports the session total; one that
  * reports only tokens, as codex does, is priced from the model catalog. Cache
  * writes need no term: codex counts them inside the input it reports. */
+static void ledger_add(struct session *s, const backend_result *m, const char *prompt,
+                       double cost)
+{
+    if (s->ledger_n == s->ledger_cap) {
+        int cap = s->ledger_cap ? s->ledger_cap * 2 : 32;
+        void *grown = realloc(s->ledger, (size_t)cap * sizeof *s->ledger);
+        if (!grown)
+            return;
+        s->ledger = grown;
+        s->ledger_cap = cap;
+    }
+    struct sessionpresent_tokens *t = &s->ledger[s->ledger_n++];
+    memset(t, 0, sizeof *t);
+    const char *model = session_model_label(s);
+    snprintf(t->backend, sizeof t->backend, "%s", s->backend);
+    const char *shown = models_short_name(s->backend, model);
+    snprintf(t->model, sizeof t->model, "%s", shown ? shown : "");
+    /* ponytail: matches the voice preamble by its opening words; a reworded
+       preamble shows in the prompt column until this is updated */
+    const char *body = prompt ? prompt : "";
+    const char *past = strstr(body, "\n\n");
+    if (!strncmp(body, "The message below was spoken aloud", 34) && past)
+        body = past + 2;
+    size_t at = 0, cap = sizeof t->prompt - sizeof "\xe2\x80\xa6";
+    while (*body == ' ' || *body == '\n' || *body == '\t' || *body == '\r')
+        body++;
+    for (; *body && at < cap; body++) {
+        char c = *body == '\n' || *body == '\t' || *body == '\r' ? ' ' : *body;
+        if (c == ' ' && at && t->prompt[at - 1] == ' ')
+            continue;
+        t->prompt[at++] = c;
+    }
+    if (*body) {
+        if (((unsigned char)*body & 0xC0) == 0x80) {
+            while (at > 0 && ((unsigned char)t->prompt[at - 1] & 0xC0) == 0x80)
+                at--;
+            if (at > 0)
+                at--;
+        }
+        memcpy(t->prompt + at, "\xe2\x80\xa6", 3);
+        at += 3;
+    }
+    t->prompt[at] = '\0';
+    t->fresh = m->input_tokens;
+    t->cache_write = m->cache_creation_tokens;
+    t->cache_read = m->cache_read_tokens;
+    t->output = m->output_tokens;
+    t->context = m->context_tokens;
+    t->cost = cost;
+    struct model_rates rates;
+    if (models_rates(s->backend, model, &rates)) {
+        t->rate_input = rates.input;
+        t->rate_cache_write = rates.cache_write;
+        t->rate_cache_read = rates.cache_read;
+        t->rate_output = rates.output;
+    }
+}
+
+void session_tokenomics(const struct session *s)
+{
+    sessionpresent_tokenomics(s->ledger, s->ledger_n, s->context_window);
+}
+
 static void charge_turn(struct session *s, const backend_result *m)
 {
     if (m->cost_usd > 0) {
@@ -2175,6 +2246,7 @@ static void charge_turn(struct session *s, const backend_result *m)
 
     s->cost_usd += ((double)m->input_tokens * rates.input +
                     (double)m->cache_read_tokens * rates.cache_read +
+                    (double)m->cache_creation_tokens * rates.cache_write +
                     (double)m->output_tokens * rates.output) / 1e6;
 }
 

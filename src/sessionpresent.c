@@ -1,5 +1,6 @@
 #include "sessionpresent.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -518,6 +519,131 @@ void sessionpresent_report(const struct sessionpresent_report *r)
                 r->auth && !strcmp(r->auth, "subscription login")
                     ? "  (list price; the subscription is not billed per token)"
                     : "");
+    viewport_item_end();
+    ui_flush();
+}
+
+static void tokenomics_line(enum ui_role role, const char *fmt, ...)
+{
+    char line[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    ui_esc(ui_style(role));
+    ui_put(line);
+    ui_esc(ui_style(UI_RESET));
+    ui_put("\n");
+}
+
+static void tokenomics_row(enum ui_role role, const char *label, long tokens, long input,
+                           double cost, int priced)
+{
+    char n[32], share[16] = "", price[24] = "";
+    text_humanize(tokens, n, sizeof n);
+    if (input > 0)
+        snprintf(share, sizeof share, "%.1f%%", 100.0 * (double)tokens / (double)input);
+    if (priced)
+        snprintf(price, sizeof price, "$%.4f", cost);
+    tokenomics_line(role, "  %-12s %8s %7s %10s", label, n, share, price);
+}
+
+void sessionpresent_tokenomics(const struct sessionpresent_tokens *turns, int n,
+                               long context_window)
+{
+    viewport_item_begin(VIEWPORT_ROWS(1, 1));
+    if (n <= 0) {
+        ui_note("  no completed turns yet");
+        viewport_item_end();
+        ui_flush();
+        return;
+    }
+
+    long fresh = 0, write = 0, read = 0, out = 0, peak = 0;
+    double c_fresh = 0, c_write = 0, c_read = 0, c_out = 0, charged = 0;
+    int priced = 1, mixed = 0;
+    for (int i = 0; i < n; i++) {
+        const struct sessionpresent_tokens *t = &turns[i];
+        fresh += t->fresh;
+        write += t->cache_write;
+        read += t->cache_read;
+        out += t->output;
+        if (t->context > peak)
+            peak = t->context;
+        charged += t->cost;
+        if (t->rate_input <= 0 && t->rate_output <= 0)
+            priced = 0;
+        if (strcmp(t->backend, turns[0].backend) || strcmp(t->model, turns[0].model))
+            mixed = 1;
+        c_fresh += (double)t->fresh * t->rate_input / 1e6;
+        c_write += (double)t->cache_write * t->rate_cache_write / 1e6;
+        c_read += (double)t->cache_read * t->rate_cache_read / 1e6;
+        c_out += (double)t->output * t->rate_output / 1e6;
+    }
+    long input = fresh + write + read;
+
+    char who[80];
+    snprintf(who, sizeof who, "%s %s", turns[0].backend, turns[0].model);
+    tokenomics_line(UI_HEADING, "  tokenomics \xc2\xb7 %s \xc2\xb7 %d turn%s",
+                    mixed ? "several models" : who, n, n == 1 ? "" : "s");
+    ui_put("\n");
+
+    tokenomics_line(UI_DIM, "  %-12s %8s %7s %10s", "", "tokens", "share",
+                    priced ? "list cost" : "");
+    tokenomics_row(UI_TEXT, "fresh input", fresh, input, c_fresh, priced);
+    tokenomics_row(UI_TEXT, "cache write", write, input, c_write, priced);
+    tokenomics_row(UI_TEXT, "cache read", read, input, c_read, priced);
+    tokenomics_row(UI_TEXT, "output", out, 0, c_out, priced);
+    tokenomics_row(UI_BOLD, "total", input + out, 0, c_fresh + c_write + c_read + c_out,
+                   priced);
+    ui_put("\n");
+
+    char pk[32], win[32], ctx[80];
+    text_humanize(peak, pk, sizeof pk);
+    text_humanize(context_window, win, sizeof win);
+    if (context_window > 0)
+        snprintf(ctx, sizeof ctx, "%s / %s (%ld%%)", pk, win, 100 * peak / context_window);
+    else
+        snprintf(ctx, sizeof ctx, "%s", peak > 0 ? pk : "not reported");
+    if (input > 0)
+        tokenomics_line(UI_TEXT, "  %-12s %.1f%% of input", "cache hit",
+                        100.0 * (double)read / (double)input);
+    if (write > 0)
+        tokenomics_line(UI_TEXT, "  %-12s %.1f reads per written token", "cache reuse",
+                        (double)read / (double)write);
+    tokenomics_line(UI_TEXT, "  %-12s %s", "peak context", ctx);
+    if (charged > 0)
+        tokenomics_line(UI_TEXT, "  %-12s $%.4f", "charged", charged);
+    ui_put("\n");
+
+    char model_head[24] = "";
+    if (mixed)
+        snprintf(model_head, sizeof model_head, "%-18s ", "model");
+    tokenomics_line(UI_DIM, "  %4s %s%7s %7s %7s %7s %7s %9s  %s", "turn", model_head,
+                    "fresh", "write", "read", "out", "context", "cost", "prompt");
+    int room = ui_columns() - 60 - (mixed ? 19 : 0);
+    for (int i = 0; i < n; i++) {
+        const struct sessionpresent_tokens *t = &turns[i];
+        char f[16], w[16], r[16], o[16], c[16], cost[16] = "", model[24] = "", prompt[272];
+        text_humanize(t->fresh, f, sizeof f);
+        text_humanize(t->cache_write, w, sizeof w);
+        text_humanize(t->cache_read, r, sizeof r);
+        text_humanize(t->output, o, sizeof o);
+        text_humanize(t->context, c, sizeof c);
+        if (t->cost > 0)
+            snprintf(cost, sizeof cost, "$%.4f", t->cost);
+        if (mixed)
+            snprintf(model, sizeof model, "%-18.18s ", t->model);
+        snprintf(prompt, sizeof prompt, "%s", room >= 4 ? t->prompt : "");
+        if (room >= 4 && ui_cells(prompt) > (size_t)room) {
+            size_t keep = ui_fit_bytes(prompt, (size_t)room - 1);
+            while (keep > 0 && prompt[keep - 1] == ' ')
+                keep--;
+            memcpy(prompt + keep, "\xe2\x80\xa6", 4);
+        }
+        tokenomics_line(UI_TEXT, "  %4d %s%7s %7s %7s %7s %7s %9s  %s", i + 1, model, f,
+                        w, r, o, t->context ? c : "", cost, prompt);
+    }
     viewport_item_end();
     ui_flush();
 }
