@@ -881,6 +881,30 @@ static char *join_system(const char *const *parts, int n)
     return out;
 }
 
+static char *session_system(const struct session *s, const char *handoff)
+{
+    const char *note = image_available()
+        ? "This conversation is displayed in a terminal that renders images inline. "
+          "To show the user an image, write a markdown image with an absolute local "
+          "path — ![alt](/abs/path.png) — alone on its own line. PNG is drawn "
+          "directly; other formats are converted first. Use this whenever an image "
+          "would answer better than words: a render you just produced, a screenshot, "
+          "a diagram, a photo the user asked about. This only displays the image to "
+          "the user; it does not show it to you. To look at an image yourself, read "
+          "it with the Read tool first, then write the markdown."
+        : NULL;
+
+    const char *view =
+        "To present a long text file to the user, such as a plan, write it to disk "
+        "and output `@view /abs/path.md` alone on its own line instead of repeating "
+        "its contents. The user can open it in a full-screen pager; markdown is "
+        "rendered.";
+
+    const char *parts[] = {note, view, s->system_extra, handoff};
+    return join_system(parts, 4);
+}
+
+
 int session_set_env(struct session *s, const char *const *env)
 {
     if (s->agent)
@@ -928,25 +952,7 @@ static Backend *agent(struct session *s)
     o.plugin_dir = shunt_plugin_dir(s);
     o.env = (const char *const *)s->env;
 
-    const char *note = image_available()
-        ? "This conversation is displayed in a terminal that renders images inline. "
-          "To show the user an image, write a markdown image with an absolute local "
-          "path — ![alt](/abs/path.png) — alone on its own line. PNG is drawn "
-          "directly; other formats are converted first. Use this whenever an image "
-          "would answer better than words: a render you just produced, a screenshot, "
-          "a diagram, a photo the user asked about. This only displays the image to "
-          "the user; it does not show it to you. To look at an image yourself, read "
-          "it with the Read tool first, then write the markdown."
-        : NULL;
-
-    const char *view =
-        "To present a long text file to the user, such as a plan, write it to disk "
-        "and output `@view /abs/path.md` alone on its own line instead of repeating "
-        "its contents. The user can open it in a full-screen pager; markdown is "
-        "rendered.";
-
-    const char *parts[] = {note, view, s->system_extra, s->handoff};
-    char *joined = join_system(parts, 4);
+    char *joined = session_system(s, s->handoff);
     o.system = joined;
     s->agent = backend_open_ex(&o);
     free(joined);
@@ -1001,9 +1007,10 @@ int session_switch_backend(struct session *s, const char *backend)
         src = &disk;
     char *handoff = transcript_handoff(src, 128 * 1024, s->id[0] ? s->id : NULL);
     transcript_free(&disk);
+    char *joined = session_system(s, handoff);
     backend_opts o = {0};
     o.name = backend;
-    o.system = handoff;
+    o.system = joined;
     o.cwd = s->cwd;
     o.allow_customizations = s->customizations;
     o.permission_mode = s->permission;
@@ -1012,6 +1019,7 @@ int session_switch_backend(struct session *s, const char *backend)
     o.plugin_dir = shunt_plugin_dir(s);
     o.env = (const char *const *)s->env;
     Backend *replacement = backend_open_ex(&o);
+    free(joined);
     if (!replacement) {
         free(handoff);
         return 0;
