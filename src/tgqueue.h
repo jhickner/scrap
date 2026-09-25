@@ -17,8 +17,6 @@ void            tgqueue_free(struct tgqueue *q);
 
 void tgqueue_push(struct tgqueue *q, enum tgqueue_kind kind, const char *text);
 
-/* A synchronous Telegram call can be made while held; queued sends drain first
-   and the sender remains excluded until release. */
 void tgqueue_hold(struct tgqueue *q);
 void tgqueue_release(struct tgqueue *q);
 

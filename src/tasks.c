@@ -73,9 +73,6 @@ static int label_filler(const char *word, size_t n)
     return 0;
 }
 
-/* The words of the description that carry it, as many as fit: "Read the battery
-   state" labels as "read battery", which tells two agents apart where the first
-   few characters of each would not. */
 void tasks_label(const struct task *a, char *out, size_t size)
 {
     const char *from = a ? (a->desc[0] ? a->desc : (a->type[0] ? a->type : a->id)) : "";
@@ -92,7 +89,7 @@ void tasks_label(const struct task *a, char *out, size_t size)
         size_t n = strcspn(p, " ");
         if (!label_filler(p, n)) {
             size_t want = n + (at ? 1 : 0);
-            /* a word goes in whole or not at all: a cut word reads as a typo */
+
             if (n && at + want <= TASK_LABEL_CELLS && at + want < size) {
                 if (at)
                     out[at++] = ' ';
@@ -125,8 +122,6 @@ static struct task *find(struct tasktab *t, const char *id)
     return NULL;
 }
 
-/* A full table drops the oldest finished entry: what is still running is what a
-   caller waiting on the work needs to keep. */
 static struct task *add(struct tasktab *t, const char *id)
 {
     if (t->n < TASKS_MAX) {
@@ -200,7 +195,6 @@ static int is_spawn_tool(const char *name)
     return 0;
 }
 
-/* What a spawn call was for, in the terms the drivers use for it. */
 static const char *spawn_desc(const cJSON *in)
 {
     static const char *const keys[] = {"description", "prompt", "task", "instructions"};

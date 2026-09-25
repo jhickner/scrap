@@ -61,8 +61,7 @@ macos_voice *macos_voice_start(const macos_voice_opts *opts, macos_voice_cb fn, 
 }
 
 int  macos_voice_fd(const macos_voice *v) { (void)v; return -1; }
-/* what the helper hands back on the next poll, as it does when ownership is
-   released */
+
 static const char *handoff_text;
 int  macos_voice_poll(macos_voice *v, int timeout_ms)
 {
@@ -137,7 +136,6 @@ void status_set_note(const char *text) { snprintf(last_note, sizeof last_note, "
 void status_touch(void) {}
 void chrome_live_label(const char *(*fn)(void)) { (void)fn; }
 
-/* the tab in front, and a second one to switch to */
 static struct session other;
 static struct session *front = &sess;
 struct session *workspace_current(void) { return front; }
@@ -167,7 +165,6 @@ int tty_focused(void) { return focused_window; }
 int tty_is_raw(void) { return 0; }
 int tty_read(tty_event *ev, int timeout_ms) { (void)ev; (void)timeout_ms; return 0; }
 
-/* stands in for the input box: the preview is the whole line there */
 static char box[1024];
 
 static int box_released;
@@ -176,7 +173,7 @@ static void box_heard(void *ud, const char *text)
 {
     (void)ud;
     if (box_released) {
-        /* the prompt keeps what is there and writes the next words beside it */
+
         if (!text || !*text)
             return;
         box_released = 0;
@@ -193,7 +190,6 @@ static void box_release(void *ud)
     box_released = 1;
 }
 
-/* the prompt tracks words already in the line as the preview again */
 static int box_claim(void *ud, const char *text)
 {
     (void)ud;
@@ -203,7 +199,6 @@ static int box_claim(void *ud, const char *text)
     return 1;
 }
 
-/* workspace_show: leave the tab in front, stash its box, load the other */
 static void switch_tab(struct session *to, char *stash, size_t size, const char *load)
 {
     voice_leave(front);
@@ -268,7 +263,7 @@ int main(void)
         fail("dropping an empty voice input is not handled");
     if (voice_drop())
         fail("a drop hold is not fresh voice input");
-    /* Clear the residue hold before testing recognition below. */
+
     voice_set_mic(0);
     voice_set_mic(1);
     clear_chimes();
@@ -348,8 +343,6 @@ int main(void)
         eq_str("focus-out draft", sent[0], "left in the other window");
     clear_sent();
 
-    /* releasing the helper makes it hand back what it had heard; that answer
-       belongs to the window being left */
     voice_arm(1);
     handoff_text = "handed back on the way out";
     voice_arm(0);
@@ -427,7 +420,6 @@ int main(void)
     clear_chimes();
     clear_sent();
 
-
     fire("partial", "sent by hand");
     voice_draft_sent();
     fire("final", "sent by hand");
@@ -438,8 +430,7 @@ int main(void)
     clear_chimes();
     fire("partial", "sent by hand again");
     voice_draft_sent();
-    /* the wake word arrives inside the hold that follows a hand-submit, and
-       with its first words clipped by the gate that closes while speaking */
+
     fire("final", "up listen I want to show each project");
     if (nsent || voice_take_line())
         fail("a turn that opens a dictation is not sent on its own");
@@ -497,7 +488,6 @@ int main(void)
     clear_sent();
     clear_chimes();
 
-    /* out of the hold left by the hand-submits above */
     voice_set_mic(0);
     voice_set_mic(1);
     box[0] = '\0';
@@ -688,10 +678,6 @@ int main(void)
     clear_chimes();
     clear_sent();
 
-    /* a tab switch leaves voice listening: the dictation is held for its tab,
-       the rest of an utterance spanning the switch goes to the new tab, and
-       the dictation resumes where it was on return. Exercise both a wake-word
-       partial and a dictation spanning finals. */
     for (int multi = 0; multi < 2; multi++) {
         if (!start_voice())
             return 1;
@@ -720,7 +706,7 @@ int main(void)
         fire("partial", spanning);
         eq_str("the rest of a spanning utterance previews on the new tab", box,
                "and this is for the worker");
-        /* the recognizer revises case and punctuation of the carried words */
+
         fire("final", multi ? "Second part. And this is for the worker."
                             : "Listen, first part. And this is for the worker.");
         char *taken = voice_take_line();
@@ -773,8 +759,6 @@ int main(void)
         clear_chimes();
     }
 
-    /* the carried words are taken off a spanning utterance even when the
-       recognizer revised a word in them or the switch fell inside a word */
     if (!start_voice())
         return 1;
     voice_on_heard(box_heard, NULL);
@@ -806,7 +790,6 @@ int main(void)
     clear_sent();
     clear_chimes();
 
-    /* a closed tab's dictation is not resumed by a tab that takes its place */
     if (!start_voice())
         return 1;
     voice_on_heard(box_heard, NULL);
@@ -823,7 +806,7 @@ int main(void)
         switch_tab(&sess, stash, sizeof stash, stash);
         if (!strcmp(voice_label(), "voice dictation"))
             fail("a forgotten dictation does not resume");
-        /* a box that no longer holds the dictation does not resume it either */
+
         fire("final", "listen held words");
         switch_tab(&other, stash, sizeof stash, "");
         switch_tab(&sess, stash, sizeof stash, "something else");
@@ -871,7 +854,6 @@ int main(void)
     voice_on_release(NULL, NULL);
     clear_chimes();
 
-    /* a window started out of front leaves the microphone to the one in front */
     focused_window = 0;
     if (!start_voice())
         return 1;
@@ -914,8 +896,7 @@ int main(void)
     voice_arm(1);
     if (helper_focus != 1 || focus_calls != 2)
         fail("real focus edge still claims a resumed connection");
-    /* a window that missed its focus-out is already armed, and still has to ask
-       for the helper back */
+
     focus_calls = 0;
     helper_focus = 0;
     voice_arm(1);

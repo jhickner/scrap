@@ -10,7 +10,6 @@ int models_for(const char *backend, const struct pick_item **out);
 
 int models_codex_slug(const char *model, char *out, size_t size);
 
-/* List rates in dollars per million tokens, from the OpenRouter catalog. */
 struct model_rates {
     double input, output, cache_read, cache_write;
 };

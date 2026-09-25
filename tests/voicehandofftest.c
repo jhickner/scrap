@@ -3,7 +3,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-/* Keep this test's fake helper separate from the user's running helper. */
 static uid_t test_uid(void) { return (uid_t)strtoul(getenv("MUX_TEST_UID"), NULL, 10); }
 #define getuid test_uid
 #define MACOS_VOICE_IMPLEMENTATION
@@ -67,7 +66,7 @@ int main(int argc, char **argv)
     FILE *stream = fdopen(peer, "r");
     assert(stream);
     char line[128];
-    /* No QUIT, reconnect, or focus claim is sent during the actual exec. */
+
     assert(fgets(line, sizeof line, stream) && !strcmp(line, "RESUMED\n"));
     assert(write(peer, "lo\n", 3) == 3);
     assert(fgets(line, sizeof line, stream) && !strcmp(line, "QUIT\n"));

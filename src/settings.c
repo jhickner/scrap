@@ -87,8 +87,6 @@ static void put(struct settings *s, const char *key, const char *value)
     snprintf(s->entries[i].value, MAX_SETTING_VALUE, "%s", value);
 }
 
-/* Other windows write the same file: take their entries before adding ours,
-   so a change made elsewhere is not undone by a stale copy. */
 void settings_put(struct settings *s, const char *key, const char *value)
 {
     if (!value)

@@ -12,9 +12,6 @@
 #include "app.h"
 #include "settings.h"
 
-/* Shared by the prompt and voice without making either depend on the other.
-   No file is opened unless explicitly enabled. Escape text so every event is
-   one physical line, even for multiline drafts and terminal control bytes. */
 static inline void voice_trace(const char *event, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 static inline void voice_trace(const char *event, const char *fmt, ...)
@@ -26,8 +23,7 @@ static inline void voice_trace(const char *event, const char *fmt, ...)
     int n = snprintf(path, sizeof path, "%s/" APP_CONFIG "/voice-events.log", home);
     if (n < 0 || (size_t)n >= sizeof path)
         return;
-    /* the log file existing also opts in: the setting is lost whenever another
-       instance writes its own copy of the settings file */
+
     if (!settings_get_int(SETTING_VOICE_TRACE, 0) && access(path, F_OK) != 0)
         return;
     va_list ap, copy;

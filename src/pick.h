@@ -11,7 +11,6 @@ int pick_run(const char *title, const struct pick_item *items, int count, int in
 
 int pick_run_filter(const char *title, const struct pick_item *items, int count, int initial);
 
-/* a filtering pick whose query starts on seed, which backspace can clear */
 int pick_run_query(const char *title, const struct pick_item *items, int count,
                    int initial, const char *query);
 
@@ -25,7 +24,6 @@ enum pick_search {
 #define PICK_TICK_REOPEN 2
 #define PICK_REOPEN      (-2)
 
-/* how long a view watching a live session waits before it ticks again */
 #define PICK_POLL_MS 500
 
 #define PICK_HEADING 1

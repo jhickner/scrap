@@ -96,7 +96,6 @@ static int env_set(const char *name)
     return v && *v;
 }
 
-/* google and huggingface use names that are not PROVIDER_API_KEY. */
 static int pi_env_name(const char *provider, char *out, size_t cap)
 {
     if (!provider || !*provider || !out || cap < 12)
@@ -150,8 +149,6 @@ static time_t pi_env_stamp(void)
     return t;
 }
 
-/* A backend that reads its models off disk rebuilds its list when the file
-   moves, or an edited config waits for the next mux. */
 static time_t backend_stamp(const char *backend)
 {
     if (!strcmp(backend, "pi"))
@@ -168,7 +165,6 @@ static time_t backend_stamp(const char *backend)
     return 0;
 }
 
-/* Fallbacks for a machine where the CLI has not written its catalogue yet. */
 static const struct pick_item CLAUDE[] = {
     {"claude-opus-5-5[1m]", "Opus 5.5 with a 1M-token context"},
     {"claude-opus-5-5", "most capable"},
@@ -188,8 +184,6 @@ static void fill_static(struct list *l, const struct pick_item *v, int n)
         push(l, v[i].label, v[i].detail);
 }
 
-/* Claude Code caches the model catalogue it was served, one file per surface;
-   "cc" is the CLI. Take the newest. */
 static int claude_catalog_path(char *out, size_t cap)
 {
     const char *home = getenv("HOME");
@@ -231,8 +225,6 @@ static time_t claude_stamp(void)
     return st.st_mtime;
 }
 
-/* The catalogue does not say which models take the long context, and only the
-   frontier ones do. Haiku is the odd one out. */
 static int claude_has_1m(const char *id, const char *section)
 {
     return section && !strcmp(section, "main") && !strstr(id, "haiku");
@@ -352,8 +344,6 @@ static void pi_model_id(char *out, size_t cap, const char *id)
         snprintf(out, cap, "openrouter/%s", id);
 }
 
-/* pi takes provider/id. The id is already prefixed when the catalog listed it
-   that way. */
 static void push_pi_model(struct list *l, const char *provider, const char *id,
                           const char *name, double context)
 {
@@ -465,7 +455,6 @@ static int fill_openrouter_catalog(struct list *l)
     return l->n > before;
 }
 
-/* The catalog quotes dollars per token as a string. */
 static double per_million(cJSON *pricing, const char *key)
 {
     const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(pricing, key));
@@ -489,7 +478,6 @@ static int rates_of(cJSON *models, const char *id, struct model_rates *out)
     return 0;
 }
 
-/* A backend names its model without the vendor the catalog files it under. */
 static const char *catalog_vendor(const char *backend)
 {
     if (!backend)
@@ -503,7 +491,6 @@ static const char *catalog_vendor(const char *backend)
     return "";
 }
 
-/* 0 when the catalog is not there yet */
 static time_t catalog_stamp(void)
 {
     char        path[4096];
@@ -562,9 +549,6 @@ int models_rates(const char *backend, const char *model, struct model_rates *out
     char key[256];
     snprintf(key, sizeof key, "%s/%s", backend ? backend : "", model);
 
-    /* Misses are remembered too, or a model the catalog does not carry reparses
-       the whole file every turn. A catalog that lands, or is refreshed, moves
-       the mtime and drops the table. */
     static struct {
         char               key[256];
         struct model_rates rates;
@@ -755,9 +739,6 @@ const char *models_short_name(const char *backend, const char *model)
     return model;
 }
 
-/* Codex takes only the full slug: `sol` reaches the API and comes back a 400.
- * Expand a bare family name against the cached catalogue when exactly one slug
- * ends in it. */
 int models_codex_slug(const char *model, char *out, size_t size)
 {
     if (!model || !*model)

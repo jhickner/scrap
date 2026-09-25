@@ -35,10 +35,8 @@ void viewport_item_end(void);
 void viewport_suspend(void);
 void viewport_resume(void);
 
-
 void viewport_paint(void);
 
-/* synchronized paints preserve Kitty placeholder combining marks in tmux */
 void viewport_sync_placeholders(int on);
 
 void viewport_defer(void);
@@ -56,8 +54,6 @@ void viewport_chrome_row(int at, const char *s);
 
 void viewport_chrome_keep(int keep);
 
-/* hold the transcript still under a modal, which owns every row: the scroll
-   position is restored when the pin comes off */
 void viewport_chrome_pin(int on);
 
 int viewport_ends_blank(void);
@@ -71,11 +67,8 @@ unsigned viewport_item_find(const char *kind);
 
 void *viewport_item_data(unsigned mark);
 
-/* nothing has been printed since this item closed */
 int   viewport_item_last(unsigned mark);
 
-/* the image whose placeholder cell the last paint left at a screen cell, both
-   1-based; 0 when nothing of an image is drawn there */
 uint32_t viewport_image_at(int row, int col);
 
 void  viewport_item_update(unsigned mark);
@@ -84,7 +77,6 @@ void viewport_item_hide(unsigned mark, int on);
 void viewport_item_pad(unsigned mark, int on);
 void viewport_item_stale(unsigned mark);
 
-/* from is a hint: a mark no longer held scans from the first item */
 typedef void (*viewport_scan_fn)(unsigned mark, const char *kind, void *ud, void *ctx);
 void viewport_scan(unsigned from, viewport_scan_fn fn, void *ctx);
 
@@ -93,8 +85,6 @@ void viewport_on_width(viewport_width_fn fn);
 
 void viewport_repad(void);
 
-/* composites onto the transcript rows of each paint, above the chrome; a row
-   replaced is freed and set to a malloc'd string of at most `cols` cells */
 typedef void (*viewport_cover_fn)(char **rows, int n, int cols);
 void viewport_on_cover(viewport_cover_fn fn);
 
@@ -106,8 +96,6 @@ struct viewport_state;
 struct viewport_state *viewport_state_new(void);
 void viewport_state_free(struct viewport_state *st);
 
-/* Module-private state attached to the currently adopted viewport. The owner
-   token keeps unrelated clients from accidentally sharing the one slot. */
 void *viewport_state_local(const void *owner, size_t size);
 
 void viewport_hold(int on);

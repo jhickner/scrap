@@ -97,8 +97,6 @@ static int known_backend(const char *name)
 #define GROKBOT_LIST_MAX 128
 #define GROKBOT_LIST_TTL 30
 
-/* The bots and groups the Grok Bot gateway serves. Refetched after
-   GROKBOT_LIST_TTL seconds; empty when the gateway is unreachable. */
 static const struct pick_item *grokbot_choices(int *count)
 {
     static struct pick_item items[GROKBOT_LIST_MAX];
@@ -295,9 +293,6 @@ static int can_pick(const char *usage)
     return 1;
 }
 
-/* Resolve a typed name against the backend's list: exact label or short name,
-   then the first short name it prefixes, then the first containing it. A
-   backend without a list takes any name. */
 static const char *resolve_model(const struct session *s, const char *name)
 {
     int count = 0;
@@ -481,7 +476,7 @@ static void do_permission(struct session *s, const char *arg)
 
         int initial = session_permission_index(session_permission(s));
         int index = pick_run("gate tool calls", choices, count, initial < 0 ? 0 : initial);
-        /* the labels are the names of a static table, so they outlive the array */
+
         chosen = index >= 0 ? choices[index].label : NULL;
         free(choices);
         if (!chosen)
@@ -1234,7 +1229,7 @@ static void do_sessions(struct session *s, const char *arg)
 static void do_status(struct session *s, const char *arg)
 {
     (void)arg;
-    /* the repo may have moved from outside this session since the last turn */
+
     gitinfo_forget();
     hud_print(s);
 }

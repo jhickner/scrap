@@ -29,10 +29,9 @@ struct entry {
     int         low;
     int         high;
     const char *unbounded;
-    const char *key; /* S_ROWS, S_CHOICE and S_NOUL: the setting it stores */
+    const char *key;
     int         def;
-    /* S_CHOICE: the values it takes, first one the default. S_NOUL: the
-       default, as a fraction from 0 to 1 */
+
     const char *const *choices;
     int                nchoices;
     double             deff;

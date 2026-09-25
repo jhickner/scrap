@@ -86,8 +86,6 @@ static void restore_terminal(void)
     tty_raw_end();
 }
 
-/* grokbot with no saved bot: the user's pick from the gateway list. Returns 0
-   when the backend is left to take the first bot the gateway lists. */
 static int pick_startup_bot(struct session *s)
 {
     if (strcmp(session_backend(s), "grokbot") || strcmp(session_model(s), "default"))
@@ -222,7 +220,6 @@ static int voice_listening(void *ud)
     return voice_mic();
 }
 
-/* off applies to every client of the voice helper; on stays local */
 static void toggle_mic(void *ud)
 {
     (void)ud;
@@ -301,10 +298,7 @@ static void side_tick(void *ud)
     if (vncinset_stale(inset_live()))
         viewport_touch();
 }
-/* Dispatch requests arrive as files, and nothing in the idle fd set wakes the
-   loop for them. An instance with no running session must still tick, or it
-   never answers a spawn and the caller times out against a live mux.
-   dispatch_poll throttles itself. */
+
 static int idle_poll(void *ud)   { (void)ud; return 1; }
 static void replay(void *ud)      { (void)ud; session_replay(workspace_current()); }
 static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
@@ -668,8 +662,6 @@ int main(int argc, char **argv)
         ui_raw(1);
         ui_cursor_plain();
 
-        /* typeahead echo, before 1049h snapshots the main screen. skip on
-           restart: the alt screen is already up, and the erase desyncs it. */
         if (!restore_arg && tty_input_waiting()) {
             ui_esc("\r");
             ui_esc(UI_ERASE_BELOW);

@@ -134,8 +134,6 @@ static size_t detail_width(const struct view *v, size_t cap)
     return width > cap ? cap : width;
 }
 
-/* the ellipsis has to sit inside the budget: a label that spends the whole
-   budget and then trails a mark pushes its detail a cell right of the rest. */
 static size_t fit_bytes(const char *s, size_t budget, int *cut)
 {
     size_t fit = ui_fit_bytes(s, budget);
@@ -228,8 +226,6 @@ static int visible_cap(const struct view *v)
     return rows < 5 ? 5 : rows;
 }
 
-/* a filtering pick holds the height it opened with: the list grows and shrinks
-   inside it, rather than the whole box walking up the screen as rows drop out */
 static int hold_rows(const struct view *v)
 {
     if (!v->filter)
@@ -245,8 +241,6 @@ static int cmp_rank(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
-/* score descending, ties in list order. The rank packs the two into one key so
-   the parallel arrays sort together. */
 static void sort_by_score(struct view *v)
 {
     if (v->heading || v->count < 2)
@@ -561,8 +555,6 @@ int pick_run_live(const char *title, const struct pick_item *items, int count,
                search == PICK_SEARCH_SLASH, NULL);
 }
 
-/* the length with any partial sequence at the end dropped: the query is
-   formatted into the title, so it cannot end mid-character */
 static size_t whole_chars(const char *s, size_t len)
 {
     size_t at = len;

@@ -56,8 +56,8 @@ struct session {
     char    *effort;
     char    *resolved;
     char     id[128];
-    char    *addr;   /* the file this session's id is published to, for the child */
-    char   **env;    /* NAME=VALUE entries added to the child's environment */
+    char    *addr;
+    char   **env;
     backend_result last_result;
     char     title[128];
     char     stale_title[128];
@@ -72,11 +72,10 @@ struct session {
     struct transcript transcript;
     char    *last_block;
     int      turns;
-    int      saved;      /* the id has a turn on disk, so it can be resumed */
+    int      saved;
     double   cost_usd;
     long     tokens_in, tokens_out;
-    /* The cache-read share of tokens_in. Broken out because it is billed at a
-       fraction of fresh input, so the two move very differently. */
+
     long     tokens_cached;
     struct sessionpresent_tokens *ledger;
     int      ledger_n, ledger_cap;
@@ -102,10 +101,10 @@ struct session {
     struct tasktab     tasks;
     const struct task *task_change;
     int      task_repeat;
-    unsigned long spoke; /* events other than task reports, for stall_watch */
-    double   work_at;    /* when the outstanding background work started */
-    double   stall_at;   /* when the last outstanding task went quiet */
-    int      stall_seen; /* work was outstanding at the previous pump */
+    unsigned long spoke;
+    double   work_at;
+    double   stall_at;
+    int      stall_seen;
     int      stall_told;
     volatile double heard_at;
     volatile int    tool_open;
@@ -132,8 +131,8 @@ struct session {
     int             continuing;
     backend_result  meta;
     double          started;
-    double          status_at;   /* when the last status update was asked for */
-    char           *status_last; /* its answer, so the next one adds to it */
+    double          status_at;
+    char           *status_last;
     int             status_open;
 
     struct sessionpresent present;
@@ -146,8 +145,6 @@ struct evcopy {
     struct evcopy *next;
 };
 
-/* The enqueue time of the event being rendered, so a listener can report how
-   long the event sat between the backend thread and the main loop. */
 static double rendering_queued_at;
 
 double session_event_queued_at(void)
@@ -189,8 +186,7 @@ static int session_retarget(struct session *s, const char *model, const char *ef
 
 static void render_event(struct session *s, const backend_event *ev)
 {
-    /* Anything but a task report is the backend talking, which is what tells a
-       stalled session from one whose work woke it. */
+
     if (ev->kind != BACKEND_EV_TASK)
         s->spoke++;
 
@@ -295,9 +291,6 @@ static void queue_drop(struct session *s)
         evcopy_free(e);
 }
 
-/* The turn's stream is the only sign the backend is still talking to its
- * provider: a CLI that has lost the network keeps its pipe open and retries in
- * silence. */
 static void heard(struct session *s, const backend_event *ev)
 {
     s->heard_at = now_seconds();
@@ -374,10 +367,6 @@ static void tab_busy(struct session *s, int busy)
 static void name_poll(struct session *s);
 static void status_update_tick(struct session *s);
 
-/* Background work outstanding with no turn in flight, and how long it has been
-   there. A backend that counts its own is the authority: the table can be left
-   holding a task whose end was never reported, which is the thing being watched
-   for. */
 int session_work_count(const struct session *s)
 {
     if (!s || !s->agent)
@@ -385,11 +374,6 @@ int session_work_count(const struct session *s)
     return s->agent->busy ? session_idle_busy(s) : tasks_pending(&s->tasks);
 }
 
-/* Work that outlives its turn is only over when the backend says so: the task
-   ends, its result wakes the model, and that turn is the answer. A task torn
-   down without one leaves the session at a prompt indistinguishable from an
-   answered one, with nothing left to resume it. Note the moment the last one
-   goes quiet so session_stalled() can time it. */
 static void stall_watch(struct session *s, int awake)
 {
     int work = session_work_count(s);
@@ -403,7 +387,7 @@ static void stall_watch(struct session *s, int awake)
     }
     s->work_at = 0;
     if (awake) {
-        /* the turn the work woke: its answer is what resumes the session */
+
         s->stall_seen = 0;
         s->stall_at = 0;
         return;
@@ -415,15 +399,12 @@ static void stall_watch(struct session *s, int awake)
     }
 }
 
-/* Whether a stall is being timed, for a caller that has to come back for it:
-   nothing else will wake the loop once the work has gone quiet. */
 int session_stall_armed(const struct session *s)
 {
     return s && s->stall_at && !s->stall_told &&
            settings_get_int(SETTING_TASK_STALL, TASK_STALL_DEFAULT) > 0;
 }
 
-/* Nonzero once per stall, for the caller that can do something about it. */
 int session_stalled(struct session *s)
 {
     int wait = settings_get_int(SETTING_TASK_STALL, TASK_STALL_DEFAULT);
@@ -477,7 +458,6 @@ int session_idle_pump(struct session *s)
     sessionpresent_expire(&s->present, s->quiet);
     session_set_drawing(was);
 
-    /* a turn still open, or one that opened and closed inside this pump */
     stall_watch(s, busy || s->spoke != before);
     if (s == live)
         status_update_tick(s);
@@ -502,7 +482,6 @@ void session_set_typeahead(session_key_fn fn, void *ud)
     typeahead = fn;
     typeahead_ud = ud;
 }
-
 
 static void set_id(struct session *s, const char *id);
 
@@ -551,7 +530,6 @@ static void name_poll(struct session *s)
         set_id(s, id);
     }
 
-    /* a rename that landed before the conversation had an id */
     if (s->id[0] && s->held_title[0]) {
         title_set(s->id, s->held_title);
         s->held_title[0] = '\0';
@@ -607,8 +585,6 @@ enum session_rename session_rename(struct session *s, const char *name)
     if (!s)
         return SESSION_RENAME_NO_ID;
 
-    /* the id arrives when the first turn ends and the name is filed under it;
-       until then the session wears it and name_poll files it */
     if (!s->id[0] && name && *name) {
         if (!title_clean(name, s->held_title, sizeof s->held_title))
             return SESSION_RENAME_BAD_NAME;
@@ -669,8 +645,6 @@ static const char *spin_effort(const struct session *s)
     return NULL;
 }
 
-/* A tool the backend is still running explains any amount of silence; nothing
- * else does. */
 static double session_quiet(const struct session *s)
 {
     if (!s || !s->heard_at || s->tool_open)
@@ -711,8 +685,6 @@ static void status_update_done(void *ud, const char *answer)
         replace(&s->status_last, answer);
 }
 
-/* Every status interval of a running turn or outstanding background work, fork
-   a side turn that says what the agent has done since the last update. */
 static void status_update_tick(struct session *s)
 {
     if (!s || s->status_open)
@@ -732,8 +704,6 @@ static void status_update_tick(struct session *s)
         s->status_open = 1;
 }
 
-/* The session whose work this thread is running: set on every thread but the
-   window's own, so the abort check knows not to draw or read from it. */
 static __thread struct session *owner;
 
 static int abort_check(void)
@@ -876,9 +846,6 @@ void session_free(struct session *s)
     free(s);
 }
 
-/* Path of the shunt plugin, or NULL when the setting is off or there is no
-   config dir. The plugin's hooks only run when customizations are on, since
-   --safe-mode loads a plugin but will not execute its hooks. */
 static const char *shunt_plugin_dir(const struct session *s)
 {
     static char path[4300];
@@ -993,9 +960,6 @@ static void *retire_thread(void *arg)
     return NULL;
 }
 
-/* Closing a backend stops its child. Do that on another thread in case close
-   joins a reader that would deadlock here, then join so quit reaps the CLI
-   before the process exits and closes its stdout pipe. */
 static void retire(Backend *b)
 {
     if (!b)
@@ -1065,7 +1029,7 @@ int session_switch_backend(struct session *s, const char *backend)
     replace(&s->model, NULL);
     replace(&s->effort, NULL);
     replace(&s->resolved, NULL);
-    /* a new backend mints a new id; keep the name so the namer does not run */
+
     if (s->title[0] && !s->held_title[0])
         snprintf(s->held_title, sizeof s->held_title, "%s", s->title);
     s->id[0] = '\0';
@@ -1164,17 +1128,11 @@ static void set_id(struct session *s, const char *id)
     agenttabs_forget_hook(id);
 }
 
-/* A CLI mints its id before anything is written under it, so an id with no
-   turn yet resumes to nothing: start over instead. */
 static const char *saved_id(const struct session *s)
 {
     return s->id[0] && s->saved ? s->id : NULL;
 }
 
-/* A child is handed its directory, model, effort and permission mode on its
-   command line, so anything that changes one of them starts a replacement
-   rather than telling the running child and restarting it. The session keeps
-   the old backend until the new one is up, and lets go of it on a thread. */
 static int restart(struct session *s, const char *resume_id)
 {
     if (s->running)
@@ -1252,7 +1210,6 @@ static void start_word(const struct session *s, char *out, size_t size)
     snprintf(out, size, "Starting %s\xe2\x80\xa6", s->model ? s->model : "Grok Bot");
 }
 
-/* grokbot starts over the network: run it off-thread under the status spinner */
 static int restart_spun(struct session *s, const char *resume_id)
 {
     if (strcmp(s->backend, "grokbot"))
@@ -1294,9 +1251,6 @@ int session_start(struct session *s)
     return 1;
 }
 
-/* a CLI takes seconds to boot and resume, so the sessions a window comes back
-   with connect at once, off the main thread: their events queue, and the live
-   list is written back here when each is collected. */
 static int start_pipe[2] = {-1, -1};
 
 static void start_notify(void)
@@ -1312,9 +1266,6 @@ static void *start_thread(void *ud)
 {
     struct session *s = ud;
 
-    /* a backend can poll the abort check all through its handshake, and that
-       check draws and reads the terminal. Only the thread the window runs on
-       may do that: claim the session so this one answers and nothing else. */
     owner = s;
 
     restart_shield_thread();
@@ -1518,8 +1469,6 @@ void session_adopt_id(struct session *s, const char *id)
 #define RESET_BLOCK   (1 << 0)
 #define RESET_WORKDIR (1 << 1)
 
-/* what a conversation counted, said and was called does not carry into the
-   next one */
 static void reset_turns(struct session *s, int flags)
 {
     s->turns = 0;
@@ -1545,7 +1494,6 @@ int session_resume(struct session *s, const char *id)
     return 1;
 }
 
-/* A directory change is a conversation of its own. */
 static void started_over(struct session *s)
 {
     reset_turns(s, RESET_BLOCK | RESET_WORKDIR);
@@ -1574,9 +1522,6 @@ int session_set_cwd(struct session *s, const char *path)
     return session_retarget(s, s->model, s->effort, path);
 }
 
-/* Setting a model, an effort and a directory one at a time restarts the child
-   for each. This asks for all three at once: one replacement, started with
-   what it needs on its command line. */
 static int session_retarget(struct session *s, const char *model, const char *effort,
                             const char *cwd)
 {
@@ -2167,9 +2112,6 @@ const char *session_saved_effort(const char *backend)
     return prefs_saved_choice("effort", backend);
 }
 
-/* A backend that prices its own turns reports the session total; one that
- * reports only tokens, as codex does, is priced from the model catalog. Cache
- * writes need no term: codex counts them inside the input it reports. */
 static void ledger_add(struct session *s, const backend_result *m, const char *prompt,
                        double cost)
 {
@@ -2187,8 +2129,7 @@ static void ledger_add(struct session *s, const backend_result *m, const char *p
     snprintf(t->backend, sizeof t->backend, "%s", s->backend);
     const char *shown = models_short_name(s->backend, model);
     snprintf(t->model, sizeof t->model, "%s", shown ? shown : "");
-    /* ponytail: matches the voice preamble by its opening words; a reworded
-       preamble shows in the prompt column until this is updated */
+
     const char *body = prompt ? prompt : "";
     const char *past = strstr(body, "\n\n");
     if (!strncmp(body, "The message below was spoken aloud", 34) && past)
@@ -2263,9 +2204,6 @@ static void remember_model(const struct session *s)
     const char *id = s->resolved && *s->resolved ? s->resolved : backend_model(s);
     prefs_remember_resolved_model(s->backend, s->model, id);
 
-    /* Pi otherwise consults its own mutable setting on every new process. Once
-       mux has observed the model pi selected, make that explicit for later mux
-       sessions until the user chooses another model here. */
     if (!strcmp(s->backend, "pi") && (!s->model || !*s->model) && id && *id)
         prefs_remember_choice("model", s->backend, id);
 }

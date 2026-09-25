@@ -54,18 +54,14 @@ void prompt_set_takeover(struct prompt *p, int (*pending)(void *ud), void (*run)
                          void *ud);
 
 void prompt_set_cancel(struct prompt *p, int (*fn)(void *ud), void *ud);
-/* ctrl-c or escape on a non-empty line: drop the voice input in it. 1 when
-   there was some; escape then leaves the rest of the line */
+
 void prompt_set_discard(struct prompt *p, int (*fn)(void *ud), void *ud);
 
 void prompt_set_switcher(struct prompt *p, void (*fn)(void *ud), void *ud);
 
-/* what a click on the transcript opens, given the 1-based screen row and
-   column */
 void prompt_set_click(struct prompt *p, int (*fn)(void *ud, int row, int col),
                       void *ud);
 
-/* space on an empty prompt */
 void prompt_set_mic(struct prompt *p, void (*fn)(void *ud), void *ud);
 
 void prompt_set_another(struct prompt *p, void (*fn)(void *ud), void *ud);
@@ -86,37 +82,31 @@ void prompt_restart_check(struct prompt *p);
 void prompt_set_animate(struct prompt *p, int (*busy)(void *ud), void (*tick)(void *ud),
                         void *ud);
 
-/* How often the idle hooks are run when nothing will wake the loop for them */
 #define PROMPT_IDLE_POLL_MS 500
 
-/* fds/render are the wait-and-drain pair; poll reports work whose next step is
-   due at a time rather than on an fd, and is what bounds the wait. */
 void prompt_set_idle(struct prompt *p, int (*fds)(void *ud, int *out, int max),
                      int (*render)(void *ud), int (*poll)(void *ud), void *ud);
 
 char *prompt_take_queued(struct prompt *p);
 
 void prompt_set_external(struct prompt *p, char *(*fn)(void *ud), void *ud);
-/* the live transcription in the input, edited and submitted like typed text;
-   "" removes it */
+
 void prompt_set_preview(struct prompt *p, const char *text);
 void prompt_insert(struct prompt *p, const char *text);
 const char *prompt_line(struct prompt *p);
 int         prompt_cursor(const struct prompt *p);
 
-/* unsent input parked while another tab is in front; *text is heap or NULL */
 void prompt_stash_draft(char **text, int *cursor);
 void prompt_adopt_draft(const char *text, int cursor);
-/* 1 when the prompt should show the listen mark */
+
 void prompt_set_listen(struct prompt *p, int (*fn)(void *ud), void *ud);
 
 int  prompt_line_was_external(struct prompt *p);
-/* 1 when the submitted line held the transcription preview */
+
 int  prompt_line_had_preview(struct prompt *p);
-/* keep the line as it stands and stop tracking it as a preview */
+
 void prompt_release_preview(struct prompt *p);
-/* track text already in the line, its last occurrence, as the preview again.
-   "" forgets the preview; 0 when the text is not in the line */
+
 int  prompt_claim_preview(struct prompt *p, const char *text);
 
 void prompt_echo_message(const char *text);

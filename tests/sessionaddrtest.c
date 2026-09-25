@@ -28,9 +28,8 @@ int main(void)
     char a[4300], b[4300];
     assert(sessionaddr_alloc(a, sizeof a));
     assert(sessionaddr_alloc(b, sizeof b));
-    assert(strcmp(a, b)); /* one file per session */
+    assert(strcmp(a, b));
 
-    /* allocated empty, so a child that looks early reads nothing */
     struct stat st;
     assert(stat(a, &st) == 0);
     assert(st.st_size == 0);
@@ -40,19 +39,16 @@ int main(void)
     assert(!strcmp(slurp(a), "sess-one\n"));
     assert(!strcmp(slurp(b), ""));
 
-    /* the same id again leaves the file alone; a new one replaces it */
     sessionaddr_write(a, "sess-one");
     assert(!strcmp(slurp(a), "sess-one\n"));
     sessionaddr_write(a, "sess-two");
     assert(!strcmp(slurp(a), "sess-two\n"));
 
-    /* nothing to say is not written */
     sessionaddr_write(b, NULL);
     sessionaddr_write(b, "");
     sessionaddr_write(NULL, "sess-three");
     assert(!strcmp(slurp(b), ""));
 
-    /* no temporary file is left behind */
     char tmp[4400];
     snprintf(tmp, sizeof tmp, "%s.tmp", a);
     assert(stat(tmp, &st) != 0);

@@ -15,7 +15,6 @@ struct tasktab;
 typedef int (*session_key_fn)(void *ud, tty_event *ev);
 void session_set_typeahead(session_key_fn fn, void *ud);
 
-
 struct session *session_new(const char *backend, const char *cwd, const char *model,
                             const char *effort);
 void            session_free(struct session *s);
@@ -27,18 +26,14 @@ void session_set_quiet(struct session *s, int quiet);
 typedef void (*session_event_fn)(void *ud, const backend_event *ev);
 void session_set_observer(struct session *s, session_event_fn fn, void *ud);
 
-/* process-wide hooks, called after the observer for every session's events */
 typedef void (*session_listener_fn)(void *ud, struct session *s, const backend_event *ev);
 int  session_add_listener(session_listener_fn fn, void *ud);
 void session_remove_listener(session_listener_fn fn, void *ud);
 
 void session_set_system_extra(struct session *s, const char *text);
 
-/* NAME=VALUE entries added to the child's environment. Only before the child
-   starts; returns 0 once it has. */
 int session_set_env(struct session *s, const char *const *env);
 
-/* The last finished turn's usage and error flags. Zeroed before the first. */
 const backend_result *session_last_result(const struct session *s);
 
 void session_set_abort_hook(struct session *s, int (*fn)(void *ud), void *ud);
@@ -56,16 +51,10 @@ void session_set_browser_login(struct session *s, int on);
 
 void session_set_fork(struct session *s, int on);
 
-/* why the last backend start failed; NULL when unknown */
 const char *session_start_error(void);
 
 int session_start(struct session *s);
 
-/* Starts every session at once, off the main thread. Each is collected with
-   session_start_wait(), which joins its connect and returns whether it came up;
-   session_start_done() says whether that would return right away, and
-   session_start_fd() is readable once a connect has finished. A session is
-   untouchable until it has been collected. */
 void session_start_batch(struct session **list, int n);
 int  session_start_done(const struct session *s);
 int  session_start_wait(struct session *s);
@@ -88,7 +77,6 @@ double session_turn_elapsed(const struct session *s);
 
 #define SESSION_QUIET_SECONDS 60.0
 
-
 void session_turn_wait(struct session *s);
 
 void session_interrupt(struct session *s);
@@ -103,18 +91,12 @@ int  session_idle_fd(const struct session *s);
 int  session_idle_pump(struct session *s);
 int  session_idle_busy(const struct session *s);
 
-/* Background work this session started: the whole table, and the entry the
-   event being dispatched changed, for an observer rendering it. */
 const struct tasktab *session_tasks(const struct session *s);
 const struct task    *session_task_change(const struct session *s);
 int  session_task_repeat(const struct session *s);
 
-/* Background work the agent has running with no turn in flight: an idle prompt
-   with work outstanding is not a finished one. */
 int session_work_count(const struct session *s);
 
-/* The session's background work ended without waking the agent, and nothing is
-   left to resume it. Nonzero once per stall, for a caller that can nudge. */
 int  session_stalled(struct session *s);
 int  session_stall_armed(const struct session *s);
 
@@ -127,7 +109,7 @@ int session_clear(struct session *s);
 int session_set_cwd(struct session *s, const char *path);
 
 int session_set_model(struct session *s, const char *model);
-/* Set the model of a session that has not started, without a restart. */
+
 int session_preset_model(struct session *s, const char *model);
 
 int session_set_effort(struct session *s, const char *effort);
@@ -164,8 +146,6 @@ const char *session_rename_error(enum session_rename why);
 const char *session_model(const struct session *s);
 const char *session_id(const struct session *s);
 
-/* The file this session's id is published to, exported to its child as
-   $MUX_SESSION_FILE so the child can name itself. NULL when none was made. */
 const char *session_addr(const struct session *s);
 
 const char *session_saved_model(const char *backend);
@@ -181,15 +161,12 @@ const char *session_cwd(const struct session *s);
 const char *session_workdir(const struct session *s);
 const char *session_backend(const struct session *s);
 
-/* grokbot: the newest transcript entry drawn for `bot`, which /tail continues
-   from. Replies drawn live advance its time. */
 struct grokbottail_mark;
 int  session_tail_mark(const struct session *s, const char *bot,
                        struct grokbottail_mark *out);
 void session_set_tail_mark(struct session *s, const char *bot,
                            const struct grokbottail_mark *mark);
 
-/* grokbot: the desktop inset, NULL until first asked for with `create` */
 struct vncinset;
 struct vncinset *session_inset(struct session *s, int create);
 
@@ -243,17 +220,14 @@ static inline int mux_argv(char **out, int max, unsigned what,
 
 int session_argv(const struct session *s, char **out, int max, unsigned what);
 const char *session_last_reply(const struct session *s);
-/* the prompt of the running or most recent turn, and when it began */
+
 const char *session_prompt(const struct session *s);
 double      session_turn_started(const struct session *s);
 
-/* When the event now being rendered was enqueued on the backend thread, or 0
-   if it is being rendered inline. */
 double      session_event_queued_at(void);
 const struct transcript *session_transcript(const struct session *s);
 const char *session_last_error(const struct session *s);
 int         session_last_interrupted(const struct session *s);
-
 
 long session_tokens_in(const struct session *s);
 long session_tokens_out(const struct session *s);

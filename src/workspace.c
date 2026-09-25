@@ -59,8 +59,6 @@ void workspace_on_turn(void (*fn)(struct session *s))
     on_turn = fn;
 }
 
-/* The spinner above the prompt is this tab's turn. Background work, and every
-   other tab's turn, belongs on the tab bar. */
 static void spin_follow(void)
 {
     static const struct session *spinning;
@@ -135,8 +133,6 @@ void workspace_end(void)
     ntabs = 0;
 }
 
-/* the tab bar and the session list read in the same order, so a tab lands
-   with its directory group rather than at the end */
 static int slot_for(const struct session *s)
 {
     char mine[512];
@@ -461,9 +457,6 @@ int workspace_fds(int *out, int max)
 
 static void send_next(int index, int hold);
 
-/* A stalled session has background work that ended without waking the agent:
-   nothing is coming, and nothing is left to resume it. Say so where it happened
-   and send the turn that picks the work back up. */
 static const char STALL_PROMPT[] =
     "The background work you started here ended without reporting back, so no "
     "turn was run for it. Check what those tasks left behind and carry on from "
@@ -473,8 +466,6 @@ static void nudge_stalled(int index, int hold, int screen)
 {
     struct tab *t = &tabs[index];
 
-    /* nothing is drawn or sent while the screen belongs to a child: the stall
-       keeps its timer and the next pump with the screen picks it up */
     if (!screen || chrome_modal_active() || t->npending || session_turn_running(t->s))
         return;
     if (!session_stalled(t->s))
@@ -531,8 +522,6 @@ static int pump(int hold, int screen)
         settle_finished(i, hold);
     }
 
-    /* the status row and the spinner both write to the terminal, so a caller
-       that has handed the screen to a child asks for the drain alone */
     if (screen) {
         if (ntabs) {
             status_set_note(session_title(tabs[cur].s));

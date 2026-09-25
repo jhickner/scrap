@@ -122,8 +122,6 @@ static struct tg_runtime runtime = {
     .inbox_lock = PTHREAD_MUTEX_INITIALIZER,
 };
 
-/* Keep the transport-heavy implementation readable while all mutable storage
-   remains visibly owned by the one restartable runtime. */
 #define rx           runtime.receiver
 #define tx           runtime.sender
 #define sendq        runtime.sendq
@@ -722,7 +720,6 @@ static void on_event(void *ud, const backend_event *ev)
 {
     (void)ud;
 
-    /* the session keeps the table; this is only what the event changed in it */
     const struct task *changed = session_task_change(current_session());
 
     if (ev->kind == BACKEND_EV_TASK) {
@@ -1466,9 +1463,6 @@ int tg_start(struct session *s)
     if (running)
         return 0;
 
-    /* stop() leaves the runtime ready to be started again.  Reset the flags
-       whose terminal values are consumed by the worker threads before any
-       new resource becomes visible to them. */
     poller_stop = 0;
     stop_wanted = 0;
     from_chat = 0;
@@ -1529,8 +1523,6 @@ int tg_start(struct session *s)
     fcntl(wake[0], F_SETFD, FD_CLOEXEC);
     fcntl(wake[1], F_SETFD, FD_CLOEXEC);
 
-    /* a private 0700 directory, so an attachment path cannot be pre-created as
-       a symlink by another user on the host */
     snprintf(attach_dir, sizeof attach_dir, "/tmp/" APP_NAME "_tg_XXXXXX");
     if (!mkdtemp(attach_dir))
         attach_dir[0] = '\0';

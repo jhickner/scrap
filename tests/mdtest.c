@@ -75,7 +75,6 @@ int main(void)
                  "- **Conversion path** / *non-PNG* (8): `photo.jpg`, [bmp](https://x.test/b), "
                  "tiff, webp, ico, anim.gif\n");
 
-
     if (failures)
         return 1;
     fprintf(stderr, "mdtest: all checks passed\n");

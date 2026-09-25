@@ -14,8 +14,7 @@
 #include "workspace.h"
 
 #define AGENTS_MAX  256
-/* ponytail: runs are kept for the life of the instance; recycle the oldest
-   finished ones if an instance ever outlives this */
+
 #define RUNS_MAX    4096
 #define ID_WAIT_MS  30000
 #define USAGE_MAX   16
@@ -25,9 +24,9 @@ static const char *const RUN_STATUS[] = {"queued", "running", "finished", "error
 
 struct run {
     int            id;
-    int            agent;   /* index into agents */
+    int            agent;
     int            status;
-    int            from_tab; /* a turn someone started by typing in the tab */
+    int            from_tab;
     int            cancel;
     char          *prompt;
     char          *result;
@@ -41,11 +40,11 @@ struct agent {
     int              id;
     char            *backend, *model, *effort, *cwd, *title;
     char             sid[128];
-    struct session  *s;      /* used only until sid is known */
+    struct session  *s;
     int              exited;
-    const char      *shown;  /* last status sent as an agent event */
+    const char      *shown;
     char             created[32], updated[32];
-    struct apicall  *held;   /* a create waiting for the session id */
+    struct apicall  *held;
     struct timespec  held_since;
     int              held_run;
 };
@@ -115,7 +114,6 @@ static void emit(const char *event, cJSON *data)
         cJSON_Delete(data);
 }
 
-/* the agent's tab index, or -1 once the tab is gone */
 static int tab_of(struct agent *a)
 {
     if (a->exited)
@@ -224,7 +222,6 @@ static cJSON *run_json(const struct run *r)
     return o;
 }
 
-/* The model the CLI resolved once its tab has one, else the one asked for. */
 static const char *agent_model(struct agent *a)
 {
     int at = tab_of(a);
@@ -263,7 +260,6 @@ static cJSON *event_base(struct agent *a, struct run *r)
     return o;
 }
 
-/* an agent event when its status differs from the last one sent */
 static void note_agent(struct agent *a)
 {
     const char *st = agent_status(a);
@@ -359,7 +355,6 @@ static void end_runs(struct agent *a, int status, const char *why)
     }
 }
 
-/* ids look like ag_7 / run_12 */
 static int parse_id(const char *s, size_t n, const char *prefix)
 {
     size_t p = strlen(prefix);
@@ -434,7 +429,6 @@ static void free_env(char **env)
     free(env);
 }
 
-/* {"NAME": "value", ...} as a NULL-ended NAME=VALUE list; NULL and *bad set on error */
 static char **env_list(const cJSON *obj, const char **bad)
 {
     int n = cJSON_GetArraySize(obj);
@@ -648,7 +642,6 @@ void apicore_handle(struct apicall *c)
     if (strncmp(p, "/v1/agents/", 11))
         return fail(c, 404, "not_found", "no route %s", p);
 
-    /* /v1/agents/{id}[/runs[/{run}[/cancel]]] */
     const char *seg[4] = {0};
     size_t len[4] = {0};
     int n = 0;

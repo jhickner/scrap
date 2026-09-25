@@ -143,8 +143,6 @@ static int has_disqualifier(const char *command)
     return 0;
 }
 
-/* 0 at the end of the segment, 1 for a word, -1 for a word too long for out:
-   a partial token cannot be classified, so every caller has to fail closed. */
 static int take_word(const char **cursor, const char *end, char *out, size_t size)
 {
     const char *p = *cursor;
@@ -184,7 +182,6 @@ static int take_word(const char **cursor, const char *end, char *out, size_t siz
     return cut ? -1 : 1;
 }
 
-/* -1 when a word was truncated: the count cannot be trusted. */
 static int count_operands(const char *values, const char *cursor, const char *end)
 {
     char word[512];

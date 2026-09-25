@@ -1,4 +1,3 @@
-/* The tab bar reaches the whole workspace; a chrome test links this instead. */
 
 #include "tabbar.h"
 

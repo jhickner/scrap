@@ -9,14 +9,11 @@
 
 void text_one_line(const char *in, char *out, size_t size);
 
-/* copy at most size-1 bytes, never splitting a UTF-8 sequence, marking a cut
-   with an ellipsis */
 void text_trunc(char *out, size_t size, const char *in);
 
 void text_block(const char *in, char *out, size_t size);
 
 void text_chomp(char *s);
-
 
 __attribute__((format(printf, 1, 2)))
 char *text_dsprintf(const char *fmt, ...);

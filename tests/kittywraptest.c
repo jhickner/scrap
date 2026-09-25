@@ -13,8 +13,6 @@ static void term_move_cursor(int col, int row) { (void)col; (void)row; }
 #define KITTY_IMPLEMENTATION
 #include "../src/vendor/kitty.h"
 
-/* One tmux layer: every passthrough DCS is replaced by its payload with ESC
-   pairs halved; anything else passes through. */
 static size_t unwrap(const char *in, size_t n, char *dst)
 {
     size_t o = 0;

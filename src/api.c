@@ -30,9 +30,6 @@
 #define HEARTBEAT_S   15
 #define TICK_MS       250
 
-/* one request crossing from an HTTP thread to the main thread. whichever side
-   finishes last frees it: the HTTP thread after a reply, or the main thread
-   when the HTTP thread gave up waiting */
 struct job {
     struct apicall call;
     char          *method, *path, *query;
@@ -54,8 +51,6 @@ struct event {
     char *data;
 };
 
-/* an SSE connection's position in the ring, and the unsent tail of the
-   frame it is writing */
 struct stream {
     long   next;
     int    reset;
@@ -71,10 +66,10 @@ static struct {
     char               url[64];
     int                wake[2];
     pthread_mutex_t    lock;
-    pthread_cond_t     cond;     /* job replies and new events */
+    pthread_cond_t     cond;
     struct job        *inbox, *inbox_tail;
     struct event       ring[RING_MAX];
-    long               next_id;  /* id the next event gets */
+    long               next_id;
     struct timespec    last_tick;
 } api = {.wake = {-1, -1}, .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER,
          .next_id = 1};
@@ -98,7 +93,6 @@ static void job_free(struct job *j)
     free(j);
 }
 
-/* apicore's reply callback, on the main thread */
 static void on_reply(struct apicall *c)
 {
     struct job *j = c->ud;
@@ -113,7 +107,6 @@ static void on_reply(struct apicall *c)
     pthread_mutex_unlock(&api.lock);
 }
 
-/* apicore's event callback, on the main thread */
 static void on_emit(const char *name, cJSON *data)
 {
     char *text = cJSON_PrintUnformatted(data);
@@ -168,7 +161,6 @@ static enum MHD_Result send_error(struct MHD_Connection *c, int status, const ch
     return r;
 }
 
-/* the frame for one event, or a reset when the client's position has left the ring */
 static char *frame(const struct event *e)
 {
     size_t n = strlen(e->data) + strlen(e->name) + 64;
@@ -261,7 +253,6 @@ static enum MHD_Result add_arg(void *cls, enum MHD_ValueKind kind, const char *k
     return MHD_YES;
 }
 
-/* hands the call to the main thread and waits for its reply */
 static enum MHD_Result run_job(struct MHD_Connection *c, const char *url, const char *method, cJSON *body)
 {
     struct job *j = calloc(1, sizeof *j);
@@ -462,7 +453,6 @@ static size_t buf_write(char *d, size_t sz, size_t nm, void *u)
     return sz * nm;
 }
 
-/* POST {base}/v1/{verb} with a dlv key; the parsed reply, or NULL with err set. */
 static cJSON *dlv_call(const char *base, const char *key, const char *verb, const cJSON *body, char *err, size_t en)
 {
     char url[1024], auth[600];
@@ -568,7 +558,7 @@ void api_stop(void)
     MHD_stop_daemon(api.daemon);
     api.daemon = NULL;
     session_remove_listener(apicore_event, NULL);
-    /* every HTTP thread has returned, so no one waits on what is left */
+
     for (struct job *j = api.inbox, *next; j; j = next) {
         next = j->next;
         job_free(j);

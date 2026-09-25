@@ -50,8 +50,7 @@ enum { ITEM_LINE = 0, ITEM_PICK = 1, ITEM_HELLO = 2 };
 struct inbox_item {
     char *text;
     int   kind;
-    /* the tab the phone was showing when it sent this: the session id when it
-       has one, the 1-based index either way */
+
     char  tab_id[80];
     int   tab;
 };
@@ -133,8 +132,6 @@ static struct session *current_session(void)
     return tgbridge_session(&rt.bridge);
 }
 
-/* ---- inbox: server thread -> main loop ---------------------------------- */
-
 static void wake_up(void)
 {
     if (rt.wake[1] >= 0) {
@@ -174,8 +171,6 @@ static int inbox_push(char *text, int kind, const char *tab_id, int tab)
     return ok;
 }
 
-/* Takes the head item only, so order is kept: `want` refuses the ones that
-   cannot run yet. */
 static char *inbox_take_if(int *kind, int (*want)(const struct inbox_item *))
 {
     pthread_mutex_lock(&rt.inbox_lock);
@@ -233,8 +228,6 @@ int relay_fds(int *out, int max)
     return 1;
 }
 
-/* ---- outbound frames ---------------------------------------------------- */
-
 static void send_json(cJSON *o)
 {
     char *s = cJSON_PrintUnformatted(o);
@@ -265,8 +258,6 @@ static void send_text(const char *t, const char *text)
 static void send_note(const char *text)  { send_text("note", text); }
 static void send_pre(const char *text)   { send_text("pre", text); }
 
-/* Send time and how long the event waited in the session queue, so the client
-   can attribute the delay before a reply is spoken. */
 static void stamp_timing(cJSON *o)
 {
     double now = now_seconds();
@@ -285,8 +276,6 @@ static void send_reply(const char *text)
     send_json(o);
 }
 
-/* Every line or pick the phone sends ends with one of these, so the client can
-   drop its pending spinner even when the reply was only a tabs refresh. */
 static void send_idle(void)
 {
     send_json(frame("idle"));
@@ -378,8 +367,6 @@ static void send_hello(void)
     send_busy(session_busy(s));
 }
 
-/* What the model is told about the phone on the other end: replies land there
-   as chat messages, so terminal-width answers read badly. */
 const char *relay_system_note(void)
 {
     size_t n = snprintf(rt.system_note, sizeof rt.system_note,
@@ -399,8 +386,6 @@ const char *relay_system_note(void)
     return rt.system_note;
 }
 
-/* Images the reply points at (![](/abs/path)) are published as links: the
-   file is linked into a private directory the file server roots at. */
 static void send_images(const char *text)
 {
     if (!rt.files || !text)
@@ -433,8 +418,6 @@ static void send_images(const char *text)
         p = close;
     }
 }
-
-/* ---- menus (tabs, resume) ----------------------------------------------- */
 
 static void menu_begin(const char *kind)
 {
@@ -529,8 +512,6 @@ static char *menu_line(const char *payload)
     return strdup(line);
 }
 
-/* ---- session events ----------------------------------------------------- */
-
 static int mirroring(void)
 {
     if (!rt.active || rt.mirror == MIRROR_OFF)
@@ -600,7 +581,6 @@ static void on_event(void *ud, struct session *s, const backend_event *ev)
     }
 }
 
-/* A turn typed at the terminal shows on the phone as the line it was. */
 static void mirror_prompt(struct session *s)
 {
     if (!s || rt.from_chat || !mirroring() || !session_busy(s))
@@ -616,9 +596,6 @@ static int  bridge_command(const char *line);
 static int  bridge_command_name(const char *line);
 static int  stamped_tab(void);
 
-/* What the phone can have while a turn is running: the tab commands, and any
-   command the terminal would also take mid-turn.  A prompt line has to wait --
-   running one here would start a second turn inside this one. */
 static int runs_mid_turn(const struct inbox_item *it)
 {
     if (it->kind == ITEM_HELLO)
@@ -649,9 +626,6 @@ static void run_live(char *line)
     send_idle();
 }
 
-/* A turn is in flight and the main loop is not reading the inbox, so drain what
-   can run now and say so about what cannot -- silence here reads as a dropped
-   message on the phone. */
 static void drain_mid_turn(void)
 {
     if (rt.draining)
@@ -682,11 +656,6 @@ static void drain_mid_turn(void)
     rt.draining = 0;
 }
 
-/* `live` is the session being drawn, which is the running turn's -- not the tab
-   the phone is on, since switching tabs mid-turn leaves the turn drawing where
-   it was.  The prompt and the spinner follow the phone's tab; the drain follows
-   the pump, which is the only thing running and so the only thing that can
-   service the inbox at all. */
 int relay_poll(struct session *live)
 {
     if (!rt.active)
@@ -701,8 +670,6 @@ int relay_poll(struct session *live)
     }
     return 0;
 }
-
-/* ---- server thread callbacks -------------------------------------------- */
 
 static void on_text(void *ud, const char *text, size_t n)
 {
@@ -742,8 +709,6 @@ static void on_state(void *ud, int connected)
         rt.client[0] = '\0';
 }
 
-/* ---- lines from the phone ----------------------------------------------- */
-
 static const char *arg_of(const char *line, const char *cmd)
 {
     size_t n = strlen(cmd);
@@ -755,7 +720,6 @@ static const char *arg_of(const char *line, const char *cmd)
     return arg;
 }
 
-/* Whether the bridge owns this line, without running it. */
 static int bridge_command_name(const char *line)
 {
     static const char *CMDS[] = {"/tabs", "/tab",    "/sessions", "/open",
@@ -819,8 +783,6 @@ static void send_turn_reply(struct session *s, int ok)
     send_json(o);
 }
 
-/* The tab the phone meant, or -1 for "it did not say".  A stamp that no longer
-   resolves is refused rather than run somewhere else. */
 static int stamped_tab(void)
 {
     if (rt.want_id[0]) {
@@ -895,9 +857,6 @@ done:
     c->ran = 1;
 }
 
-/* The session is settled before the line runs and held for the whole of it: a
-   tab switch part way through must not move the turn, its deferred commands or
-   its reply to another conversation. */
 static void run_line(char *line)
 {
     int at = stamped_tab();
@@ -967,8 +926,6 @@ char *relay_take_line(void)
         send_idle();
     }
 }
-
-/* ---- lifecycle ---------------------------------------------------------- */
 
 static void bind_session(struct session *s, int active, void *ud)
 {

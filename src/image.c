@@ -138,8 +138,6 @@ struct pending {
     unsigned mark;
 };
 
-/* every image transmitted this session, in the order it was drawn: the viewer
-   steps through these, and a click names one by the id in its cells */
 struct shot {
     uint32_t id;
     char    *path;
@@ -310,9 +308,6 @@ static uint32_t next_id(void)
            (uint32_t)(0x40 | (counter++ & 0x3F));
 }
 
-/* The counter byte of next_id() always carries bit 6, so an id ending in 0x3F
-   is one no inline image can be given: the viewer reuses it for every image it
-   draws at full size, and never collides with the transcript. */
 static uint32_t full_id(void)
 {
     unsigned pid = (unsigned)getpid();
@@ -375,7 +370,6 @@ static void fit_cells(int img_w, int img_h, int cw, int ch, int cols_box, int ro
     *rows = r;
 }
 
-/* the box to fall back on before the pixel size of an image is known */
 static void fit_blind(int cols_box, int rows_box, int *cols, int *rows)
 {
     int side = cols_box < rows_box * 2 ? cols_box : rows_box * 2;
@@ -391,8 +385,7 @@ void image_fit(int img_w, int img_h, int cw, int ch, int cols_box, int rows_box,
                int *cols, int *rows)
 {
     if (img_w > 0 && img_h > 0 && cw > 0 && ch > 0) {
-        /* an image smaller than the box is drawn at its own size rather than
-           enlarged into it */
+
         int natural_cols = (img_w + cw - 1) / cw;
         int natural_rows = (img_h + ch - 1) / ch;
         if (natural_cols > 0 && natural_cols < cols_box)
@@ -406,8 +399,6 @@ void image_fit(int img_w, int img_h, int cw, int ch, int cols_box, int rows_box,
     fit_blind(cols_box, rows_box, cols, rows);
 }
 
-/* image_fit without the natural-size clamp: the largest box-filling rectangle
-   of the image's shape, enlarging a small image to get there */
 void image_fill(int img_w, int img_h, int cw, int ch, int cols_box, int rows_box,
                 int *cols, int *rows)
 {
@@ -535,8 +526,6 @@ static void place(uint32_t id, int indent, int img_w, int img_h)
         write_placeholders(id, indent, cols, rows, 1);
 }
 
-/* PNG is sent as stored; anything else is decoded to px_w x px_h (source size
-   when either is < 1). img_w/img_h receive the source dimensions. */
 static int transmit(const char *path, uint32_t id, int px_w, int px_h, int *img_w, int *img_h)
 {
     unsigned char head[32];
@@ -593,8 +582,6 @@ static int show_png(const char *path, time_t mtime, int indent)
     return 1;
 }
 
-/* Formats the vendored decoder reads - jpeg above all - go straight to pixels,
-   scaled to the box on the way out of the decoder. */
 static int show_decoded(const char *path, time_t mtime, int indent)
 {
     int probe_w = 0, probe_h = 0;
@@ -713,8 +700,7 @@ uint32_t image_load(const char *path, int cols_box, int rows_box, int *cols, int
         if (!imagedec_probe(path, &probe_w, &probe_h))
             return 0;
         image_fill(probe_w, probe_h, cw, ch, cols_box, rows_box, cols, rows);
-        /* enlarging is the terminal's job: it scales the image into the cells
-           the placeholders cover, so never decode past what the file holds */
+
         px_w = *cols * cw;
         px_h = *rows * ch;
         if (px_w > probe_w || px_h > probe_h) {
@@ -727,7 +713,7 @@ uint32_t image_load(const char *path, int cols_box, int rows_box, int *cols, int
     int img_w = 0, img_h = 0;
     if (!transmit(path, id, px_w, px_h, &img_w, &img_h))
         return 0;
-    /* orientation can transpose the frame the probe reported */
+
     image_fill(img_w, img_h, cw, ch, cols_box, rows_box, cols, rows);
     return id;
 }
@@ -746,7 +732,6 @@ void image_cell_size(int *cw, int *ch)
 
 int image_cells_max(void) { return KG_DIACRITIC_COUNT; }
 
-/* 0x3E, like full_id's 0x3F, is a low byte next_id() never produces */
 uint32_t image_inset_id(void)
 {
     unsigned pid = (unsigned)getpid();

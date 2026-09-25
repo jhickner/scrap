@@ -52,17 +52,13 @@ int  tty_raw_begin(void);
 
 void tty_raw_end(void);
 
-/* Restore cooked input for an exec handoff without leaving the alternate
-   screen that the replacement process inherits. */
 void tty_raw_handoff(void);
 
-/* Balance the current screen's keyboard stack before switching screens. */
 void tty_keyboard_on(void);
 void tty_keyboard_off(void);
 
-/* 1 while this window is in front */
 int  tty_focused(void);
-/* called on every focus edge, as it arrives */
+
 void tty_on_focus(void (*fn)(int on));
 
 int  tty_read(tty_event *ev, int timeout_ms);
@@ -78,8 +74,6 @@ int  tty_watch_fds(int *out, int max);
 
 void tty_watch_ready(void);
 
-/* ask the terminal where the cursor is; 0 if it did not answer in time.
-   bytes that arrive alongside the reply are kept for the reader. */
 int  tty_cursor_position(int *row, int *col);
 
 int  tty_is_raw(void);

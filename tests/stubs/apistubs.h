@@ -4,8 +4,6 @@
 #include "session.h"
 #include "workspace.h"
 
-/* stubbed tabs for the worker API tests: a session is a slot with an id, a
-   running flag and a queue */
 struct session {
     char           id[64];
     int            running;
@@ -22,9 +20,8 @@ extern struct session *tabs[WORKSPACE_MAX];
 extern int             ntabs;
 extern int             in_view;
 extern int             spawn_fails;
-extern int             hide_ids;   /* spawned sessions report no id yet */
+extern int             hide_ids;
 
-/* the turn in s ends; a queued line starts the next one */
 void end_turn(struct session *s, const char *reply, int interrupted);
 
 #endif

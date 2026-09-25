@@ -82,7 +82,6 @@ int main(void)
     want(drawn, 5, "six six six six six six");
     free(drawn);
 
-    /* the box runs past the end of what it stands on */
     o.row = 7;
     drawn = composited(&o, under);
     want(drawn, 7, "eigh|----|t eight eight");
@@ -90,7 +89,6 @@ int main(void)
     want(drawn, 9, "    |    |");
     free(drawn);
 
-    /* what a raw terminal was painted with carries returns */
     const char *raw = "one\r\ntwo two two two two two\r\n\r\n"
                       "four four four four four\r\n";
     o.row = 2;

@@ -1,6 +1,3 @@
-/* Connects to Grok Bot desktops read-only, saves the first full frame as PPM,
- * and reports update rate. Targets: "base" or an agent id/name.
- * usage: vncprobe [-t seconds] [-o dir] [target...]   (default: base BCG) */
 
 #include <poll.h>
 #include <stdio.h>

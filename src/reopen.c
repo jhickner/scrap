@@ -20,8 +20,6 @@ struct row {
     unsigned char kind;
 };
 
-/* the records of one window, in tab order. A session with no id was never
-   given one by its CLI, so there is nothing to resume it from. */
 static int window_slots(const struct live_session *list, int n, long pid, int *out,
                         int max)
 {
@@ -61,8 +59,6 @@ static int build(const struct live_session *list, int n, struct row *rows, int m
         char ago[32];
         text_ago((time_t)list[i].ts, 1, ago, sizeof ago);
 
-        /* the group opens the window, the row under it is the whole window to
-           take, and the sessions below that are there to recognise it by */
         struct row *head = &rows[m++];
         head->pid = list[i].pid;
         head->kind = PICK_HEADING;

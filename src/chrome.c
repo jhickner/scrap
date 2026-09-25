@@ -81,8 +81,6 @@ void chrome_modal(chrome_modal_fn fn, void *ud)
     chrome_paint();
 }
 
-/* the rows stay on screen and their owner paints them again, so nothing else
-   may paint over them in between */
 void chrome_modal_keep(void)
 {
     modal = NULL;

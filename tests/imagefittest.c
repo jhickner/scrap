@@ -76,7 +76,6 @@ int main(void)
     if (cols < 1 || rows < 1 || cols > 4 || rows > 2)
         fail("a tiny pane still gets a box", 1600, 900, cols, rows);
 
-    /* the full-size viewer fills its box rather than stopping at 1:1 */
     image_fill(160, 160, CW, CH, 80, 20, &cols, &rows);
     if (rows != 20 || cols != 40)
         fail("a small image is enlarged to fill the box", 160, 160, cols, rows);

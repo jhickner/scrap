@@ -11,7 +11,6 @@
 
 #define UPDATE_INTERVAL_MS ((int)(VNCINSET_FRAME_INTERVAL * 1000))
 
-/* shared with the connect thread; freed by whichever side lets go last */
 struct attempt {
     pthread_mutex_t mu;
     int             refs;

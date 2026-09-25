@@ -54,8 +54,6 @@ static int send(int wfd, const char *bytes, size_t n, tty_event *ev)
     return tty_read(ev, 200);
 }
 
-/* tty_read hands back a decoded-to-nothing sequence as no event, so a caller
-   waiting for one keeps reading until the deadline */
 static int read_until(tty_event *ev, int ms)
 {
     for (int left = ms;;) {
@@ -175,8 +173,6 @@ static void expect_ctrl(int wfd, const char *bytes, size_t n, uint32_t cp,
     }
 }
 
-/* Match the legacy stream from tmux against CSI-u and modifyOtherKeys,
-   including Control press/release reports from report-all on Ghostty/kitty. */
 static void modified_keys(int w)
 {
     for (int ch = 'a'; ch <= 'z'; ch++) {
@@ -202,12 +198,12 @@ static void modified_keys(int w)
 #define KEY(s, k) expect_key(w, s, sizeof(s) - 1, k, s)
 #define CHAR(s, c) expect_ctrl(w, s, sizeof(s) - 1, c, s)
 #define NONE(s) expect_none(w, s, sizeof(s) - 1, s)
-    NONE("\x1b[57442;5u"); /* LEFT_CONTROL press: used to insert U+E062. */
+    NONE("\x1b[57442;5u");
     CHAR("\x1b[100;5u", 4);
-    NONE("\x1b[57442u"); /* LEFT_CONTROL release with report-all only. */
-    NONE("\x1b[57448;5u"); /* RIGHT_CONTROL */
+    NONE("\x1b[57442u");
+    NONE("\x1b[57448;5u");
     NONE("\x1b[100::100;5:3u");
-    NONE("\x1b[?9u"); /* A keyboard-mode reply is not a Tab keystroke. */
+    NONE("\x1b[?9u");
     NONE("\x1b[1114112u");
     NONE("\x1b[55296u");
     NONE("\x1b[999999999999999999999999u");
@@ -238,7 +234,7 @@ static void modified_keys(int w)
     KEY("\x1b[57414;2u", TK_NEWLINE);
     KEY("\x1b[57417;5u", TK_WORD_LEFT);
     CHAR("\x1b[57400u", '1');
-    NONE("\x1b[97;9u"); /* Unbound Command-A cannot type a. */
+    NONE("\x1b[97;9u");
 #undef KEY
 #undef CHAR
 #undef NONE
@@ -409,8 +405,7 @@ static void keys_from_pipe(void)
     expect_ctrl(w, "\x1b[97;5u", 7, 1, "csi-u ctrl-a");
     expect_focus(w, "\x1b[O", TK_FOCUS_OUT, "focus out");
     expect_focus(w, "\x1b[I", TK_FOCUS_IN, "focus in");
-    /* a window that missed its focus-out still has to report the edge, so a
-       repeat is reported rather than filtered */
+
     expect_focus(w, "\x1b[I", TK_FOCUS_IN, "focus repeat");
 
     close(w);
@@ -433,8 +428,6 @@ static void busy_ready(void *ud)
     usleep(80 * 1000);
 }
 
-/* a watched fd that takes longer to serve than the 50ms a sequence waits for
-   its next byte: the tail must still arrive as one event */
 static void watch_keeps_a_sequence_whole(void)
 {
     int sp[2], watch[2];
@@ -504,7 +497,6 @@ static void cursor_report(void)
     if (tty_raw_begin() != 0)
         fail("cursor raw begin");
 
-    /* the reply, with typeahead on either side of it */
     const char reply[] = "x\x1b[12;34Ry";
     if (write(master, reply, sizeof reply - 1) != (ssize_t)(sizeof reply - 1))
         fail("cursor reply write");
@@ -518,7 +510,6 @@ static void cursor_report(void)
     expect_ctrl(master, "", 0, 'x', "cursor keeps typeahead before the reply");
     expect_ctrl(master, "", 0, 'y', "cursor keeps typeahead after the reply");
 
-    /* a terminal that never answers gives up and keeps what did arrive */
     if (write(master, "z", 1) != 1)
         fail("cursor quiet write");
     row = col = 0;
@@ -548,8 +539,6 @@ static size_t drain(int fd, char *out, size_t max)
     }
 }
 
-/* the alternate screen goes back to the spot the shell left the cursor on,
-   whatever the terminal kept in its own saved-cursor slot */
 static void exit_returns_home(void)
 {
     struct winsize ws = {24, 80, 0, 0};
@@ -581,7 +570,7 @@ static void exit_returns_home(void)
 
     ui_init();
     viewport_begin();
-    /* the pty holds only a few kilobytes; keep it drained while painting */
+
     n += drain(master, out + n, sizeof out - n - 1);
     viewport_suspend();
     viewport_resume();
@@ -598,8 +587,7 @@ static void exit_returns_home(void)
     close(oldout);
     close(slave);
     close(master);
-    /* Independent keyboard stacks: never leave one of our pushes behind on
-       either screen, including suspend/resume and final raw-mode cleanup. */
+
     int screen = 0, depth[2] = {0};
     for (const char *p = out; *p; p++) {
         if (!strncmp(p, "\x1b[>1u", 5)) depth[screen]++;

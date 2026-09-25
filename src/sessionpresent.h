@@ -79,7 +79,7 @@ struct sessionpresent_tokens {
     long   fresh, cache_write, cache_read, output;
     long   context;
     double cost;
-    /* per million tokens; all 0 when the model has no known rates */
+
     double rate_input, rate_cache_write, rate_cache_read, rate_output;
 };
 

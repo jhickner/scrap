@@ -24,7 +24,6 @@ static void type(struct replbox *b, const char *text)
     replbox_set_text(b, text);
 }
 
-/* the caret is followed into the room and no further */
 static void scroll_window(void)
 {
     struct replbox b;
@@ -54,7 +53,6 @@ static void scroll_window(void)
     replbox_free(&b);
 }
 
-/* a width narrower than the text wraps it into more rows */
 static void wrapping(void)
 {
     struct replbox b;

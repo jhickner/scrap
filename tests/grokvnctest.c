@@ -54,7 +54,6 @@ static void zrle_rect(struct out *o, z_stream *zs, int x, int y, int w, int h,
     put(o, z, sizeof z - zs->avail_out);
 }
 
-/* RFB byte stream split into server websocket frames of at most `max` bytes. */
 static struct out frames(const struct out *rfb, size_t max)
 {
     struct out ws = {0};

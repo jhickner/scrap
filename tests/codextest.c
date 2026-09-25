@@ -244,8 +244,7 @@ static int mock_server(void)
                            "\"call_id\":\"call-1\",\"output\":["
                            "{\"type\":\"input_text\",\"text\":\"Script completed\\n\"},"
                            "{\"type\":\"input_text\",\"text\":\"Output:\\n/project\\n\"}]}}}\n");
-                    /* a sub-agent, and the thread of its own that it talks on:
-                       none of it belongs to this turn's answer */
+
                     printf("{\"method\":\"item/started\",\"params\":{"
                            "\"threadId\":\"thread-1\",\"turnId\":\"turn-2\",\"item\":{"
                            "\"type\":\"subAgentActivity\",\"id\":\"call-agent-1\","
@@ -267,8 +266,7 @@ static int mock_server(void)
                            "\"type\":\"subAgentActivity\",\"id\":\"call-agent-4\","
                            "\"kind\":\"started\",\"agentThreadId\":\"thread-5\","
                            "\"agentPath\":\"/root/status_only\"}}}\n");
-                    /* This agent completes while the parent turn is active.
-                       It must not request a concurrent continuation. */
+
                     printf("{\"method\":\"item/started\",\"params\":{"
                            "\"threadId\":\"thread-1\",\"turnId\":\"turn-2\",\"item\":{"
                            "\"type\":\"subAgentActivity\",\"id\":\"call-agent-3\","

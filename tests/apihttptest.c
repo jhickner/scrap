@@ -16,9 +16,6 @@
 #include "vendor/cJSON.h"
 #include "vendor/wsd.h"
 
-/* the worker API over real HTTP: a thread plays mux's main loop (api_poll),
-   the test talks to it with libcurl */
-
 #define TOKEN "test-token-0123456789abcdef0123456789"
 
 static char base[64];
@@ -30,7 +27,6 @@ static void fail(const char *what)
     failures++;
 }
 
-/* stubs for what api.c reads from mux */
 int path_config_file(char *out, size_t size, const char *leaf)
 {
     snprintf(out, size, "/nonexistent/%s", leaf);
@@ -51,7 +47,6 @@ int session_add_listener(session_listener_fn fn, void *ud) { (void)fn; (void)ud;
 void session_remove_listener(session_listener_fn fn, void *ud) { (void)fn; (void)ud; }
 const char *wsd_tailscale_ip(void) { return NULL; }
 
-/* main-loop thread; work the test needs done on it is posted through these */
 static volatile int stop_loop, want_end_turn, want_burst;
 
 static void *main_loop(void *ud)
@@ -83,7 +78,7 @@ static void wait_for(volatile int *flag)
 struct buf {
     char  *s;
     size_t n;
-    int    frames_wanted;  /* stop the transfer after this many blank-line frames */
+    int    frames_wanted;
 };
 
 static size_t collect(char *p, size_t size, size_t n, void *ud)
@@ -164,7 +159,6 @@ static void sse_open(struct sse *s, int frames, const char *last_id)
     usleep(100000);
 }
 
-/* a fake dlv: backends lists one existing host, backend_set records its body */
 static char dlv_set[4096];
 
 static enum MHD_Result dlv_handle(void *cls, struct MHD_Connection *c, const char *url, const char *method,
@@ -276,7 +270,6 @@ int main(void)
         fail("an oversized body is 413");
     free(big);
 
-    /* a live stream sees the create and the turn end */
     struct sse s;
     sse_open(&s, 7, NULL);
     if (req("POST", "/v1/agents", "{\"prompt\":{\"text\":\"hello\"},\"env\":{\"DLV_KEY\":\"k\"}}", &b) != 201 ||
@@ -293,14 +286,12 @@ int main(void)
     if (req("GET", "/v1/agents/ag_1/runs/run_1", NULL, &b) != 200 || !strstr(b.s, "\"status\":\"finished\""))
         fail("the run reads back finished");
 
-    /* resume from an id */
     sse_open(&s, 1, "1");
     pthread_join(s.th, NULL);
     if (!s.b.s || strncmp(s.b.s, "id: 2\n", 6))
         fail("Last-Event-ID resumes at the next event");
     free(s.b.s);
 
-    /* an id that has left the ring gets a reset, then the oldest kept event */
     want_burst = 10050;
     wait_for(&want_burst);
     sse_open(&s, 2, "1");

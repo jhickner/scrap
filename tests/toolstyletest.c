@@ -79,8 +79,6 @@ int main(void)
     acts("sed 's/a/b/'");
     acts("awk '{print $1}'");
 
-    /* a token longer than the word buffer is unknown, not read-only: the write
-       directive of a long sed script sits past the cutoff */
     char script[900];
     int  at = snprintf(script, sizeof script, "cat f | sed '");
     for (int i = 0; i < 700; i++)

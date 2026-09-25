@@ -20,7 +20,6 @@
 
 #define MAX_LIVE 200
 
-/* how long a window that is gone stays reopenable */
 #define CLOSED_MAX_AGE (14L * 24 * 60 * 60)
 #define MAX_SLOTS 32
 
@@ -293,8 +292,6 @@ static int newer(const void *a, const void *b)
     return x->slot - y->slot;
 }
 
-/* A window that went away without tidying up is still a window: its records
-   move aside so it can be reopened, rather than being dropped on sight. */
 static int closed_dir(char *out, size_t size)
 {
     char where[4200];
@@ -371,7 +368,7 @@ static int load_dir(const char *where, int live, struct live_session **out)
 
         if (live) {
             if (!livelist_alive(v->pid)) {
-                /* nothing to reopen a session with no id from */
+
                 if (v->id[0])
                     retire(path, e->d_name);
                 else
@@ -405,9 +402,6 @@ int livelist_load(struct live_session **out)
     return load_dir(where, 1, out);
 }
 
-/* A session that is live again has been reopened, so the record it was closed
-   with has done its job. Clearing them here rather than when a window is
-   picked is what makes a reopen that fails leave the window to try again. */
 static void forget_reopened(struct live_session *closed, int n,
                             const struct live_session *live, int live_n)
 {
@@ -436,8 +430,7 @@ int livelist_closed_load(struct live_session **out)
     char                 where[4300];
 
     *out = NULL;
-    /* a window that has just gone still has its records in the live dir until
-       something reads it: retire those before listing what is closed */
+
     int live_n = livelist_load(&live);
 
     int n = closed_dir(where, sizeof where) ? load_dir(where, 0, out) : 0;
