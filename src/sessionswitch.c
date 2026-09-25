@@ -89,7 +89,7 @@ static void tab_rows(struct row *rows, int *n)
         snprintf(r->id, sizeof r->id, "%s", session_id(s) ? session_id(s) : "");
         if (r->id[0])
             parent_of(r->id, r->parent, sizeof r->parent);
-        snprintf(r->detail, sizeof r->detail, "%s %s",
+        snprintf(r->detail, sizeof r->detail, "@%s %s %s", session_name(s),
                  session_backend(s),
                  models_short_name(session_backend(s), session_model_label(s)));
         row_status(r, status);
@@ -158,8 +158,8 @@ static void fill_live(struct row *r, const struct live_session *v)
 
     snprintf(r->label, sizeof r->label, "%s",
              v->title[0] ? v->title : "untitled");
-    snprintf(r->detail, sizeof r->detail, "%s %s",
-                 v->backend,
+    snprintf(r->detail, sizeof r->detail, "%s%s%s%s %s", v->name[0] ? "@" : "", v->name,
+                 v->name[0] ? " " : "", v->backend,
                  models_short_name(v->backend, v->label[0] ? v->label : v->model));
     if (where[0])
         snprintf(r->when, sizeof r->when, "%s%s", where, when);

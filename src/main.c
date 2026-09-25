@@ -18,6 +18,7 @@
 #include "hud.h"
 #include "image.h"
 #include "docview.h"
+#include "intercom.h"
 #include "imageview.h"
 #include "livelist.h"
 #include "prompt.h"
@@ -157,6 +158,10 @@ static void usage(void)
             "  -V, --version  print the version and exit\n"
             "\n"
             "  " APP_NAME " version   the same, as a subcommand\n"
+            "  " APP_NAME " ls [--live] [--cwd DIR] [QUERY]   list sessions, newest first\n"
+            "  " APP_NAME " read TARGET [-n TURNS] [--bytes N]   print a session's last turns\n"
+            "  " APP_NAME " send TARGET TEXT   message a live session\n"
+            "  " APP_NAME " open TARGET   resume a past session in a new tab\n"
             "\n"
             "With a prompt on the command line, answer it and exit.\n",
             choices);
@@ -548,6 +553,9 @@ int main(int argc, char **argv)
 {
     if (argc > 1 && !strcmp(argv[1], "sync"))
         return agentsync_main(argc - 1, argv + 1);
+    if (argc > 1 && (!strcmp(argv[1], "ls") || !strcmp(argv[1], "read") ||
+                     !strcmp(argv[1], "send") || !strcmp(argv[1], "open")))
+        return intercom_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "version")) {
         printf(APP_NAME " %s\n", MUX_VERSION);
         return 0;
@@ -802,6 +810,7 @@ int main(int argc, char **argv)
         workspace_end();
         return 1;
     }
+    prompt_set_completer(intercom_complete);
     prompt_file_completion(prompt, cwd);
     if (have_config) {
         char history[4200];

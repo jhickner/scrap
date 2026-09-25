@@ -13,6 +13,8 @@ void           prompt_free(struct prompt *p);
 
 void prompt_history_open(struct prompt *p, const char *path);
 
+void prompt_set_completer(ReplCompleter fn);
+
 void prompt_file_completion(struct prompt *p, const char *root);
 
 void prompt_rehome(const char *root);

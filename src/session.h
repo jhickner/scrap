@@ -131,6 +131,10 @@ void session_adopt_id(struct session *s, const char *id);
 
 const char *session_title(const struct session *s);
 
+const char *session_name(const struct session *s);
+
+int session_set_name(struct session *s, const char *name);
+
 enum session_rename {
     SESSION_RENAME_OK,
     SESSION_RENAME_NO_ID,

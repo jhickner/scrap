@@ -68,9 +68,10 @@ const backend_result *session_last_result(const struct session *s) { return &s->
 const char *session_last_error(const struct session *s) { (void)s; return "boom"; }
 
 int dispatch_spawn(const char *backend, const char *model, const char *effort, const char *cwd,
-                   const char *title, const char *const *env, const char *prompt)
+                   const char *title, const char *resume, const char *const *env,
+                   const char *prompt)
 {
-    (void)backend; (void)model; (void)effort; (void)cwd; (void)title; (void)prompt;
+    (void)backend; (void)model; (void)effort; (void)cwd; (void)title; (void)resume; (void)prompt;
     if (spawn_fails || ntabs >= WORKSPACE_MAX)
         return -1;
     struct session *s = &store[next_id % (WORKSPACE_MAX + 2)];

@@ -20,6 +20,7 @@
 #include "grokbottail.h"
 #include "hud.h"
 #include "image.h"
+#include "intercom.h"
 #include "livelist.h"
 #include "restart.h"
 #include "models.h"
@@ -56,6 +57,7 @@ struct session {
     char    *effort;
     char    *resolved;
     char     id[128];
+    char     name[INTERCOM_NAME_MAX];
     char    *addr;
     char   **env;
     backend_result last_result;
@@ -761,6 +763,7 @@ struct session *session_new(const char *backend, const char *cwd, const char *mo
     s->model = dup_model(s->backend, model);
     s->effort = effort ? strdup(effort) : NULL;
     s->thinking = 1;
+    intercom_name_new(s->name, sizeof s->name);
     char addr[4300];
     if (sessionaddr_alloc(addr, sizeof addr))
         s->addr = strdup(addr);
@@ -900,8 +903,11 @@ static char *session_system(const struct session *s, const char *handoff)
         "its contents. The user can open it in a full-screen pager; markdown is "
         "rendered.";
 
-    const char *parts[] = {note, view, s->system_extra, handoff};
-    return join_system(parts, 4);
+    char       *intercom = intercom_note(s->name);
+    const char *parts[] = {note, view, intercom, s->system_extra, handoff};
+    char       *joined = join_system(parts, 5);
+    free(intercom);
+    return joined;
 }
 
 
@@ -1123,6 +1129,8 @@ static void set_id(struct session *s, const char *id)
     snprintf(s->id, sizeof s->id, "%s", id);
     sessionaddr_write(s->addr, s->id);
     if (changed) {
+        if (!intercom_name_of(s->id, s->name, sizeof s->name))
+            intercom_register(s->id, s->name, s->backend, s->cwd);
         if (s->held_title[0]) {
             title_set(s->id, s->held_title);
             s->held_title[0] = '\0';
@@ -1155,6 +1163,8 @@ static int restart(struct session *s, const char *resume_id)
     Backend *previous = s->agent;
     s->agent = NULL;
     start_error[0] = '\0';
+    if (resume_id)
+        intercom_name_of(resume_id, s->name, sizeof s->name);
 
     Backend *b = agent(s);
     if (!b || !b->start(b, resume_id)) {
@@ -2100,6 +2110,21 @@ void session_turn_wait(struct session *s)
 const char *session_title(const struct session *s)
 {
     return s && s->title[0] ? s->title : NULL;
+}
+
+const char *session_name(const struct session *s)
+{
+    return s ? s->name : "";
+}
+
+int session_set_name(struct session *s, const char *name)
+{
+    if (!intercom_name_valid(name) || intercom_name_taken(name, s->id[0] ? s->id : NULL))
+        return 0;
+    snprintf(s->name, sizeof s->name, "%s", name);
+    intercom_register(s->id, s->name, s->backend, s->cwd);
+    publish(s, s->idle_busy ? "working" : "finished");
+    return 1;
 }
 
 const char *session_model(const struct session *s)

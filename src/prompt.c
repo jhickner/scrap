@@ -371,6 +371,13 @@ static void echo_free(void *ud)
     free(e);
 }
 
+static enum ui_role echo_role(const char *text)
+{
+    if (bash_is_command(text))
+        return UI_BASH;
+    return text && !strncmp(text, "from @", 6) ? UI_SIDE : UI_ECHO;
+}
+
 void prompt_echo_message(const char *text)
 {
     int cap = settings_get_int(SETTING_ECHO_ROWS, ECHO_ROWS_DEFAULT);
@@ -378,7 +385,7 @@ void prompt_echo_message(const char *text)
     struct echo_item *e = malloc(sizeof *e);
     if (e) {
         e->text = strdup(text ? text : "");
-        e->role = bash_is_command(text) ? UI_BASH : UI_ECHO;
+        e->role = echo_role(text);
         e->cap = cap > 0 ? cap : 0;
         e->gap = 1;
         if (!e->text) {
@@ -396,7 +403,7 @@ void prompt_echo_message(const char *text)
         viewport_item_persist(mark, PROMPT_ECHO_KIND, echo_encode);
     } else {
         struct echo_item fallback = {(char *)(text ? text : ""),
-                                     bash_is_command(text) ? UI_BASH : UI_ECHO,
+                                     echo_role(text),
                                      cap > 0 ? cap : 0, 1};
         echo_paint(&fallback);
     }
@@ -426,6 +433,7 @@ void prompt_echo_load(const cJSON *st)
 
 static struct prompt *active;
 static struct prompt *completion_owner;
+static ReplCompleter  completer = files_complete;
 
 struct prompt *prompt_new(const ReplCommand *commands, int command_count)
 {
@@ -439,13 +447,18 @@ struct prompt *prompt_new(const ReplCommand *commands, int command_count)
     return p;
 }
 
+void prompt_set_completer(ReplCompleter fn)
+{
+    completer = fn;
+}
+
 void prompt_file_completion(struct prompt *p, const char *root)
 {
     completion_owner = p;
     free(p->file_root);
     p->file_root = strdup(root);
     if (p->file_root)
-        repl_set_completer(&p->repl, files_complete, p->file_root);
+        repl_set_completer(&p->repl, completer, p->file_root);
     files_prefetch(p->file_root);
 }
 
