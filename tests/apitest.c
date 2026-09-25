@@ -125,6 +125,18 @@ int main(void)
     if (!saw("assistant", "\"run_id\":\"run_1\",\"text\":\"working on it\"") || !saw("tool_call", "\"name\":\"Bash\""))
         fail("assistant and tool events carry the run");
 
+    char big[10000];
+    memset(big, 'x', sizeof big - 1);
+    big[sizeof big - 1] = '\0';
+    clear_events();
+    backend_event result = {.kind = BACKEND_EV_TOOL_RESULT, .text = big};
+    apicore_event(NULL, tabs[0], &result);
+    cJSON *rj = nevents == 1 && !strcmp(events[0], "tool_result") ? cJSON_Parse(event_data[0]) : NULL;
+    const char *rtext = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(rj, "text"));
+    if (!rtext || strcmp(rtext, big))
+        fail("tool_result text is emitted in full");
+    cJSON_Delete(rj);
+
     /* the model the CLI resolves is reported as the agent's model */
     backend_event init = {.kind = BACKEND_EV_INIT, .name = "claude-opus-5-5"};
     apicore_event(NULL, tabs[0], &init);
