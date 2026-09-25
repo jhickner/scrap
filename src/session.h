@@ -266,5 +266,6 @@ long session_context_window(const struct session *s);
 void session_spin_word(const struct session *s);
 
 void session_report(const struct session *s);
+void session_tokenomics(const struct session *s);
 
 #endif

@@ -72,4 +72,18 @@ struct sessionpresent_report {
 
 void sessionpresent_report(const struct sessionpresent_report *r);
 
+struct sessionpresent_tokens {
+    char   backend[16];
+    char   model[48];
+    char   prompt[256];
+    long   fresh, cache_write, cache_read, output;
+    long   context;
+    double cost;
+    /* per million tokens; all 0 when the model has no known rates */
+    double rate_input, rate_cache_write, rate_cache_read, rate_output;
+};
+
+void sessionpresent_tokenomics(const struct sessionpresent_tokens *turns, int n,
+                               long context_window);
+
 #endif
