@@ -74,6 +74,12 @@ static void emit_tool(const char *id, const char *status, const char *content,
 }
 
 static int pinned_model;
+static int abort_flag;
+
+static int abort_check(void)
+{
+    return abort_flag;
+}
 static int billing_reads;
 
 static int mock_server(int argc, char **argv)
@@ -429,6 +435,22 @@ int main(int argc, char **argv)
         strcmp(reply, streamed)) {
         fprintf(stderr, "groktest: the reply and the streamed chunks disagree "
                 "(reply=%s streamed=%s)\n", reply ? reply : "NULL", streamed);
+        free(reply);
+        grok_stop(client);
+        return 1;
+    }
+    free(reply);
+
+    grok_set_abort_check(client, abort_check);
+    abort_flag = 1;
+    reply = grok_send_ex(client, "interrupted turn", &meta);
+    free(reply);
+    abort_flag = 0;
+    reply = grok_send_ex(client, "turn after interrupt", &meta);
+    if (!reply || strcmp(reply, "A useful title") || meta.interrupted) {
+        fprintf(stderr, "groktest: an abort from the previous turn interrupted "
+                "the next one (reply=%s interrupted=%d)\n",
+                reply ? reply : "NULL", meta.interrupted);
         free(reply);
         grok_stop(client);
         return 1;
