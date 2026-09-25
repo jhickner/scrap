@@ -8,8 +8,9 @@ usage() {
     cat >&2 <<'EOF'
 usage: muxrig <command> ...
 
-  start  [-n name] [-s COLSxROWS] [--fake] [--fixture file] [--mux path] [-- mux args]
-         start mux; prints the instance name
+  start  [-n name] [-s COLSxROWS] [--fake] [--fixture file] [--share dir] [--mux path] [-- mux args]
+         start mux; prints the instance name. --share dir: instances started
+         with the same dir share live sessions, dispatch, and session names
   send   name keys...        tmux send-keys names: Enter Escape C-c Tab Up
   type   name text           literal text
   wait   name regex [secs]   until the screen matches (default 10s)
@@ -51,13 +52,14 @@ fail_snap() {
 }
 
 cmd_start() {
-    local name="" size="100x30" fake=0 fixture="" mux="$RIG_HOME/../../mux"
+    local name="" size="100x30" fake=0 fixture="" share="" mux="$RIG_HOME/../../mux"
     while [ $# -gt 0 ]; do
         case "$1" in
         -n) name="$2"; shift 2 ;;
         -s) size="$2"; shift 2 ;;
         --fake) fake=1; shift ;;
         --fixture) fixture="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; fake=1; shift 2 ;;
+        --share) share="$2"; shift 2 ;;
         --mux) mux="$2"; shift 2 ;;
         --) shift; break ;;
         *) usage ;;
@@ -75,9 +77,15 @@ cmd_start() {
     fi
     local dir="$ROOT/$name"
     mkdir -p "$dir/state" "$dir/work" "$dir/bin"
+    if [ -n "$share" ]; then
+        mkdir -p "$share/live" "$share/dispatch" "$dir/state/config"
+        touch "$share/names"
+        for leaf in live dispatch names; do ln -s "$share/$leaf" "$dir/state/config/$leaf"; done
+    fi
     local path="$PATH"
     if [ "$fake" = 1 ]; then
         ln -s "$RIG_HOME/fake-claude" "$dir/bin/claude"
+        ln -s "$mux" "$dir/bin/mux"
         path="$dir/bin:$PATH"
     fi
     local cmd

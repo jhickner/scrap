@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":"where is the retry backoff configured"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"In net.c, RETRY_BASE_MS."}]}}
+{"type":"user","message":{"role":"user","content":"raise it to 500"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Set RETRY_BASE_MS to 500 (zebracorn)."}]}}

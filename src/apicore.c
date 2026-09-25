@@ -493,7 +493,7 @@ static void create_agent(struct apicall *c)
     }
 
     int at = dispatch_spawn(backend, body_str(b, "model"), body_str(b, "effort"), cwd,
-                            body_str(b, "title"), (const char *const *)env, NULL);
+                            body_str(b, "title"), NULL, (const char *const *)env, NULL);
     free_env(env);
     if (at < 0)
         return fail(c, 502, "start_failed", "could not start the %s CLI", backend);

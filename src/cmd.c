@@ -1143,6 +1143,19 @@ static void do_rename(struct session *s, const char *arg)
     ui_flush();
 }
 
+static void do_name(struct session *s, const char *arg)
+{
+    viewport_item_begin(VIEWPORT_ROWS(1, 1));
+    if (!arg || !*arg)
+        ui_note("this session is @%s", session_name(s));
+    else if (session_set_name(s, arg[0] == '@' ? arg + 1 : arg))
+        ui_note("this session is now @%s", session_name(s));
+    else
+        ui_error("a name is letters, digits, - and _, and must not be in use");
+    viewport_item_end();
+    ui_flush();
+}
+
 static int split_command(const char *line, char *name, size_t size, const char **arg)
 {
     if (*line != '/')
@@ -1344,6 +1357,7 @@ static const struct cmd COMMANDS[] = {
      CMD_LIVE, do_tokenomics},
     {"/rename", "name this session, or ask the model to name it again", "[name]",
      0, do_rename},
+    {"/name", "show or set this session's @name for mux send", "[name]", 0, do_name},
     {"/tail", "show bot messages that arrived since the last shown", "[count]", 0,
      do_tail},
     {"/vnc", "show the bot's desktop in an inset", "[left|right|off|test|size <percent>]",

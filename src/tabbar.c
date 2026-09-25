@@ -87,9 +87,12 @@ static const char *mark(int at, enum ui_role *role)
 
 static void name_of(const struct session *s, size_t cells, char *out, size_t size)
 {
+    char        at[48];
     const char *title = session_title(s);
-    if (!title || !*title)
-        title = "untitled";
+    if (!title || !*title) {
+        snprintf(at, sizeof at, "@%s", session_name(s));
+        title = at;
+    }
 
     size_t len = strlen(title);
     size_t fit = ui_fit_visible(title, len, cells);
