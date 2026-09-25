@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include "settings.h"
+#include "text.h"
 
 static int failures;
 
@@ -54,6 +55,22 @@ int main(void)
     free(a);
     free(b);
     free(c);
+
+    char root[] = "/tmp/mux-configdir-XXXXXX";
+    if (!mkdtemp(root))
+        return 1;
+    char want[128], got[4096];
+    snprintf(want, sizeof want, "%s/a/b", root);
+    setenv("MUX_CONFIG_DIR", want, 1);
+    if (!path_config_dir(got, sizeof got) || strcmp(got, want) != 0)
+        fail("MUX_CONFIG_DIR replaces the config directory");
+    if (access(want, F_OK) != 0)
+        fail("MUX_CONFIG_DIR is created with its parents");
+    rmdir(want);
+    snprintf(want, sizeof want, "%s/a", root);
+    rmdir(want);
+    rmdir(root);
+
     if (failures)
         return 1;
     puts("settingstest: all checks passed");

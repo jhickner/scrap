@@ -287,17 +287,20 @@ double now_seconds(void)
 
 int path_config_dir(char *out, size_t size)
 {
+    const char *env = getenv("MUX_CONFIG_DIR");
     const char *home = getenv("HOME");
-    if (!home || !*home)
+    if (env && *env) {
+        if ((size_t)snprintf(out, size, "%s", env) >= size)
+            return 0;
+    } else if (!home || !*home || (size_t)snprintf(out, size, "%s/" APP_CONFIG, home) >= size) {
         return 0;
-    if ((size_t)snprintf(out, size, "%s/" APP_CONFIG, home) >= size)
-        return 0;
+    }
 
     static char made[4096];
     if (!strcmp(made, out))
         return 1;
 
-    for (char *p = out + strlen(home) + 1; *p; p++) {
+    for (char *p = out + 1; *p; p++) {
         if (*p != '/')
             continue;
         *p = '\0';

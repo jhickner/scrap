@@ -293,7 +293,10 @@ map: map/MAP.md
 map/MAP.md: $(wildcard src/*.c src/*.h) $(BUILD)/version.h
 	cmap -o map -x src/vendor src -- $(ALL_CFLAGS) -I$(BUILD)
 
+rigtest: $(BIN)
+	@for t in tools/rig/tests/*.sh; do echo "$$t"; $$t || exit 1; done
+
 strip-comments:
 	stripcomments -i -x vendor src tests tools
 
-.PHONY: all install clean check FORCE manual tests strip-comments map
+.PHONY: all install clean check FORCE manual tests strip-comments map rigtest
