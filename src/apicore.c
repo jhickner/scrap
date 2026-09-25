@@ -18,7 +18,6 @@
    finished ones if an instance ever outlives this */
 #define RUNS_MAX    4096
 #define ID_WAIT_MS  30000
-#define TOOL_TEXT_MAX 4096
 #define USAGE_MAX   16
 
 enum { RUN_QUEUED, RUN_RUNNING, RUN_FINISHED, RUN_ERROR, RUN_CANCELLED };
@@ -793,9 +792,7 @@ void apicore_event(void *ud, struct session *s, const backend_event *ev)
         put_str(o, "input", ev->input_json ? ev->input_json : ev->arg);
     } else if (ev->kind == BACKEND_EV_TOOL_RESULT) {
         cJSON_AddBoolToObject(o, "failed", ev->failed);
-        char *text = ev->text ? strndup(ev->text, TOOL_TEXT_MAX) : NULL;
-        put_str(o, "text", text);
-        free(text);
+        put_str(o, "text", ev->text);
     } else
         put_str(o, "text", ev->text);
     emit(name, o);
