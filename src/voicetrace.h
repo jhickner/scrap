@@ -11,17 +11,14 @@
 
 #include "app.h"
 #include "settings.h"
+#include "text.h"
 
 static inline void voice_trace(const char *event, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 static inline void voice_trace(const char *event, const char *fmt, ...)
 {
-    const char *home = getenv("HOME");
-    if (!home || !*home)
-        return;
-    char path[4096];
-    int n = snprintf(path, sizeof path, "%s/" APP_CONFIG "/voice-events.log", home);
-    if (n < 0 || (size_t)n >= sizeof path)
+    char path[4200];
+    if (!path_config_file(path, sizeof path, "voice-events.log"))
         return;
 
     if (!settings_get_int(SETTING_VOICE_TRACE, 0) && access(path, F_OK) != 0)
@@ -29,7 +26,7 @@ static inline void voice_trace(const char *event, const char *fmt, ...)
     va_list ap, copy;
     va_start(ap, fmt);
     va_copy(copy, ap);
-    n = vsnprintf(NULL, 0, fmt, copy);
+    int n = vsnprintf(NULL, 0, fmt, copy);
     va_end(copy);
     char *detail = n >= 0 ? malloc((size_t)n + 1) : NULL;
     if (detail)

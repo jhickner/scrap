@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+import json, os, sys
+
+SESSION = "fake-%d" % os.getpid()
+MODEL = "fake"
+
+
+def emit(ev):
+    ev.setdefault("session_id", SESSION)
+    sys.stdout.write(json.dumps(ev) + "\n")
+    sys.stdout.flush()
+
+
+def load_turns():
+    path = os.environ.get("MUXRIG_FIXTURE")
+    if not path:
+        return []
+    turns, cur = [], []
+    for line in open(path):
+        line = line.strip()
+        if line == "---":
+            turns.append(cur)
+            cur = []
+        elif line:
+            cur.append(json.loads(line))
+    if cur:
+        turns.append(cur)
+    return turns
+
+
+def prompt_text(msg):
+    content = msg.get("message", {}).get("content", "")
+    if isinstance(content, str):
+        return content
+    return "".join(b.get("text", "") for b in content if b.get("type") == "text")
+
+
+def main():
+    turns = load_turns()
+    for line in sys.stdin:
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        kind = msg.get("type")
+        if kind == "control_request":
+            emit({"type": "control_response", "response": {
+                "subtype": "success", "request_id": msg.get("request_id"),
+                "response": {}}})
+        elif kind == "user":
+            emit({"type": "system", "subtype": "init", "model": MODEL,
+                  "cwd": os.getcwd(), "apiKeySource": "none"})
+            events = turns.pop(0) if turns else [{
+                "type": "assistant",
+                "message": {"role": "assistant", "model": MODEL, "content": [
+                    {"type": "text", "text": "echo: " + prompt_text(msg)}]}}]
+            for ev in events:
+                emit(ev)
+            emit({"type": "result", "subtype": "success", "is_error": False,
+                  "duration_ms": 1, "num_turns": 1, "total_cost_usd": 0,
+                  "usage": {"input_tokens": 1, "output_tokens": 1}})
+
+
+if __name__ == "__main__":
+    main()

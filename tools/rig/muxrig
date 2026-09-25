@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+RIG_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="${MUXRIG_ROOT:-/tmp/muxrig}"
+
+usage() {
+    cat >&2 <<'EOF'
+usage: muxrig <command> ...
+
+  start  [-n name] [-s COLSxROWS] [--fake] [--fixture file] [--mux path] [-- mux args]
+         start mux; prints the instance name
+  send   name keys...        tmux send-keys names: Enter Escape C-c Tab Up
+  type   name text           literal text
+  wait   name regex [secs]   until the screen matches (default 10s)
+  idle   name [ms] [secs]    until the screen is unchanged for ms (default 500)
+  snap   name [-e]           print the screen, instance dir as <rig>; -e keeps colour
+  expect name golden [--update]   compare the screen to a golden file
+  log    name                mux stderr
+  dir    name                the instance directory
+  stop   name
+  ls
+EOF
+    exit 2
+}
+
+die() { echo "muxrig: $*" >&2; exit 1; }
+
+tm() { env -u TMUX -u TMUX_PANE tmux -L "muxrig-$1" "${@:2}"; }
+
+inst() {
+    [ -n "${1:-}" ] || usage
+    [ -d "$ROOT/$1" ] || die "no instance '$1'"
+}
+
+screen() { tm "$1" capture-pane -p -t rig "${@:2}"; }
+
+snap() { screen "$@" | sed -e "s|/private$ROOT/$1|<rig>|g" -e "s|$ROOT/$1|<rig>|g"; }
+
+dead() { [ "$(tm "$1" display -p -t rig '#{pane_dead}' 2>/dev/null || echo 1)" = 1 ]; }
+
+fail_snap() {
+    local name="$1"; shift
+    echo "muxrig: $*" >&2
+    screen "$name" >&2 || true
+    if dead "$name"; then
+        echo "muxrig: mux exited ($(tm "$name" display -p -t rig '#{pane_dead_status}' 2>/dev/null || echo ?))" >&2
+        tail -20 "$ROOT/$name/stderr" >&2 || true
+    fi
+    exit 1
+}
+
+cmd_start() {
+    local name="" size="100x30" fake=0 fixture="" mux="$RIG_HOME/../../mux"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+        -n) name="$2"; shift 2 ;;
+        -s) size="$2"; shift 2 ;;
+        --fake) fake=1; shift ;;
+        --fixture) fixture="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; fake=1; shift 2 ;;
+        --mux) mux="$2"; shift 2 ;;
+        --) shift; break ;;
+        *) usage ;;
+        esac
+    done
+    [ -x "$mux" ] || die "no mux binary at $mux (run make)"
+    mux="$(cd "$(dirname "$mux")" && pwd)/$(basename "$mux")"
+    mkdir -p "$ROOT"
+    if [ -z "$name" ]; then
+        local i=1
+        while ! mkdir "$ROOT/r$i" 2>/dev/null; do i=$((i + 1)); done
+        name="r$i"
+    else
+        mkdir "$ROOT/$name" 2>/dev/null || die "instance '$name' exists"
+    fi
+    local dir="$ROOT/$name"
+    mkdir -p "$dir/state" "$dir/work" "$dir/bin"
+    local path="$PATH"
+    if [ "$fake" = 1 ]; then
+        ln -s "$RIG_HOME/fake-claude" "$dir/bin/claude"
+        path="$dir/bin:$PATH"
+    fi
+    local cmd
+    cmd="$(printf '%q ' env "PATH=$path" "MUXRIG_FIXTURE=$fixture" \
+        "$mux" --state "$dir/state" "$@")2>$(printf '%q' "$dir/stderr")"
+    tm "$name" -f /dev/null new-session -d -s rig -x "${size%x*}" -y "${size#*x}" \
+        -c "$dir/work" "exec $cmd" \; \
+        set -g status off \; set -g allow-passthrough on \; \
+        set -g remain-on-exit on \; set -g window-size manual \
+        || { rm -rf "$dir"; die "tmux failed to start"; }
+    echo "$name"
+}
+
+cmd_wait() {
+    local name="$1" re="$2" secs="${3:-10}"
+    local end=$((SECONDS + secs))
+    while [ $SECONDS -le $end ]; do
+        screen "$name" | grep -Eq -- "$re" && return 0
+        dead "$name" && fail_snap "$name" "mux exited before /$re/"
+        sleep 0.1
+    done
+    fail_snap "$name" "timed out after ${secs}s waiting for /$re/"
+}
+
+cmd_idle() {
+    local name="$1" ms="${2:-500}" secs="${3:-10}"
+    local end=$((SECONDS + secs)) last="" now stable=0
+    while [ $SECONDS -le $end ]; do
+        now="$(screen "$name")"
+        if [ "$now" = "$last" ]; then
+            stable=$((stable + 100))
+            [ $stable -ge "$ms" ] && return 0
+        else
+            stable=0
+            last="$now"
+        fi
+        sleep 0.1
+    done
+    fail_snap "$name" "screen still changing after ${secs}s"
+}
+
+cmd_expect() {
+    local name="$1" golden="$2"
+    if [ "${3:-}" = --update ]; then
+        mkdir -p "$(dirname "$golden")"
+        snap "$name" > "$golden"
+        return 0
+    fi
+    [ -f "$golden" ] || die "no golden $golden (use --update)"
+    snap "$name" | diff -u "$golden" - >&2 || fail_snap "$name" "screen differs from $golden"
+}
+
+cmd_stop() {
+    local name="$1"
+    tm "$name" kill-server 2>/dev/null || true
+    rm -rf "${ROOT:?}/$name"
+}
+
+[ $# -gt 0 ] || usage
+c="$1"; shift
+case "$c" in
+start) cmd_start "$@" ;;
+send) inst "${1:-}"; tm "$1" send-keys -t rig "${@:2}" ;;
+type) inst "${1:-}"; tm "$1" send-keys -t rig -l -- "${2:?text}" ;;
+wait) inst "${1:-}"; [ $# -ge 2 ] || usage; cmd_wait "$@" ;;
+idle) inst "${1:-}"; cmd_idle "$@" ;;
+snap)
+    inst "${1:-}"
+    if [ "${2:-}" = -e ]; then snap "$1" -e; else snap "$1"; fi ;;
+expect) inst "${1:-}"; [ $# -ge 2 ] || usage; cmd_expect "$@" ;;
+log) inst "${1:-}"; cat "$ROOT/$1/stderr" ;;
+dir) inst "${1:-}"; echo "$ROOT/$1" ;;
+stop) inst "${1:-}"; cmd_stop "$1" ;;
+ls) [ -d "$ROOT" ] && ls "$ROOT" || true ;;
+*) usage ;;
+esac

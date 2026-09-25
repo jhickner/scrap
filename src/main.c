@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -100,6 +101,34 @@ static int pick_startup_bot(struct session *s)
     return index >= 0 && session_preset_model(s, choices[index].label);
 }
 
+static int state_enter(const char *arg)
+{
+    char root[4096];
+    if (mkdir(arg, 0700) != 0 && errno != EEXIST) {
+        fprintf(stderr, APP_NAME ": cannot create %s: %s\n", arg, strerror(errno));
+        return 0;
+    }
+    if (!realpath(arg, root)) {
+        fprintf(stderr, APP_NAME ": no such directory: %s\n", arg);
+        return 0;
+    }
+    static const char *const LEAVES[][2] = {
+        {"MUX_CONFIG_DIR", "config"},
+        {"AGENT_TABS_STATE_DIR", "tabs"},
+        {"TMPDIR", "tmp"},
+    };
+    for (size_t i = 0; i < sizeof LEAVES / sizeof LEAVES[0]; i++) {
+        char path[4200];
+        snprintf(path, sizeof path, "%s/%s", root, LEAVES[i][1]);
+        mkdir(path, 0700);
+        setenv(LEAVES[i][0], path, 1);
+    }
+    unsetenv("MUX_LIVE_DIR");
+    unsetenv("MUX_ADDR_DIR");
+    unsetenv("MUX_DISPATCH_DIR");
+    return 1;
+}
+
 static void usage(void)
 {
     char choices[128];
@@ -116,6 +145,7 @@ static void usage(void)
             "  --relay    also answer a phone over WebSocket, in the same session\n"
             "  --connect telegram|relay   the same thing, spelled out\n"
             "  --api      serve the worker API (config: ~/.config/mux/api)\n"
+            "  --state dir  keep config and state under dir instead of ~/.config/mux\n"
             "  -r         --resume: pick a past conversation to continue\n"
             "  --reopen   bring back the sessions of a window that is gone\n"
             "  --session id  resume a specific conversation (used by the fork commands)\n"
@@ -539,6 +569,7 @@ int main(int argc, char **argv)
         {"relay",    no_argument,      NULL, 'W'},
         {"api",      no_argument,      NULL, 'A'},
         {"connect", required_argument, NULL, 'N'},
+        {"state",   required_argument, NULL, 'X'},
         {"help",    no_argument,       NULL, 'h'},
         {"version", no_argument,       NULL, 'V'},
         {NULL,      0,                 NULL, 0},
@@ -552,6 +583,7 @@ int main(int argc, char **argv)
     const char *restore_arg = NULL;
     const char *tabs_arg = NULL;
     int         reopen_arg = 0;
+    const char *state_arg = NULL;
     int telegram = 0;
     int relay = 0;
     int api_on = 0;
@@ -577,6 +609,7 @@ int main(int argc, char **argv)
         case 'T': telegram = 1; break;
         case 'W': relay = 1; break;
         case 'A': api_on = 1; break;
+        case 'X': state_arg = optarg; break;
         case 'V': printf(APP_NAME " %s\n", MUX_VERSION); return 0;
         case 'N':
             if (!strcmp(optarg, "relay")) {
@@ -591,6 +624,15 @@ int main(int argc, char **argv)
             break;
         default:  usage(); return opt == 'h' ? 0 : 2;
         }
+    }
+
+    if (state_arg) {
+        if (telegram || relay || api_on) {
+            fprintf(stderr, APP_NAME ": --state does not combine with --telegram, --relay, --api\n");
+            return 2;
+        }
+        if (!state_enter(state_arg))
+            return 1;
     }
 
     if (!backend_known(backend)) {
