@@ -1424,7 +1424,9 @@ int grok_connect(grok_client *c) {
 
 char *grok_send_ex(grok_client *c, const char *user_text, grok_result *meta) {
     if (meta) memset(meta, 0, sizeof *meta);
-    if (!c || !user_text || !gk_handshake(c)) return NULL;
+    if (!c || !user_text) return NULL;
+    c->abort_latched = 0;
+    if (!gk_handshake(c)) return NULL;
     /* ESC during the handshake is latched so it is not lost, but there is no
      * prompt to cancel yet. Treat it as an interrupted empty turn. */
     if (c->abort_latched) {
