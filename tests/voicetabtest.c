@@ -125,7 +125,7 @@ void session_spin_word(const struct session *s)
     status_set_word("working");
 }
 const char *session_failed_prompt(const struct session *s) { (void)s; return NULL; }
-/* The helper, answering nothing but what each check fires. */
+
 struct macos_voice { int fd; };
 static macos_voice fake;
 static macos_voice_cb helper_cb;
@@ -197,8 +197,6 @@ static void eq(const char *what, const char *got, const char *want)
     failures++;
 }
 
-/* main's chat_line: a finished line goes into a box already holding text,
-   and is sent from an empty one */
 static void pump(void)
 {
     char *taken = voice_take_line();
@@ -221,7 +219,6 @@ static void partial(const char *text)
     pump();
 }
 
-/* the helper clears the preview, then delivers the turn */
 static void final(const char *text)
 {
     helper_cb(helper_ud, "partial", "");
@@ -268,9 +265,6 @@ static void begin(void)
                "I'm talking, talking, and talking. Now I'm going to switch a tab. And then say, Here,"
 #define SAID_B "Talk over here, see what happens here."
 
-/* dictation left mid-sentence: the recognizer finishes the utterance on the
-   other tab, whose words are that tab's; the first tab keeps its dictation
-   open and sends it only on the end phrase */
 static void check_switch_mid_sentence(void)
 {
     begin();
@@ -302,7 +296,6 @@ static void check_switch_mid_sentence(void)
     voice_stop();
 }
 
-/* the same with the first utterance finished before the switch */
 static void check_switch_between_utterances(void)
 {
     begin();
@@ -322,8 +315,6 @@ static void check_switch_between_utterances(void)
     voice_stop();
 }
 
-/* typed text before the dictated words: a tab round trip leaves the caret
-   where it was put */
 static void check_caret_kept(void)
 {
     begin();
@@ -345,8 +336,6 @@ static void check_caret_kept(void)
     voice_stop();
 }
 
-/* after returning, text typed right before the dictated words keeps them
-   tracked: speech joins the dictation instead of replacing the whole line */
 static void check_typed_before_resumed_words(void)
 {
     begin();
@@ -358,7 +347,7 @@ static void check_typed_before_resumed_words(void)
     press(TK_HOME);
     press(TK_WORD_RIGHT);
     press(TK_WORD_RIGHT);
-    /* speech arrives while the word is still being typed against the words */
+
     type("more");
     eq("typing lands before the words", prompt_line(box), "typed note moreListen. spoken one");
     partial("spoken two");
@@ -372,8 +361,6 @@ static void check_typed_before_resumed_words(void)
     voice_stop();
 }
 
-/* text typed into the dictated words, ending in a space, is adopted with them;
-   after a round trip the end phrase still sends and leaves the box empty */
 static void check_typed_inside_dictation(void)
 {
     begin();
@@ -433,8 +420,6 @@ static void check_live_roundtrip(void)
     }
 }
 
-/* The spoken sequence from the report, with the typed follow-up entered
-   after returning. With the fix it is a new draft after the voice submit. */
 static void check_reported_sequence(void)
 {
     begin();
@@ -501,8 +486,6 @@ static void lacks(const char *what, const char *got, const char *word)
 
 #define CTRL_C 3
 
-/* ctrl-c on an open dictation: its words are gone from the box, and neither the
-   dictation held so far nor the rest of the utterance being spoken returns */
 static void check_ctrl_c_mid_utterance(void)
 {
     begin();
@@ -540,7 +523,6 @@ static void check_ctrl_c_between_utterances(void)
     voice_stop();
 }
 
-/* the helper ends a turn with a dropped final while more of it is still heard */
 static void check_ctrl_c_then_dropped(void)
 {
     begin();
@@ -555,7 +537,6 @@ static void check_ctrl_c_then_dropped(void)
     voice_stop();
 }
 
-/* the recognizer revises the words already heard, so they no longer match */
 static void check_ctrl_c_revised(void)
 {
     begin();
@@ -566,7 +547,7 @@ static void check_ctrl_c_revised(void)
     final("Hello, world, again");
     lacks("revised words of the cleared utterance are not inserted", prompt_line(box), "world");
     lacks("revised words of the cleared utterance are not sent", sent_a, "world");
-    /* past the residue hold that follows a drop */
+
     usleep(800 * 1000);
     partial("fresh words");
     eq("speech after the cleared turn previews", prompt_line(box), "fresh words");
@@ -600,7 +581,6 @@ static void check_ctrl_c_keeps_typed_edit(void)
     voice_stop();
 }
 
-/* escape drops the dictated words and the dictation behind them */
 static void check_escape_drops_dictation(void)
 {
     begin();

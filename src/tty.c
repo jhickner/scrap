@@ -20,8 +20,6 @@
 #define FOCUS_ON            "\x1b[?1004h"
 #define FOCUS_OFF           "\x1b[?1004l"
 
-/* Disambiguate shortcuts, but keep text as UTF-8. Report-all also sends
-   standalone modifier keys (e.g. LEFT_CONTROL = 57442), not characters. */
 #define KEYBOARD_PUSH "\x1b[>1u\x1b[>4;2m"
 #define KEYBOARD_SET  "\x1b[=1u\x1b[>4;2m"
 #define KEYBOARD_OFF  "\x1b[>4;0m\x1b[<u"
@@ -105,8 +103,6 @@ static void on_fatal(int sig)
     raise(sig);
 }
 
-/* The first one asks the main loop to shut down cleanly; a second one means
-   the loop is not getting there, so fall back to restore-and-die. */
 static void on_quit(int sig)
 {
     if (quit_signal) {
@@ -183,8 +179,6 @@ int tty_rows(void)
 
 static int focused = 1;
 
-/* tmux knows which pane is in front; asking beats assuming for a window that
-   starts in the background and is never sent a focus-out. */
 static int tmux_pane_focused(void)
 {
     const char *pane = getenv("TMUX_PANE");
@@ -252,8 +246,6 @@ int tty_raw_begin(void)
 
     signal(SIGPIPE, SIG_IGN);
 
-    /* focus is only reported when it changes, so a window that starts out of
-       front has no way to learn it. A restart hands the state over instead. */
     const char *carried = getenv(FOCUS_ENV);
     if (carried) {
         focused = *carried != '0';
@@ -348,8 +340,6 @@ void tty_watch_ready(void)
 
 static volatile sig_atomic_t woken;
 
-/* Depth of a partly-read escape sequence or paste: a wake must not cut one
-   short, so it stays latched until the next top-level read. */
 static int seq_depth;
 
 void tty_wake(void) { woken = 1; }
@@ -377,9 +367,6 @@ static int wait_readable(int timeout_ms)
         if (wake_latched())
             return 0;
 
-        /* the rest of a sequence is a byte or two behind, on a 50ms budget:
-           serving a watched fd here can outrun it, and the abandoned tail is
-           read back as text */
         int extra[TTY_WATCH_MAX];
         int count = watch_fds && !seq_depth ? watch_fds(watch_ud, extra, TTY_WATCH_MAX) : 0;
         if (count < 0)
@@ -425,7 +412,6 @@ static int wait_readable(int timeout_ms)
     }
 }
 
-/* stash bytes that arrived while waiting on a reply, ahead of the reader */
 static void pending_push(const unsigned char *p, size_t n)
 {
     size_t have = pending_len - pending_pos;
@@ -664,10 +650,6 @@ static void emit_modified_tab(tty_event *ev, int mods)
         emit(ev, (bits & 1) ? TK_PREV_TAB : TK_TAB);
 }
 
-/* Focus is only ever reported as a change, so a window that started in the
-   background and was never told believes it is in front. Report every edge the
-   terminal sends rather than filtering it against that guess: a listener owning
-   a shared resource has to be able to reclaim it on the way in. */
 static void focus_change(tty_event *ev, int on)
 {
     focused = on;
@@ -676,7 +658,6 @@ static void focus_change(tty_event *ev, int on)
     emit(ev, focused ? TK_FOCUS_IN : TK_FOCUS_OUT);
 }
 
-/* All three wire formats must reach the same control-key semantics. */
 static void emit_codepoint(tty_event *ev, uint32_t cp)
 {
     switch (cp) {
@@ -692,8 +673,8 @@ static void emit_codepoint(tty_event *ev, uint32_t cp)
 static void decode_modified(tty_event *ev, int key, int mods, int shifted)
 {
     int bits = mods > 1 ? mods - 1 : 0;
-    int shortcuts = bits & 63; /* Lock state alone does not modify Enter. */
-    /* Disambiguation gives keypad keys dedicated codes even without report-all. */
+    int shortcuts = bits & 63;
+
     if (key >= 57399 && key <= 57408) key = '0' + key - 57399;
     switch (key) {
     case 57409: key = '.'; break;
@@ -716,7 +697,7 @@ static void decode_modified(tty_event *ev, int key, int mods, int shifted)
     }
     if (key < 0 || key > 0x10ffff || (key >= 0xd800 && key <= 0xdfff) ||
         (key >= 57344 && key <= 63743)) {
-        /* Kitty functional/modifier keys are not Unicode text. */
+
         emit(ev, TK_NONE);
         return;
     }

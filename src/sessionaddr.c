@@ -23,8 +23,7 @@ int sessionaddr_alloc(char *out, size_t size)
         return 0;
     if ((size_t)snprintf(out, size, "%s/%ld-%d", dir, (long)getpid(), seq++) >= size)
         return 0;
-    /* an empty file, so a child that looks before the backend has reported an
-       id reads nothing rather than failing to open */
+
     FILE *f = fopen(out, "w");
     if (!f)
         return 0;

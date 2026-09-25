@@ -22,8 +22,8 @@ struct view {
     int         n;
     int         at;
     uint32_t    id;
-    int         cols, rows;         /* cells the image fills */
-    int         box_cols, box_rows; /* the box it was fitted to */
+    int         cols, rows;
+    int         box_cols, box_rows;
 };
 
 static const char *shot_path(const struct view *v) { return image_path_at(v->at); }
@@ -114,7 +114,7 @@ int imageview_open(int at)
         if (!tty_read(&ev, POLL_MS)) {
             if (chrome_modal_interrupted())
                 break;
-            /* the session behind the viewer keeps streaming */
+
             workspace_pump_quiet();
             continue;
         }
@@ -151,8 +151,7 @@ int imageview_open(int at)
         free(ev.text);
         if (done)
             break;
-        /* a held key queues more steps than the decoder can keep up with:
-           paint the one the last of them lands on */
+
         if (tty_input_waiting())
             continue;
         chrome_paint();
@@ -161,7 +160,7 @@ int imageview_open(int at)
     image_drop(v.id);
     chrome_modal(NULL, NULL);
     chrome_full(0);
-    /* the modal painted over every row, so nothing on screen can be reused */
+
     viewport_forget();
     viewport_touch();
     viewport_flush();

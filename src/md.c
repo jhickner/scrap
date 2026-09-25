@@ -137,8 +137,6 @@ static int is_url_start(const char *p)
     return strncmp(p, "http://", 7) == 0 || strncmp(p, "https://", 8) == 0;
 }
 
-/* the span a delimiter was already scanned over without a closer; a later
-   scan starting inside it on the same line cannot find one either */
 struct nomatch {
     const char *from, *to;
 };

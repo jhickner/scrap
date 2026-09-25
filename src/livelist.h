@@ -32,15 +32,10 @@ void livelist_forget(const struct session *s);
 
 int livelist_load(struct live_session **out);
 
-/* The sessions of windows that are gone, newest first. A dead window's records
-   are kept until the session turns up live again, so a reopen that fails
-   leaves the window there to try again. */
 int livelist_closed_load(struct live_session **out);
 
 int livelist_alive(long pid);
 
-/* Move the terminal to the tmux pane a session runs in. Returns 0 and fills
-   why when there is no pane to go to. */
 int livelist_jump(const struct live_session *v, char *why, int size);
 
 const char *livelist_tmux_window(void);

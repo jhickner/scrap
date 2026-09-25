@@ -83,7 +83,6 @@ int main(void)
     prompt_set_preview(p, "");
     eq_line(p, "removing the preview keeps the typed text", "typed");
 
-    /* the exact call order of a spoken cancel right after the wake word */
     prompt_set_preview(p, "Listen");
     prompt_set_preview(p, "Listen Cancel");
     prompt_set_preview(p, "Listen");

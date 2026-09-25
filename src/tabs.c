@@ -84,9 +84,6 @@ static void tabs_drop(int at)
     pending_tabs[at].screen = NULL;
 }
 
-/* the front session and the restored tabs boot their CLIs together, and only
-   the front one is waited for: a tab nobody is looking at yet opens when its
-   own CLI is up */
 int tabs_start(struct session *front)
 {
     struct session *batch[1 + WORKSPACE_MAX];
@@ -125,7 +122,6 @@ static void tabs_take(int at)
     pending_tabs[at].s = NULL;
 }
 
-/* `all` waits for the connects still running, for a window on its way out */
 void tabs_admit(int all)
 {
     int taken = 0;

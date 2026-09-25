@@ -105,8 +105,6 @@ static int op_block(struct op **ops, int *count, int *cap, char sign, const stru
     return 1;
 }
 
-/* 1 written, 0 the table would not fit so the caller falls back to whole
-   blocks, -1 the op list ran out of memory and the diff has to be dropped */
 static int lcs_script(struct op **ops, int *count, int *cap, const struct linevec *a,
                       const struct linevec *b, int pre, int ra, int rb)
 {

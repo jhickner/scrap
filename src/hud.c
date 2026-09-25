@@ -37,8 +37,7 @@ struct row {
 struct hud {
     struct row row[2];
     int        restarts;
-    /* came back from a restart rather than being printed here, and has not
-       been rewritten yet */
+
     int        restored;
 };
 
@@ -248,8 +247,6 @@ void hud_print(const struct session *s)
     if (!s)
         return;
 
-    /* a hud carried across a restart is rewritten in place, so a window
-       restarted over and over keeps one block and one count */
     unsigned    mark = viewport_item_find(HUD_KIND);
     struct hud *back = mark ? viewport_item_data(mark) : NULL;
     int         restarts = 0;
@@ -261,8 +258,7 @@ void hud_print(const struct session *s)
             ui_flush();
             return;
         }
-        /* anything printed after it left the carried hud up in the
-           scrollback, out of sight: move the count onto a fresh one */
+
         restarts = back->restarts;
         back->restarts = 0;
         viewport_item_update(mark);

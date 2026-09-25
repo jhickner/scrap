@@ -42,10 +42,6 @@ static inline void kvlog_clear(struct kvlog_map *m)
     m->mtime = 0;
 }
 
-/* Entries sit in write order, oldest first, so a full map drops the key written
-   longest ago. The file is append-only and last-record-wins, so its tail is the
-   live part -- a map that refused new keys instead would go permanently blind to
-   every record past the cap. */
 static inline int kvlog_upsert(struct kvlog_map *m, const char *key,
                                const char *val)
 {
@@ -149,7 +145,6 @@ static inline struct kvlog_map *kvlog_fresh(const char *path)
     return m;
 }
 
-/* Append-only, tab-separated key/value records. The last matching record wins. */
 static inline int kvlog_lookup(const char *path, const char *key, char *out,
                                size_t size)
 {
@@ -198,8 +193,6 @@ static inline int kvlog_append(const char *path, const char *key,
     if (left != 0 || n <= 0)
         return 0;
 
-    /* The row is on disk. If the map could not take it, leave the map stale so
-       the next read reloads the file rather than answering without it. */
     if (value && *value && !kvlog_upsert(m, key, value)) {
         m->loaded = 0;
         return 1;

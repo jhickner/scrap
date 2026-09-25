@@ -17,7 +17,7 @@ struct slot {
     char        agent[32];
     char        provider[32];
     char        status[16];
-    int         usage_percent; /* -1 until a reading lands */
+    int         usage_percent;
     long        usage_resets_at;
     long        usage_window_minutes;
     time_t      usage_updated_at;
@@ -171,8 +171,6 @@ void agenttabs_publish(const void *key, const char *backend, const char *status,
     if (at < 0)
         return;
 
-    /* A quota reading belongs to the backend that reported it: a session that
-     * switches drops the old one rather than showing it under the new name. */
     if (strcmp(slots[at].agent, backend) != 0) {
         snprintf(slots[at].agent, sizeof slots[at].agent, "%s", backend);
         slots[at].usage_percent = -1;

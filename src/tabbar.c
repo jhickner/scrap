@@ -45,7 +45,6 @@ static unsigned digest(void)
 
 static unsigned painted;
 
-/* the columns each tab's entry was painted across, so a click can name one */
 static struct { int start, end; } span[WORKSPACE_MAX];
 static int spans;
 
@@ -65,8 +64,6 @@ int tabbar_stale(void)
     return digest() != painted || spin_due();
 }
 
-/* a turn on the current tab is counted out above the prompt; everything else
-   that is working, including this tab's leftover background work, marks here */
 static const char *mark(int at, enum ui_role *role)
 {
     const struct session *s = workspace_at(at);
@@ -104,7 +101,6 @@ static void name_of(const struct session *s, size_t cells, char *out, size_t siz
     snprintf(out, size, "%.*s\xe2\x80\xa6", (int)fit, title);
 }
 
-/* fixed cost of a tab's entry: separator, mark, and the current tab's brackets */
 static size_t frame_cells(int at)
 {
     enum ui_role role;
@@ -112,7 +108,6 @@ static size_t frame_cells(int at)
            (at == workspace_index() ? 4 : 0);
 }
 
-/* the widest name cap that still fits every tab, or 0 if none does */
 static size_t name_cells(int n, size_t budget)
 {
     for (size_t cap = NAME_CELLS; cap >= NAME_CELLS_MIN; cap--) {

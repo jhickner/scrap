@@ -30,17 +30,14 @@
 #define READY_WAIT_MS 30000
 #define JOIN_WAIT_MS  8000
 #define LINE_MAX_QUEUE 16
-/* room for a dictation held across many turns */
+
 #define LISTEN_MAX 8192
 #define DROP_HOLD_MS 700
-/* the hold after the draft is submitted by hand, where only the tail of the
-   utterance already sent has to be swallowed */
+
 #define SENT_HOLD_MS 200
-/* AVSpeechUtteranceDefaultSpeechRate, what 100 percent means */
+
 #define AV_RATE_DEFAULT 0.5
 
-/* prefixed to spoken input while replies are read back, so the answer is
-   shaped for the ear; the pane shows the words without it */
 #define SPOKEN_BREVITY                                                         \
     "Reply in one or two short sentences of plain prose. Answer only what "    \
     "was asked: no background, caveats, alternatives, or offers of further "   \
@@ -50,8 +47,7 @@
 #define SPOKEN_PREAMBLE                                                        \
     "The message below was spoken aloud, and your reply will be read back "    \
     "aloud. " SPOKEN_BREVITY
-/* a queued message is answered after another reply, which a listener cannot
-   tell apart from the one before it */
+
 #define QUEUED_PREAMBLE                                                        \
     "The message below was spoken aloud while an earlier reply was running, "  \
     "and your reply will be read back aloud. Open with a few words restating " \
@@ -66,33 +62,27 @@ static int          mic = 1;
 static int          dropping;
 static long         drop_until;
 static int          hearing;
-/* draft heard while unarmed or dropping; the helper can re-emit it after
-   focus, and that residue must not preview or send */
+
 static char         stale[LISTEN_MAX];
 static int          stale_hit;
 static char         draft[LISTEN_MAX];
-/* dictation opened by the wake word: every turn is held here until the
-   terminator, so a long input is not cut up by pauses */
+
 static int          listen_mode;
 static char         listen_buf[LISTEN_MAX];
-/* open dictations of tabs not in front, resumed when their tab is again */
+
 static struct {
     const struct session *s;
     char                 *text;
 } held[WORKSPACE_MAX];
 static int          nheld;
-/* the utterance in progress as last heard, and the part of it spoken before
-   the tab changed: the recognizer carries on with it, but only the rest
-   belongs to the tab now in front */
+
 static char         utter[LISTEN_MAX];
 static char         carry[LISTEN_MAX];
-/* set by the spoken pause command: the recognizer keeps running so the resume
-   command is heard, and every other turn is discarded */
+
 static int          paused;
-/* the pause state was changed from a partial; the final of that turn is
-   consumed without changing it again */
+
 static int          command_early;
-/* another client turned the mic off; applied once the helper poll returns */
+
 static int          mic_off_pending;
 static char         failure[256];
 static char        *queue[LINE_MAX_QUEUE];
@@ -106,11 +96,9 @@ static void       (*release_fn)(void *ud);
 static void        *release_ud;
 static int        (*claim_fn)(void *ud, const char *text);
 static void        *claim_ud;
-/* the words heard for this utterance were erased in the box; what is left of
-   it keeps arriving and is dropped rather than typed back in */
+
 static int          erased;
-/* the words last put in the input box; what is there now is measured against
-   this to see whether they were changed by hand */
+
 static char         shown[LISTEN_MAX];
 
 static void listen_append(const char *text);
@@ -122,8 +110,6 @@ static void show(const char *text)
     heard_fn(heard_ud, text);
 }
 
-/* Adopt edits to dictated words and typed continuations after them. A typed
-   prefix can remain outside the span; it is included when the draft submits. */
 static const char *box_edit(void)
 {
     if (!draft_fn || !shown[0])
@@ -132,15 +118,12 @@ static const char *box_edit(void)
     if (!cur)
         return NULL;
     const char *found = strstr(cur, shown);
-    /* A typed continuation belongs before the next spoken utterance. Keeping
-       only the old spoken span would insert new speech before that suffix. */
+
     if (found && !(listen_mode && found[strlen(shown)]))
         return NULL;
     return cur;
 }
 
-/* 1 when the box holds text voice did not put there. A taken line is then
-   folded into that draft rather than sent, and must not chime as if it left */
 static int box_has_typed(void)
 {
     const char *cur = draft_fn ? draft_fn(draft_ud) : NULL;
@@ -156,26 +139,21 @@ static int box_has_typed(void)
     return found[strlen(shown)] != '\0';
 }
 
-/* adopt an edit made in the box, which is what gets sent: a word deleted there
-   is gone from the dictation, and an emptied box leaves nothing to send.
-   1 when there was one, with the box copied to out */
 static int take_edit(char *out, size_t n)
 {
     const char *cur = box_edit();
     if (!cur)
         return 0;
     snprintf(out, n, "%s", cur);
-    /* the words of an utterance still arriving must not be typed back over what
-       is being erased, so that utterance is dropped. An edit made between two of
-       them takes nothing with it: the dictation carries on from what is kept */
+
     erased = draft[0] != 0;
     if (listen_mode) {
-        /* the box as it is, spacing included, so showing it again changes nothing */
+
         snprintf(listen_buf, sizeof listen_buf, "%s", out);
         if (claim_fn)
             claim_fn(claim_ud, out);
     } else if (release_fn) {
-        /* the line is theirs now, and what they kept is left to send by hand */
+
         release_fn(release_ud);
     }
     shown[0] = '\0';
@@ -280,8 +258,6 @@ static int is_stale(const char *text)
     return 1;
 }
 
-/* 1 when the turn, lowercased and without punctuation or filler words, is one
-   of the phrases in list, possibly repeated */
 static int is_command(const char *text, const char *const *list, int count)
 {
     char words[256];
@@ -384,8 +360,6 @@ static int is_resume_command(const char *text)
     return is_command(text, words, (int)(sizeof words / sizeof words[0]));
 }
 
-/* the two-word forms are acted on from a partial, ahead of the final and the
-   endpoint silence; a bare word could still grow into a sentence */
 static int is_early_pause_command(const char *text)
 {
     static const char *const words[] = { "pause listening" };
@@ -429,8 +403,6 @@ static void jev_clear(void);
 static const char *jev_judged(void);
 static const char *jev_row(void);
 
-/* jev keeps the helper from ending a turn on its own, so its silence goes to
-   the longest it takes */
 static double helper_silence(void)
 {
     return voice_mode() == VOICE_MODE_JEV ? VOICE_SILENCE_MAX : voice_silence();
@@ -469,10 +441,6 @@ static void set_paused(int on)
     status_touch();
 }
 
-/* the word "listen" where it starts, or NULL when the turn does not carry it.
-   The word is looked for anywhere, not just at the front: the microphone gate
-   closes while a reply is read back, so a dictation opened over the tail of one
-   reaches here with its first words already missing */
 static const char *listen_wake(const char *text)
 {
     for (const char *p = text; *p; p++) {
@@ -485,7 +453,6 @@ static const char *listen_wake(const char *text)
     return NULL;
 }
 
-/* the offset where word ends at end, or -1 */
 static ptrdiff_t word_ends_at(const char *text, size_t end, const char *word)
 {
     size_t len = strlen(word);
@@ -499,8 +466,6 @@ static ptrdiff_t word_ends_at(const char *text, size_t end, const char *word)
     return (ptrdiff_t)start;
 }
 
-/* strips a closing "ok done"; 1 when it was there. Only the very end counts,
-   so "okay, done with that" mid-thought does not cut the dictation short */
 static int listen_end(char *text)
 {
     size_t n = strlen(text);
@@ -522,7 +487,6 @@ static int listen_end(char *text)
     return 1;
 }
 
-/* strips a closing "cancel", "cancel this" or "cancel that"; 1 when it was there */
 static int listen_cancel(char *text)
 {
     size_t n = strlen(text);
@@ -568,19 +532,15 @@ static void listen_clear(void)
     listen_buf[0] = '\0';
 }
 
-/* jev mode. The helper has no way to end a listening turn, so every turn ends
-   here: the composed transcript is asked about as the words arrive, and when
-   jev answers ready it is queued and the words already sent are stripped from
-   the rest of that helper utterance. Finals only ever add to the held text. */
 static char jev_held[LISTEN_MAX];
 static char jev_utter[LISTEN_MAX];
-/* the helper utterance as it arrived, and the part of it already submitted */
+
 static char jev_raw[LISTEN_MAX];
 static char jev_sent[LISTEN_MAX];
-/* held and utterance together: what jev judges and what gets submitted */
+
 static char jev_text[LISTEN_MAX];
 static char jev_asked[LISTEN_MAX];
-/* the last line submitted from here, the user side of recent_turns */
+
 static char jev_line[LISTEN_MAX];
 static char jev_verdict[48];
 static long jev_changed;
@@ -672,8 +632,6 @@ static void jev_fire(void)
     voice_trace("jev.ask", "text=%s", text);
 }
 
-/* the words of this turn are gone from here; what the helper is still saying
-   of them is stripped from the partials that follow */
 static void jev_forget(void)
 {
     snprintf(jev_sent, sizeof jev_sent, "%s", jev_raw);
@@ -682,7 +640,6 @@ static void jev_forget(void)
     jev_reset();
 }
 
-/* the turn leaves the preview and the box; the caller frees what was in them */
 static char *jev_end(void)
 {
     if (heard_fn)
@@ -750,9 +707,6 @@ static void jev_answer(const struct jev_result *r)
     jev_submit();
 }
 
-/* delay_ms is the shortest gap between calls rather than a wait after the last
-   partial: the poll loop has no timer of its own, and a turn must not wait for
-   the next idle tick to be judged */
 static void jev_tick(void)
 {
     if (voice_mode() != VOICE_MODE_JEV)
@@ -781,8 +735,6 @@ static void jev_heard(void)
     heard(jev_text);
 }
 
-/* an edit made in the box replaces everything dictated so far; the utterance
-   still arriving continues after it, its words up to now being dropped */
 static void jev_adopt_edit(void)
 {
     const char *cur = box_edit();
@@ -812,7 +764,6 @@ static void jev_adopt_edit(void)
     voice_trace("jev.edit", "text=%s", jev_held);
 }
 
-/* what jev judges: the box when it holds the dictation plus typed additions */
 static const char *jev_judged(void)
 {
     const char *cur = draft_fn ? draft_fn(draft_ud) : NULL;
@@ -850,8 +801,7 @@ static void jev_final(const char *text)
     }
     jev_heard();
     jev_tick();
-    /* the helper waits for a reply to the turn it just delivered; nothing here
-       answers one, so it is let out of that wait */
+
     if (voice && !speaking)
         macos_voice_cancel(voice);
 }
@@ -907,10 +857,6 @@ static const char *skip_word(const char *p)
     return p;
 }
 
-/* text past the words spoken before the tab changed. Case and punctuation the
-   recognizer revised still match; a revised word further in is skipped by
-   count, as long as the first word is the same. Text that does not start the
-   same way is a new utterance and is left whole */
 static const char *after_carry(const char *text)
 {
     if (!carry[0] || !text)
@@ -946,7 +892,7 @@ static const char *after_carry(const char *text)
             p = skip_word(p);
         }
     } else if (isalnum((unsigned char)*p) && p > text && isalnum((unsigned char)p[-1])) {
-        /* the carried text ended inside a word the recognizer has since finished */
+
         while (*p && !isspace((unsigned char)*p))
             p++;
     }
@@ -955,7 +901,6 @@ static const char *after_carry(const char *text)
     return p;
 }
 
-/* end the dictation with tail as its last utterance and queue the whole thing */
 static void listen_flush(const char *tail)
 {
     char body[sizeof draft];
@@ -967,10 +912,7 @@ static void listen_flush(const char *tail)
     size_t n = strlen(listen_buf);
     while (n && isspace((unsigned char)listen_buf[n - 1]))
         listen_buf[--n] = '\0';
-    /* The terminator submits the whole input, including typed text before
-       the dictation. Materialize the final words before taking that snapshot,
-       then claim the whole draft so clearing it leaves no typed residue for
-       chat_line to mistake for an unfinished composition. */
+
     if (heard_fn)
         show(listen_buf);
     const char *cur = draft_fn ? draft_fn(draft_ud) : NULL;
@@ -986,7 +928,6 @@ static void listen_flush(const char *tail)
     free(line);
 }
 
-/* end the dictation and drop everything in it, the box included */
 static void listen_discard(void)
 {
     if (heard_fn)
@@ -999,14 +940,11 @@ static void listen_discard(void)
     if (heard_fn)
         show("");
     chime("interrupted");
-    /* the recognizer starts over, so the cancelled utterance does not carry
-       into the next wake word */
+
     if (voice && !speaking)
         macos_voice_cancel(voice);
 }
 
-/* holds a finished turn in the dictation; 0 when this turn is not one. cue
-   chimes when the turn opens it */
 static int listen_take(const char *text, int cue)
 {
     const char *body = text;
@@ -1020,9 +958,7 @@ static int listen_take(const char *text, int cue)
         if (cue)
             chime("listening");
     }
-    /* the dictation starts at the wake word rather than after it: the entry then shows
-       the words as they were said, and an opening turn carrying nothing else leaves the
-       word standing instead of an empty entry. What precedes it is gate residue and goes */
+
     char rest[sizeof draft];
     snprintf(rest, sizeof rest, "%s", body);
     if (listen_end(rest)) {
@@ -1034,8 +970,7 @@ static int listen_take(const char *text, int cue)
         return 1;
     }
     listen_append(rest);
-    /* Recognition can endpoint between "ok" and "done". Match the joined
-       dictation too, so a pause inside the closing phrase still sends. */
+
     if (voice_wake() && listen_end(listen_buf))
         listen_flush(NULL);
     else if (voice_wake() && listen_cancel(listen_buf))
@@ -1043,8 +978,6 @@ static int listen_take(const char *text, int cue)
     return 1;
 }
 
-/* the utterance in progress joins the dictation it belongs to, as if its final
-   had arrived; 0 when it is not part of one */
 static int listen_hold_draft(void)
 {
     if (!draft[0] || erased)
@@ -1068,9 +1001,6 @@ static void send_line(struct session *s, const char *line)
     chime("sent");
 }
 
-/* Discarded speech is not remembered as stale: remembering each partial would
-   fold every longer partial into the stale prefix, and an utterance whose
-   first words landed in a drop hold would then be swallowed whole. */
 static void discard_speech(void)
 {
     hearing = 0;
@@ -1114,7 +1044,7 @@ static void handle_event(void *ud, const char *kind, const char *text)
             set_paused(1);
             return;
         }
-        /* a command word is not previewed; it shows once the turn grows past it */
+
         if (is_pause_command(text) || is_resume_command(text)) {
             hearing = 1;
             heard("");
@@ -1162,9 +1092,7 @@ static void handle_event(void *ud, const char *kind, const char *text)
                 return;
             }
         }
-        /* the helper waits for a reply to every turn it delivers and judges
-           speech as echo until one ends; a turn consumed here gets none. A reply
-           still playing is left to end it, rather than being cut off */
+
         if (command_early) {
             command_early = 0;
             if (is_pause_command(text) || is_resume_command(text)) {
@@ -1206,8 +1134,7 @@ static void handle_event(void *ud, const char *kind, const char *text)
         }
         if (erased) {
             erased = 0;
-            /* the turn being erased is gone, but a terminator in it still ends
-               the dictation and sends what was kept */
+
             if (listen_mode) {
                 char rest[sizeof draft];
                 snprintf(rest, sizeof rest, "%s", text ? text : "");
@@ -1221,8 +1148,7 @@ static void handle_event(void *ud, const char *kind, const char *text)
             }
             return;
         }
-        /* a dictation outranks the hold, which is there to swallow the tail of
-           a line already sent, not the words held for one */
+
         if (text && *text && !is_stale(text) &&
             (listen_mode || listen_wake(text))) {
             forget_stale();
@@ -1260,7 +1186,7 @@ static void handle_event(void *ud, const char *kind, const char *text)
         chime("interrupted");
         erased = 0;
     } else if (!strcmp(kind, "dropped")) {
-        /* the erased turn ends here when the helper discards its final */
+
         carry_clear();
         if (voice_mode() == VOICE_MODE_JEV) {
             jev_raw[0] = jev_utter[0] = jev_sent[0] = '\0';
@@ -1271,8 +1197,7 @@ static void handle_event(void *ud, const char *kind, const char *text)
         discard_speech();
         erased = 0;
     } else if (!strcmp(kind, "cancelled")) {
-        /* the helper dropped the turn on its own cancel phrase; in a dictation
-           that phrase cancels the whole dictation, not just the last turn */
+
         carry_clear();
         erased = 0;
         if (voice_mode() == VOICE_MODE_JEV) {
@@ -1378,9 +1303,7 @@ int voice_start(char *err, size_t size)
     chrome_live_label(jev_row);
     ready = 0;
     speaking = 0;
-    /* a window that is not in front must not take the microphone from the one
-       that is: every window starting at once after a restart would otherwise
-       leave the last of them holding it */
+
     armed = tty_focused();
     mic = 1;
     dropping = 0;
@@ -1421,8 +1344,6 @@ again:
         return 0;
     }
 
-    /* a helper already running answers a new client at once; one that stays
-       silent has stopped serving its queue and is replaced */
     int joined = !macos_voice_launched(voice) && !macos_voice_resumed(voice);
     long until = now_ms() + (joined && !reaped ? JOIN_WAIT_MS : READY_WAIT_MS);
     while (!ready && !failure[0]) {
@@ -1457,9 +1378,7 @@ again:
         return 0;
     }
     armed = tty_focused();
-    /* An inherited connection already has the correct helper-side ownership.
-       Reasserting remembered terminal focus here would let restart order
-       decide which instance gets the microphone. Only real focus edges claim it. */
+
     if (!macos_voice_resumed(voice)) {
         macos_voice_focus(voice, armed);
         if (armed)
@@ -1467,13 +1386,12 @@ again:
     }
     macos_voice_volume(voice, voice_volume() / 100.0);
     macos_voice_rate(voice, voice_rate() / 100.0 * AV_RATE_DEFAULT);
-    /* the helper may already be running for another client, with its silence */
+
     macos_voice_silence(voice, helper_silence());
     session_add_listener(on_session_event, NULL);
     return 1;
 }
 
-/* end_helper quits the shared process for every client, not just this one. */
 static void teardown(int end_helper)
 {
     chrome_live_label(NULL);
@@ -1525,8 +1443,7 @@ int voice_restart(char *err, size_t size)
     int was_on = voice != NULL, was_speaking = speak;
     teardown(1);
     if (!was_on) {
-        /* no client here to shut the helper down through, but one started by another
-           client is still holding the microphone and the socket */
+
         macos_voice_reap(settings_get_str(SETTING_VOICE_HELPER, VOICE_HELPER_PATH));
         return 1;
     }
@@ -1642,7 +1559,7 @@ void voice_set_mic(int on)
         return;
     if (!on) {
         voice_commit(workspace_current());
-        /* the dictation ends here, and what it held stays in the box */
+
         if (listen_mode && release_fn)
             release_fn(release_ud);
     }
@@ -1702,8 +1619,6 @@ void voice_on_claim(int (*fn)(void *ud, const char *text), void *ud)
     claim_ud = ud;
 }
 
-/* the jev verdict changes with every word, so it is painted live above the
-   input rather than in the hud, which is filled once per session */
 static const char *jev_row(void)
 {
     return voice && voice_mode() == VOICE_MODE_JEV ? voice_label() : NULL;
@@ -1742,8 +1657,7 @@ int voice_fds(int *out, int max)
     int fd = macos_voice_fd(voice);
     if (fd >= 0)
         out[n++] = fd;
-    /* the answer to a jev request has to wake the loop too, or the turn it
-       ends waits for the next idle tick */
+
     n += jev_fds(out + n, max - n);
     return n;
 }
@@ -1816,8 +1730,7 @@ void voice_refocus(void)
     int i = s ? held_find(s) : -1;
     if (i < 0)
         return;
-    /* the box came back with the tab; its dictation carries on where it was
-       unless those words are no longer there */
+
     if (!claim_fn || claim_fn(claim_ud, held[i].text)) {
         listen_mode = 1;
         snprintf(listen_buf, sizeof listen_buf, "%s", held[i].text);
@@ -1838,16 +1751,13 @@ void voice_leave(struct session *s)
     snprintf(carry, sizeof carry, "%s", utter);
     if (listen_mode || listen_wake(draft))
         listen_hold_draft();
-    /* A wake-word partial only became an open dictation above. Adopt any
-       typed continuation now, before its span is parked for this tab. */
+
     take_edit(edit, sizeof edit);
     draft[0] = '\0';
     hearing = erased = command_early = 0;
     if (heard_fn && listen_mode)
         show(listen_buf);
-    /* Finals awaiting chat_line belong before the current preview. Materialize
-       them in this box before workspace saves it, never in the global queue
-       that the next tab would take. Keep any surrounding typed text intact. */
+
     if (nqueue && heard_fn) {
         char *text = strdup("");
         for (int i = 0; text && i < nqueue; i++) {
@@ -1896,8 +1806,7 @@ void voice_commit(struct session *s)
             remember_stale(draft);
     } else if (draft[0] && !is_stale(draft)) {
         remember_stale(draft);
-        /* A wake word can still be only a partial when focus or the mic changes.
-           Neither edge is the dictation's end phrase, so it stays open */
+
         if (voice_mode() == VOICE_MODE_JEV) {
             if (jev_text[0])
                 enqueue(jev_text);
@@ -1914,10 +1823,7 @@ void voice_commit(struct session *s)
     }
     hearing = 0;
     heard("");
-    /* A focus or workspace edge can commit speech before the prompt loop gets
-       to take it.  If the box already has a typed draft, leave the speech in
-       the queue so chat_line can merge it into that draft; sending here would
-       bypass the box and make the model answer the speech on its own. */
+
     const char *composing = draft_fn ? draft_fn(draft_ud) : NULL;
     if (composing && *composing)
         return;
@@ -1935,8 +1841,7 @@ void voice_draft_sent(void)
 {
     if (!voice || !listening())
         return;
-    /* the same words come back as a final once the turn endpoints; remember
-       them so that copy is dropped instead of sent again */
+
     if (draft[0])
         remember_stale(draft);
     erased = 0;
@@ -1958,13 +1863,11 @@ static void drop_input(void)
     erased = 0;
     listen_clear();
     hearing = 0;
-    /* the cancelled utterance keeps arriving as ever-longer partials and a
-       final; its words so far are the prefix that marks them stale */
+
     forget_stale();
     remember_stale(draft);
     heard("");
-    /* revised words no longer match that prefix: the rest of the utterance is
-       dropped until its final */
+
     erased = cut;
     drain();
 }
@@ -1973,9 +1876,7 @@ int voice_drop(void)
 {
     if (!voice || !listening())
         return 0;
-    /* The drop hold only swallows recognition residue after a cancellation; it
-       is not itself voice input.  Reporting it as something dropped makes a
-       quick second Escape renew the hold instead of reaching the active turn. */
+
     int had = nqueue > 0 || hearing || listen_mode;
     drop_input();
     macos_voice_cancel(voice);
@@ -1994,10 +1895,6 @@ int voice_discard(void)
     return 1;
 }
 
-/* Releasing ownership makes the helper hand back whatever it had heard. Wait
-   for that answer, while this window is still armed to take it, so the words
-   land in the window they were spoken in rather than the one being switched
-   to. */
 #define HANDOFF_WAIT_MS 40
 static void await_handoff(void)
 {
@@ -2011,9 +1908,7 @@ void voice_arm(int on)
 {
     on = on ? 1 : 0;
     int changed = on != armed;
-    /* Every edge reasserts the claim, whether or not this window thought it had
-       focus: the helper routes speech to the client that asked for it last, and
-       a window that missed its focus-out would otherwise never ask again. */
+
     if (on) {
         armed = 1;
         if (voice)

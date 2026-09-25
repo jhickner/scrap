@@ -15,14 +15,11 @@
 
 #define TOOL_INDENT 2
 
-/* A subagent's work is drawn one step in from the session's own, under a mark
-   naming which agent it came from, so a call it made is not read as a call the
-   session made, nor as another agent's. */
 #define NEST_MARK "\xe2\x86\xb3"
 
 static int         nest;
 static const char *nest_label;
-static int         nest_said; /* the mark is drawn once, then padded to */
+static int         nest_said;
 
 static int nest_width(const char *label)
 {
@@ -61,9 +58,9 @@ struct keep {
     unsigned char *spans;
     enum ui_role   role;
     int            error;
-    int            collapses; /* the tool style shows this call as one row in any mode */
-    int            nested;    /* a subagent's work, not the session's own */
-    char          *label;     /* which agent, for a nested one */
+    int            collapses;
+    int            nested;
+    char          *label;
     char          *row;
 };
 
@@ -159,9 +156,6 @@ static void keep_render(void *ud, int cols)
     const struct keep *k = ud;
     (void)cols;
 
-    /* Each item names its agent on its first row and pads to the mark after, so
-       an item drawn on its own -- a reflow redraws only what moved -- says whose
-       it is without depending on what was drawn before it. */
     nest_label = k->nested ? k->label : NULL;
     nest = k->nested ? nest_width(nest_label) : 0;
     nest_said = 0;
@@ -258,8 +252,6 @@ static char *keep_encode(void *ud)
 
 static void restate(unsigned from, int stale);
 
-/* the blank always gets reserved here: a pad can be hidden later but not
-   conjured, so an item born without one could never take a gap on a toggle */
 static unsigned keep(struct keep *k)
 {
     unsigned mark = viewport_item_begin(&(struct viewport_entry){
@@ -276,7 +268,6 @@ static unsigned keep(struct keep *k)
 static int   nesting;
 static char *nesting_label;
 
-/* Everything kept until this is turned off belongs to the named subagent. */
 void view_keep_nest(int on, const char *label)
 {
     nesting = on ? 1 : 0;
@@ -298,7 +289,7 @@ static struct keep *keep_new(enum keep_kind kind)
 void view_keep_load(const cJSON *st)
 {
     int kind = scrollback_int(st, "kind");
-    /* pre-merge dumps stored a collapsed row of calls as kind 4 */
+
     enum { KEEP_CLUSTER = 4 };
     if (kind == KEEP_CLUSTER)
         kind = KEEP_CALL;
@@ -464,9 +455,6 @@ void view_collapse(int on)
     viewport_paint();
 }
 
-/* One order for every front end: the command is the whole of a shell call, so
-   it wins over a path a wrapper carries alongside it; paths come next, and the
-   free-text keys are the last resort. */
 static const struct {
     const char *key;
     int         is_path;
@@ -668,8 +656,6 @@ static void cluster_paint(const char *line, const unsigned char *spans)
     if (line[tag])
         tag++;
 
-    /* one row per call: fill the width and cut mid-word, so a long first token
-       does not leave the row nearly empty */
     size_t len = strlen(line);
     size_t fit = ui_fit_visible(line, len, (size_t)cluster_budget());
     if (fit < tag)

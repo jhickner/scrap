@@ -8,14 +8,12 @@
 #define SGR_MAX 64
 
 struct edge {
-    size_t at;    /* byte offset */
-    size_t cells; /* visible cells consumed up to it */
-    size_t sgr;   /* offset of the last SGR at or before it */
+    size_t at;
+    size_t cells;
+    size_t sgr;
     size_t sgr_n;
 };
 
-/* one forward walk records where the box starts, where it ends, and the colour
-   the row was left in there, so the tail resumes in it */
 static void measure(const char *line, size_t n, size_t col, size_t over,
                     struct edge *head, struct edge *cut, struct edge *wide)
 {
@@ -59,7 +57,6 @@ static void put_over(const char *line, size_t n, const struct overlay *o, int at
 
     o->paint_row(o->ud, at, o->w);
 
-    /* a wide glyph straddling the right edge of the box goes under it */
     struct edge tail = cut.cells < over && wide.at > cut.at ? wide : cut;
     if (tail.cells > over)
         ui_pad((int)(tail.cells - over));
@@ -90,8 +87,7 @@ void overlay_put(const char *under, const struct overlay *o)
         const char *nl = strchr(p, '\n');
         size_t      n = nl ? (size_t)(nl - p) : strlen(p);
         size_t      full = n;
-        /* a raw terminal was written to with \r\n, and the return is not
-           part of the row the box stands on */
+
         while (n && p[n - 1] == '\r')
             n--;
 
@@ -106,7 +102,6 @@ void overlay_put(const char *under, const struct overlay *o)
         p += nl ? full + 1 : full;
     }
 
-    /* the block ran out from under the box */
     for (int line = at - o->row; line >= 0 && line < o->rows; line++) {
         ui_pad(o->col);
         o->paint_row(o->ud, line, o->w);

@@ -26,10 +26,9 @@ static char    alert[64];
 static char    note[128];
 
 static int              painted;
-/* when the last full repaint went out, so a burst of changes coalesces */
+
 static double           painted_at;
-/* a change from an event stream rather than from status's own state; held to
-   the spin frame so a burst of them does not repaint per event */
+
 static int              touched;
 static int              spin_width;
 static int              dirty;
@@ -54,7 +53,6 @@ double status_elapsed(void)
 
 void status_touch(void) { touched = 1; }
 
-/* TEMP: trace who rewrites the spin line (MUX_STATUS_TRACE=<path>) */
 static void trace_set(const char *field, const char *from, const char *to)
 {
     const char *path = getenv("MUX_STATUS_TRACE");

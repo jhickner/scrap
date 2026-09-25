@@ -177,7 +177,6 @@ static int same_text(const char *path, const char *text)
     return same;
 }
 
-/* Writes only on change so mtimes (and codex's hook trust hashes) stay put. */
 static int put(const char *path, const char *text, FILE *log)
 {
     if (same_text(path, text))
@@ -332,7 +331,6 @@ static int is_backend_key(const char *key)
     return 0;
 }
 
-/* One handler as a backend sees it: NULL when dropped there. */
 static cJSON *render_handler(const cJSON *h, const char *backend)
 {
     const cJSON *over = cJSON_GetObjectItemCaseSensitive(h, backend);
@@ -402,9 +400,6 @@ static const cJSON *handler_at(const cJSON *hooks, const char *event, int gi, in
     return cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(g, "hooks"), hi);
 }
 
-/* First run: Claude's hooks become the source, with codex's existing commands
-   folded in as overrides where they differ and codex-only events kept off
-   Claude. */
 static cJSON *seed_hooks(const char *home, FILE *log)
 {
     char path[PATH_MAX];

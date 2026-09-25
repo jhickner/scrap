@@ -176,8 +176,6 @@ int vncinset_layout(enum vncinset_side side, int pct, int cols, int rows, int fr
     return 1;
 }
 
-/* the inset last transmitted, so a frame goes out once however often the
-   screen is painted */
 static const struct vncinset *sent_by;
 static uint64_t               sent_gen;
 static int                    sent_cols, sent_rows;

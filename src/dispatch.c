@@ -16,7 +16,7 @@
 
 #define POLL_MS      250
 #define REQUEST_MAX  65536
-/* how long a spawn reply waits for the backend to report its session id */
+
 #define ID_WAIT_MS   30000
 
 static int dir_path(char *out, size_t size)
@@ -68,7 +68,6 @@ static void echo_prompt(struct session *s, void *ud)
     prompt_echo_message(ud);
 }
 
-/* the only address the request API accepts: a backend session id */
 static int index_of_id(const cJSON *target)
 {
     if (!cJSON_IsString(target))
@@ -143,8 +142,6 @@ static void send_session(const char *dir, const char *base, const cJSON *o, cons
     }
 }
 
-/* a spawn whose reply is held until its session id is known, so the caller
-   never has to address the tab by position */
 struct pending {
     char            base[256];
     struct session *s;
@@ -237,7 +234,7 @@ int dispatch_spawn(const char *backend, const char *model, const char *effort, c
 
 int dispatch_send(int at, const char *line)
 {
-    /* a queued line is echoed when its turn starts; an idle tab has no such path */
+
     if (!session_turn_running(workspace_at(at)))
         workspace_render(at, echo_prompt, (void *)line);
     return workspace_send(at, line, NULL);

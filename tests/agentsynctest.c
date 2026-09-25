@@ -78,7 +78,6 @@ int main(void)
     assert(log);
     assert(agentsync_run(root, 0, log));
 
-    /* skills */
     char path[1024], target[1024];
     snprintf(path, sizeof path, "%s/.agents/skills", root);
     ssize_t n = readlink(path, target, sizeof target - 1);
@@ -92,7 +91,6 @@ int main(void)
     assert(exists(".codex/skills/own/SKILL.md"));
     assert(exists(".codex/skills/.system"));
 
-    /* hooks: seeded source with the codex override folded in */
     char *src = slurp(".config/mux/hooks.json");
     assert(src);
     assert(strstr(src, "\"codex\":\t\"codex-hook.py\""));
@@ -120,7 +118,6 @@ int main(void)
     assert(strstr(ext, "session_start"));
     free(ext);
 
-    /* editing the source flows out; pi:false drops a handler nowhere else */
     spit(".config/mux/hooks.json",
          "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"all.sh\","
          "\"claude\":\"claude.sh\",\"pi\":false}]}],"
@@ -134,7 +131,6 @@ int main(void)
     assert(strstr(codex, "all.sh") && !strstr(codex, "SessionEnd"));
     free(codex);
 
-    /* prune removed the stale copy and kept the backend-only skill */
     assert(!exists(".codex/skills/a"));
     assert(exists(".codex/skills/own/SKILL.md"));
 

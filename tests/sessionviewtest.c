@@ -299,7 +299,6 @@ int main(void)
         return fail("view_tool_call flattened the command", out);
     free(out);
 
-
     ui_capture_begin(80);
     view_tool_error("failed: Exit code 1\n"
                     "Traceback (most recent call last):\n"

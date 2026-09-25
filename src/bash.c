@@ -430,8 +430,6 @@ void bash_run(const char *line)
                 pfd[nfd++].revents = 0;
             }
 
-            /* the agent sessions still have to be drained, or a turn that keeps
-               streaming fills its pty buffer and stalls for the whole command */
             int at_watch = nfd;
             int nwatch = tty_watch_fds(watch, TTY_WATCH_MAX);
             for (int i = 0; i < nwatch; i++) {

@@ -370,7 +370,7 @@ static void placeholder_rows(void *ud, int cols)
 {
     (void)ud;
     (void)cols;
-    /* two rows of cells carrying image id 0x010203 in their foreground */
+
     for (int r = 0; r < 2; r++)
         ui_put("\x1b[38;2;1;2;3m\xf4\x8e\xbb\xae\xf4\x8e\xbb\xae\x1b[39m\n");
 }
@@ -388,7 +388,7 @@ static void check_image_at_row(struct screen *s)
     set_size(80, 24);
 
     say("one");
-    /* nested inside another item, which is where images actually land */
+
     viewport_item_begin(&(struct viewport_entry){.render = block_with_image, .reflow = 1});
     block_with_image(NULL, 80);
     viewport_item_end();
@@ -408,7 +408,6 @@ static void check_image_at_row(struct screen *s)
                 viewport_image_at(row, col) != 0x010203u)
                 fail("no other cell names an image");
 
-    /* the fixture draws two placeholder cells, so the rest of the row is bare */
     for (int row = 1; row <= 24; row++) {
         if (viewport_image_at(row, 1) != viewport_image_at(row, 2))
             fail("both placeholder cells name the image");
@@ -422,7 +421,6 @@ static void check_image_at_row(struct screen *s)
         fail("a column off the screen names nothing");
 }
 
-/* an image drawn beside text: only the placeholder cells are the image */
 static void image_beside_text(void *ud, int cols)
 {
     (void)ud;
@@ -461,7 +459,6 @@ static void check_image_at_column(struct screen *s)
         fail("the row beside the text names the image");
 }
 
-/* the id 0x010203 is carried in the placeholder cells' foreground */
 static int row_has_image(struct screen *s, int row)
 {
     return strstr(row_text(s, row - 1), "\xf4\x8e\xbb\xae") != NULL;
@@ -524,8 +521,6 @@ static void check_modal_holds_the_screen(struct screen *s)
     if (strstr(row_text(s, 23), "CHROME-prompt"))
         fail("scrolling back takes the prompt off screen");
 
-    /* a modal claims every row: it must show even though the transcript is
-       scrolled back past where the chrome would sit */
     char *rows[3] = {"MODAL-title", "MODAL-body", "MODAL-foot"};
     viewport_chrome_pin(1);
     viewport_chrome(rows, 3, 0, -1);
@@ -538,7 +533,6 @@ static void check_modal_holds_the_screen(struct screen *s)
     if (!seen)
         fail("a modal opened while scrolled back is on screen");
 
-    /* and closing it puts the reader back where they were */
     viewport_chrome_pin(0);
     chrome("CHROME-prompt", NULL);
     redraw(s);

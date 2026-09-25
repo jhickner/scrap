@@ -288,4 +288,7 @@ clean:
 	rm -f src/*.o src/*.d src/vendor/*.o src/vendor/*.d $(BIN) \
 	      src/*.o.tmp src/vendor/*.o.tmp
 
-.PHONY: all install clean check FORCE manual tests
+strip-comments:
+	stripcomments -i -x vendor src tests tools
+
+.PHONY: all install clean check FORCE manual tests strip-comments

@@ -355,8 +355,6 @@ static int draw_codex_tool(const cJSON *ev, const char *cwd)
     return 1;
 }
 
-/* counts the turns in the file and reports where the last TURNS_MAX of them
-   start, so the replay reads the tail rather than the whole file again */
 static int count_turns(FILE *f, long *from)
 {
     char   *line = NULL;

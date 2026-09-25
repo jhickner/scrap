@@ -113,8 +113,6 @@ static int index_from_git(struct index *ix, const char *root)
     if (!text_shell_quote(root, quoted, sizeof quoted))
         return 0;
 
-    /* -z with quotePath off: a path with non-ASCII in it comes back whole,
-       rather than C-quoted and unusable. */
     char cmd[4300];
     if (snprintf(cmd, sizeof cmd,
                  "git -c core.quotePath=false -C %s ls-files -z --cached --others "

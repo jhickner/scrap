@@ -26,7 +26,6 @@
 #include "text.h"
 #include "terminalrun.h"
 
-/* the ceiling on an $EDITOR round trip */
 #define EDIT_MAX_BYTES (1u << 22)
 
 struct prompt {
@@ -88,8 +87,7 @@ struct prompt {
     void        *discard_ud;
     int          stopped;
     int          frame_ok;
-    /* the live transcription span in the buffer: its text and byte offset. Sized for a
-       held dictation, which accumulates whole utterances before it is sent */
+
     char         preview[8704];
     int          preview_at;
     int          preview_taken;
@@ -269,9 +267,7 @@ static void emit_input(struct prompt *p, int rows)
                 ui_esc(seq);
                 open = seq;
             }
-            /* The terminal cursor has to move through every changed row while
-               the viewport paints. Draw the caret into this row so it stays
-               put while a spinner elsewhere is arriving in pieces. */
+
             if (caret)
                 ui_esc("\x1b[7m");
             put_codepoint(cp);
@@ -781,8 +777,7 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             return KEY_OK;
         }
         if (ev->cp == KEY_CTRL('L')) {
-            /* also the way back from a screen the terminal lost: every row is
-               written again rather than the difference from what was drawn */
+
             viewport_forget();
             repaint(p);
             if (live)
@@ -1083,12 +1078,7 @@ static char *read_loop(struct prompt *p)
         }
 
         int animating = !resizing && p->animate_busy && p->animate_busy(p->animate_ud);
-        /* Nothing to read from is the usual reason to wait forever; work that
-           has to be timed rather than woken is the exception. */
-        /* Not !animating: a spinning turn is exactly when a session runs the
-           command that asks this instance to spawn, and that request is only
-           served from idle_render. Gating polling on the spinner deadlocks the
-           turn against its own dispatch until the user interrupts it. */
+
         int polling = !resizing && p->idle_poll && p->idle_poll(p->idle_ud);
         int wait = resizing      ? TTY_RESIZE_SETTLE_MS
                    : animating   ? SPIN_FRAME_MS
@@ -1152,8 +1142,6 @@ char *prompt_read(struct prompt *p)
     return out;
 }
 
-/* the copy of words closest to where they were last put, when text typed
-   around them has moved them or the same words appear twice */
 static const char *nearest(const char *line, const char *words, int was)
 {
     const char *best = NULL;
@@ -1188,7 +1176,7 @@ void prompt_set_preview(struct prompt *p, const char *text)
         if (at < 0 || at + len > (int)strlen(line) ||
             memcmp(line + at, p->preview, (size_t)len)) {
             const char *found = nearest(line, p->preview, at);
-            /* text typed between the separator and the words leaves the words whole */
+
             if (!found && p->preview[0] == ' ' && p->preview[1]) {
                 found = nearest(line, p->preview + 1, at);
                 if (found)
@@ -1197,9 +1185,7 @@ void prompt_set_preview(struct prompt *p, const char *text)
             if (found) {
                 at = (int)(found - line);
             } else {
-                /* the words were edited by hand; that edit comes back folded
-                   into this text, so it replaces the line rather than landing
-                   beside what is left of them */
+
                 at = 0;
                 len = (int)strlen(line);
             }
@@ -1216,7 +1202,7 @@ void prompt_set_preview(struct prompt *p, const char *text)
     }
     if (!len && !next[0])
         return;
-    /* the same words again leave the line and the caret as they are */
+
     const char *same = (int)strlen(next) == len ? next
                      : next[0] == ' ' && (int)strlen(next + 1) == len ? next + 1
                                                                       : NULL;
@@ -1228,7 +1214,7 @@ void prompt_set_preview(struct prompt *p, const char *text)
 
     int cursor = p->repl.cursor;
     repl_replace_range(&p->repl, at, at + len, next);
-    /* Updating speech must not pull a caret out of surrounding typed text. */
+
     if (len && cursor < at)
         p->repl.cursor = cursor;
     else if (len && cursor > at + len)
@@ -1266,7 +1252,7 @@ int prompt_claim_preview(struct prompt *p, const char *text)
         found = at;
     if (!found)
         return 0;
-    /* the separator set_preview put before the words is part of the preview */
+
     int sep = found > line && found[-1] == ' ';
     size_t len = strlen(text) + (size_t)sep;
     if (len >= sizeof p->preview)
@@ -1285,9 +1271,7 @@ void prompt_insert(struct prompt *p, const char *text)
         return;
     int cursor = p->repl.cursor;
     int len = (int)strlen(p->preview);
-    /* a line that lands while the next words are previewed goes where they
-       stand, whatever was typed around them: the preview is what was said
-       after it */
+
     int at = len ? p->preview_at : cursor;
     p->repl.cursor = at;
     if (at > 0) {

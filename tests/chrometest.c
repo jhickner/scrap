@@ -131,8 +131,6 @@ static void check_queued(struct prompt *p, struct screen *s)
         fail("a queued line that was cut short says so");
 }
 
-/* Exercise the actual modal reader through a terminal, including a quit
-   signal that previously left it spinning without reading any more keys. */
 static void check_confirmation(const char *input, int quit, int expected)
 {
     int master, ready[2];

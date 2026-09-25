@@ -183,7 +183,6 @@ static int cli_catalogs(void)
     snprintf(rm, sizeof rm, "rm -rf %s", home);
     (void)system(rm);
 
-    /* With the caches gone the static lists carry the picker. */
     items = NULL;
     n = models_for("claude", &items);
     if (!has_label(items, n, "claude-opus-5-5"))

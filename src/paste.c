@@ -89,7 +89,6 @@ int paste_image(char *out, size_t size)
 
 #define CHUNK 4096
 
-/* the same ceiling tty.c holds a bracketed paste to */
 #define PASTE_MAX (8u << 20)
 
 char *paste_text(void)

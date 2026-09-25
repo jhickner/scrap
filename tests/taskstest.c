@@ -46,8 +46,6 @@ static void labels(const char *desc, const char *want)
     expect_text(got, want, desc);
 }
 
-/* The work a subagent does comes up the same stream as the session's own, told
-   apart only by the call that started it. */
 static void by_parent(void)
 {
     struct tasktab t;
@@ -61,12 +59,11 @@ static void by_parent(void)
     expect(tasks_by_parent(&t, "toolu_Z") == NULL, 1, "a call that started none");
     expect(tasks_by_parent(&t, "") == NULL, 1, "no id is not a match");
 
-    /* filler words carry nothing; a word goes in whole or not at all */
     labels("Read the battery state", "read battery");
     labels("Watch the network come back", "watch network");
     labels("Run echo command and report output", "run echo");
     labels("Investigate", "investigate");
-    /* nothing to trim to but the limit when the first word alone overruns it */
+
     labels("Extraordinarily long single word here", "extraordinaril");
 }
 
@@ -76,8 +73,6 @@ static const struct task *tool(struct tasktab *t, const char *name, const char *
     return tasks_note(t, &ev, NULL);
 }
 
-/* A backend that reports the life cycle: one entry per task, a line only when
-   its state changes, and the end of the work is knowable. */
 static void lifecycle(void)
 {
     struct tasktab t;
@@ -112,8 +107,6 @@ static void lifecycle(void)
     expect(repeat, 1, "a task reporting after the end is a repeat");
 }
 
-/* A backend with no life cycle: the spawn call is all there is, so the entries
-   never close and nothing may wait on them. */
 static void inferred(void)
 {
     struct tasktab t;
@@ -128,15 +121,12 @@ static void inferred(void)
     expect(tasks_running(&t), 0, "an inferred task has no open state to report");
     expect(tasks_pending(&t), 0, "and nothing waits on it");
 
-    /* once the backend reports a life cycle, the guess is off */
     life(&t, "t9", "running", "the real thing", NULL);
     expect(tool(&t, "Task", "{\"description\":\"another\"}") == NULL, 1,
            "spawn calls are ignored once life cycle arrives");
     expect(tasks_count(&t), 2, "no entry invented for it");
 }
 
-/* A full table gives up finished entries first: what is still running is what a
-   caller waiting on the work needs. */
 static void eviction(void)
 {
     struct tasktab t;

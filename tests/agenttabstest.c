@@ -63,7 +63,6 @@ int main(void)
     setenv("TMUX_PANE", "%42", 1);
     agenttabs_begin();
 
-    /* Two sessions in one process, as tabs in one window are. */
     int one = 1, two = 2;
 
     char agents[512], first[640], second[640];
@@ -94,8 +93,6 @@ int main(void)
         return 1;
     }
 
-    /* A switched backend takes the record's name with it, and leaves the
-     * previous provider's quota behind. */
     agenttabs_publish(&two, "claude", "working", NULL);
     if (!check_record(second, "claude", "working", -1, NULL)) {
         fputs("agenttabstest: switching backends kept the old quota\n", stderr);
@@ -112,7 +109,6 @@ int main(void)
         return 1;
     }
 
-    /* The freed slot is reused rather than growing the table. */
     int three = 3;
     agenttabs_publish(&three, "grok", "working", NULL);
     if (!check_record(first, "grok", "working", -1, NULL)) {

@@ -43,7 +43,6 @@ static int show_all;
 
 #define KEY_CTRL(c) ((c) & 0x1f)
 
-
 #define MAX_ROWS 128
 
 enum row_kind {
@@ -188,8 +187,6 @@ static void live_rows(struct row *rows, int *n, const struct live_session *live,
     }
 }
 
-/* a row nests under its parent only when the parent is in the same directory
-   group, so the cwd column still describes every row under it */
 static int in_group(const struct row *in, int n, const char *group, const char *id)
 {
     for (int i = 0; i < n; i++)
@@ -223,8 +220,6 @@ static void note_parent(struct row *r)
     snprintf(r->detail, sizeof r->detail, "%s", said);
 }
 
-/* The parent file is hand-editable, so a cycle in it must not hang the list:
-   a row is emitted once and the walk stops at four deep. */
 #define NEST_MAX 4
 
 static void emit_tree(const struct row *in, int n, char *used, struct row *out,
@@ -281,7 +276,6 @@ static int group_rows(const struct row *in, int n, struct row *out,
 
         emit_tree(in, n, used, out, heading, &m, max, group, NULL, 0);
 
-        /* whatever a cycle or the depth cap stranded still has to be listed */
         for (int i = 0; i < n; i++) {
             if (used[i] || strcmp(in[i].cwd, group) != 0)
                 continue;
@@ -480,8 +474,6 @@ static int new_custom(void)
     }
 }
 
-/* the new-session row opens this: a session on the defaults, or one whose
-   backend, model and opening prompt are asked for */
 static int open_new(void)
 {
     const struct pick_item how[] = {
@@ -495,7 +487,6 @@ static int open_new(void)
     return which == 1 ? new_custom() : new_default();
 }
 
-/* the working directory of the selected row, or of the current session */
 static const char *row_cwd(const struct row *r, const struct live_session *live)
 {
     if (r->kind == ROW_TAB) {

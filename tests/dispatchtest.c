@@ -234,7 +234,6 @@ int main(void)
     if (read_res(dir, "titled"))
         fail("spawn reply waits for the session id");
 
-    /* the backend reports its id; the held reply carries it */
     snprintf(spawned_id, sizeof spawned_id, "sess-1");
     poll_once();
     expect_res(dir, "titled", "\"session\":\"sess-1\"", "spawn reply carries the session id");
@@ -335,7 +334,6 @@ int main(void)
         fail("close by id closes that session");
     expect_res(dir, "close-id", "\"session\":\"sess-1\"", "close reply names the session");
 
-    /* the session is gone now: further requests for its id must not land */
     reset_case();
     drop_req(dir, "dead-send", "{\"send\":\"too late\",\"session\":\"sess-1\"}");
     drop_req(dir, "dead-close", "{\"close\":\"sess-1\"}");
@@ -344,7 +342,6 @@ int main(void)
         fail("a finished session takes nothing");
     expect_res(dir, "dead-send", "no such session", "send to a finished session is an error");
     expect_res(dir, "dead-close", "no such session", "close of a finished session is an error");
-
 
     {
         char path[512];

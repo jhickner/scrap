@@ -5,16 +5,13 @@
 #include "tty.h"
 #include "vendor/repl.h"
 
-/* A line editor in a box: a Repl, the replframe it renders into, the width it
-   wraps at and the window of rows a host has room to paint. Every input in mux
-   except the main prompt is one of these. */
 struct replbox {
     Repl             repl;
     struct replframe frame;
-    int              cols;   /* wrap width, gutter included */
-    int              rows;   /* rows the frame holds */
-    int              top;    /* first row painted */
-    int              fresh;  /* the frame matches the repl */
+    int              cols;
+    int              rows;
+    int              top;
+    int              fresh;
 };
 
 void replbox_init(struct replbox *b, const ReplCommand *cmds, int n);
@@ -27,8 +24,6 @@ void replbox_scroll(struct replbox *b, int room);
 int  replbox_top(const struct replbox *b);
 void replbox_paint_row(const struct replbox *b, int y, int gutter, int focused);
 
-/* 0 for a key it did not take, so the host keeps enter, escape and its own
-   bindings. Does not free ev->text. */
 int replbox_key(struct replbox *b, const tty_event *ev);
 
 const char *replbox_line(const struct replbox *b);

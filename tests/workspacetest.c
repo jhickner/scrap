@@ -257,8 +257,6 @@ int main(void)
         if (a.running)
             fail("restoring unsent input does not submit it");
 
-        /* Voice must finish preserving its preview in the departing prompt
-           before its draft is stashed or the destination is made current. */
         workspace_show(1);
         leave_prompt = prompt;
         leave_session = workspace_current();

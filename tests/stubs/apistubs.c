@@ -84,7 +84,6 @@ int dispatch_spawn(const char *backend, const char *model, const char *effort, c
     return ntabs++;
 }
 
-/* an idle tab starts the turn at once, as workspace_send does */
 int dispatch_send(int at, const char *line)
 {
     struct session *s = workspace_at(at);
@@ -115,4 +114,3 @@ void end_turn(struct session *s, const char *reply, int interrupted)
         apicore_turn_begin(s);
     }
 }
-

@@ -88,8 +88,6 @@ int jev_set_backend(const char *name)
 
 const char *jev_backend(void) { return backend; }
 
-/* the key is an API key and stays in the environment; a login shell is asked
-   for it when mux was not started from one */
 const char *jev_key(void)
 {
     if (key_loaded)
@@ -415,8 +413,7 @@ const char *jev_strip_prefix(const char *submitted, const char *text)
     for (int i = 0; i < cmp; i++)
         if (!strcmp(a[i], b[i]))
             same++;
-    /* the recognizer revises words it has already emitted, so a fifth of the
-       prefix may read differently and still be the same speech */
+
     if (same * 5 < cmp * 4)
         return text;
     const char *p = text;

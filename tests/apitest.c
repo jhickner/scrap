@@ -16,7 +16,6 @@ static void fail(const char *what)
     failures++;
 }
 
-/* captured replies and events */
 static struct apicall *last;
 static int             replies;
 static char            events[512][40];
@@ -88,7 +87,6 @@ int main(void)
 {
     apicore_init(on_reply, on_emit);
 
-    /* validation */
     if (request("POST", "/v1/agents", NULL, "{\"backend\":\"nope\",\"prompt\":{\"text\":\"x\"}}") != 400 ||
         strcmp(err_code(), "unknown_backend"))
         fail("unknown backend is 400");
@@ -103,7 +101,6 @@ int main(void)
         fail("a CLI that does not start is 502");
     spawn_fails = 0;
 
-    /* create: first turn starts at once; env reaches the spawn */
     if (request("POST", "/v1/agents", NULL,
                 "{\"backend\":\"claude\",\"model\":\"opus\",\"title\":\"t\",\"cwd\":\"/tmp\","
                 "\"prompt\":{\"text\":\"first\"},\"env\":{\"DLV_KEY\":\"k1\"}}") != 201)
@@ -117,7 +114,6 @@ int main(void)
     if (!saw("status", "\"run_id\":\"run_1\",\"status\":\"running\"") || !saw("agent", "\"busy\""))
         fail("create emits run and agent status");
 
-    /* events route to the running run */
     backend_event ev = {.kind = BACKEND_EV_ASSISTANT, .text = "working on it"};
     apicore_event(NULL, tabs[0], &ev);
     backend_event tool = {.kind = BACKEND_EV_TOOL, .name = "Bash", .input_json = "{\"command\":\"ls\"}"};
@@ -137,7 +133,6 @@ int main(void)
         fail("tool_result text is emitted in full");
     cJSON_Delete(rj);
 
-    /* the model the CLI resolves is reported as the agent's model */
     backend_event init = {.kind = BACKEND_EV_INIT, .name = "claude-opus-5-5"};
     apicore_event(NULL, tabs[0], &init);
     if (!saw("agent", "\"model\":\"claude-opus-5-5\""))
@@ -146,7 +141,6 @@ int main(void)
     if (request("GET", "/v1/agents/ag_1", NULL, NULL) != 200 || strcmp(out_str("model", NULL), "claude-opus-5-5"))
         fail("the agent reads back its resolved model");
 
-    /* a second run queues behind the first */
     if (request("POST", "/v1/agents/ag_1/runs", NULL, "{\"prompt\":{\"text\":\"second\"}}") != 201 ||
         strcmp(out_str("status", NULL), "queued"))
         fail("a run sent mid-turn is queued");
@@ -160,7 +154,6 @@ int main(void)
     if (strcmp(out_str("status", NULL), "finished") || strcmp(out_str("result", NULL), "all done"))
         fail("run_1 reads back finished with its result");
 
-    /* cancel: queued is dropped from the tab queue, running is interrupted */
     request("POST", "/v1/agents/ag_1/runs", NULL, "{\"prompt\":{\"text\":\"third\"}}");
     if (tabs[0]->nqueue != 1)
         fail("third is queued in the tab");
@@ -176,14 +169,12 @@ int main(void)
     if (request("POST", "/v1/agents/ag_1/runs/run_2/cancel", NULL, NULL) != 409)
         fail("cancelling a finished run is 409");
 
-    /* a failed turn */
     request("POST", "/v1/agents/ag_1/runs", NULL, "{\"prompt\":{\"text\":\"fail\"}}");
     clear_events();
     end_turn(tabs[0], NULL, 0);
     if (!saw("error", "\"message\":\"boom\"") || !saw("status", "\"status\":\"error\""))
         fail("a failed turn emits error");
 
-    /* someone types in the tab */
     tabs[0]->running = 1;
     apicore_turn_begin(tabs[0]);
     request("GET", "/v1/agents/ag_1", NULL, NULL);
@@ -194,7 +185,6 @@ int main(void)
         fail("a typed turn is recorded as a tab run");
     end_turn(tabs[0], "typed reply", 0);
 
-    /* create held until the backend reports an id */
     hide_ids = 1;
     if (request("POST", "/v1/agents", NULL, "{\"prompt\":{\"text\":\"slow\"}}") != 0)
         fail("create is held while the session has no id");
@@ -204,7 +194,6 @@ int main(void)
     if (!last || last->status != 201 || strcmp(out_str("agent", "session_id"), "late-id"))
         fail("the held create replies once the id arrives");
 
-    /* delete rules */
     in_view = 1;
     end_turn(tabs[1], "ok", 0);
     if (request("DELETE", "/v1/agents/ag_2", NULL, NULL) != 409 || strcmp(err_code(), "agent_in_view"))
@@ -220,7 +209,6 @@ int main(void)
     if (request("POST", "/v1/agents/ag_2/runs", NULL, "{\"prompt\":{\"text\":\"x\"}}") != 409)
         fail("an exited agent takes no runs");
 
-    /* a tab closed elsewhere */
     request("POST", "/v1/agents/ag_1/runs", NULL, "{\"prompt\":{\"text\":\"orphan\"}}");
     workspace_close(0);
     clear_events();
@@ -228,7 +216,6 @@ int main(void)
     if (!saw("agent", "\"ag_1\",\"status\":\"exited\"") || !saw("status", "\"status\":\"error\""))
         fail("a closed tab exits the agent and fails its run");
 
-    /* listing, capacity, routes */
     request("GET", "/v1/agents", NULL, NULL);
     if (cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(call.out, "agents")) != 0)
         fail("exited agents are hidden by default");
@@ -245,7 +232,6 @@ int main(void)
     if (cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(call.out, "usage")) != 0)
         fail("capacity usage is empty before any reading");
 
-    /* subscription usage */
     clear_events();
     backend_rate_limit limit = {.available = 1, .used_percent = 42, .resets_at = 1790000000, .window_minutes = 300};
     apicore_usage("claude", &limit);

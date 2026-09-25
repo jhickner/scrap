@@ -68,8 +68,8 @@ static int    chrome_top = -1;
 
 static int held;
 static int active;
-static int home_row, home_col;   /* main-screen cursor when the alt screen went up */
-static int home_rows, home_cols; /* screen size at that moment */
+static int home_row, home_col;
+static int home_rows, home_cols;
 static int handed;
 static int suspended;
 static int scrolled;
@@ -85,15 +85,11 @@ static int painted_cols;
 static unsigned anchor_id;
 static int      anchor_skip;
 
-/* a modal owns the whole screen, so the transcript under it holds still: the
-   scroll position is put aside and handed back when the modal goes */
 static int      pinned;
 static int      pin_scrolled;
 static unsigned pin_anchor;
 static int      pin_skip;
 
-/* every input to window_geometry bumps this; the cached geometry carries the
-   epoch it was measured at */
 static unsigned layout_epoch = 1;
 
 static const void *local_owner;
@@ -139,8 +135,6 @@ void viewport_sync_placeholders(int on)
     sync_placeholders = !!on;
 }
 
-/* a frame goes out in one write: split over several, the terminal draws the
-   halves as they land, and under tmux there is no synchronized update to hide it */
 static char  *batch;
 static size_t batch_len, batch_cap;
 static int    batching;
@@ -242,8 +236,6 @@ int viewport_item_last(unsigned mark)
     return mark && !open_len && nitems > 0 && items[nitems - 1].id == mark;
 }
 
-/* the newest item of this kind on the screen in front, 0 when there is none:
-   a mark is only good for the screen it was made on, and every tab has one */
 unsigned viewport_item_find(const char *kind)
 {
     if (!kind)
@@ -514,9 +506,6 @@ static void loose_row(const char *body, size_t n)
     fclose(f);
 }
 
-/* the buffer is read back as a C string, so the length reset has to move the
-   terminator with it -- an item that renders nothing would otherwise inherit
-   the bytes of the one before it */
 static void open_reset(void)
 {
     open_len = 0;
@@ -995,7 +984,7 @@ static int shown_rows, shown_cols;
 
 static int placeholder_row(const char *s)
 {
-    static const char placeholder[] = "\xf4\x8e\xbb\xae"; /* U+10EEEE */
+    static const char placeholder[] = "\xf4\x8e\xbb\xae";
     return strstr(s, placeholder) != NULL;
 }
 
@@ -1099,14 +1088,9 @@ static void row_into_frame(struct frame *f, const char *s, int W)
 
 static char *blank_row(void) { return strdup(""); }
 
-/* The id of the image whose placeholder cell sits at a painted screen cell.
-   Images render inside whatever item encloses them - an assistant's markdown
-   block, usually - so the item under a click does not name one. The cell does:
-   in placeholder mode the id travels in its foreground colour. A row can hold
-   text beside the image, so the column has to match as well as the row. */
 uint32_t viewport_image_at(int row, int col)
 {
-    static const char placeholder[] = "\xf4\x8e\xbb\xae"; /* U+10EEEE */
+    static const char placeholder[] = "\xf4\x8e\xbb\xae";
 
     int at = row - 1;
     if (at < 0 || at >= shown.n || col < 1)
@@ -1266,8 +1250,6 @@ static int shift_score(int body, int k)
     return score;
 }
 
-/* prefix counts of the built rows a shift can score on: no shift k can beat a
-   score the rows in its overlap cannot reach */
 static int *shift_reach(int body)
 {
     static int *reach;
@@ -1333,12 +1315,6 @@ void viewport_flush(void)
         viewport_paint();
 }
 
-/* The bytes of a frame can reach the terminal in pieces, and tmux draws each
-   piece as it comes, so a row erased ahead of its text shows as a blank one
-   in between. Write the text over what is there and erase the tail after.
-   A row that erases on its own, to fill a background, or that spans the
-   width, where the cursor would be left on its last cell, keeps the erase
-   in front. */
 static void put_row(const char *row, int W)
 {
     if (!strncmp(row, "\x1b[K", 3))
@@ -1443,8 +1419,7 @@ void viewport_paint(void)
     batch_begin();
     if (sync)
         direct_str("\x1b[?2026h");
-    /* The prompt carries a painted caret. Keep the terminal's own cursor
-       hidden between frames so it cannot flash or travel during a redraw. */
+
     direct_str(UI_CURSOR_HIDE);
     direct_str("\x1b[?7l");
 
@@ -1599,10 +1574,6 @@ void viewport_scroll_end(void)
     viewport_paint();
 }
 
-/* The terminal keeps one saved-cursor slot for the alternate screen, and any
-   child that switches screens itself overwrites it, so the position it hands
-   back on the way out can be somewhere up the page. Remember where the shell
-   left the cursor and go back there explicitly. */
 static void home_mark(void)
 {
     int row = 0, col = 0;
@@ -1621,8 +1592,7 @@ static void home_mark(void)
 
 static void home_return(void)
 {
-    /* a resize reflows the main screen and moves the shell's line; the
-       terminal's own restore tracks that, the saved row does not */
+
     if (home_row <= 0 || home_col <= 0 || home_rows != tty_rows() ||
         home_cols != tty_screen_columns())
         return;
@@ -1656,8 +1626,7 @@ void viewport_end(void)
     suspended = 0;
     direct_str(MOUSE_OFF);
     direct_str(UI_CURSOR_SHOW);
-    /* while suspended the screen is already the main one, with whatever the
-       external command printed below the home row */
+
     if (!was_suspended) {
         tty_keyboard_off();
         direct_str(UI_ALT_OFF);
