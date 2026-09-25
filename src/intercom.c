@@ -1,0 +1,665 @@
+#include "intercom.h"
+
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "dispatch.h"
+#include "files.h"
+#include "kvlog.h"
+#include "livelist.h"
+#include "sessionlist.h"
+#include "sessionload.h"
+#include "text.h"
+#include "title.h"
+#include "transcript.h"
+#include "vendor/agents/backend.h"
+#include "vendor/cJSON.h"
+
+#define GREP_MAX    (4L * 1024 * 1024)
+#define INLINE_MAX  4000
+#define REPLY_WAIT  10
+#define READ_TURNS  3
+#define READ_BYTES  16000
+
+static const char *const ADJECTIVES[] = {
+    "amber", "bold", "brisk", "calm", "clear", "coral", "crisp", "dusty", "eager", "fair",
+    "fleet", "gentle", "glad", "golden", "green", "hazel", "ivory", "jade", "keen", "lucid",
+    "mellow", "misty", "noble", "olive", "pale", "quiet", "rapid", "rosy", "rustic", "sandy",
+    "sharp", "silver", "sleek", "solid", "steady", "swift", "tidy", "vivid", "warm", "wise",
+};
+
+static const char *const NOUNS[] = {
+    "badger", "bear", "cedar", "comet", "crane", "delta", "eagle", "ember", "falcon", "fern",
+    "finch", "fox", "harbor", "hawk", "heron", "lark", "lynx", "maple", "marten", "meadow",
+    "moth", "otter", "owl", "pine", "quail", "raven", "reef", "ridge", "river", "robin",
+    "sparrow", "spruce", "stone", "swan", "thrush", "tiger", "vale", "willow", "wolf", "wren",
+};
+
+#define COUNT(a) (sizeof(a) / sizeof(a)[0])
+
+static int registry_path(char *out, size_t size)
+{
+    return path_config_file(out, size, "names");
+}
+
+static void field_at(const char *row, int index, char *out, size_t size)
+{
+    for (int i = 0; i < index && row; i++) {
+        row = strchr(row, '\t');
+        if (row)
+            row++;
+    }
+    size_t n = row ? strcspn(row, "\t") : 0;
+    snprintf(out, size, "%.*s", (int)n, row ? row : "");
+}
+
+int intercom_name_valid(const char *name)
+{
+    size_t n = name ? strlen(name) : 0;
+    if (!n || n >= INTERCOM_NAME_MAX)
+        return 0;
+    for (const char *p = name; *p; p++)
+        if (!isalnum((unsigned char)*p) && *p != '-' && *p != '_')
+            return 0;
+    return 1;
+}
+
+int intercom_name_taken(const char *name, const char *id)
+{
+    char path[4200];
+    if (registry_path(path, sizeof path)) {
+        struct kvlog_map *m = kvlog_fresh(path);
+        for (int i = 0; i < m->n; i++) {
+            char have[INTERCOM_NAME_MAX];
+            field_at(m->ents[i].val, 0, have, sizeof have);
+            if (!strcmp(have, name) && (!id || strcmp(m->ents[i].key, id)))
+                return 1;
+        }
+    }
+    struct live_session *live = NULL;
+    int                  n = livelist_load(&live);
+    int                  taken = 0;
+    for (int i = 0; i < n && !taken; i++)
+        taken = !strcmp(live[i].name, name) && (!id || strcmp(live[i].id, id));
+    free(live);
+    return taken;
+}
+
+void intercom_name_new(char *out, size_t size)
+{
+    for (int tries = 0; tries < 64; tries++) {
+        snprintf(out, size, "%s-%s",
+                 ADJECTIVES[arc4random_uniform(COUNT(ADJECTIVES))],
+                 NOUNS[arc4random_uniform(COUNT(NOUNS))]);
+        if (!intercom_name_taken(out, NULL))
+            return;
+    }
+    snprintf(out, size, "session-%u", arc4random_uniform(100000));
+}
+
+int intercom_name_of(const char *id, char *out, size_t size)
+{
+    char path[4200], row[8400];
+    if (!id || !*id || !registry_path(path, sizeof path) ||
+        !kvlog_lookup(path, id, row, sizeof row))
+        return 0;
+    field_at(row, 0, out, size);
+    return out[0] != '\0';
+}
+
+void intercom_register(const char *id, const char *name, const char *backend,
+                       const char *cwd)
+{
+    char path[4200], row[8400];
+    if (!id || !*id || !intercom_name_valid(name) || !registry_path(path, sizeof path))
+        return;
+    snprintf(row, sizeof row, "%s\t%s\t%s", name, backend ? backend : "", cwd ? cwd : "");
+    char have[8400];
+    if (kvlog_lookup(path, id, have, sizeof have) && !strcmp(have, row))
+        return;
+    kvlog_append(path, id, row);
+}
+
+char *intercom_note(const char *name)
+{
+    if (!name || !*name)
+        return NULL;
+    return text_dsprintf(
+        "This session is @%s in mux. Other mux sessions are reachable with the `mux` "
+        "command, run through Bash:\n"
+        "- `mux ls [--live] [--cwd DIR] [QUERY]` lists sessions, newest first; `--cwd .` "
+        "means this directory; QUERY also searches transcript text.\n"
+        "- `mux read TARGET [-n TURNS] [--bytes N]` prints a session's recent turns.\n"
+        "- `mux send TARGET TEXT` sends a message to a live session.\n"
+        "- `mux open TARGET` resumes a past session in a new tab.\n"
+        "TARGET is @name, a session id prefix, or a title. Messages from other sessions "
+        "arrive prefixed `[from @name]`; answer them with `mux send @name ...` only when "
+        "an answer is needed.\n"
+        "To coordinate with a live session: `mux ls --live --cwd .`, then `mux read "
+        "@name`, then `mux send @name ...`. To recover old context: `mux ls QUERY`, then "
+        "`mux read TARGET`.",
+        name);
+}
+
+int intercom_complete(void *ctx, const char *token, ReplCandidate *out, int max)
+{
+    int n = 0;
+    if (!strpbrk(token, "/.")) {
+        struct live_session *live = NULL;
+        int                  count = livelist_load(&live);
+        for (int i = 0; i < count && n < max; i++) {
+            if (!live[i].name[0] || text_fuzzy_score(live[i].name, token) < 0)
+                continue;
+            snprintf(out[n].text, REPL_CAND_TEXT, "%s", live[i].name);
+            snprintf(out[n].desc, REPL_CAND_DESC, "%s", live[i].title);
+            n++;
+        }
+        free(live);
+    }
+    int files = n < max ? files_complete(ctx, token, out + n, max - n) : 0;
+    return n + (files > 0 ? files : 0);
+}
+
+struct entry {
+    char name[INTERCOM_NAME_MAX];
+    char id[128];
+    char backend[32];
+    char cwd[1024];
+    char title[200];
+    char status[16];
+    long ts;
+    long pid;
+    int  live;
+};
+
+struct entries {
+    struct entry *e;
+    int           n, cap;
+};
+
+static struct entry *find_id(struct entries *l, const char *id)
+{
+    for (int i = 0; i < l->n; i++)
+        if (!strcmp(l->e[i].id, id))
+            return &l->e[i];
+    return NULL;
+}
+
+static void fill(char *dst, size_t size, const char *src)
+{
+    if (!dst[0] && src && *src)
+        snprintf(dst, size, "%s", src);
+}
+
+static void add(struct entries *l, const struct entry *e)
+{
+    if (!e->id[0])
+        return;
+    struct entry *have = find_id(l, e->id);
+    if (have) {
+        fill(have->name, sizeof have->name, e->name);
+        fill(have->title, sizeof have->title, e->title);
+        fill(have->backend, sizeof have->backend, e->backend);
+        fill(have->cwd, sizeof have->cwd, e->cwd);
+        return;
+    }
+    if (l->n == l->cap) {
+        int           cap = l->cap ? l->cap * 2 : 64;
+        struct entry *grown = realloc(l->e, (size_t)cap * sizeof *grown);
+        if (!grown)
+            return;
+        l->e = grown;
+        l->cap = cap;
+    }
+    l->e[l->n++] = *e;
+}
+
+static void add_records(struct entries *l, const struct live_session *v, int n, int live)
+{
+    for (int i = 0; i < n; i++) {
+        struct entry e = {0};
+        snprintf(e.name, sizeof e.name, "%s", v[i].name);
+        snprintf(e.id, sizeof e.id, "%s", v[i].id);
+        snprintf(e.backend, sizeof e.backend, "%s", v[i].backend);
+        snprintf(e.cwd, sizeof e.cwd, "%s", v[i].cwd);
+        snprintf(e.title, sizeof e.title, "%s", v[i].title);
+        snprintf(e.status, sizeof e.status, "%s", live ? v[i].status : "closed");
+        e.ts = v[i].ts;
+        e.pid = v[i].pid;
+        e.live = live;
+        add(l, &e);
+    }
+}
+
+static long transcript_time(const struct entry *e)
+{
+    char        path[4096];
+    struct stat st;
+    if (sessionload_path(e->backend, e->cwd, e->id, path, sizeof path) &&
+        stat(path, &st) == 0)
+        return (long)st.st_mtime;
+    return 0;
+}
+
+static int newest(const void *a, const void *b)
+{
+    const struct entry *x = a, *y = b;
+    if (x->live != y->live)
+        return y->live - x->live;
+    return x->ts < y->ts ? 1 : x->ts > y->ts ? -1 : 0;
+}
+
+static void add_past(struct entries *l, const char *cwd)
+{
+    for (const char *const *b = backend_names(); *b; b++) {
+        if (!sessionlist_available(*b))
+            continue;
+        struct past_session *past = NULL;
+        int                  count = sessionlist_load(*b, cwd, NULL, &past);
+        for (int i = 0; i < count; i++) {
+            struct entry e = {0};
+            snprintf(e.id, sizeof e.id, "%s", past[i].id);
+            snprintf(e.backend, sizeof e.backend, "%s", *b);
+            snprintf(e.cwd, sizeof e.cwd, "%s", cwd);
+            snprintf(e.title, sizeof e.title, "%s", past[i].label);
+            snprintf(e.status, sizeof e.status, "closed");
+            e.ts = (long)past[i].modified;
+            add(l, &e);
+        }
+        free(past);
+    }
+}
+
+static void collect(struct entries *l, const char *cwd, int live_only, int up)
+{
+    struct live_session *v = NULL;
+    int                  n = livelist_load(&v);
+    add_records(l, v, n, 1);
+    free(v);
+    if (live_only)
+        return;
+
+    n = livelist_closed_load(&v);
+    add_records(l, v, n, 0);
+    free(v);
+
+    char path[4200];
+    if (registry_path(path, sizeof path)) {
+        struct kvlog_map *m = kvlog_fresh(path);
+        for (int i = m->n - 1; i >= 0; i--) {
+            struct entry e = {0};
+            snprintf(e.id, sizeof e.id, "%s", m->ents[i].key);
+            field_at(m->ents[i].val, 0, e.name, sizeof e.name);
+            field_at(m->ents[i].val, 1, e.backend, sizeof e.backend);
+            field_at(m->ents[i].val, 2, e.cwd, sizeof e.cwd);
+            snprintf(e.status, sizeof e.status, "closed");
+            e.ts = transcript_time(&e);
+            add(l, &e);
+        }
+    }
+
+    char dir[4096];
+    snprintf(dir, sizeof dir, "%s", cwd ? cwd : "");
+    while (dir[0]) {
+        add_past(l, dir);
+        char *slash = strrchr(dir, '/');
+        if (!up || !slash || slash == dir)
+            break;
+        *slash = '\0';
+    }
+
+    for (int i = 0; i < l->n; i++)
+        if (!l->e[i].title[0])
+            title_lookup(l->e[i].id, l->e[i].title, sizeof l->e[i].title);
+    qsort(l->e, (size_t)l->n, sizeof *l->e, newest);
+}
+
+static int contains(const char *hay, const char *needle)
+{
+    size_t n = strlen(needle);
+    for (; *hay; hay++)
+        if (!strncasecmp(hay, needle, n))
+            return 1;
+    return !n;
+}
+
+static int transcript_has(const struct entry *e, const char *query)
+{
+    char path[4096];
+    if (!sessionload_path(e->backend, e->cwd, e->id, path, sizeof path))
+        return 0;
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return 0;
+    char *buf = malloc(GREP_MAX + 1);
+    size_t got = buf ? fread(buf, 1, GREP_MAX, f) : 0;
+    fclose(f);
+    if (!buf)
+        return 0;
+    buf[got] = '\0';
+    int found = contains(buf, query);
+    free(buf);
+    return found;
+}
+
+static int under(const char *cwd, const char *dir)
+{
+    size_t n = strlen(dir);
+    if (n > 1 && dir[n - 1] == '/')
+        n--;
+    return !strncmp(cwd, dir, n) && (cwd[n] == '\0' || cwd[n] == '/');
+}
+
+static const struct entry *resolve(struct entries *l, const char *target)
+{
+    const char *name = target[0] == '@' ? target + 1 : target;
+    for (int i = 0; i < l->n; i++)
+        if (l->e[i].name[0] && !strcmp(l->e[i].name, name))
+            return &l->e[i];
+    if (target[0] == '@')
+        return NULL;
+    size_t n = strlen(target);
+    for (int i = 0; i < l->n; i++)
+        if (!strncmp(l->e[i].id, target, n))
+            return &l->e[i];
+    for (int i = 0; i < l->n; i++)
+        if (contains(l->e[i].title, target))
+            return &l->e[i];
+    return NULL;
+}
+
+static void print_entry(const struct entry *e)
+{
+    char who[INTERCOM_NAME_MAX + 2], where[1024];
+    if (e->name[0])
+        snprintf(who, sizeof who, "@%s", e->name);
+    else
+        snprintf(who, sizeof who, "%.8s", e->id);
+    path_home_relative(e->cwd, where, sizeof where);
+    printf("%-20s %-4s %-8s %s  %s\n", who, e->live ? "live" : "past",
+           e->status[0] ? e->status : "-", where, e->title[0] ? e->title : "untitled");
+}
+
+static int here(char *out, size_t size)
+{
+    return getcwd(out, size) != NULL;
+}
+
+static int cmd_ls(int argc, char **argv)
+{
+    int         live_only = 0;
+    const char *dir = NULL, *query = NULL;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--live"))
+            live_only = 1;
+        else if (!strcmp(argv[i], "--cwd") && i + 1 < argc)
+            dir = argv[++i];
+        else if (!query && argv[i][0] != '-')
+            query = argv[i];
+        else {
+            fprintf(stderr, "usage: mux ls [--live] [--cwd DIR] [QUERY]\n");
+            return 2;
+        }
+    }
+
+    char cwd[4096], real[4096];
+    if (dir) {
+        if (!realpath(dir, real)) {
+            fprintf(stderr, "mux: no such directory: %s\n", dir);
+            return 1;
+        }
+        dir = real;
+    }
+    const char *hint = dir ? dir : here(cwd, sizeof cwd) ? cwd : NULL;
+
+    struct entries l = {0};
+    collect(&l, hint, live_only, 0);
+    for (int i = 0; i < l.n; i++) {
+        const struct entry *e = &l.e[i];
+        if (dir && !under(e->cwd, dir))
+            continue;
+        if (query && !contains(e->name, query) && !contains(e->title, query) &&
+            !contains(e->cwd, query) && strncmp(e->id, query, strlen(query)) &&
+            !transcript_has(e, query))
+            continue;
+        print_entry(e);
+    }
+    free(l.e);
+    return 0;
+}
+
+static const struct entry *lookup(struct entries *l, const char *target)
+{
+    char cwd[4096];
+    collect(l, here(cwd, sizeof cwd) ? cwd : NULL, 0, 1);
+    const struct entry *e = resolve(l, target);
+    if (!e)
+        fprintf(stderr, "mux: no session matches %s\n", target);
+    return e;
+}
+
+static int cmd_read(int argc, char **argv)
+{
+    const char *target = NULL;
+    long        turns = READ_TURNS, bytes = READ_BYTES;
+    int         bad = 0;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-n") && i + 1 < argc)
+            turns = atol(argv[++i]);
+        else if (!strcmp(argv[i], "--bytes") && i + 1 < argc)
+            bytes = atol(argv[++i]);
+        else if (!target)
+            target = argv[i];
+        else
+            bad = 1;
+    }
+    if (bad || !target || turns < 1 || bytes < 1) {
+        fprintf(stderr, "usage: mux read TARGET [-n TURNS] [--bytes N]\n");
+        return 2;
+    }
+
+    struct entries      l = {0};
+    const struct entry *e = lookup(&l, target);
+    if (!e) {
+        free(l.e);
+        return 1;
+    }
+
+    struct transcript t = {0};
+    if (!sessionload_fill(&t, e->backend, e->cwd, e->id) || !t.count) {
+        fprintf(stderr, "mux: no transcript for %s\n", target);
+        transcript_free(&t);
+        free(l.e);
+        return 1;
+    }
+    size_t            first = t.count > (size_t)turns ? t.count - (size_t)turns : 0;
+    struct transcript tail = {t.turns + first, t.count - first, t.count - first};
+    char             *text = transcript_handoff(&tail, (size_t)bytes, NULL);
+    const char       *body = text ? strstr(text, "\n\n") : NULL;
+
+    print_entry(e);
+    printf("id %s, last %zu of %zu turns\n\n%s", e->id, tail.count, t.count,
+           body ? body + 2 : "");
+    free(text);
+    transcript_free(&t);
+    free(l.e);
+    return 0;
+}
+
+static int request(long pid, cJSON *body, char *reply, size_t size)
+{
+    char dir[4200], tmp[4400], req[4400], res[4400];
+    if (!dispatch_dir(dir, sizeof dir))
+        return 0;
+    mkdir(dir, 0700);
+    unsigned tag = arc4random();
+    snprintf(tmp, sizeof tmp, "%s/%ld-%08x.tmp", dir, pid, tag);
+    snprintf(req, sizeof req, "%s/%ld-%08x.req", dir, pid, tag);
+    snprintf(res, sizeof res, "%s/%ld-%08x.res", dir, pid, tag);
+
+    char *json = cJSON_PrintUnformatted(body);
+    FILE *f = json ? fopen(tmp, "w") : NULL;
+    if (!f) {
+        free(json);
+        return 0;
+    }
+    fputs(json, f);
+    free(json);
+    if (fclose(f) != 0 || rename(tmp, req) != 0) {
+        unlink(tmp);
+        return 0;
+    }
+
+    for (int i = 0; i < REPLY_WAIT * 10; i++) {
+        char *got = text_slurp(res, 65536, NULL);
+        if (got) {
+            unlink(res);
+            text_chomp(got);
+            snprintf(reply, size, "%s", got);
+            free(got);
+            return 1;
+        }
+        usleep(100000);
+    }
+    unlink(req);
+    snprintf(reply, size, "{\"error\":\"no answer from mux %ld\"}", pid);
+    return 1;
+}
+
+static int answered(const char *reply, const char *done)
+{
+    cJSON      *o = cJSON_Parse(reply);
+    const char *error = cJSON_GetStringValue(cJSON_GetObjectItem(o, "error"));
+    if (error)
+        fprintf(stderr, "mux: %s\n", error);
+    else
+        printf("%s\n", done);
+    cJSON_Delete(o);
+    return error ? 1 : 0;
+}
+
+static void self_name(char *out, size_t size)
+{
+    out[0] = '\0';
+    const char *file = getenv("MUX_SESSION_FILE");
+    char       *id = file && *file ? text_slurp(file, 4096, NULL) : NULL;
+    if (id) {
+        text_chomp(id);
+        intercom_name_of(id, out, size);
+    }
+    free(id);
+}
+
+static char *spill(const char *text)
+{
+    char dir[4200], path[4400];
+    if (!path_config_subdir(dir, sizeof dir, "intercom"))
+        return NULL;
+    snprintf(path, sizeof path, "%s/%ld-%08x.txt", dir, (long)time(NULL), arc4random());
+    FILE *f = fopen(path, "w");
+    if (!f)
+        return NULL;
+    fputs(text, f);
+    if (fclose(f) != 0)
+        return NULL;
+    return text_dsprintf("The message is %zu bytes, stored in %s; read that file.",
+                         strlen(text), path);
+}
+
+static int cmd_send(int argc, char **argv)
+{
+    if (argc < 3) {
+        fprintf(stderr, "usage: mux send TARGET TEXT\n");
+        return 2;
+    }
+    size_t len = 0;
+    for (int i = 2; i < argc; i++)
+        len += strlen(argv[i]) + 1;
+    char *text = calloc(1, len + 1);
+    if (!text)
+        return 1;
+    for (int i = 2; i < argc; i++) {
+        if (i > 2)
+            strcat(text, " ");
+        strcat(text, argv[i]);
+    }
+
+    struct entries      l = {0};
+    const struct entry *e = lookup(&l, argv[1]);
+    int                 rc = 1;
+    if (e && !e->live)
+        fprintf(stderr, "mux: %s is not live; resume it with `mux open %s`\n", argv[1],
+                argv[1]);
+    else if (e) {
+        char *long_text = strlen(text) > INLINE_MAX ? spill(text) : NULL;
+        char  me[INTERCOM_NAME_MAX], reply[1024] = "";
+        self_name(me, sizeof me);
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "send", long_text ? long_text : text);
+        cJSON_AddStringToObject(o, "session", e->id);
+        if (me[0])
+            cJSON_AddStringToObject(o, "from", me);
+        char done[200];
+        snprintf(done, sizeof done, "sent to @%s", e->name[0] ? e->name : e->id);
+        rc = request(e->pid, o, reply, sizeof reply) ? answered(reply, done) : 1;
+        if (rc && !reply[0])
+            fprintf(stderr, "mux: could not write the request\n");
+        cJSON_Delete(o);
+        free(long_text);
+    }
+    free(text);
+    free(l.e);
+    return rc;
+}
+
+static int cmd_open(int argc, char **argv)
+{
+    if (argc != 2) {
+        fprintf(stderr, "usage: mux open TARGET\n");
+        return 2;
+    }
+    const char *owner = getenv("MUX_PID");
+    long        pid = owner ? atol(owner) : 0;
+    if (pid <= 0 || !livelist_alive(pid)) {
+        fprintf(stderr, "mux: mux open runs inside a mux session\n");
+        return 1;
+    }
+
+    struct entries      l = {0};
+    const struct entry *e = lookup(&l, argv[1]);
+    int                 rc = 1;
+    if (e && e->live)
+        fprintf(stderr, "mux: %s is already live\n", argv[1]);
+    else if (e) {
+        char   reply[1024] = "";
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "backend", e->backend);
+        cJSON_AddStringToObject(o, "cwd", e->cwd);
+        cJSON_AddStringToObject(o, "resume", e->id);
+        char done[200];
+        snprintf(done, sizeof done, "opened %s in a new tab", argv[1]);
+        rc = request(pid, o, reply, sizeof reply) ? answered(reply, done) : 1;
+        cJSON_Delete(o);
+    }
+    free(l.e);
+    return rc;
+}
+
+int intercom_main(int argc, char **argv)
+{
+    if (!strcmp(argv[0], "ls"))
+        return cmd_ls(argc, argv);
+    if (!strcmp(argv[0], "read"))
+        return cmd_read(argc, argv);
+    if (!strcmp(argv[0], "send"))
+        return cmd_send(argc, argv);
+    if (!strcmp(argv[0], "open"))
+        return cmd_open(argc, argv);
+    return -1;
+}

@@ -25,6 +25,7 @@ struct kvlog_map {
     int              live;
     int              loaded;
     time_t           mtime;
+    off_t            size;
 };
 
 static struct kvlog_map kvlog_maps[KVLOG_MAPS];
@@ -40,6 +41,7 @@ static inline void kvlog_clear(struct kvlog_map *m)
     m->n = 0;
     m->loaded = 0;
     m->mtime = 0;
+    m->size = 0;
 }
 
 static inline int kvlog_upsert(struct kvlog_map *m, const char *key,
@@ -107,8 +109,10 @@ static inline void kvlog_load(struct kvlog_map *m)
 {
     kvlog_clear(m);
     struct stat st;
-    if (stat(m->path, &st) == 0)
+    if (stat(m->path, &st) == 0) {
         m->mtime = st.st_mtime;
+        m->size = st.st_size;
+    }
 
     FILE *f = fopen(m->path, "r");
     if (!f) {
@@ -138,9 +142,12 @@ static inline struct kvlog_map *kvlog_fresh(const char *path)
     struct kvlog_map *m = kvlog_slot(path);
     struct stat       st;
     time_t            mt = 0;
-    if (stat(path, &st) == 0)
+    off_t             size = 0;
+    if (stat(path, &st) == 0) {
         mt = st.st_mtime;
-    if (!m->loaded || mt != m->mtime)
+        size = st.st_size;
+    }
+    if (!m->loaded || mt != m->mtime || size != m->size)
         kvlog_load(m);
     return m;
 }
@@ -198,8 +205,10 @@ static inline int kvlog_append(const char *path, const char *key,
         return 1;
     }
     struct stat st;
-    if (stat(path, &st) == 0)
+    if (stat(path, &st) == 0) {
         m->mtime = st.st_mtime;
+        m->size = st.st_size;
+    }
     return 1;
 }
 

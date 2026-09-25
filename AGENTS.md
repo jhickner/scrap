@@ -28,6 +28,11 @@ tools/rig/muxrig stop $n
 - `--fake` puts `tools/rig/fake-claude` first on PATH as `claude`: it echoes
   each prompt back. `--fixture file` replays canned stream-json turns instead,
   one turn per block, blocks separated by `---`; see `tools/rig/fixtures/`.
+  A prompt `run: CMD` makes the fake run CMD in a shell and reply with its
+  output, as a Bash tool call would; `mux` on its PATH is the built binary.
+- `--share dir` gives instances started with the same dir one set of live
+  sessions, dispatch requests, and session names, so they can reach each
+  other with `mux send`.
 - Without `--fake` the real CLI runs, costs tokens, and writes its transcript
   to `~/.claude`.
 - `wait`, `idle`, and `expect` exit non-zero and print the screen on failure.

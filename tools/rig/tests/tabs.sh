@@ -9,6 +9,6 @@ $R send $n Enter
 $R wait $n 'session 2/2'
 $R wait $n 'echo: second tab'
 $R send $n BTab
-$R wait $n '^\[ untitled \]  untitled'
+$R wait $n '^\[ @[a-z]+-[a-z]+ \]  @[a-z]+-[a-z]+'
 $R send $n BTab
 $R wait $n 'echo: second tab'

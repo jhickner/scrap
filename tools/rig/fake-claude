@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, sys
+import json, os, subprocess, sys
 
 SESSION = "fake-%d" % os.getpid()
 MODEL = "fake"
@@ -50,10 +50,16 @@ def main():
         elif kind == "user":
             emit({"type": "system", "subtype": "init", "model": MODEL,
                   "cwd": os.getcwd(), "apiKeySource": "none"})
+            text = prompt_text(msg)
+            if text.startswith("run: "):
+                ran = subprocess.run(text[5:], shell=True, capture_output=True, text=True)
+                text = "ran: " + (ran.stdout + ran.stderr).strip()
+            else:
+                text = "echo: " + text
             events = turns.pop(0) if turns else [{
                 "type": "assistant",
                 "message": {"role": "assistant", "model": MODEL, "content": [
-                    {"type": "text", "text": "echo: " + prompt_text(msg)}]}}]
+                    {"type": "text", "text": text}]}}]
             for ev in events:
                 emit(ev)
             emit({"type": "result", "subtype": "success", "is_error": False,
