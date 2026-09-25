@@ -223,7 +223,7 @@ int main(void)
     if (cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(call.out, "agents")) != 2)
         fail("include_exited lists them");
     while (ntabs < WORKSPACE_MAX)
-        dispatch_spawn("claude", NULL, NULL, NULL, NULL, NULL, NULL);
+        dispatch_spawn("claude", NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     if (request("POST", "/v1/agents", NULL, "{\"prompt\":{\"text\":\"x\"}}") != 429)
         fail("a full instance is 429");
     request("GET", "/v1/capacity", NULL, NULL);

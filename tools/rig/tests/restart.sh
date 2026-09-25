@@ -7,8 +7,10 @@ $R wait $n '❯'
 $R type $n '/new second tab'
 $R send $n Enter
 $R wait $n 'session 2/2'
+$R wait $n 'echo: second tab'
+names=$($R snap $n | tail -1 | grep -Eo '@[a-z]+-[a-z]+')
 $R type $n /restart
 $R send $n Enter
 $R wait $n 'restarted 1x'
-$R wait $n 'untitled.*untitled'
+for name in $names; do $R wait $n "$name"; done
 [ -z "$(ls "$($R dir $n)/state/tmp")" ] || { echo "restart left files in state/tmp" >&2; exit 1; }

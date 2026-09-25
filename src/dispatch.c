@@ -19,7 +19,11 @@
 
 #define ID_WAIT_MS   30000
 
-static int dir_path(char *out, size_t size)
+#define PAIR_WINDOW  60
+#define PAIR_CAP     6
+#define PAIR_SLOTS   64
+
+int dispatch_dir(char *out, size_t size)
 {
     const char *env = getenv("MUX_DISPATCH_DIR");
     if (env && *env)
@@ -110,6 +114,37 @@ static void close_session(const char *dir, const char *base, const cJSON *target
     cJSON_Delete(r);
 }
 
+static struct {
+    char   pair[200];
+    double at;
+} delivered[PAIR_SLOTS];
+
+static int pair_allowed(const char *from, const char *to)
+{
+    char pair[200];
+    snprintf(pair, sizeof pair, "%s>%s", from, to);
+    double now = now_seconds();
+    int    seen = 0, slot = 0;
+    for (int i = 0; i < PAIR_SLOTS; i++) {
+        if (now - delivered[i].at < PAIR_WINDOW && !strcmp(delivered[i].pair, pair))
+            seen++;
+        if (delivered[i].at < delivered[slot].at)
+            slot = i;
+    }
+    if (seen >= PAIR_CAP)
+        return 0;
+    snprintf(delivered[slot].pair, sizeof delivered[slot].pair, "%s", pair);
+    delivered[slot].at = now;
+    return 1;
+}
+
+static int deliver(int at, const char *line, const char *shown)
+{
+    if (!session_turn_running(workspace_at(at)))
+        workspace_render(at, echo_prompt, (void *)shown);
+    return workspace_send(at, line, shown);
+}
+
 static void send_session(const char *dir, const char *base, const cJSON *o, const cJSON *send)
 {
     const char *line = cJSON_GetStringValue(send);
@@ -129,7 +164,17 @@ static void send_session(const char *dir, const char *base, const cJSON *o, cons
         return;
     }
 
-    if (!dispatch_send(at, line))
+    const char *from = field(o, "from");
+    if (from && !pair_allowed(from, id)) {
+        reply_error(dir, base, "too many messages to this session in the last minute", id);
+        return;
+    }
+    char *framed = from ? text_dsprintf("[from @%s] %s", from, line) : NULL;
+    char *shown = from ? text_dsprintf("from @%s: %s", from, line) : NULL;
+    int   sent = from ? framed && shown && deliver(at, framed, shown) : dispatch_send(at, line);
+    free(framed);
+    free(shown);
+    if (!sent)
         reply_error(dir, base, "could not send line", id);
     else {
         cJSON *r = cJSON_CreateObject();
@@ -207,13 +252,14 @@ static void settle_pending(const char *dir)
 }
 
 int dispatch_spawn(const char *backend, const char *model, const char *effort, const char *cwd,
-                   const char *title, const char *const *env, const char *prompt)
+                   const char *title, const char *resume, const char *const *env,
+                   const char *prompt)
 {
     struct session *was = workspace_current();
     char here[4096];
     if (!cwd && getcwd(here, sizeof here))
         cwd = here;
-    int at = workspace_spawn_env(backend, model, effort, cwd, NULL, env);
+    int at = workspace_spawn_env(backend, model, effort, cwd, resume, env);
     if (at < 0)
         return -1;
 
@@ -234,10 +280,7 @@ int dispatch_spawn(const char *backend, const char *model, const char *effort, c
 
 int dispatch_send(int at, const char *line)
 {
-
-    if (!session_turn_running(workspace_at(at)))
-        workspace_render(at, echo_prompt, (void *)line);
-    return workspace_send(at, line, NULL);
+    return deliver(at, line, line);
 }
 
 static void serve(const char *dir, const char *base, const char *text)
@@ -267,7 +310,7 @@ static void serve(const char *dir, const char *base, const char *text)
         backend = cmd_default_backend();
 
     int at = dispatch_spawn(backend, field(o, "model"), field(o, "effort"), field(o, "cwd"),
-                            field(o, "title"), NULL, field(o, "prompt"));
+                            field(o, "title"), field(o, "resume"), NULL, field(o, "prompt"));
     if (at < 0) {
         char out[300];
         snprintf(out, sizeof out, "{\"error\": \"could not start the %s CLI\"}", backend);
@@ -295,7 +338,7 @@ void dispatch_poll(void)
     last = now;
 
     char dir[4200];
-    if (!dir_path(dir, sizeof dir))
+    if (!dispatch_dir(dir, sizeof dir))
         return;
 
     settle_pending(dir);
