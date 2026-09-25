@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "api.h"
 #include "app.h"
 #include "gitinfo.h"
 #include "models.h"
@@ -107,6 +108,8 @@ static void row_identity(const struct session *s, struct row *r)
         row_add(r, UI_OK, SEP "%s", relay_label());
     if (voice_label())
         row_add(r, UI_OK, SEP "%s", voice_label());
+    if (api_active())
+        row_add(r, UI_OK, SEP "api");
 }
 
 static void row_location(const struct session *s, struct row *r)
