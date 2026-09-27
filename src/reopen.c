@@ -145,7 +145,7 @@ int reopen_run(void)
         heading[i] = rows[i].kind;
     }
 
-    struct pick_live shown = {.heading = heading, .align = 1};
+    struct pick_live shown = {.heading = heading, .group_gap = 1, .align = 1};
     int at = pick_run_live("reopen which window", items, m, 0, &shown,
                            PICK_SEARCH_TYPE, NULL, NULL);
     if (at >= 0 && at < m)
