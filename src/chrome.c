@@ -62,7 +62,7 @@ void chrome_modal_interrupt(int (*fn)(void))
 
 int chrome_modal_interrupted(void)
 {
-    return modal_interrupt ? modal_interrupt() : 0;
+    return tty_quit_requested() || (modal_interrupt && modal_interrupt());
 }
 
 int chrome_modal_active(void)
