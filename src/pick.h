@@ -11,12 +11,6 @@ int pick_run(const char *title, const struct pick_item *items, int count, int in
 
 int pick_run_filter(const char *title, const struct pick_item *items, int count, int initial);
 
-#define PICK_TYPED_MAX 1024
-#define PICK_TYPED     (-3)
-
-int pick_run_typed(const char *title, const struct pick_item *items, int count, int initial,
-                   char *typed);
-
 enum pick_search {
     PICK_SEARCH_TYPE,
     PICK_SEARCH_SLASH,

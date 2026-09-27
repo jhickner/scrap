@@ -38,7 +38,7 @@ struct view {
     int filter;
     int slash;
     int searching;
-    char query[PICK_TYPED_MAX];
+    char query[64];
     short hit[HIT_MAX];
 };
 
@@ -420,7 +420,7 @@ static void show_keys(struct view *v)
 
 static int run(const char *title, const struct pick_item *items, int count,
                int initial, const struct pick_live *live, const char *shortcuts,
-               int *pressed, int filter, int slash, char *typed);
+               int *pressed, int filter, int slash);
 
 static void paint(void *ud)
 {
@@ -669,19 +669,12 @@ static void paint(void *ud)
 
 int pick_run(const char *title, const struct pick_item *items, int count, int initial)
 {
-    return run(title, items, count, initial, NULL, NULL, NULL, 0, 0, NULL);
+    return run(title, items, count, initial, NULL, NULL, NULL, 0, 0);
 }
 
 int pick_run_filter(const char *title, const struct pick_item *items, int count, int initial)
 {
-    return run(title, items, count, initial, NULL, NULL, NULL, 1, 0, NULL);
-}
-
-int pick_run_typed(const char *title, const struct pick_item *items, int count, int initial,
-                   char *typed)
-{
-    typed[0] = '\0';
-    return run(title, items, count, initial, NULL, NULL, NULL, 1, 0, typed);
+    return run(title, items, count, initial, NULL, NULL, NULL, 1, 0);
 }
 
 int pick_run_live(const char *title, const struct pick_item *items, int count,
@@ -689,7 +682,7 @@ int pick_run_live(const char *title, const struct pick_item *items, int count,
                   enum pick_search search, const char *shortcuts, int *pressed)
 {
     return run(title, items, count, initial, live, shortcuts, pressed, 1,
-               search == PICK_SEARCH_SLASH, NULL);
+               search == PICK_SEARCH_SLASH);
 }
 
 static size_t whole_chars(const char *s, size_t len)
@@ -741,7 +734,7 @@ static int paste_into(struct view *v, const char *s, size_t n)
 
 static int run(const char *title, const struct pick_item *items, int count,
                int initial, const struct pick_live *live, const char *shortcuts,
-               int *pressed, int filter, int slash, char *typed)
+               int *pressed, int filter, int slash)
 {
     if (pressed)
         *pressed = 0;
@@ -895,12 +888,6 @@ static int run(const char *title, const struct pick_item *items, int count,
                 *pressed = '\n';
             goto done;
         case TK_ENTER:
-            if (typed && v.query[0] &&
-                (!v.count || v.query[0] == '/' || v.query[0] == '~')) {
-                snprintf(typed, PICK_TYPED_MAX, "%s", v.query);
-                result = PICK_TYPED;
-                goto done;
-            }
             if (!v.count || row_heading(&v, v.sel))
                 break;
             result = v.order[v.sel];

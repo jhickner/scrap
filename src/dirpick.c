@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "ask.h"
 #include "pick.h"
 #include "text.h"
 #include "ui.h"
@@ -15,6 +16,7 @@
 
 #define DIR_MAX   6000
 #define DIR_DEPTH 2
+#define TYPE_ROW  "type a path\xe2\x80\xa6"
 
 static const char *SKIP[] = {"node_modules", "target", "build",  "dist",
                              "venv",         ".git",   "Library", "__pycache__"};
@@ -164,6 +166,7 @@ char *dirpick_run(const char *title, const char *current)
     char root[4096];
     snprintf(root, sizeof root, "%s/working", home);
     struct list l = {0};
+    list_add(&l, TYPE_ROW);
     list_add(&l, "~/working");
     walk(&l, root, "~/working", 1);
     qsort(l.items, (size_t)l.count, sizeof *l.items, cmp_item);
@@ -176,12 +179,17 @@ char *dirpick_run(const char *title, const char *current)
         if (!strcmp(l.items[i].label, now))
             initial = i;
 
-    char  typed[PICK_TYPED_MAX];
-    int   which = l.count ? pick_run_typed(title, l.items, l.count, initial, typed) : -1;
+    int   which = l.count ? pick_run_filter(title, l.items, l.count, initial) : -1;
     char *out = NULL;
-    if (which == PICK_TYPED)
-        out = resolve(home, typed);
-    else if (which >= 0) {
+    if (which >= 0 && !strcmp(l.items[which].label, TYPE_ROW)) {
+        char *typed = ask_run(title, "~/working/");
+        if (typed) {
+            text_chomp(typed);
+            if (*typed)
+                out = resolve(home, typed);
+        }
+        free(typed);
+    } else if (which >= 0) {
         const char *label = l.items[which].label;
         size_t      n = strlen(home) + strlen(label) + 1;
         out = malloc(n);
