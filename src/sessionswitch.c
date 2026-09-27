@@ -374,6 +374,23 @@ static int open_somewhere(const char *name, void *ud)
     return tab_named(name) >= 0 || other(ud, name);
 }
 
+int sessionswitch_show_open(const char *id)
+{
+    int at = id && *id ? workspace_find_id(id) : -1;
+    if (at >= 0) {
+        workspace_show(at);
+        return 1;
+    }
+    struct live_session *live = NULL;
+    int n = id && *id ? livelist_load(&live) : 0;
+    int shown = 0;
+    for (int i = 0; i < n && !shown; i++)
+        if (!live[i].mine && !strcmp(live[i].id, id) && livelist_alive(live[i].pid))
+            shown = jump(&live[i]);
+    free(live);
+    return shown;
+}
+
 void sessionswitch_step(int dir)
 {
     char path[4400], here[128], id[128];

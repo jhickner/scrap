@@ -935,7 +935,7 @@ int cmd_resume(struct session *s)
 
     int resumed = 0;
     int index = pick_run("resume which conversation", items, count, 0);
-    if (index >= 0) {
+    if (index >= 0 && !sessionswitch_show_open(list[index].id)) {
         if (session_resume(s, list[index].id)) {
             status_sticky_prompt(NULL);
 
