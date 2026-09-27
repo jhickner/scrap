@@ -41,6 +41,7 @@ struct entry {
 
 static const char *const VOICE_MODES[] = {"auto", "wake", "jev"};
 static const char *const JEV_BACKENDS[] = {"typesafe", "experiential"};
+static const char *const FOLDER_SORTS[] = {"name", "recent"};
 
 static const struct entry ENTRIES[] = {
     {.name = "reasoning", .kind = S_FLAG,
@@ -106,6 +107,9 @@ static const struct entry ENTRIES[] = {
      .about = "sessions ctrl-o steps back through",
      .low = 1, .high = JUMP_LENGTH_MAX,
      .key = SETTING_JUMP_LENGTH, .def = JUMP_LENGTH_DEFAULT},
+    {.name = "folder sort", .kind = S_CHOICE,
+     .about = "order of working folders in /sessions: by name, or most recently active first",
+     .key = SETTING_FOLDER_SORT, .choices = FOLDER_SORTS, .nchoices = (int)COUNT(FOLDER_SORTS)},
     {.name = "input colour", .kind = S_COLOR,
      .about = "the prompt, its echo, and the sticky line",
      .group = UI_GROUP_INPUT},
