@@ -9,7 +9,7 @@
 
 #define LOG_MAX  (64 * 1024)
 #define LOG_KEEP (16 * 1024)
-#define SEEN_MAX 256
+#define LENGTH_MAX 256
 
 struct entry {
     char *id;
@@ -96,7 +96,7 @@ void activelog_add(const char *path, const char *id, int back)
     free(text);
 }
 
-int activelog_step(const char *path, const char *here, int dir,
+int activelog_step(const char *path, const char *here, int dir, int length,
                    int (*alive)(const char *id, void *ud), void *ud,
                    char *out, size_t size)
 {
@@ -119,9 +119,11 @@ int activelog_step(const char *path, const char *here, int dir,
         all[i] = parse(lines[i]);
 
     struct entry last = n ? all[n - 1] : (struct entry){NULL, 0};
-    const char *order[SEEN_MAX];
+    const char *order[LENGTH_MAX];
+    if (length < 1 || length > LENGTH_MAX)
+        length = LENGTH_MAX;
     int count = 0;
-    for (int i = n - 1; i >= 0 && count < SEEN_MAX; i--) {
+    for (int i = n - 1; i >= 0 && count < length; i--) {
         struct entry e = all[i];
         int stopped = i + 1 < n && all[i + 1].id && !all[i + 1].back;
         if (!e.id || !*e.id || (e.back && !stopped))

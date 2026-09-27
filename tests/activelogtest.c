@@ -16,7 +16,7 @@ static void step(const char *path, const char *here, int dir, const char *closed
                  const char *want)
 {
     char got[64] = "";
-    int ok = activelog_step(path, here, dir, open_all, (void *)closed, got, sizeof got);
+    int ok = activelog_step(path, here, dir, 0, open_all, (void *)closed, got, sizeof got);
     if (!want) {
         assert(!ok);
         return;
@@ -56,6 +56,12 @@ int main(void)
     step(path, "c", -1, "b", "d");
     step(path, "d", -1, "b", "a");
     step(path, "a", -1, "b", NULL);
+
+    char got[64];
+    activelog_add(path, "f", 0);
+    assert(activelog_step(path, "f", -1, 2, open_all, NULL, got, sizeof got) &&
+           !strcmp(got, "a"));
+    assert(!activelog_step(path, "a", -1, 2, open_all, NULL, got, sizeof got));
 
     unlink(path);
     puts("activelogtest ok");
