@@ -322,7 +322,7 @@ void hud_print_launch(const struct session *s)
 void hud_refresh(const struct session *s)
 {
     unsigned    mark = viewport_item_find(HUD_KIND);
-    struct hud *h = mark && s ? viewport_item_data(mark) : NULL;
+    struct hud *h = mark && s && s == workspace_current() ? viewport_item_data(mark) : NULL;
     if (!h)
         return;
     hud_fill(h, s);

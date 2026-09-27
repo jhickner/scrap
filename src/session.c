@@ -1885,6 +1885,7 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     if (!s->quiet)
         sessionpresent_footer(elapsed, s->context_tokens, s->context_window,
                               s->cost_usd, s->title);
+    hud_refresh(s);
     return 1;
 }
 
@@ -2393,6 +2394,8 @@ int session_context_percent(const struct session *s)
         if (live_window > 0)
             window = live_window;
     }
+    if (window <= 0)
+        window = session_context_window(s);
     if (used <= 0 || window <= 0)
         return -1;
     int percent = (int)(used * 100 / window);
