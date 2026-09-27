@@ -319,69 +319,61 @@ static void here_id(char *out, size_t size)
     snprintf(out, size, "%s", id ? id : "");
 }
 
-static void remember(const char *from)
-{
-    char path[4400];
-    if (!from[0] || !path_config_file(path, sizeof path, "back"))
-        return;
-    FILE *f = fopen(path, "w");
-    if (!f)
-        return;
-    fprintf(f, "%s\n", from);
-    fclose(f);
-}
-
 static int jump(const struct live_session *v)
 {
-    char from[128], why[256];
-    here_id(from, sizeof from);
+    char why[256];
     if (!livelist_jump(v, why, sizeof why)) {
         ui_error("%s", why);
         ui_put("\n");
         ui_flush();
         return 0;
     }
-    remember(from);
     return 1;
 }
 
-static void show_tab(int at)
+static int go_to(const char *id, const struct live_session *live, int nlive)
 {
-    char from[128];
-    here_id(from, sizeof from);
-    if (at == workspace_index())
-        return;
-    workspace_show(at);
-    remember(from);
+    int at = workspace_find_id(id);
+    if (at >= 0) {
+        workspace_show(at);
+        return 1;
+    }
+    for (int i = 0; i < nlive; i++)
+        if (!live[i].mine && !strcmp(live[i].id, id)) {
+            jump(&live[i]);
+            return 1;
+        }
+    return 0;
 }
 
 void sessionswitch_back(void)
 {
-    char path[4400], id[128] = "";
+    char path[4400], here[128];
+    here_id(here, sizeof here);
     size_t len = 0;
-    char *text = path_config_file(path, sizeof path, "back")
-                     ? text_slurp(path, sizeof id, &len) : NULL;
-    if (text) {
-        snprintf(id, sizeof id, "%.*s", (int)strcspn(text, "\n"), text);
-        free(text);
-    }
-
-    int at = id[0] ? workspace_find_id(id) : -1;
-    if (at >= 0) {
-        show_tab(at);
-        return;
-    }
-
+    char *text = path_config_file(path, sizeof path, "active")
+                     ? text_slurp(path, 0, &len) : NULL;
     struct live_session *live = NULL;
-    int nlive = id[0] ? livelist_load(&live) : 0;
-    for (int i = 0; i < nlive; i++)
-        if (!live[i].mine && !strcmp(live[i].id, id)) {
-            jump(&live[i]);
-            free(live);
-            return;
-        }
+    int nlive = text ? livelist_load(&live) : 0;
+
+    int went = 0;
+    for (char *end = text ? text + len : NULL; end && end > text && !went;) {
+        *end = '\0';
+        char *line = end;
+        while (line > text && line[-1] != '\n')
+            line--;
+        end = line > text ? line - 1 : text;
+
+        char *id = strchr(line, '\t');
+        id = id ? id + 1 : line;
+        if (*id && strcmp(id, here))
+            went = go_to(id, live, nlive);
+    }
     free(live);
-    ui_note("%s", id[0] ? "the previous session is gone" : "no previous session");
+    free(text);
+    if (went)
+        return;
+    ui_note("no previous session");
     ui_put("\n");
     ui_flush();
 }
@@ -934,7 +926,7 @@ static int switch_once(void)
         if (chosen.kind == ROW_LIVE) {
             jump(&live[chosen.at]);
         } else if (chosen.kind == ROW_TAB) {
-            show_tab(chosen.at);
+            workspace_show(chosen.at);
         }
         free(live);
         return 0;
@@ -958,7 +950,7 @@ static int switch_once(void)
 
     switch (chosen.kind) {
     case ROW_TAB:
-        show_tab(chosen.at);
+        workspace_show(chosen.at);
         break;
     case ROW_LIVE:
         jump(&live[chosen.at]);

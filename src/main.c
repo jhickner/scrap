@@ -367,6 +367,13 @@ static void switcher(void *ud)
         prompt_stop(ud);
 }
 
+static void focus_changed(int on)
+{
+    voice_arm(on);
+    if (on)
+        workspace_log_active();
+}
+
 static void back(void *ud)
 {
     (void)ud;
@@ -875,7 +882,7 @@ int main(int argc, char **argv)
     voice_on_draft(voice_draft, prompt);
     voice_on_release(voice_release, prompt);
     voice_on_claim(voice_claim, prompt);
-    tty_on_focus(voice_arm);
+    tty_on_focus(focus_changed);
 
     voice_set_speak(settings_get_int(SETTING_VOICE_SPEAK, 1));
     if (settings_get_int(SETTING_VOICE, 0)) {
