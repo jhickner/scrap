@@ -39,6 +39,7 @@
 #include "title.h"
 #include "tg.h"
 #include "relay.h"
+#include "im.h"
 #include "transcript.h"
 #include "tty.h"
 #include "ui.h"
@@ -2429,10 +2430,12 @@ void session_report(const struct session *s)
     }
 
     char chat[160] = "";
-    if (tg_label() || relay_label())
-        snprintf(chat, sizeof chat, "%s%s%s", tg_label() ? tg_label() : "",
-                 tg_label() && relay_label() ? ", " : "",
-                 relay_label() ? relay_label() : "");
+    const char *chats[] = {tg_label(), relay_label(), im_label()};
+    size_t      nchat = 0;
+    for (size_t i = 0; i < sizeof chats / sizeof *chats; i++)
+        if (chats[i] && nchat < sizeof chat)
+            nchat += (size_t)snprintf(chat + nchat, sizeof chat - nchat, "%s%s",
+                                      nchat ? ", " : "", chats[i]);
 
     struct sessionpresent_report r = {
         .backend = s->backend,

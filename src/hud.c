@@ -13,6 +13,7 @@
 #include "session.h"
 #include "tg.h"
 #include "relay.h"
+#include "im.h"
 #include "voice.h"
 #include "ui.h"
 #include "viewport.h"
@@ -106,6 +107,8 @@ static void row_identity(const struct session *s, struct row *r)
         row_add(r, UI_OK, SEP "%s", chat);
     if (relay_label())
         row_add(r, UI_OK, SEP "%s", relay_label());
+    if (im_label())
+        row_add(r, UI_OK, SEP "%s", im_label());
     if (voice_label())
         row_add(r, UI_OK, SEP "%s", voice_label());
     if (api_active())

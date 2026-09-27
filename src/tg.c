@@ -31,6 +31,7 @@
 #include "relay.h"
 #include "reminders.h"
 #include "handoff.h"
+#include "im.h"
 #include "restart.h"
 #include "session.h"
 #include "settings.h"
@@ -1462,6 +1463,11 @@ int tg_start(struct session *s)
     start_error[0] = '\0';
     if (running)
         return 0;
+    if (im_label()) {
+        snprintf(start_error, sizeof start_error, "--telegram and --imessage do not combine");
+        fprintf(stderr, APP_NAME ": %s\n", start_error);
+        return 0;
+    }
 
     poller_stop = 0;
     stop_wanted = 0;
