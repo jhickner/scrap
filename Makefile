@@ -63,7 +63,7 @@ LIBS += -pthread -lcurl
 # for TLS. image.o also uses zlib for compressed kitty transmits.
 VNC_LIBS := -lz
 ifeq ($(shell uname -s),Darwin)
-VNC_LIBS += -framework Security -framework CoreFoundation
+VNC_LIBS += -framework Security -framework CoreFoundation -lsqlite3
 endif
 LIBS += $(VNC_LIBS)
 ifneq ($(shell uname -s),Darwin)

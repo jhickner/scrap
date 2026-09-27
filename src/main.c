@@ -40,6 +40,7 @@
 #include "tabs.h"
 #include "status.h"
 #include "tg.h"
+#include "im.h"
 #include "agentsync.h"
 #include "relay.h"
 #include "api.h"
@@ -145,6 +146,7 @@ static void usage(void)
             "  -s         safe mode: skip skills, CLAUDE.md, MCP servers, hooks\n"
             "  --telegram also answer over Telegram, in the same session\n"
             "  --relay    also answer a phone over WebSocket, in the same session\n"
+            "  --imessage also answer over iMessage, in the same session (config: ~/.config/mux/imessage)\n"
             "  --connect telegram|relay   the same thing, spelled out\n"
             "  --api      serve the worker API (config: ~/.config/mux/api)\n"
             "  --state dir  keep config and state under dir instead of ~/.config/mux\n"
@@ -180,6 +182,7 @@ static int idle_fds(void *ud, int *out, int max)
     n += voice_fds(out + n, max - n);
     n += relay_fds(out + n, max - n);
     n += api_fds(out + n, max - n);
+    n += im_fds(out + n, max - n);
     return n + tg_fds(out + n, max - n);
 }
 
@@ -215,7 +218,7 @@ static int idle_render(void *ud)
     sidechannel_tick();
     dispatch_poll();
 
-    if (tg_pending() || relay_pending() || voice_pending())
+    if (tg_pending() || relay_pending() || im_pending() || voice_pending())
         tty_wake();
     relay_poll(NULL);
     api_poll();
@@ -229,6 +232,7 @@ static int idle_render(void *ud)
 
 static int voice_took;
 static int relay_took;
+static int im_took;
 
 static void voice_heard(void *ud, const char *text)
 {
@@ -295,6 +299,10 @@ static char *chat_line(void *ud)
     }
     line = relay_take_line();
     relay_took = line != NULL;
+    if (line)
+        return line;
+    line = im_take_line();
+    im_took = line != NULL;
     if (line)
         return line;
     return tg_take_line();
@@ -576,6 +584,7 @@ int main(int argc, char **argv)
         {"reopen",  no_argument,       NULL, 'O'},
         {"telegram", no_argument,      NULL, 'T'},
         {"relay",    no_argument,      NULL, 'W'},
+        {"imessage", no_argument,      NULL, 'I'},
         {"api",      no_argument,      NULL, 'A'},
         {"connect", required_argument, NULL, 'N'},
         {"state",   required_argument, NULL, 'X'},
@@ -595,6 +604,7 @@ int main(int argc, char **argv)
     const char *state_arg = NULL;
     int telegram = 0;
     int relay = 0;
+    int imessage = 0;
     int api_on = 0;
     int pin_backend = 0;
     int fork_session = 0;
@@ -617,6 +627,7 @@ int main(int argc, char **argv)
         case 'O': reopen_arg = 1; break;
         case 'T': telegram = 1; break;
         case 'W': relay = 1; break;
+        case 'I': imessage = 1; break;
         case 'A': api_on = 1; break;
         case 'X': state_arg = optarg; break;
         case 'V': printf(APP_NAME " %s\n", MUX_VERSION); return 0;
@@ -636,8 +647,8 @@ int main(int argc, char **argv)
     }
 
     if (state_arg) {
-        if (telegram || relay || api_on) {
-            fprintf(stderr, APP_NAME ": --state does not combine with --telegram, --relay, --api\n");
+        if (telegram || relay || imessage || api_on) {
+            fprintf(stderr, APP_NAME ": --state does not combine with --telegram, --relay, --imessage, --api\n");
             return 2;
         }
         if (!state_enter(state_arg))
@@ -697,9 +708,9 @@ int main(int argc, char **argv)
 
     int interactive = optind >= argc;
 
-    if ((telegram || relay || api_on) && !interactive) {
+    if ((telegram || relay || imessage || api_on) && !interactive) {
         fprintf(stderr, APP_NAME ": --%s takes no prompt\n",
-                telegram ? "telegram" : relay ? "relay" : "api");
+                telegram ? "telegram" : relay ? "relay" : imessage ? "imessage" : "api");
         return 2;
     }
 
@@ -755,6 +766,8 @@ int main(int argc, char **argv)
         telegram = 0;
     if (relay && session && !relay_start(session))
         relay = 0;
+    if (imessage && session && !im_start(session))
+        imessage = 0;
     if (api_on && session && !api_start())
         api_on = 0;
 
@@ -978,6 +991,9 @@ int main(int argc, char **argv)
             if (relay_took) {
                 workspace_settle(relay_session());
                 relay_run_line(line);
+            } else if (im_took) {
+                workspace_settle(im_session());
+                im_run_line(line);
             } else {
                 workspace_settle(tg_session());
                 tg_run_line(line);
@@ -1000,6 +1016,7 @@ int main(int argc, char **argv)
     voice_stop();
     tg_stop();
     relay_stop();
+    im_stop();
     api_stop();
     session_set_typeahead(NULL, NULL);
     chrome_bind(NULL);
