@@ -103,6 +103,12 @@ static void add_channels(struct row *r)
     snprintf(r->detail + len, sizeof r->detail - len, " \xc2\xb7 %s", r->channels);
 }
 
+static long last_active(const char *name)
+{
+    char path[4400];
+    return path_config_file(path, sizeof path, "active") ? activelog_last(path, name) : 0;
+}
+
 static void tab_rows(struct row *rows, int *n)
 {
     for (int i = 0; i < workspace_count() && *n < MAX_ROWS; i++) {
@@ -114,6 +120,7 @@ static void tab_rows(struct row *rows, int *n)
         r->at = i;
 
         path_home_relative(session_cwd(s), r->cwd, sizeof r->cwd);
+        r->ts = last_active(session_name(s));
         snprintf(r->label, sizeof r->label, "%s %s",
                  i == workspace_index() ? "\xe2\x96\xb8" : "\xc2\xb7",
                  title && *title ? title : "untitled");
@@ -218,7 +225,7 @@ static void live_rows(struct row *rows, int *n, const struct live_session *live,
         snprintf(r->id, sizeof r->id, "%s", v->id);
         snprintf(r->parent, sizeof r->parent, "%s", v->parent);
         path_home_relative(v->cwd, r->cwd, sizeof r->cwd);
-        r->ts = v->ts;
+        r->ts = last_active(v->name);
         fill_live(r, v);
     }
 }
@@ -829,10 +836,6 @@ static int switch_once(void)
     panes_load();
     tab_rows(found, &nfound);
     live_rows(found, &nfound, live, nlive);
-    for (int i = 0; i < nfound; i++)
-        for (int j = 0; found[i].kind == ROW_TAB && j < nlive; j++)
-            if (live[j].mine && !strcmp(live[j].id, found[i].id))
-                found[i].ts = live[j].ts;
 
     int n = group_rows(found, nfound, rows, heading, MAX_ROWS);
     free(found);
