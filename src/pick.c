@@ -216,15 +216,39 @@ static int visible_cap(const struct view *v)
     int rows = chrome_modal_rows() - 1;
     if (v->live)
         rows -= chrome_foot_rows(v->live->ask, v->live->hint, ui_columns());
-    if (v->heading) {
-        int breaks = 0;
-        for (int i = 0; i < v->count; i++)
-            if (row_group(v, i) || row_apart(v, i))
-                breaks++;
-        if (breaks > 1)
-            rows -= breaks - 1;
-    }
     return rows < 5 ? 5 : rows;
+}
+
+static int fit_rows(const struct view *v, int top, int budget)
+{
+    int n = 0, used = 0;
+    for (int row = top; row < v->count; row++) {
+        int lines = 1 + (row > top && (row_group(v, row) || row_apart(v, row)));
+        if (n && used + lines > budget)
+            break;
+        used += lines;
+        n++;
+    }
+    return n;
+}
+
+static void place_window(struct view *v)
+{
+    int budget = visible_cap(v);
+    if (fit_rows(v, 0, budget) < v->count)
+        budget--;
+    if (v->sel < v->top)
+        v->top = v->sel;
+    while (v->top < v->sel && v->top + fit_rows(v, v->top, budget) <= v->sel)
+        v->top++;
+    while (v->top > 0 && v->top - 1 + fit_rows(v, v->top - 1, budget) >= v->count)
+        v->top--;
+    v->visible = fit_rows(v, v->top, budget);
+    while (v->visible > 1 && v->top + v->visible < v->count &&
+           row_heading(v, v->top + v->visible - 1))
+        v->visible--;
+    if (v->visible < 1)
+        v->visible = 1;
 }
 
 static int hold_rows(const struct view *v)
@@ -381,12 +405,7 @@ static void paint(void *ud)
     else
         snprintf(title, sizeof title, "%s", v->title);
 
-    if (sel < v->top)
-        v->top = sel;
-    if (sel >= v->top + v->visible)
-        v->top = sel - v->visible + 1;
-    if (v->top < 0)
-        v->top = 0;
+    place_window(v);
 
     int    columns = ui_columns();
     int    rows = 0;
