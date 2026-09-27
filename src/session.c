@@ -1139,6 +1139,15 @@ static void set_id(struct session *s, const char *id)
         }
         if (!s->retitle)
             title_lookup(s->id, s->title, sizeof s->title);
+        if (s->context_tokens <= 0) {
+            long tokens, window;
+            if (sessionload_context(s->backend, s->cwd, s->id, &tokens, &window)) {
+                s->context_tokens = tokens;
+                if (window > 0 && s->context_window <= 0)
+                    s->context_window = window;
+                hud_refresh(s);
+            }
+        }
         status_set_note(s->title);
         publish(s, s->idle_busy ? "working" : "finished");
     }

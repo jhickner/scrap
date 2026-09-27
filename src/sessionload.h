@@ -16,4 +16,7 @@ struct transcript;
 int sessionload_fill(struct transcript *t, const char *backend, const char *cwd,
                      const char *id);
 
+int sessionload_context(const char *backend, const char *cwd, const char *id, long *tokens,
+                        long *window);
+
 #endif

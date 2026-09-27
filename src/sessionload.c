@@ -496,3 +496,66 @@ int sessionload_fill(struct transcript *t, const char *backend, const char *cwd,
     fclose(f);
     return (int)(t->count - before);
 }
+
+static long num(const cJSON *o, const char *key)
+{
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(o, key);
+    return cJSON_IsNumber(v) ? (long)v->valuedouble : 0;
+}
+
+static void line_context(const cJSON *ev, long *tokens, long *window)
+{
+    const cJSON *payload = cJSON_GetObjectItemCaseSensitive(ev, "payload");
+    const char  *kind = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(payload, "type"));
+    if (kind && !strcmp(kind, "token_count")) {
+        const cJSON *info = cJSON_GetObjectItemCaseSensitive(payload, "info");
+        long used = num(cJSON_GetObjectItemCaseSensitive(info, "last_token_usage"), "total_tokens");
+        if (used > 0) {
+            *tokens = used;
+            if (num(info, "model_context_window") > 0)
+                *window = num(info, "model_context_window");
+        }
+        return;
+    }
+
+    if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(ev, "isSidechain")))
+        return;
+    const cJSON *message = cJSON_GetObjectItemCaseSensitive(ev, "message");
+    const char  *role = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(message, "role"));
+    const cJSON *usage = cJSON_GetObjectItemCaseSensitive(message, "usage");
+    if (!role || strcmp(role, "assistant") || !cJSON_IsObject(usage))
+        return;
+    long used = num(usage, "totalTokens");
+    if (!used)
+        used = num(usage, "input_tokens") + num(usage, "output_tokens") +
+               num(usage, "cache_read_input_tokens") + num(usage, "cache_creation_input_tokens");
+    if (used > 0)
+        *tokens = used;
+}
+
+int sessionload_context(const char *backend, const char *cwd, const char *id, long *tokens,
+                        long *window)
+{
+    char path[4096];
+    *tokens = *window = 0;
+    if (!sessionload_path(backend, cwd, id, path, sizeof path))
+        return 0;
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return 0;
+
+    char   *line = NULL;
+    size_t  cap = 0;
+    ssize_t n;
+    while ((n = getline(&line, &cap, f)) > 0) {
+        if (n > LINE_MAX || (!strstr(line, "\"usage\"") && !strstr(line, "\"token_count\"")))
+            continue;
+        cJSON *ev = cJSON_Parse(line);
+        if (ev)
+            line_context(ev, tokens, window);
+        cJSON_Delete(ev);
+    }
+    free(line);
+    fclose(f);
+    return *tokens > 0;
+}
