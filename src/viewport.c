@@ -80,6 +80,7 @@ static int sync_placeholders;
 
 static viewport_width_fn on_width;
 static viewport_cover_fn on_cover;
+static viewport_cover_fn on_overlay;
 static int painted_cols;
 
 static unsigned anchor_id;
@@ -299,6 +300,11 @@ void viewport_on_width(viewport_width_fn fn)
 void viewport_on_cover(viewport_cover_fn fn)
 {
     on_cover = fn;
+}
+
+void viewport_on_overlay(viewport_cover_fn fn)
+{
+    on_overlay = fn;
 }
 
 void viewport_scan(unsigned from, viewport_scan_fn fn, void *ctx)
@@ -1443,6 +1449,15 @@ void viewport_paint(void)
 
     for (int i = 0; i < chrome_shown; i++)
         frame_push(&built, strdup(chrome_rows[i]));
+
+    if (on_overlay) {
+        on_overlay(built.row, built.n, W);
+        for (int i = 0; i < built.n; i++) {
+            if (!built.row[i])
+                built.row[i] = blank_row();
+            built.hash[i] = row_hash(built.row[i]);
+        }
+    }
 
     if (shown_rows != H || shown_cols != W) {
         frame_reset(&shown);

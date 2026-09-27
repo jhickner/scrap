@@ -338,8 +338,6 @@ static const struct keyhelp_row NUMBER_KEYS[] = {
     {"LIST", "1-9", "jump to that row"},
 };
 
-static void paint(void *ud);
-
 static void show_keys(struct view *v)
 {
     struct keyhelp_row rows[32];
@@ -360,7 +358,6 @@ static void show_keys(struct view *v)
 #undef ADD
     keyhelp_show(v->title, rows, n,
                  v->filter && !v->slash ? KEYHELP_FOOT_F1 : KEYHELP_FOOT_ALL);
-    chrome_modal(paint, v);
 }
 
 static int run(const char *title, const struct pick_item *items, int count,

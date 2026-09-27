@@ -6,8 +6,10 @@
 
 #include "chrome.h"
 #include "frontend.h"
+#include "overlay.h"
 #include "tty.h"
 #include "ui.h"
+#include "viewport.h"
 #include "workspace.h"
 
 #define POLL_MS    250
@@ -15,7 +17,7 @@
 #define LINES_MAX  128
 #define KEY_GAP    2
 #define COL_GAP    3
-#define INDENT     1
+#define MARGIN     1
 
 const char KEYHELP_FOOT_ALL[] = "? or F1 \xc2\xb7 any key closes";
 const char KEYHELP_FOOT_F1[]  = "F1 \xc2\xb7 any key closes";
@@ -141,7 +143,6 @@ static void put_cell(const struct help *h, const struct line *l, int key_w, int 
 
 static void border(const char *left, const char *label, const char *right, int inner)
 {
-    ui_pad(INDENT);
     ui_esc(ui_style(UI_DIM));
     ui_put(left);
     ui_put("\xe2\x94\x80 ");
@@ -157,14 +158,24 @@ static void border(const char *left, const char *label, const char *right, int i
         ui_put("\xe2\x94\x80");
     ui_put(right);
     ui_esc(ui_style(UI_RESET));
-    ui_put("\n");
 }
 
-static void paint(void *ud)
+struct box {
+    const struct help *h;
+    struct line        left[LINES_MAX], right[LINES_MAX];
+    int                nl, nr, two;
+    int                inner, cw, key_w;
+    int                body, shown;
+    char               title[256];
+    int                at;
+};
+
+static const struct help *active;
+static struct box         drawn;
+
+static void measure_box(const struct help *h, int cols, int rows, struct box *b)
 {
-    const struct help *h = ud;
-    int columns = ui_columns();
-    int room = columns - INDENT - 4;
+    int room = cols - 2 * MARGIN - 4;
     if (room < 10)
         room = 10;
 
@@ -172,62 +183,121 @@ static void paint(void *ud)
     keyhelp_layout(h->rows, h->n, room, &split, &colw);
     int start[GROUPS_MAX + 1];
     int ng = groups_of(h->rows, h->n, start);
-    int two = split < ng;
 
-    struct line left[LINES_MAX], right[LINES_MAX];
-    int nl = column_lines(start, 0, split, left);
-    int nr = two ? column_lines(start, split, ng, right) : 0;
+    b->h = h;
+    b->two = split < ng;
+    b->nl = column_lines(start, 0, split, b->left);
+    b->nr = b->two ? column_lines(start, split, ng, b->right) : 0;
+    snprintf(b->title, sizeof b->title, "keys \xc2\xb7 %s", h->title);
 
-    char title[256];
-    snprintf(title, sizeof title, "keys \xc2\xb7 %s", h->title);
-
-    int inner = two ? 2 * colw + COL_GAP : colw;
-    int label = (int)ui_cells(title) > (int)ui_cells(h->foot) ? (int)ui_cells(title)
-                                                             : (int)ui_cells(h->foot);
+    int inner = b->two ? 2 * colw + COL_GAP : colw;
+    int label = (int)ui_cells(b->title) > (int)ui_cells(h->foot) ? (int)ui_cells(b->title)
+                                                                : (int)ui_cells(h->foot);
     if (inner < label + 2)
         inner = label + 2;
     if (inner > room)
         inner = room;
-    int cw = two ? colw : inner;
-    if (cw > inner)
-        cw = inner;
-    int key_w = key_width(h->rows, h->n);
-    border("\xe2\x94\x8c", title, "\xe2\x94\x90", inner);
+    b->inner = inner;
+    b->cw = b->two ? colw : inner;
+    if (b->cw > inner)
+        b->cw = inner;
+    b->key_w = key_width(h->rows, h->n);
 
-    int body = nl > nr ? nl : nr;
-    int limit = chrome_modal_rows() - 2;
+    b->body = b->nl > b->nr ? b->nl : b->nr;
+    int limit = rows - 2 - 2 * MARGIN;
     if (limit < 1)
         limit = 1;
-    for (int i = 0; i < body && i < limit; i++) {
-        ui_pad(INDENT);
+    b->shown = b->body < limit ? b->body : limit;
+}
+
+static void box_row(void *ud, int unused, int width)
+{
+    (void)unused;
+    const struct box *b = ud;
+    int at = b->at - MARGIN;
+    int last = b->shown + 1;
+
+    ui_esc(ui_style(UI_RESET));
+    if (at < 0 || at > last) {
+        ui_pad(width);
+        return;
+    }
+    ui_pad(MARGIN);
+    if (at == 0) {
+        border("\xe2\x94\x8c", b->title, "\xe2\x94\x90", b->inner);
+    } else if (at == last) {
+        border("\xe2\x94\x94", b->h->foot, "\xe2\x94\x98", b->inner);
+    } else {
+        int i = at - 1;
         ui_esc(ui_style(UI_DIM));
         ui_put("\xe2\x94\x82 ");
         ui_esc(ui_style(UI_RESET));
-        if (i == limit - 1 && body > limit) {
-            put_fit("\xe2\x80\xa6", inner);
+        if (i == b->shown - 1 && b->body > b->shown) {
+            put_fit("\xe2\x80\xa6", b->inner);
         } else {
-            put_cell(h, i < nl ? &left[i] : NULL, key_w, cw);
-            if (two) {
+            put_cell(b->h, i < b->nl ? &b->left[i] : NULL, b->key_w, b->cw);
+            if (b->two) {
                 ui_pad(COL_GAP);
-                put_cell(h, i < nr ? &right[i] : NULL, key_w, inner - cw - COL_GAP);
+                put_cell(b->h, i < b->nr ? &b->right[i] : NULL, b->key_w,
+                         b->inner - b->cw - COL_GAP);
             }
         }
         ui_esc(ui_style(UI_DIM));
         ui_put(" \xe2\x94\x82");
         ui_esc(ui_style(UI_RESET));
-        ui_put("\n");
     }
-    border("\xe2\x94\x94", h->foot, "\xe2\x94\x98", inner);
+    ui_pad(MARGIN);
+}
+
+static void cover(char **rows, int n, int cols)
+{
+    if (!active)
+        return;
+    struct box *b = &drawn;
+    measure_box(active, cols, n, b);
+
+    int w = b->inner + 4 + 2 * MARGIN;
+    int h = b->shown + 2 + 2 * MARGIN;
+    int top = (n - h) / 2;
+    int col = (cols - w) / 2;
+    if (top < 0)
+        top = 0;
+    if (col < 0)
+        col = 0;
+
+    struct overlay o = {.row = 0, .col = col, .w = w, .rows = 1, .paint_row = box_row,
+                        .ud = b};
+    for (int r = top; r < top + h && r < n; r++) {
+        b->at = r - top;
+        ui_sink_begin();
+        overlay_put(rows[r] ? rows[r] : "", &o);
+        char *out = ui_sink_end();
+        if (!out)
+            continue;
+        size_t len = strlen(out);
+        while (len && (out[len - 1] == '\n' || out[len - 1] == '\r'))
+            out[--len] = '\0';
+        free(rows[r]);
+        rows[r] = out;
+    }
+}
+
+static void repaint(void)
+{
+    viewport_touch();
+    viewport_paint();
 }
 
 void keyhelp_show(const char *title, const struct keyhelp_row *rows, int n,
                   const char *foot)
 {
-    if (n <= 0 || !frontend_has_keyboard() || !tty_is_raw())
+    if (n <= 0 || !frontend_has_keyboard() || !tty_is_raw() || !viewport_active())
         return;
 
     struct help h = {title, rows, n, foot};
-    chrome_modal(paint, &h);
+    active = &h;
+    viewport_on_overlay(cover);
+    repaint();
     for (;;) {
         tty_event ev;
         if (!tty_read(&ev, POLL_MS)) {
@@ -238,12 +308,14 @@ void keyhelp_show(const char *title, const struct keyhelp_row *rows, int n,
         }
         free(ev.text);
         if (ev.key == TK_RESIZE) {
-            chrome_paint();
+            repaint();
             continue;
         }
         if (ev.key == TK_NONE || ev.key == TK_FOCUS_IN || ev.key == TK_FOCUS_OUT)
             continue;
         break;
     }
-    chrome_modal(NULL, NULL);
+    active = NULL;
+    viewport_on_overlay(NULL);
+    repaint();
 }
