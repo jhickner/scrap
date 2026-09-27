@@ -87,6 +87,12 @@ static void spin_follow(void)
 }
 
 int workspace_count(void) { return ntabs; }
+
+void workspace_republish(void)
+{
+    for (int i = 0; i < ntabs; i++)
+        session_republish(workspace_at(i));
+}
 int workspace_index(void) { return cur; }
 
 struct session *workspace_current(void)

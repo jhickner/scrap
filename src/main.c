@@ -772,6 +772,8 @@ int main(int argc, char **argv)
         imessage = 0;
     if (api_on && session && !api_start())
         api_on = 0;
+    if (telegram || relay || imessage || api_on)
+        workspace_republish();
 
     if (!session) {
         if (interactive)

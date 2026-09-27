@@ -11,6 +11,7 @@ void workspace_end(void);
 struct session *workspace_current(void);
 struct session *workspace_at(int index);
 int  workspace_count(void);
+void workspace_republish(void);
 int  workspace_index(void);
 int  workspace_index_of(const struct session *s);
 

@@ -38,8 +38,9 @@
 #define KEY_HERE   'c'
 #define KEY_ALL    '*'
 #define KEY_PULL   'a'
+#define KEY_TAKE   'y'
 
-static int show_all;
+static int show_all = 1;
 
 #define KEY_CTRL(c) ((c) & 0x1f)
 
@@ -57,6 +58,8 @@ struct row {
     int  at;
     int  spin;
     char mark[4];
+    unsigned char role;
+    char channels[48];
     char id[128];
     char parent[128];
     char cwd[512];
@@ -68,8 +71,17 @@ struct row {
 static void row_status(struct row *r, const char *status)
 {
     r->spin = status && !strcmp(status, "working");
-    snprintf(r->mark, sizeof r->mark, "%s",
-             status && !strcmp(status, "errored") ? "e" : "");
+    int errored = status && !strcmp(status, "errored");
+    snprintf(r->mark, sizeof r->mark, "%.1s", errored ? "e" : r->channels);
+    r->role = errored ? UI_ERROR : UI_OK;
+}
+
+static void add_channels(struct row *r)
+{
+    if (!r->channels[0])
+        return;
+    size_t len = strlen(r->detail);
+    snprintf(r->detail + len, sizeof r->detail - len, " \xc2\xb7 %s", r->channels);
 }
 
 static void tab_rows(struct row *rows, int *n)
@@ -92,6 +104,8 @@ static void tab_rows(struct row *rows, int *n)
         snprintf(r->detail, sizeof r->detail, "@%s %s %s", session_name(s),
                  session_backend(s),
                  models_short_name(session_backend(s), session_model_label(s)));
+        livelist_channels(r->channels, sizeof r->channels);
+        add_channels(r);
         row_status(r, status);
     }
 }
@@ -161,6 +175,8 @@ static void fill_live(struct row *r, const struct live_session *v)
     snprintf(r->detail, sizeof r->detail, "%s%s%s%s %s", v->name[0] ? "@" : "", v->name,
                  v->name[0] ? " " : "", v->backend,
                  models_short_name(v->backend, v->label[0] ? v->label : v->model));
+    snprintf(r->channels, sizeof r->channels, "%s", v->channels);
+    add_channels(r);
     if (where[0])
         snprintf(r->when, sizeof r->when, "%s%s", where, when);
     else
@@ -273,6 +289,12 @@ static int group_rows(const struct row *in, int n, struct row *out,
         }
         if (!group)
             break;
+
+        if (*group && m < max) {
+            out[m] = (struct row){.kind = ROW_HEAD};
+            snprintf(out[m].label, sizeof out[m].label, "%s", group);
+            heading[m++] = PICK_HEADING;
+        }
 
         emit_tree(in, n, used, out, heading, &m, max, group, NULL, 0);
 
@@ -586,7 +608,7 @@ struct listing {
     int                  n;
     unsigned char       *spin;
     const char         **marks;
-    const char         **leads;
+    unsigned char       *roles;
     const char         **tails;
     struct live_session **live;
     int                 *nlive;
@@ -599,7 +621,7 @@ static void sync_columns(struct listing *l)
     for (int i = 0; i < l->n; i++) {
         l->spin[i] = (unsigned char)l->rows[i].spin;
         l->marks[i] = l->rows[i].mark;
-        l->leads[i] = l->rows[i].cwd;
+        l->roles[i] = l->rows[i].role;
         l->tails[i] = l->rows[i].when;
     }
 }
@@ -680,15 +702,15 @@ static int switch_once(void)
     unsigned char *heading = calloc(MAX_ROWS, 1);
     unsigned char *spin = calloc(MAX_ROWS, 1);
     const char **marks = calloc(MAX_ROWS, sizeof *marks);
-    const char **leads = calloc(MAX_ROWS, sizeof *leads);
+    unsigned char *roles = calloc(MAX_ROWS, 1);
     const char **tails = calloc(MAX_ROWS, sizeof *tails);
-    if (!found || !rows || !heading || !spin || !marks || !leads || !tails) {
+    if (!found || !rows || !heading || !spin || !marks || !roles || !tails) {
         free(found);
         free(rows);
         free(heading);
         free(spin);
         free(marks);
-        free(leads);
+        free(roles);
         free(tails);
         free(live);
         return 0;
@@ -727,7 +749,7 @@ static int switch_once(void)
         free(heading);
         free(spin);
         free(marks);
-        free(leads);
+        free(roles);
         free(tails);
         free(live);
         return 0;
@@ -738,7 +760,7 @@ static int switch_once(void)
     }
 
     char shortcuts[24] = {KEY_CLOSE, KEY_NEW, KEY_ASK, KEY_GO, KEY_RENAME,
-                          KEY_ALL, KEY_HERE, KEY_PULL,
+                          KEY_ALL, KEY_HERE, KEY_PULL, KEY_TAKE, '\t',
                           KEY_CTRL(KEY_CLOSE), KEY_CTRL(KEY_NEW), KEY_CTRL(KEY_ASK),
                           KEY_CTRL(KEY_GO), KEY_CTRL(KEY_RENAME),
                           '\n', PICK_KEY_RIGHT, 0};
@@ -746,12 +768,12 @@ static int switch_once(void)
 
     char title[256];
     snprintf(title, sizeof title, "sessions");
-    struct listing listing = {rows, n, spin, marks, leads, tails, &live,
+    struct listing listing = {rows, n, spin, marks, roles, tails, &live,
                               &nlive, 0, 0};
     sync_columns(&listing);
     listing.sig = listing_sig(&listing);
-    struct pick_live shown = {.heading = heading, .spin = spin, .mark = marks,
-                              .lead = leads, .tail = tails,
+    struct pick_live shown = {.heading = heading, .spin = spin, .mark = marks, .mark_role = roles,
+                              .tail = tails,
                               .align = 1, .tick = relist, .ud = &listing};
     int picked = pick_run_live(title, items, n, initial, &shown, PICK_SEARCH_SLASH,
                                shortcuts, &pressed);
@@ -774,7 +796,7 @@ static int switch_once(void)
     free(heading);
     free(spin);
     free(marks);
-    free(leads);
+    free(roles);
     free(tails);
 
     if (pressed == KEY_ALL) {
@@ -837,6 +859,13 @@ static int switch_once(void)
         return 1;
     }
 
+    if (pressed == KEY_TAKE) {
+        if (chosen.kind == ROW_LIVE)
+            yank(&live[chosen.at]);
+        free(live);
+        return 0;
+    }
+
     if (pressed == KEY_GO || pressed == '\n') {
         if (chosen.kind == ROW_LIVE) {
             jump(&live[chosen.at]);
@@ -868,7 +897,7 @@ static int switch_once(void)
         workspace_show(chosen.at);
         break;
     case ROW_LIVE:
-        yank(&live[chosen.at]);
+        jump(&live[chosen.at]);
         break;
     case ROW_NEW:
         {
