@@ -99,10 +99,12 @@ static void row_paint(const struct row *r, int cols)
 
 static void row_name(const struct session *s, struct row *r)
 {
-    if (!session_name(s)[0])
-        return;
     row_add(r, UI_BRAND, UI_BAR " ");
-    row_add(r, UI_ACCENT, "@%s", session_name(s));
+    row_add(r, UI_BOLD, APP_NAME);
+    if (session_name(s)[0]) {
+        row_add(r, UI_DIM, SEP);
+        row_add(r, UI_ACCENT, "@%s", session_name(s));
+    }
 }
 
 static void row_identity(const struct session *s, struct row *r)
@@ -114,8 +116,7 @@ static void row_identity(const struct session *s, struct row *r)
     int         count = workspace_count();
 
     row_add(r, UI_BRAND, UI_BAR " ");
-    row_add(r, UI_BOLD, APP_NAME);
-    row_add(r, UI_DIM, SEP "%s" SEP "%s%s%s", backend, model,
+    row_add(r, UI_DIM, "%s" SEP "%s%s%s", backend, model,
             effort ? SEP : "", effort ? effort : "");
     if (count > 1)
         row_add(r, UI_ACCENT, SEP "session %d/%d", workspace_index() + 1, count);
@@ -129,6 +130,9 @@ static void row_identity(const struct session *s, struct row *r)
         row_add(r, UI_OK, SEP "%s", voice_label());
     if (api_active())
         row_add(r, UI_OK, SEP "api");
+    int percent = session_context_percent(s);
+    if (percent >= 0)
+        row_add(r, UI_DIM, " \xc2\xb7 %d%%", percent);
 }
 
 static void row_location(const struct session *s, struct row *r)
@@ -139,7 +143,6 @@ static void row_location(const struct session *s, struct row *r)
     path_home_relative(dir, path, sizeof path);
 
     const struct gitinfo *g = gitinfo_get(dir);
-    int percent = session_context_percent(s);
 
     row_add(r, UI_BRAND, UI_BAR " ");
     row_add(r, UI_CHROME, "%s", path);
@@ -154,8 +157,6 @@ static void row_location(const struct session *s, struct row *r)
     if (g->dirty || g->untracked)
         row_add(r, UI_ERROR, " [%s%s]", g->dirty ? "!" : "",
                 g->untracked ? "?" : "");
-    if (percent >= 0)
-        row_add(r, UI_DIM, " \xc2\xb7 %d%%", percent);
 
     long in = session_tokens_in(s), out = session_tokens_out(s);
     long cached = session_tokens_cached(s);
@@ -316,6 +317,17 @@ void hud_print(const struct session *s)
 void hud_print_launch(const struct session *s)
 {
     hud_emit(s, 1);
+}
+
+void hud_refresh(const struct session *s)
+{
+    unsigned    mark = viewport_item_find(HUD_KIND);
+    struct hud *h = mark && s ? viewport_item_data(mark) : NULL;
+    if (!h)
+        return;
+    hud_fill(h, s);
+    viewport_item_update(mark);
+    ui_flush();
 }
 
 int hud_restarted(void)

@@ -19,8 +19,10 @@ static void replay_tab(struct session *s, void *ud)
     struct stat st;
 
     if (screen && *screen && stat(screen, &st) == 0 && st.st_size > 0 &&
-        scrollback_restore(screen))
+        scrollback_restore(screen)) {
+        hud_refresh(s);
         return;
+    }
     hud_print(s);
     sessionload_into(s);
 }

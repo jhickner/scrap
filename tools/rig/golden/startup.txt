@@ -23,8 +23,8 @@
 
 ▌ ▄▀▀ ▄▀▀ █▀▄ ▄▀▄ █▀▄
 ▌ ▄▄▀ ▀▄▄ █▀▄ █▀█ █▀
-▌ @<name>
-▌ scrap › claude › default › medium
+▌ scrap › @<name>
+▌ claude › default › medium
 ▌ <rig>/work
 
 ❯

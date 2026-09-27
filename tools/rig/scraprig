@@ -36,7 +36,7 @@ inst() {
 
 screen() { tm "$1" capture-pane -p -t rig "${@:2}"; }
 
-snap() { screen "$@" | sed -e "s|/private$ROOT/$1|<rig>|g" -e "s|$ROOT/$1|<rig>|g" -e "s|^▌ @[a-z0-9-]*|▌ @<name>|"; }
+snap() { screen "$@" | sed -e "s|/private$ROOT/$1|<rig>|g" -e "s|$ROOT/$1|<rig>|g" -e "s|^▌ scrap › @[a-z0-9_-]*|▌ scrap › @<name>|"; }
 
 dead() { [ "$(tm "$1" display -p -t rig '#{pane_dead}' 2>/dev/null || echo 1)" = 1 ]; }
 

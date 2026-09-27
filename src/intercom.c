@@ -529,6 +529,8 @@ static int request(long pid, cJSON *body, char *reply, size_t size)
             free(got);
             return 1;
         }
+        if (pid == getpid())
+            dispatch_poll();
         usleep(100000);
     }
     unlink(req);
@@ -576,6 +578,44 @@ static char *spill(const char *text)
                          strlen(text), path);
 }
 
+int intercom_send(const char *from, const char *target, const char *text, char *msg,
+                  size_t size)
+{
+    struct entries l = {0};
+    char           cwd[4096];
+    collect(&l, here(cwd, sizeof cwd) ? cwd : NULL, 0, 1);
+    const struct entry *e = resolve(&l, target);
+    int                 rc = 1;
+    if (!e)
+        snprintf(msg, size, "no session matches %s", target);
+    else if (!e->live)
+        snprintf(msg, size, "%s is not live; resume it with `scrap open %s`", target, target);
+    else {
+        char  *long_text = strlen(text) > INLINE_MAX ? spill(text) : NULL;
+        char   reply[1024] = "";
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "send", long_text ? long_text : text);
+        cJSON_AddStringToObject(o, "session", e->id);
+        if (from && *from)
+            cJSON_AddStringToObject(o, "from", from);
+        if (request(e->pid, o, reply, sizeof reply)) {
+            cJSON      *r = cJSON_Parse(reply);
+            const char *error = cJSON_GetStringValue(cJSON_GetObjectItem(r, "error"));
+            if (error)
+                snprintf(msg, size, "%s", error);
+            else
+                snprintf(msg, size, "sent to @%s", e->name[0] ? e->name : e->id);
+            rc = error ? 1 : 0;
+            cJSON_Delete(r);
+        } else
+            snprintf(msg, size, "could not write the request");
+        cJSON_Delete(o);
+        free(long_text);
+    }
+    free(l.e);
+    return rc;
+}
+
 static int cmd_send(int argc, char **argv)
 {
     if (argc < 3) {
@@ -594,31 +634,14 @@ static int cmd_send(int argc, char **argv)
         strcat(text, argv[i]);
     }
 
-    struct entries      l = {0};
-    const struct entry *e = lookup(&l, argv[1]);
-    int                 rc = 1;
-    if (e && !e->live)
-        fprintf(stderr, "scrap: %s is not live; resume it with `scrap open %s`\n", argv[1],
-                argv[1]);
-    else if (e) {
-        char *long_text = strlen(text) > INLINE_MAX ? spill(text) : NULL;
-        char  me[INTERCOM_NAME_MAX], reply[1024] = "";
-        self_name(me, sizeof me);
-        cJSON *o = cJSON_CreateObject();
-        cJSON_AddStringToObject(o, "send", long_text ? long_text : text);
-        cJSON_AddStringToObject(o, "session", e->id);
-        if (me[0])
-            cJSON_AddStringToObject(o, "from", me);
-        char done[200];
-        snprintf(done, sizeof done, "sent to @%s", e->name[0] ? e->name : e->id);
-        rc = request(e->pid, o, reply, sizeof reply) ? answered(reply, done) : 1;
-        if (rc && !reply[0])
-            fprintf(stderr, "scrap: could not write the request\n");
-        cJSON_Delete(o);
-        free(long_text);
-    }
+    char me[INTERCOM_NAME_MAX], msg[1200];
+    self_name(me, sizeof me);
+    int rc = intercom_send(me, argv[1], text, msg, sizeof msg);
+    if (rc)
+        fprintf(stderr, "scrap: %s\n", msg);
+    else
+        printf("%s\n", msg);
     free(text);
-    free(l.e);
     return rc;
 }
 

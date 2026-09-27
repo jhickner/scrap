@@ -22,6 +22,7 @@
 #include "restart.h"
 #include "session.h"
 #include "image.h"
+#include "intercom.h"
 #include "sessionfork.h"
 #include "sessionlist.h"
 #include "gitinfo.h"
@@ -1169,6 +1170,32 @@ static void do_name(struct session *s, const char *arg)
     ui_flush();
 }
 
+static void do_send(struct session *s, const char *arg)
+{
+    char        target[INTERCOM_NAME_MAX + 2];
+    const char *text = arg ? strchr(arg, ' ') : NULL;
+    size_t      n = text ? (size_t)(text - arg) : 0;
+
+    viewport_item_begin(VIEWPORT_ROWS(1, 1));
+    if (!text || n >= sizeof target) {
+        ui_error("usage: /send @name text");
+    } else {
+        memcpy(target, arg, n);
+        target[n] = '\0';
+        while (*text == ' ')
+            text++;
+        char msg[1200];
+        if (!*text)
+            ui_error("usage: /send @name text");
+        else if (intercom_send(session_name(s), target, text, msg, sizeof msg))
+            ui_error("%s", msg);
+        else
+            ui_note("%s", msg);
+    }
+    viewport_item_end();
+    ui_flush();
+}
+
 static int split_command(const char *line, char *name, size_t size, const char **arg)
 {
     if (*line != '/')
@@ -1331,6 +1358,29 @@ static void do_fork_t(struct session *s, const char *arg)
     ui_flush();
 }
 
+static void do_fork(struct session *s, const char *arg)
+{
+    static const struct {
+        const char *name;
+        void      (*run)(struct session *s, const char *arg);
+    } kinds[] = {
+        {"tab", do_fork_t},
+        {"horizontal", do_fork_h},
+        {"vertical", do_fork_v},
+        {"window", do_fork_w},
+    };
+    size_t n = strlen(arg ? arg : "");
+    int    hit = n ? -1 : 0;
+    for (size_t i = 0; n && i < COUNT(kinds); i++)
+        if (!strncmp(kinds[i].name, arg, n))
+            hit = hit == -1 ? (int)i : -2;
+    if (hit < 0) {
+        reply_error("usage: /fork [tab|horizontal|vertical|window]");
+        return;
+    }
+    kinds[hit].run(s, NULL);
+}
+
 static const struct cmd COMMANDS[] = {
     {"/new", "open a new session, or a new tab running the prompt",
      "[prompt]", CMD_SELF_ECHOES | CMD_LIVE_ARG, do_new},
@@ -1358,19 +1408,17 @@ static const struct cmd COMMANDS[] = {
      CMD_LIVE, do_sessions},
     {"/reopen", "bring back the sessions of a window that is gone", NULL, 0,
      do_reopen},
-    {"/fh", "fork into a horizontal tmux split", NULL, CMD_LIVE, do_fork_h},
-    {"/fs", "alias for /fh", NULL, CMD_LIVE, do_fork_h},
-    {"/fv", "fork into a vertical tmux split", NULL, CMD_LIVE, do_fork_v},
-    {"/fw", "fork into a tmux window", NULL, CMD_LIVE, do_fork_w},
-    {"/ft", "fork into a new tab", NULL, CMD_LIVE, do_fork_t},
+    {"/fork", "fork into a new tab, tmux split, or tmux window",
+     "[tab|horizontal|vertical|window]", CMD_LIVE, do_fork},
     {"/split", "open a shell split in this directory", "[h|v|w]", 0, do_split},
     {"/status", "reprint the status bar", NULL, CMD_LIVE, do_status},
     {"/session", "show this session's info and totals", NULL, CMD_LIVE, do_session},
     {"/tokenomics", "token and cache breakdown for this session, per turn", NULL,
      CMD_LIVE, do_tokenomics},
-    {"/rename", "name this session, or ask the model to name it again", "[name]",
+    {"/title", "set this session's title, or ask the model to title it again", "[title]",
      0, do_rename},
     {"/name", "show or set this session's @name for scrap send", "[name]", 0, do_name},
+    {"/send", "send a message to another session", "@name text", CMD_LIVE_ARG, do_send},
     {"/tail", "show bot messages that arrived since the last shown", "[count]", 0,
      do_tail},
     {"/vnc", "show the bot's desktop in an inset", "[left|right|off|test|size <percent>]",
@@ -1385,10 +1433,18 @@ static const struct cmd COMMANDS[] = {
 
 static const struct cmd *cmd_named(const char *name)
 {
-    for (size_t i = 0; i < COUNT(COMMANDS); i++)
+    const struct cmd *hit = NULL;
+    size_t            n = strlen(name);
+    for (size_t i = 0; i < COUNT(COMMANDS); i++) {
         if (!strcmp(COMMANDS[i].name, name))
             return &COMMANDS[i];
-    return NULL;
+        if (n > 1 && !(COMMANDS[i].flags & CMD_HIDDEN) && !strncmp(COMMANDS[i].name, name, n)) {
+            if (hit)
+                return NULL;
+            hit = &COMMANDS[i];
+        }
+    }
+    return hit;
 }
 
 static const struct cmd *cmd_for_line(const char *line, const char **arg)
@@ -1564,23 +1620,7 @@ static void do_help(struct session *s, const char *arg)
             snprintf(label, sizeof label, "%s", COMMANDS[i].name);
         help_row(label, COMMANDS[i].desc);
     }
-    ui_put("\n");
-    help_heading("shortcuts");
-
-    int                      key_count = 0;
-    const struct prompt_key *keys = prompt_shortcuts(&key_count);
-    for (int i = 0; i < key_count; i++) {
-        char label[48];
-        snprintf(label, sizeof label, "%s%s", keys[i].key,
-                 keys[i].when == PROMPT_KEY_TURN ? " (turn)" : "");
-        help_row(label, keys[i].desc);
-    }
-    ui_put("\n");
-    help_heading("skills");
-    help_row("", "your skills, CLAUDE.md, MCP servers and agents load by default.");
-    help_row("", "any slash command not listed above goes to the agent CLI, so");
-    help_row("", "/w, /todo and the rest work here. start with -s to run without");
-    help_row("", "them; /session shows what is active.");
+    help_row("?", "key help, on an empty prompt");
     viewport_item_end();
     ui_flush();
 }

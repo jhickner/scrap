@@ -918,6 +918,9 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    if (restore_arg)
+        hud_refresh(session);
+
     if (!resume || !cmd_resume(session))
         hud_print_launch(session);
 
