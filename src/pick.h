@@ -30,6 +30,8 @@ enum pick_search {
 #define PICK_APART   2
 #define PICK_TEXT    3
 
+struct keyhelp_row;
+
 struct pick_live {
     const unsigned char *heading;
 
@@ -41,6 +43,9 @@ struct pick_live {
     const char *const *tail;
 
     const char *hint;
+
+    const struct keyhelp_row *keys;
+    int                       nkeys;
 
     const char *ask;
 

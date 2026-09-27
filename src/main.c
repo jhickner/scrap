@@ -522,6 +522,12 @@ static int cancel_turn(void *ud)
     return 1;
 }
 
+static int turn_running(void *ud)
+{
+    (void)ud;
+    return session_turn_running(workspace_current());
+}
+
 static int discard_voice(void *ud)
 {
     (void)ud;
@@ -862,6 +868,7 @@ int main(int argc, char **argv)
     prompt_set_split(prompt, splitter, NULL);
     prompt_set_another(prompt, another, NULL);
     prompt_set_step(prompt, step, NULL);
+    prompt_set_busy(prompt, turn_running, NULL);
     prompt_set_cycle(prompt, cycle_session, NULL);
     prompt_set_collapse(prompt, collapse_tools, NULL);
     view_collapse(session_compact(session));

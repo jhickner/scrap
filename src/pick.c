@@ -1,4 +1,5 @@
 #include "pick.h"
+#include "keyhelp.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -313,6 +314,53 @@ static void refilter(struct view *v)
     v->visible = v->count < cap ? v->count : cap;
     if (v->visible < 1)
         v->visible = 1;
+}
+
+static const struct keyhelp_row LIST_KEYS[] = {
+    {"LIST", "up/down", "move"},
+    {"LIST", "home/end", "first / last"},
+    {"LIST", "enter", "choose"},
+    {"LIST", "esc", "cancel"},
+};
+
+static const struct keyhelp_row FILTER_KEYS[] = {
+    {"FILTER", "type", "filter the list"},
+    {"FILTER", "ctrl-u", "clear the filter"},
+    {"FILTER", "esc", "clear the filter, else cancel"},
+};
+
+static const struct keyhelp_row SLASH_KEYS[] = {
+    {"SEARCH", "/", "search the list"},
+    {"SEARCH", "esc", "clear the search"},
+};
+
+static const struct keyhelp_row NUMBER_KEYS[] = {
+    {"LIST", "1-9", "jump to that row"},
+};
+
+static void paint(void *ud);
+
+static void show_keys(struct view *v)
+{
+    struct keyhelp_row rows[32];
+    int n = 0;
+#define ADD(t) for (size_t k = 0; k < sizeof t / sizeof *t && n < 32; k++) rows[n++] = t[k]
+    if (v->live && v->live->keys) {
+        for (int k = 0; k < v->live->nkeys && n < 32; k++)
+            rows[n++] = v->live->keys[k];
+    } else {
+        ADD(LIST_KEYS);
+        if (!v->filter)
+            ADD(NUMBER_KEYS);
+    }
+    if (v->filter && v->slash)
+        ADD(SLASH_KEYS);
+    else if (v->filter)
+        ADD(FILTER_KEYS);
+#undef ADD
+    keyhelp_show(v->title, rows, n,
+                 v->filter && !v->slash ? KEYHELP_FOOT_F1 : KEYHELP_FOOT_ALL);
+    chrome_modal(paint, v);
 }
 
 static int run(const char *title, const struct pick_item *items, int count,
@@ -730,6 +778,9 @@ static int run(const char *title, const struct pick_item *items, int count,
         }
         case TK_LEFT:
             goto done;
+        case TK_F1:
+            show_keys(&v);
+            break;
         case TK_TAB:
             if (shortcuts && strchr(shortcuts, '\t'))
                 goto done;
@@ -773,6 +824,10 @@ static int run(const char *title, const struct pick_item *items, int count,
             if (filter && ev.cp == 21) {
                 v.query[0] = '\0';
                 refilter(&v);
+                break;
+            }
+            if (ev.cp == '?' && !typing) {
+                show_keys(&v);
                 break;
             }
             if (filter && slash && !v.searching && ev.cp == '/') {

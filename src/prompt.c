@@ -1,4 +1,5 @@
 #include "prompt.h"
+#include "keyhelp.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -79,6 +80,8 @@ struct prompt {
     void        *another_ud;
     void       (*step)(void *ud, int dir);
     void        *step_ud;
+    int        (*busy)(void *ud);
+    void        *busy_ud;
     void       (*cycle)(void *ud, int delta);
     void        *cycle_ud;
     void       (*collapse)(void *ud);
@@ -667,35 +670,128 @@ static void cycle_colors(struct prompt *p, int live, int mine)
 #define KEY_CTRL(c) ((c) - 'A' + 1)
 
 static const struct prompt_key SHORTCUTS[] = {
-    {"enter", "submit prompt, or queue it while a turn is running"},
-    {"enter (empty)", "reprint the status bar"},
-    {"ctrl-j", "insert a newline"},
-    {"ctrl-a / ctrl-e", "jump to the start / end of the line"},
-    {"ctrl-w", "delete the word before the cursor"},
-    {"ctrl-u / ctrl-k", "delete to the start / end of the line"},
-    {"ctrl-y", "paste back the last deleted text"},
-    {"ctrl-_", "undo the last edit"},
-    {"ctrl-g", "edit the prompt in $EDITOR"},
-    {"ctrl-v", "paste text, or a clipboard image as a file path"},
-    {"space (empty)", "turn the microphone on or off"},
-    {"tab", "accept the completion, else open /sessions"},
-    {"@", "complete a file path from the working directory"},
-    {"up / down", "move through the completion list, else browse history"},
-    {"ctrl-r", "search history"},
-    {"esc", "close the completion, else drop voice input, else interrupt the model"},
-    {"ctrl-c", "clear the prompt line and its dictation, or interrupt a running turn"},
-    {"ctrl-d (empty)", "close the session (quit on the last one)"},
-    {"left (empty)", "open the list of every session"},
-    {"ctrl-tab / ctrl-shift-tab", "cycle to the next / previous session"},
-    {"ctrl-t", "open a shell split in this directory"},
-    {"ctrl-b", "open another session like this one, or reuse the idle one"},
-    {"ctrl-o / ctrl-p", "step back / forward through recently active sessions"},
-    {"ctrl-n", "cycle the colours of your input"},
-    {"ctrl-f", "compact or full tool calls, redrawing the transcript"},
-    {"page up/down", "scroll the transcript half a screen"},
-    {"click an image", "open it at full size, \xe2\x86\x90\xe2\x86\x92 to step"},
-    {"ctrl-l", "clear the screen"},
+    {"SESSIONS", "tab", "sessions list",
+     "accept the completion, else open /sessions", PROMPT_KEY_ALWAYS},
+    {"SESSIONS", "left", "sessions list (empty line)",
+     "on an empty line, open /sessions", PROMPT_KEY_ALWAYS},
+    {"SESSIONS", "ctrl-o/p", "back / forward",
+     "step back / forward through recently active sessions", PROMPT_KEY_ALWAYS},
+    {"SESSIONS", "ctrl-tab", "next tab, +shift previous",
+     "cycle to the next / previous session", PROMPT_KEY_ALWAYS},
+    {"SESSIONS", "ctrl-b", "another session",
+     "open another session like this one, or reuse the idle one", PROMPT_KEY_ALWAYS},
+    {"SESSIONS", "ctrl-t", "shell split",
+     "open a shell split in this directory", PROMPT_KEY_ALWAYS},
+    {"SESSIONS", "ctrl-d", "close (empty line)",
+     "on an empty line, close the session (quit on the last one)", PROMPT_KEY_ALWAYS},
+    {"EDIT", "ctrl-a/e", "line start / end",
+     "jump to the start / end of the line", PROMPT_KEY_ALWAYS},
+    {"EDIT", "ctrl-w", "delete word",
+     "delete the word before the cursor", PROMPT_KEY_ALWAYS},
+    {"EDIT", "ctrl-u/k", "delete to start / end",
+     "delete to the start / end of the line", PROMPT_KEY_ALWAYS},
+    {"EDIT", "ctrl-y", "paste deleted text",
+     "paste back the last deleted text", PROMPT_KEY_ALWAYS},
+    {"EDIT", "ctrl-_", "undo",
+     "undo the last edit", PROMPT_KEY_ALWAYS},
+    {"EDIT", "ctrl-j", "newline",
+     "insert a newline", PROMPT_KEY_ALWAYS},
+    {"EDIT", "ctrl-g", "edit in $EDITOR",
+     "edit the prompt in $EDITOR", PROMPT_KEY_ALWAYS},
+    {"EDIT", "ctrl-v", "paste text or image",
+     "paste text, or a clipboard image as a file path", PROMPT_KEY_ALWAYS},
+    {"EDIT", "ctrl-r", "search history",
+     "search history", PROMPT_KEY_ALWAYS},
+    {"EDIT", "up/down", "history",
+     "move through the completion list, else browse history", PROMPT_KEY_ALWAYS},
+    {"EDIT", "@", "complete a path",
+     "complete a file path from the working directory", PROMPT_KEY_ALWAYS},
+    {"VIEW", "ctrl-f", "compact tool calls",
+     "compact or full tool calls, redrawing the transcript", PROMPT_KEY_ALWAYS},
+    {"VIEW", "pgup/dn", "scroll transcript",
+     "scroll the transcript half a screen", PROMPT_KEY_ALWAYS},
+    {"VIEW", "ctrl-l", "clear screen",
+     "clear the screen", PROMPT_KEY_ALWAYS},
+    {"VIEW", "ctrl-n", "input colour",
+     "cycle the colours of your input", PROMPT_KEY_ALWAYS},
+    {"VIEW", "click img", "full size",
+     "open an image at full size, \xe2\x86\x90\xe2\x86\x92 to step", PROMPT_KEY_ALWAYS},
+    {"VIEW", "? / F1", "this help",
+     "on an empty line, show the keys for the current view", PROMPT_KEY_ALWAYS},
+    {"INPUT", "enter", "send",
+     "submit the prompt", PROMPT_KEY_IDLE},
+    {"INPUT", "enter", "status bar (empty line)",
+     "on an empty line, reprint the status bar", PROMPT_KEY_IDLE},
+    {"INPUT", "space", "microphone (empty line)",
+     "on an empty line, turn the microphone on or off", PROMPT_KEY_ALWAYS},
+    {"INPUT", "!cmd", "run in $SHELL",
+     "run cmd in $SHELL instead of sending it to the agent", PROMPT_KEY_ALWAYS},
+    {"INPUT", "esc", "close / drop voice",
+     "close the completion, else drop voice input", PROMPT_KEY_IDLE},
+    {"INPUT", "ctrl-c", "clear the line",
+     "clear the prompt line and its dictation", PROMPT_KEY_IDLE},
+    {"TURN", "enter", "queue the line",
+     "queue the prompt until the running turn ends", PROMPT_KEY_TURN},
+    {"TURN", "esc", "interrupt",
+     "close the completion, else drop voice input, else interrupt the model", PROMPT_KEY_TURN},
+    {"TURN", "ctrl-c", "clear, else interrupt",
+     "clear the prompt line, else interrupt the running turn", PROMPT_KEY_TURN},
 };
+
+static const struct keyhelp_row COMPLETION_KEYS[] = {
+    {"COMPLETION", "up/down", "move"},
+    {"COMPLETION", "tab", "accept"},
+    {"COMPLETION", "enter", "accept"},
+    {"COMPLETION", "esc", "close"},
+};
+
+static const struct keyhelp_row SEARCH_KEYS[] = {
+    {"HISTORY SEARCH", "type", "narrow the match"},
+    {"HISTORY SEARCH", "ctrl-r", "older match"},
+    {"HISTORY SEARCH", "enter", "put it on the line"},
+    {"HISTORY SEARCH", "arrows", "accept and move"},
+    {"HISTORY SEARCH", "esc", "cancel"},
+};
+
+#define COUNT_OF(a) ((int)(sizeof(a) / sizeof *(a)))
+
+static void show_keys(struct prompt *p, int live)
+{
+    struct keyhelp_row rows[COUNT_OF(SHORTCUTS)];
+    const struct keyhelp_row *shown = rows;
+    const char *title = "prompt";
+    const char *foot = KEYHELP_FOOT_ALL;
+    int n = 0;
+
+    if (p->repl.searching) {
+        shown = SEARCH_KEYS;
+        n = COUNT_OF(SEARCH_KEYS);
+        title = "history search";
+        foot = KEYHELP_FOOT_F1;
+    } else if (p->repl.dropdown_open) {
+        shown = COMPLETION_KEYS;
+        n = COUNT_OF(COMPLETION_KEYS);
+        title = "completion";
+        foot = KEYHELP_FOOT_F1;
+    } else {
+        int turn = live || (p->busy && p->busy(p->busy_ud));
+        enum prompt_key_when skip = turn ? PROMPT_KEY_IDLE : PROMPT_KEY_TURN;
+        for (int i = 0; i < COUNT_OF(SHORTCUTS); i++)
+            if (SHORTCUTS[i].when != skip)
+                rows[n++] = (struct keyhelp_row){SHORTCUTS[i].group, SHORTCUTS[i].key,
+                                                 SHORTCUTS[i].brief};
+        if (turn)
+            title = "prompt \xc2\xb7 turn running";
+    }
+
+    if (live)
+        status_pause();
+    viewport_defer();
+    chrome_clear();
+    keyhelp_show(title, shown, n, foot);
+    if (live)
+        status_resume();
+}
 
 const struct prompt_key *prompt_shortcuts(int *count)
 {
@@ -788,6 +884,10 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             }
             return KEY_OK;
         }
+        if (ev->cp == '?' && p->repl.len == 0 && !overlay_open(p)) {
+            show_keys(p, live);
+            return KEY_OK;
+        }
         if (ev->cp == KEY_CTRL('O') || ev->cp == KEY_CTRL('P')) {
             if (p->step && !overlay_open(p)) {
                 if (live)
@@ -827,6 +927,10 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             if (live)
                 status_resume();
         }
+        return KEY_OK;
+
+    case TK_F1:
+        show_keys(p, live);
         return KEY_OK;
 
     case TK_TAB:
@@ -1033,6 +1137,12 @@ void prompt_set_step(struct prompt *p, void (*fn)(void *ud, int dir), void *ud)
 {
     p->step = fn;
     p->step_ud = ud;
+}
+
+void prompt_set_busy(struct prompt *p, int (*fn)(void *ud), void *ud)
+{
+    p->busy = fn;
+    p->busy_ud = ud;
 }
 
 void prompt_set_cycle(struct prompt *p, void (*fn)(void *ud, int delta), void *ud)
