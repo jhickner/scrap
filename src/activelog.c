@@ -109,14 +109,22 @@ int activelog_step(const char *path, const char *here, int dir,
         return 0;
     }
 
-    struct entry last = {NULL, 0};
+    struct entry *all = malloc(((size_t)n + 1) * sizeof *all);
+    if (!all) {
+        free(lines);
+        free(text);
+        return 0;
+    }
+    for (int i = 0; i < n; i++)
+        all[i] = parse(lines[i]);
+
+    struct entry last = n ? all[n - 1] : (struct entry){NULL, 0};
     const char *order[SEEN_MAX];
     int count = 0;
     for (int i = n - 1; i >= 0 && count < SEEN_MAX; i--) {
-        struct entry e = parse(lines[i]);
-        if (i == n - 1)
-            last = e;
-        if (!e.id || !*e.id || e.back)
+        struct entry e = all[i];
+        int stopped = i + 1 < n && all[i + 1].id && !all[i + 1].back;
+        if (!e.id || !*e.id || (e.back && !stopped))
             continue;
         int seen = 0;
         for (int k = 0; k < count && !seen; k++)
@@ -138,6 +146,7 @@ int activelog_step(const char *path, const char *here, int dir,
     }
     if (found >= 0)
         snprintf(out, size, "%s", order[found]);
+    free(all);
     free(lines);
     free(text);
     if (found < 0)
