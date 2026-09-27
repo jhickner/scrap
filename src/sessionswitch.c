@@ -997,6 +997,8 @@ static int switch_once(void)
     if (pressed == KEY_CLOSE) {
         if (chosen.kind == ROW_TAB) {
             int last = workspace_count() <= 1;
+            if (chosen.at == workspace_index())
+                sessionswitch_step(-1);
             workspace_close(chosen.at);
             if (last) {
                 free(live);
