@@ -84,6 +84,7 @@ struct row {
     char label[256];
     char detail[512];
     char when[48];
+    long ts;
 };
 
 static void row_status(struct row *r, const char *status)
@@ -217,6 +218,7 @@ static void live_rows(struct row *rows, int *n, const struct live_session *live,
         snprintf(r->id, sizeof r->id, "%s", v->id);
         snprintf(r->parent, sizeof r->parent, "%s", v->parent);
         path_home_relative(v->cwd, r->cwd, sizeof r->cwd);
+        r->ts = v->ts;
         fill_live(r, v);
     }
 }
@@ -291,19 +293,33 @@ static void emit_tree(const struct row *in, int n, char *used, struct row *out,
     }
 }
 
+static long group_ts(const struct row *in, int n, const char *group)
+{
+    long ts = 0;
+    for (int i = 0; i < n; i++)
+        if (!strcmp(in[i].cwd, group) && in[i].ts > ts)
+            ts = in[i].ts;
+    return ts;
+}
+
 static int group_rows(const struct row *in, int n, struct row *out,
                       unsigned char *heading, int max)
 {
     char used[MAX_ROWS] = {0};
     int m = 0;
+    int recent = !strcmp(settings_get_str(SETTING_FOLDER_SORT, "name"), "recent");
 
     for (;;) {
         const char *group = NULL;
+        long best = 0;
         for (int i = 0; i < n; i++) {
             if (used[i])
                 continue;
-            if (!group || strcmp(in[i].cwd, group) < 0)
+            long ts = recent ? group_ts(in, n, in[i].cwd) : 0;
+            if (!group || ts > best || (ts == best && strcmp(in[i].cwd, group) < 0)) {
                 group = in[i].cwd;
+                best = ts;
+            }
         }
         if (!group)
             break;
@@ -813,6 +829,10 @@ static int switch_once(void)
     panes_load();
     tab_rows(found, &nfound);
     live_rows(found, &nfound, live, nlive);
+    for (int i = 0; i < nfound; i++)
+        for (int j = 0; found[i].kind == ROW_TAB && j < nlive; j++)
+            if (live[j].mine && !strcmp(live[j].id, found[i].id))
+                found[i].ts = live[j].ts;
 
     int n = group_rows(found, nfound, rows, heading, MAX_ROWS);
     free(found);

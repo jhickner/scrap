@@ -26,6 +26,8 @@
 
 #define SETTING_BACKEND      "backend"
 
+#define SETTING_FOLDER_SORT  "folder_sort"
+
 #define SETTING_CHROME       "chrome"
 
 #define SETTING_SHUNT        "shunt"
