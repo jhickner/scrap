@@ -157,7 +157,7 @@ static char *resolve(const char *home, const char *typed)
     return strdup(path);
 }
 
-char *dirpick_run(const char *title, const char *current)
+char *dirpick_run(const char *title)
 {
     const char *home = getenv("HOME");
     if (!home || !*home)
@@ -171,15 +171,7 @@ char *dirpick_run(const char *title, const char *current)
     walk(&l, root, "~/working", 1);
     qsort(l.items, (size_t)l.count, sizeof *l.items, cmp_item);
 
-    char now[4096] = "";
-    if (current)
-        path_home_relative(current, now, sizeof now);
-    int initial = 0;
-    for (int i = 0; i < l.count; i++)
-        if (!strcmp(l.items[i].label, now))
-            initial = i;
-
-    int   which = l.count ? pick_run_filter(title, l.items, l.count, initial) : -1;
+    int   which = l.count ? pick_run_filter(title, l.items, l.count, 0) : -1;
     char *out = NULL;
     if (which >= 0 && !strcmp(l.items[which].label, TYPE_ROW)) {
         char *typed = ask_run(title, "~/working/");

@@ -14,7 +14,6 @@
 #include "activelog.h"
 #include "ask.h"
 #include "cmd.h"
-#include "dirpick.h"
 #include "handoff.h"
 #include "hud.h"
 #include "keyhelp.h"

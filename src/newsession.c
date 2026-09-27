@@ -113,7 +113,7 @@ int newsession_run(void)
                 set(effort, sizeof effort, list[which].label);
             break;
         case 4: {
-            char *dir = dirpick_run("folder", cwd);
+            char *dir = dirpick_run("folder");
             if (dir)
                 snprintf(cwd, sizeof cwd, "%s", dir);
             free(dir);

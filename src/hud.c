@@ -101,6 +101,7 @@ static void row_name(const struct session *s, struct row *r)
 {
     row_add(r, UI_BRAND, UI_BAR " ");
     row_add(r, UI_BOLD, APP_NAME);
+    row_add(r, UI_DIM, SEP "%s", app_version);
     if (session_name(s)[0]) {
         row_add(r, UI_DIM, SEP);
         row_add(r, UI_ACCENT, "@%s", session_name(s));

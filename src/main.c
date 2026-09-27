@@ -55,6 +55,8 @@
 #include "vncinset.h"
 #include "vncsource.h"
 
+const char app_version[] = SCRAP_VERSION;
+
 static void backend_choices(char *out, size_t size)
 {
     size_t n = 0;
