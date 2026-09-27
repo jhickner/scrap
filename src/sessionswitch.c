@@ -43,8 +43,10 @@
 #define KEY_ALL    '*'
 #define KEY_PULL   'a'
 #define KEY_TAKE   'y'
+#define KEY_STACK  ','
 
 static int show_all = 1;
+static int stacked;
 
 static const struct keyhelp_row SESSION_KEYS[] = {
     {"GO", "enter/\xe2\x86\x92", "switch to it"},
@@ -59,6 +61,7 @@ static const struct keyhelp_row SESSION_KEYS[] = {
     {"CHANGE", "p", "new, like this, with a prompt"},
     {"LIST", "up/down", "move"},
     {"LIST", "*", "this window only / every window"},
+    {"LIST", ",", "details on their own line"},
 };
 
 #define KEY_CTRL(c) ((c) & 0x1f)
@@ -782,7 +785,7 @@ static int switch_once(void)
     }
 
     char shortcuts[24] = {KEY_CLOSE, KEY_NEW, KEY_ASK, KEY_GO, KEY_RENAME,
-                          KEY_ALL, KEY_HERE, KEY_PULL, KEY_TAKE, '\t',
+                          KEY_ALL, KEY_HERE, KEY_PULL, KEY_TAKE, KEY_STACK, '\t',
                           KEY_CTRL(KEY_CLOSE), KEY_CTRL(KEY_NEW), KEY_CTRL(KEY_ASK),
                           KEY_CTRL(KEY_GO), KEY_CTRL(KEY_RENAME),
                           '\n', PICK_KEY_RIGHT, 0};
@@ -796,7 +799,7 @@ static int switch_once(void)
     listing.sig = listing_sig(&listing);
     struct pick_live shown = {.heading = heading, .spin = spin, .mark = marks, .mark_role = roles,
                               .tail = tails,
-                              .align = 1, .tick = relist, .ud = &listing,
+                              .align = 1, .stack = stacked, .tick = relist, .ud = &listing,
                               .keys = SESSION_KEYS,
                               .nkeys = (int)(sizeof SESSION_KEYS / sizeof *SESSION_KEYS)};
     int picked = pick_run_live(title, items, n, initial, &shown, PICK_SEARCH_SLASH,
@@ -822,6 +825,13 @@ static int switch_once(void)
     free(marks);
     free(roles);
     free(tails);
+
+    if (pressed == KEY_STACK) {
+        stacked = !stacked;
+        resume_row = picked;
+        free(live);
+        return 1;
+    }
 
     if (pressed == KEY_ALL) {
         show_all = !show_all;

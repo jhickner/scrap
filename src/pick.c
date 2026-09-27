@@ -220,12 +220,19 @@ static int visible_cap(const struct view *v)
     return rows < 5 ? 5 : rows;
 }
 
+static int item_stacked(const struct view *v, int i)
+{
+    return v->live && v->live->stack && !item_heading(v, i) && !item_apart(v, i) &&
+           v->items[i].detail && *v->items[i].detail;
+}
+
 static int fit_rows(const struct view *v, int top, int budget)
 {
     int n = 0, used = 0;
     for (int row = top; row < v->count; row++) {
         int lines = 1 + (row > top && ((row_group(v, row) && v->live->group_gap) ||
-                                       row_apart(v, row)));
+                                       row_apart(v, row))) +
+                    item_stacked(v, v->order[row]);
         if (n && used + lines > budget)
             break;
         used += lines;
@@ -418,7 +425,7 @@ static void paint(void *ud)
     int    rows = 0;
     int    base = chrome_gap();
     size_t lead_w = lead_width(v, columns);
-    size_t pad_to = align_width(v, columns, lead_w);
+    size_t pad_to = v->live && v->live->stack ? 0 : align_width(v, columns, lead_w);
     size_t detail_w = detail_width(v, 24);
 
     for (int i = 0; i < HIT_MAX; i++)
@@ -537,6 +544,42 @@ static void paint(void *ud)
         }
 
         size_t used = 4 + lead_used + status + shown;
+
+        if (item_stacked(v, i)) {
+            if (selected) {
+                ui_esc(UI_ERASE_EOL);
+                ui_row_sel(0);
+            }
+            ui_put("\n");
+            rows++;
+            if (base + rows >= 0 && base + rows < HIT_MAX)
+                v->hit[base + rows] = (short)row;
+            size_t indent = 6 + lead_used + status;
+            int    left = columns - (int)indent - 1;
+            ui_pad((int)indent);
+            ui_esc(ui_style(UI_DIM));
+            if (left > 2) {
+                int    dcut = 0;
+                size_t dn = fit_bytes(items[i].detail, (size_t)left, &dcut);
+                ui_putn(items[i].detail, dn);
+                left -= (int)ui_cells_n(items[i].detail, dn) + 2;
+                const char *tail = v->live->tail ? v->live->tail[i] : NULL;
+                if (!dcut && tail && *tail && left > 2) {
+                    ui_put("  ");
+                    int    tcut = 0;
+                    size_t tn = fit_bytes(tail, (size_t)left, &tcut);
+                    ui_putn(tail, tn);
+                    if (tcut)
+                        ui_put("…");
+                } else if (dcut) {
+                    ui_put("…");
+                }
+            }
+            ui_esc(ui_style(UI_RESET));
+            ui_put("\n");
+            rows++;
+            continue;
+        }
 
         if (items[i].detail && *items[i].detail) {
             int budget = columns - (int)used - 4;
