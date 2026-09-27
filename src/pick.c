@@ -730,6 +730,10 @@ static int run(const char *title, const struct pick_item *items, int count,
         }
         case TK_LEFT:
             goto done;
+        case TK_TAB:
+            if (shortcuts && strchr(shortcuts, '\t'))
+                goto done;
+            break;
         case TK_RIGHT:
 
             if (!v.count || row_heading(&v, v.sel))

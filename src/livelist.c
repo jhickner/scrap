@@ -12,9 +12,13 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "api.h"
+#include "im.h"
 #include "parent.h"
+#include "relay.h"
 #include "session.h"
 #include "text.h"
+#include "tg.h"
 #include "title.h"
 #include "vendor/cJSON.h"
 
@@ -188,6 +192,16 @@ static int write_line(FILE *f, void *ud)
     return fprintf(f, "%s\n", (const char *)ud) > 0;
 }
 
+void livelist_channels(char *out, int size)
+{
+    snprintf(out, (size_t)size, "%s%s%s%s",
+             tg_label() ? " telegram" : "",
+             im_label() ? " imessage" : "",
+             relay_label() ? " relay" : "",
+             api_active() ? " api" : "");
+    memmove(out, out + (*out == ' '), strlen(out + (*out == ' ')) + 1);
+}
+
 void livelist_publish(const struct session *s, const char *status)
 {
     if (!publishing || !s || !status)
@@ -228,6 +242,9 @@ void livelist_publish(const struct session *s, const char *status)
     cJSON_AddStringToObject(rec, "parent", up);
     cJSON_AddStringToObject(rec, "title", name);
     cJSON_AddStringToObject(rec, "status", status);
+    char channels[48];
+    livelist_channels(channels, sizeof channels);
+    cJSON_AddStringToObject(rec, "channels", channels);
     cJSON_AddNumberToObject(rec, "unseen", session_unseen(s) ? 1 : 0);
     cJSON_AddNumberToObject(rec, "ts", (double)time(NULL));
     const char *pane = getenv("TMUX_PANE");
@@ -361,6 +378,7 @@ static int load_dir(const char *where, int live, struct live_session **out)
         copy_str(v->parent, sizeof v->parent, rec, "parent");
         copy_str(v->title, sizeof v->title, rec, "title");
         copy_str(v->status, sizeof v->status, rec, "status");
+        copy_str(v->channels, sizeof v->channels, rec, "channels");
         v->unseen = (int)number(rec, "unseen");
         copy_str(v->window, sizeof v->window, rec, "window");
         copy_str(v->wname, sizeof v->wname, rec, "wname");

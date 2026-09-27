@@ -84,6 +84,7 @@ void session_interrupt(struct session *s);
 int  session_busy(const struct session *s);
 
 void session_set_unseen(struct session *s, int on);
+void session_republish(const struct session *s);
 int  session_unseen(const struct session *s);
 
 int  session_idle_fd(const struct session *s);

@@ -570,12 +570,15 @@ static void do_relay(struct session *s, const char *arg)
         return;
     }
     if (on) {
-        if (!relay_start(s))
+        if (relay_start(s))
+            workspace_republish();
+        else
             reply_error("%s", relay_start_error() ? relay_start_error()
                                                    : "could not enable relay");
         return;
     }
     relay_stop();
+    workspace_republish();
     reply_note("relay off");
 }
 
@@ -590,12 +593,15 @@ static void do_telegram(struct session *s, const char *arg)
         return;
     }
     if (on) {
-        if (!tg_start(s))
+        if (tg_start(s))
+            workspace_republish();
+        else
             reply_error("%s", tg_start_error() ? tg_start_error()
                                                 : "could not enable telegram");
         return;
     }
     tg_stop();
+    workspace_republish();
     reply_note("telegram off");
 }
 

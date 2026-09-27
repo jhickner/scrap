@@ -2043,6 +2043,12 @@ void session_set_unseen(struct session *s, int on)
 
 int session_unseen(const struct session *s) { return s ? s->unseen : 0; }
 
+void session_republish(const struct session *s)
+{
+    if (s)
+        publish(s, session_busy(s) ? "working" : "finished");
+}
+
 int session_busy(const struct session *s)
 {
     if (!s)
