@@ -1,6 +1,8 @@
 #include "voice.h"
 
 #include <ctype.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1273,32 +1275,144 @@ static void drain(void)
     jev_tick();
 }
 
-static int cancelled;
+static macos_voice_opts start_opts;
+static char             start_helper[1024], start_name[256], start_input[256];
+static pthread_t        start_thread;
+static macos_voice     *start_result;
+static atomic_int       start_done, start_cancel;
+static int              start_running, starting, start_reap, start_joined, start_held;
+static long             start_until;
 
-static int cancel_pressed(void)
-{
-    if (!tty_is_raw())
-        return 0;
-    tty_event ev;
-    while (tty_read(&ev, 0)) {
-        if (ev.key == TK_TEXT)
-            free(ev.text);
-        if (ev.key == TK_ESCAPE || (ev.key == TK_CHAR && ev.cp == 3) || ev.key == TK_EOF)
-            cancelled = 1;
-    }
-    return cancelled;
-}
-
-static int wait_tick(void *ud)
+static int start_tick(void *ud)
 {
     (void)ud;
-    status_tick();
-    return cancel_pressed();
+    return atomic_load(&start_cancel);
+}
+
+static void *start_main(void *ud)
+{
+    (void)ud;
+    if (start_reap)
+        macos_voice_reap(start_opts.helper_path);
+    start_result = macos_voice_start(&start_opts, on_event, NULL);
+    atomic_store(&start_done, 1);
+    return NULL;
+}
+
+static int start_launch(void)
+{
+    start_result = NULL;
+    atomic_store(&start_done, 0);
+    atomic_store(&start_cancel, 0);
+    start_running = !pthread_create(&start_thread, NULL, start_main, NULL);
+    return start_running;
+}
+
+static void start_join(void)
+{
+    if (!start_running)
+        return;
+    pthread_join(start_thread, NULL);
+    start_running = 0;
+}
+
+static void start_release(void)
+{
+    starting = 0;
+    status_work_end(start_held && !session_turn_running(workspace_current()));
+    start_held = 0;
+}
+
+static void start_abort(void)
+{
+    if (!starting)
+        return;
+    atomic_store(&start_cancel, 1);
+    start_join();
+    if (!voice && start_result)
+        macos_voice_stop(start_result);
+    start_result = NULL;
+    start_release();
+}
+
+static void start_fail(const char *why)
+{
+    if (voice)
+        macos_voice_stop(voice);
+    voice = NULL;
+    start_release();
+    char text[320];
+    snprintf(text, sizeof text, "voice: %s", why);
+    status_set_alert(text);
+}
+
+static void start_ready(void)
+{
+    start_release();
+    armed = tty_focused();
+
+    if (!macos_voice_resumed(voice)) {
+        macos_voice_focus(voice, armed);
+        if (armed)
+            chime("listening");
+    }
+    macos_voice_volume(voice, voice_volume() / 100.0);
+    macos_voice_rate(voice, voice_rate() / 100.0 * AV_RATE_DEFAULT);
+
+    macos_voice_silence(voice, helper_silence());
+    session_add_listener(on_session_event, NULL);
+    status_touch();
+}
+
+int voice_starting(void) { return starting; }
+
+void voice_start_poll(void)
+{
+    if (!starting)
+        return;
+    if (start_running) {
+        if (!atomic_load(&start_done))
+            return;
+        start_join();
+        voice = start_result;
+        start_result = NULL;
+        if (!voice) {
+            char why[1100];
+            snprintf(why, sizeof why, "could not launch %s", start_opts.helper_path);
+            start_fail(why);
+            return;
+        }
+        start_joined = !macos_voice_launched(voice) && !macos_voice_resumed(voice);
+        start_until = now_ms() + (start_joined && !start_reap ? JOIN_WAIT_MS : READY_WAIT_MS);
+    }
+    if (!ready && !failure[0] && macos_voice_poll(voice, 0) < 0)
+        snprintf(failure, sizeof failure, "helper exited");
+    while (!ready && !failure[0] && macos_voice_poll(voice, 0) > 0)
+        ;
+    if (failure[0]) {
+        start_fail(failure);
+        return;
+    }
+    if (ready) {
+        start_ready();
+        return;
+    }
+    if (now_ms() < start_until)
+        return;
+    if (start_joined && !start_reap) {
+        macos_voice_stop(voice);
+        voice = NULL;
+        start_reap = 1;
+        if (!start_launch())
+            start_fail("could not start the helper thread");
+        return;
+    }
+    start_fail("helper is still starting");
 }
 
 int voice_start(char *err, size_t size)
 {
-    if (voice)
+    if (voice || starting)
         return 1;
     chrome_live_label(jev_row);
     ready = 0;
@@ -1320,80 +1434,36 @@ int voice_start(char *err, size_t size)
     draft[0] = '\0';
     failure[0] = '\0';
 
-    cancelled = 0;
-    int owned = status_work_begin("starting voice");
-    int reaped = 0;
-
-    macos_voice_opts opts = {
-        .helper_path = settings_get_str(SETTING_VOICE_HELPER, VOICE_HELPER_PATH),
-        .voice       = settings_get_str(SETTING_VOICE_NAME, NULL),
+    const char *name = settings_get_str(SETTING_VOICE_NAME, NULL);
+    const char *input = settings_get_str(SETTING_VOICE_INPUT, NULL);
+    snprintf(start_helper, sizeof start_helper, "%s",
+             settings_get_str(SETTING_VOICE_HELPER, VOICE_HELPER_PATH));
+    snprintf(start_name, sizeof start_name, "%s", name ? name : "");
+    snprintf(start_input, sizeof start_input, "%s", input ? input : "");
+    start_opts = (macos_voice_opts){
+        .helper_path = start_helper,
+        .voice       = name ? start_name : NULL,
         .rate        = voice_rate() / 100.0 * AV_RATE_DEFAULT,
         .silence     = helper_silence(),
         .volume      = voice_volume() / 100.0,
-        .input       = settings_get_str(SETTING_VOICE_INPUT, NULL),
-        .tick        = wait_tick,
+        .input       = input ? start_input : NULL,
+        .tick        = start_tick,
     };
-again:
-    voice = macos_voice_start(&opts, on_event, NULL);
-    if (!voice) {
-        if (cancelled)
-            snprintf(err, size, "start cancelled");
-        else
-            snprintf(err, size, "could not launch %s", opts.helper_path);
-        status_work_end(owned);
+
+    starting = 1;
+    start_reap = 0;
+    start_held = status_work_begin("starting voice");
+    if (!start_launch()) {
+        start_release();
+        snprintf(err, size, "could not start the helper thread");
         return 0;
     }
-
-    int joined = !macos_voice_launched(voice) && !macos_voice_resumed(voice);
-    long until = now_ms() + (joined && !reaped ? JOIN_WAIT_MS : READY_WAIT_MS);
-    while (!ready && !failure[0]) {
-        long left = until - now_ms();
-        if (left <= 0)
-            break;
-        int slice = left > SPIN_FRAME_MS ? SPIN_FRAME_MS : (int)left;
-        int n = macos_voice_poll(voice, slice);
-        if (n < 0) {
-            if (!failure[0])
-                snprintf(failure, sizeof failure, "helper exited");
-            break;
-        }
-        status_tick();
-        if (cancel_pressed()) {
-            snprintf(failure, sizeof failure, "start cancelled");
-            break;
-        }
-    }
-    if (!ready && !failure[0] && joined && !reaped) {
-        reaped = 1;
-        macos_voice_stop(voice);
-        voice = NULL;
-        macos_voice_reap(opts.helper_path);
-        goto again;
-    }
-    status_work_end(owned);
-    if (failure[0] || !ready) {
-        snprintf(err, size, "%s", failure[0] ? failure : "helper is still starting");
-        macos_voice_stop(voice);
-        voice = NULL;
-        return 0;
-    }
-    armed = tty_focused();
-
-    if (!macos_voice_resumed(voice)) {
-        macos_voice_focus(voice, armed);
-        if (armed)
-            chime("listening");
-    }
-    macos_voice_volume(voice, voice_volume() / 100.0);
-    macos_voice_rate(voice, voice_rate() / 100.0 * AV_RATE_DEFAULT);
-
-    macos_voice_silence(voice, helper_silence());
-    session_add_listener(on_session_event, NULL);
     return 1;
 }
 
 static void teardown(int end_helper)
 {
+    start_abort();
     chrome_live_label(NULL);
     if (!voice)
         return;
@@ -1453,7 +1523,7 @@ int voice_restart(char *err, size_t size)
     return 1;
 }
 
-int voice_on(void) { return voice != NULL; }
+int voice_on(void) { return voice || starting; }
 
 void voice_set_speak(int on)
 {
@@ -1626,7 +1696,7 @@ static const char *jev_row(void)
 
 const char *voice_label(void)
 {
-    if (!voice)
+    if (!voice && !starting)
         return NULL;
     if (!ready)
         snprintf(label, sizeof label, "voice starting");

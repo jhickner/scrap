@@ -226,6 +226,7 @@ static int idle_render(void *ud)
     image_poll();
     session_set_drawing(drew);
     int busy = workspace_pump();
+    voice_start_poll();
     status_tick();
     return busy;
 }
@@ -328,7 +329,7 @@ static void inset_cover(char **rows, int n, int cols)
 static int side_busy(void *ud)
 {
     (void)ud;
-    return sidechannel_busy() || workspace_busy() || inset_live();
+    return sidechannel_busy() || workspace_busy() || inset_live() || voice_starting();
 }
 
 static void side_tick(void *ud)
@@ -338,6 +339,7 @@ static void side_tick(void *ud)
     sidechannel_tick();
     image_poll();
     workspace_pump();
+    voice_start_poll();
     status_tick();
     if (vncinset_stale(inset_live()))
         viewport_touch();

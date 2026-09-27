@@ -251,6 +251,8 @@ static int start_voice(void)
         fails++;
         return 0;
     }
+    while (voice_starting())
+        voice_start_poll();
     return 1;
 }
 
