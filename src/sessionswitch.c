@@ -313,11 +313,18 @@ static int group_rows(const struct row *in, int n, struct row *out,
     return m;
 }
 
-static void here_id(char *out, size_t size)
+static void here_name(char *out, size_t size)
 {
     struct session *s = workspace_current();
-    const char *id = s ? session_id(s) : NULL;
-    snprintf(out, size, "%s", id ? id : "");
+    snprintf(out, size, "%s", s ? session_name(s) : "");
+}
+
+static int tab_named(const char *name)
+{
+    for (int i = 0; i < workspace_count(); i++)
+        if (!strcmp(session_name(workspace_at(i)), name))
+            return i;
+    return -1;
 }
 
 static int jump(const struct live_session *v)
@@ -337,29 +344,29 @@ struct others {
     int                  n;
 };
 
-static const struct live_session *other(const struct others *o, const char *id)
+static const struct live_session *other(const struct others *o, const char *name)
 {
     for (int i = 0; i < o->n; i++)
-        if (!o->live[i].mine && !strcmp(o->live[i].id, id))
+        if (!o->live[i].mine && !strcmp(o->live[i].name, name))
             return &o->live[i];
     return NULL;
 }
 
-static int open_somewhere(const char *id, void *ud)
+static int open_somewhere(const char *name, void *ud)
 {
-    return workspace_find_id(id) >= 0 || other(ud, id);
+    return tab_named(name) >= 0 || other(ud, name);
 }
 
 void sessionswitch_step(int dir)
 {
     char path[4400], here[128], id[128];
-    here_id(here, sizeof here);
+    here_name(here, sizeof here);
     struct others o = {NULL, 0};
     o.n = livelist_load(&o.live);
 
     if (path_config_file(path, sizeof path, "active") &&
         activelog_step(path, here, dir, open_somewhere, &o, id, sizeof id)) {
-        int at = workspace_find_id(id);
+        int at = tab_named(id);
         if (at >= 0)
             workspace_show(at);
         else
