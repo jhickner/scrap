@@ -67,7 +67,7 @@ int livelist_jump(const struct live_session *v, char *why, int size)
             snprintf(why, (size_t)size, "that session is not in a tmux pane");
         return 0;
     }
-    if (!tmux_do("select-window", v->pane) || !tmux_do("select-pane", v->pane)) {
+    if (!tmux_do("select-pane", v->pane) || !tmux_do("select-window", v->pane)) {
         if (why && size)
             snprintf(why, (size_t)size, "could not select the tmux pane");
         return 0;
