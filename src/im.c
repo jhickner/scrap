@@ -312,7 +312,7 @@ static void send_text(const char *text)
 {
     if (!rt.active || !text)
         return;
-    while (*text == '\n')
+    while (*text == '\n' || *text == ' ')
         text++;
     if (!*text)
         return;
@@ -325,23 +325,38 @@ static void send_text(const char *text)
     free(msg);
 }
 
-static void send_files(const char *text)
+static void send_reply(const char *text)
 {
-    for (const char *p = text; (p = strstr(p, "![")) != NULL;) {
-        const char *open = strstr(p, "](");
+    char *out = strdup(text);
+    if (!out)
+        return;
+    char *files[MAX_ATTACH];
+    int nfiles = 0;
+    for (char *p = out; (p = strstr(p, "![")) != NULL;) {
+        char *open = strstr(p, "](");
         if (!open)
-            return;
-        open += 2;
-        const char *close = strchr(open, ')');
-        p = open;
-        if (!close || *open != '/' || close - open > 1023)
+            break;
+        char *close = strchr(open + 2, ')');
+        if (!close || open[2] != '/' || close - open > 1024) {
+            p = open + 2;
             continue;
-        char path[1024];
-        snprintf(path, sizeof path, "%.*s", (int)(close - open), open);
-        if (access(path, R_OK) == 0)
-            outbox_push(1, path);
-        p = close;
+        }
+        *close = '\0';
+        if (nfiles >= MAX_ATTACH || access(open + 2, R_OK) != 0) {
+            *close = ')';
+            p = close;
+            continue;
+        }
+        files[nfiles++] = strdup(open + 2);
+        memmove(p, close + 1, strlen(close + 1) + 1);
     }
+    send_text(out);
+    for (int i = 0; i < nfiles; i++) {
+        if (files[i])
+            outbox_push(1, files[i]);
+        free(files[i]);
+    }
+    free(out);
 }
 
 static char *attributed_text(const unsigned char *b, int n)
@@ -582,8 +597,7 @@ static void on_event(void *ud, struct session *s, const backend_event *ev)
     if (!rt.active || !rt.from_chat || s != current_session())
         return;
     if (ev->kind == BACKEND_EV_ASSISTANT && ev->text && *ev->text) {
-        send_text(ev->text);
-        send_files(ev->text);
+        send_reply(ev->text);
         free(rt.last_said);
         rt.last_said = strdup(ev->text);
     } else if (ev->kind == BACKEND_EV_WARNING && ev->text && *ev->text) {
@@ -651,8 +665,7 @@ static void send_turn_reply(int ok)
         return;
     }
     if (reply && *reply && (!rt.last_said || strcmp(rt.last_said, reply))) {
-        send_text(reply);
-        send_files(reply);
+        send_reply(reply);
     }
 }
 
