@@ -38,7 +38,7 @@ struct view {
     int filter;
     int slash;
     int searching;
-    char query[64];
+    char query[PICK_TYPED_MAX];
     short hit[HIT_MAX];
 };
 
@@ -420,7 +420,7 @@ static void show_keys(struct view *v)
 
 static int run(const char *title, const struct pick_item *items, int count,
                int initial, const struct pick_live *live, const char *shortcuts,
-               int *pressed, int filter, int slash, const char *seed);
+               int *pressed, int filter, int slash, char *typed);
 
 static void paint(void *ud)
 {
@@ -677,6 +677,13 @@ int pick_run_filter(const char *title, const struct pick_item *items, int count,
     return run(title, items, count, initial, NULL, NULL, NULL, 1, 0, NULL);
 }
 
+int pick_run_typed(const char *title, const struct pick_item *items, int count, int initial,
+                   char *typed)
+{
+    typed[0] = '\0';
+    return run(title, items, count, initial, NULL, NULL, NULL, 1, 0, typed);
+}
+
 int pick_run_live(const char *title, const struct pick_item *items, int count,
                   int initial, const struct pick_live *live,
                   enum pick_search search, const char *shortcuts, int *pressed)
@@ -734,7 +741,7 @@ static int paste_into(struct view *v, const char *s, size_t n)
 
 static int run(const char *title, const struct pick_item *items, int count,
                int initial, const struct pick_live *live, const char *shortcuts,
-               int *pressed, int filter, int slash, const char *seed)
+               int *pressed, int filter, int slash, char *typed)
 {
     if (pressed)
         *pressed = 0;
@@ -753,10 +760,6 @@ static int run(const char *title, const struct pick_item *items, int count,
     v.n = count;
     v.filter = filter;
     v.slash = slash;
-    if (filter && seed && *seed) {
-        snprintf(v.query, sizeof v.query, "%s", seed);
-        v.searching = 1;
-    }
     v.order = calloc((size_t)count, sizeof *v.order);
     v.score = calloc((size_t)count, sizeof *v.score);
     v.rank = calloc((size_t)count, sizeof *v.rank);
@@ -892,6 +895,12 @@ static int run(const char *title, const struct pick_item *items, int count,
                 *pressed = '\n';
             goto done;
         case TK_ENTER:
+            if (typed && v.query[0] &&
+                (!v.count || v.query[0] == '/' || v.query[0] == '~')) {
+                snprintf(typed, PICK_TYPED_MAX, "%s", v.query);
+                result = PICK_TYPED;
+                goto done;
+            }
             if (!v.count || row_heading(&v, v.sel))
                 break;
             result = v.order[v.sel];

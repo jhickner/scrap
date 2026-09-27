@@ -1,6 +1,7 @@
 #include "dirpick.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,8 @@
 
 #include "pick.h"
 #include "text.h"
+#include "ui.h"
+#include "viewport.h"
 
 #define DIR_MAX   6000
 #define DIR_DEPTH 2
@@ -105,6 +108,53 @@ static int cmp_item(const void *a, const void *b)
     return dx != dy ? dx - dy : strcmp(x->label, y->label);
 }
 
+static void fail(const char *what, const char *path, const char *why)
+{
+    viewport_item_begin(VIEWPORT_ROWS(1, 1));
+    ui_error("%s %s%s%s", what, path, why ? ": " : "", why ? why : "");
+    viewport_item_end();
+    ui_flush();
+}
+
+static int make_dirs(char *path)
+{
+    for (char *p = path + 1; *p; p++) {
+        if (*p != '/')
+            continue;
+        *p = '\0';
+        int bad = mkdir(path, 0755) != 0 && errno != EEXIST;
+        *p = '/';
+        if (bad)
+            return 0;
+    }
+    return mkdir(path, 0755) == 0 || errno == EEXIST;
+}
+
+static char *resolve(const char *home, const char *typed)
+{
+    char path[4096];
+    if (typed[0] == '~')
+        snprintf(path, sizeof path, "%s%s", home, typed + 1);
+    else if (typed[0] == '/')
+        snprintf(path, sizeof path, "%s", typed);
+    else
+        snprintf(path, sizeof path, "%s/working/%s", home, typed);
+    size_t n = strlen(path);
+    while (n > 1 && path[n - 1] == '/')
+        path[--n] = '\0';
+
+    struct stat st;
+    if (stat(path, &st) == 0 && !S_ISDIR(st.st_mode)) {
+        fail("not a folder:", path, NULL);
+        return NULL;
+    }
+    if (!make_dirs(path)) {
+        fail("could not create", path, strerror(errno));
+        return NULL;
+    }
+    return strdup(path);
+}
+
 char *dirpick_run(const char *title, const char *current)
 {
     const char *home = getenv("HOME");
@@ -126,9 +176,12 @@ char *dirpick_run(const char *title, const char *current)
         if (!strcmp(l.items[i].label, now))
             initial = i;
 
-    int   which = l.count ? pick_run_filter(title, l.items, l.count, initial) : -1;
+    char  typed[PICK_TYPED_MAX];
+    int   which = l.count ? pick_run_typed(title, l.items, l.count, initial, typed) : -1;
     char *out = NULL;
-    if (which >= 0) {
+    if (which == PICK_TYPED)
+        out = resolve(home, typed);
+    else if (which >= 0) {
         const char *label = l.items[which].label;
         size_t      n = strlen(home) + strlen(label) + 1;
         out = malloc(n);
