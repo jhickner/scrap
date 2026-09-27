@@ -96,6 +96,29 @@ void activelog_add(const char *path, const char *id, int back)
     free(text);
 }
 
+long activelog_last(const char *path, const char *id)
+{
+    if (!path || !id || !*id)
+        return 0;
+    char *text = text_slurp(path, 0, NULL);
+    if (!text)
+        return 0;
+    long at = 0;
+    for (char *line = text, *nl; *line; line = nl + 1) {
+        nl = strchr(line, '\n');
+        if (nl)
+            *nl = '\0';
+        long t = atol(line);
+        struct entry e = parse(line);
+        if (e.id && !strcmp(e.id, id) && t > at)
+            at = t;
+        if (!nl)
+            break;
+    }
+    free(text);
+    return at;
+}
+
 int activelog_step(const char *path, const char *here, int dir, int length,
                    int (*alive)(const char *id, void *ud), void *ud,
                    char *out, size_t size)
