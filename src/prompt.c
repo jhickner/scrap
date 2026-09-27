@@ -959,6 +959,10 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
         return KEY_OK;
 
     case TK_ENTER: {
+        if (!overlay_open(p) && tty_input_waiting()) {
+            feed(p, REPL_KEY_NEWLINE, 0, NULL);
+            return KEY_OK;
+        }
         if (p->blank && p->repl.len == 0 && !overlay_open(p)) {
             if (live)
                 status_pause();
