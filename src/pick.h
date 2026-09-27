@@ -11,9 +11,6 @@ int pick_run(const char *title, const struct pick_item *items, int count, int in
 
 int pick_run_filter(const char *title, const struct pick_item *items, int count, int initial);
 
-int pick_run_query(const char *title, const struct pick_item *items, int count,
-                   int initial, const char *query);
-
 enum pick_search {
     PICK_SEARCH_TYPE,
     PICK_SEARCH_SLASH,

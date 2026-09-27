@@ -99,7 +99,6 @@ int  session_task_repeat(const struct session *s);
 int session_work_count(const struct session *s);
 
 int  session_stalled(struct session *s);
-int  session_stall_armed(const struct session *s);
 
 int session_switch_backend(struct session *s, const char *backend);
 

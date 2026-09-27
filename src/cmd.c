@@ -17,7 +17,6 @@
 #include "models.h"
 #include "newsession.h"
 #include "pick.h"
-#include "reopen.h"
 #include "prompt.h"
 #include "restart.h"
 #include "session.h"
@@ -1254,22 +1253,6 @@ static void do_resume(struct session *s, const char *arg)
     cmd_resume(s);
 }
 
-static void do_reopen(struct session *s, const char *arg)
-{
-    (void)s;
-    (void)arg;
-    if (!can_pick("/reopen"))
-        return;
-    if (!reopen_available()) {
-        reply_note("no window to reopen");
-        return;
-    }
-
-    int opened = reopen_run();
-    if (opened)
-        reply_note("reopening %d session%s", opened, opened == 1 ? "" : "s");
-}
-
 static void do_sessions(struct session *s, const char *arg)
 {
     (void)s;
@@ -1406,8 +1389,6 @@ static const struct cmd COMMANDS[] = {
     {"/resume", "resume a past conversation", NULL, 0, do_resume},
     {"/sessions", "every session: this window's, other windows', past ones", NULL,
      CMD_LIVE, do_sessions},
-    {"/reopen", "bring back the sessions of a window that is gone", NULL, 0,
-     do_reopen},
     {"/fork", "fork into a new tab, tmux split, or tmux window",
      "[tab|horizontal|vertical|window]", CMD_LIVE, do_fork},
     {"/split", "open a shell split in this directory", "[h|v|w]", 0, do_split},

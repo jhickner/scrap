@@ -125,11 +125,6 @@ static struct session *current_session(void)
     return tgbridge_session(&rt.bridge);
 }
 
-const char *im_start_error(void)
-{
-    return start_error[0] ? start_error : NULL;
-}
-
 __attribute__((format(printf, 1, 2)))
 static void fail_note(const char *fmt, ...)
 {

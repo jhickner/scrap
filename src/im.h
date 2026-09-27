@@ -5,7 +5,6 @@ struct session;
 
 int  im_start(struct session *s);
 void im_stop(void);
-const char *im_start_error(void);
 
 const char *im_label(void);
 const char *im_system_note(void);

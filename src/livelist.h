@@ -19,9 +19,6 @@ struct live_session {
     char channels[48];
     int  unseen;
     char pane[32];
-    char window[32];
-    char wname[64];
-    char pane_index[8];
     long ts;
     int  mine;
 };
@@ -41,7 +38,5 @@ int livelist_closed_load(struct live_session **out);
 int livelist_alive(long pid);
 
 int livelist_jump(const struct live_session *v, char *why, int size);
-
-const char *livelist_tmux_window(void);
 
 #endif

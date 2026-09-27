@@ -423,11 +423,6 @@ void voice_set_mode(int mode)
     status_touch();
 }
 
-void voice_set_wake(int on)
-{
-    voice_set_mode(on ? VOICE_MODE_WAKE : VOICE_MODE_AUTO);
-}
-
 static void chime(const char *name)
 {
     if (voice && listening())

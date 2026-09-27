@@ -787,13 +787,6 @@ static void show_keys(struct prompt *p, int live)
     keyhelp_show(title, shown, n, foot);
 }
 
-const struct prompt_key *prompt_shortcuts(int *count)
-{
-    if (count)
-        *count = (int)(sizeof SHORTCUTS / sizeof *SHORTCUTS);
-    return SHORTCUTS;
-}
-
 static int overlay_open(const struct prompt *p)
 {
     return p->repl.dropdown_open || p->repl.searching;

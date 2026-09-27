@@ -170,15 +170,3 @@ void tabs_drop_all(void)
         tabs_drop(i);
     npending_tabs = 0;
 }
-
-void tabs_start_queued(void)
-{
-    struct session *batch[WORKSPACE_MAX];
-    int             n = 0;
-
-    for (int i = 0; i < npending_tabs; i++)
-        if (pending_tabs[i].s)
-            batch[n++] = pending_tabs[i].s;
-    if (n)
-        session_start_batch(batch, n);
-}

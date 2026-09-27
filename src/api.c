@@ -409,7 +409,6 @@ int api_start(void)
 }
 
 const char *api_url(void) { return api.active ? api.url : NULL; }
-const char *api_token(void) { return api.active ? api.token : NULL; }
 
 static const char *api_connect_json_buf(char *out, size_t n)
 {

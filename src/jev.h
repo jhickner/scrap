@@ -25,7 +25,6 @@ int  jev_busy(void);
 
 int  jev_pump(struct jev_result *out);
 int  jev_fds(int *out, int max);
-const struct jev_result *jev_last(void);
 
 void jev_reset(void);
 

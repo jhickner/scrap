@@ -677,12 +677,6 @@ int pick_run_filter(const char *title, const struct pick_item *items, int count,
     return run(title, items, count, initial, NULL, NULL, NULL, 1, 0, NULL);
 }
 
-int pick_run_query(const char *title, const struct pick_item *items, int count,
-                   int initial, const char *query)
-{
-    return run(title, items, count, initial, NULL, NULL, NULL, 1, 0, query);
-}
-
 int pick_run_live(const char *title, const struct pick_item *items, int count,
                   int initial, const struct pick_live *live,
                   enum pick_search search, const char *shortcuts, int *pressed)

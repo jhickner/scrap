@@ -81,8 +81,6 @@ void ui_flush(void);
 
 void ui_esc(const char *s);
 
-int ui_reflow_rows(const int *row_widths, int count, int cols);
-
 int    ui_columns(void);
 int    ui_screen_columns(void);
 int    ui_too_narrow(void);

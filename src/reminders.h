@@ -6,8 +6,6 @@
 
 const char *reminders_path(void);
 
-int reminders_pop_due(time_t now, char *out, size_t n);
-
 int reminders_drain_due(time_t now, int (*take)(const char *text, void *ud),
                         void *ud);
 

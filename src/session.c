@@ -402,12 +402,6 @@ static void stall_watch(struct session *s, int awake)
     }
 }
 
-int session_stall_armed(const struct session *s)
-{
-    return s && s->stall_at && !s->stall_told &&
-           settings_get_int(SETTING_TASK_STALL, TASK_STALL_DEFAULT) > 0;
-}
-
 int session_stalled(struct session *s)
 {
     int wait = settings_get_int(SETTING_TASK_STALL, TASK_STALL_DEFAULT);

@@ -41,10 +41,6 @@ int    status_sticky_enabled(void);
 
 void   status_sticky_prompt(const char *text);
 
-int    status_sticky_rows(void);
-
-const char *status_sticky_offscreen(void);
-
 void   status_sticky_busy(int on);
 
 void   status_sticky_erased(void);

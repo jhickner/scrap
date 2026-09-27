@@ -7,7 +7,6 @@ int  api_start(void);
 void api_stop(void);
 int  api_active(void);
 const char *api_url(void);
-const char *api_token(void);
 
 char *api_connect_json(void);
 

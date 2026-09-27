@@ -53,8 +53,6 @@ int  vncinset_shown(const struct vncinset *v);
 void vncinset_show(struct vncinset *v, int on);
 void vncinset_set_side(struct vncinset *v, enum vncinset_side side);
 void vncinset_set_width(struct vncinset *v, int pct);
-int  vncinset_width(const struct vncinset *v);
-enum vncinset_side vncinset_side(const struct vncinset *v);
 
 int vncinset_stale(struct vncinset *v);
 

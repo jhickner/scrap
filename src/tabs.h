@@ -11,8 +11,6 @@ int tabs_pending(void);
 
 int tabs_start(struct session *front);
 
-void tabs_start_queued(void);
-
 void tabs_admit(int all);
 
 void tabs_drop_all(void);

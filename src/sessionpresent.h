@@ -27,7 +27,6 @@ struct sessionpresent {
 void sessionpresent_free(struct sessionpresent *p);
 void sessionpresent_turn_begin(struct sessionpresent *p);
 void sessionpresent_turn_end(struct sessionpresent *p);
-const char *sessionpresent_streamed(const struct sessionpresent *p);
 
 void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
                           const char *cwd, const struct tasktab *tasks,

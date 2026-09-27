@@ -67,11 +67,6 @@ void sessionpresent_turn_end(struct sessionpresent *p)
         p->call_open = 0;
 }
 
-const char *sessionpresent_streamed(const struct sessionpresent *p)
-{
-    return p ? p->streamed : NULL;
-}
-
 static void paint_note(const char *line)
 {
     viewport_item_begin(VIEWPORT_ROWS(1, 1));

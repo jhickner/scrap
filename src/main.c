@@ -36,7 +36,6 @@
 #include "version.h"
 #include "dispatch.h"
 #include "sidechannel.h"
-#include "reopen.h"
 #include "tabs.h"
 #include "status.h"
 #include "tg.h"
@@ -151,7 +150,6 @@ static void usage(void)
             "  --api      serve the worker API (config: ~/.config/scrap/api)\n"
             "  --state dir  keep config and state under dir instead of ~/.config/scrap\n"
             "  -r         --resume: pick a past conversation to continue\n"
-            "  --reopen   bring back the sessions of a window that is gone\n"
             "  --session id  resume a specific conversation (used by the fork commands)\n"
             "  --fork     with --session: branch off it instead of writing back to it\n"
             "  --restore f  take over the screen from a restarting scrap (used by /restart)\n"
@@ -602,7 +600,6 @@ int main(int argc, char **argv)
         {"fork",    no_argument,       NULL, 'F'},
         {"restore", required_argument, NULL, 'R'},
         {"tabs",    required_argument, NULL, 'B'},
-        {"reopen",  no_argument,       NULL, 'O'},
         {"telegram", no_argument,      NULL, 'T'},
         {"relay",    no_argument,      NULL, 'W'},
         {"imessage", no_argument,      NULL, 'I'},
@@ -621,7 +618,6 @@ int main(int argc, char **argv)
     const char *session_arg = NULL;
     const char *restore_arg = NULL;
     const char *tabs_arg = NULL;
-    int         reopen_arg = 0;
     const char *state_arg = NULL;
     int telegram = 0;
     int relay = 0;
@@ -645,7 +641,6 @@ int main(int argc, char **argv)
         case 'F': fork_session = 1; break;
         case 'R': restore_arg = optarg; break;
         case 'B': tabs_arg = optarg; break;
-        case 'O': reopen_arg = 1; break;
         case 'T': telegram = 1; break;
         case 'W': relay = 1; break;
         case 'I': imessage = 1; break;
@@ -928,9 +923,6 @@ int main(int argc, char **argv)
         unlink(tabs_arg);
         tabs_admit(0);
     }
-
-    if (reopen_arg)
-        reopen_run();
 
     if (!resume && !restore_arg && (session_arg || grokbottail_applies(session)))
         sessionload_into(session);

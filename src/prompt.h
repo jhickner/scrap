@@ -31,8 +31,6 @@ struct prompt_key {
     enum prompt_key_when when;
 };
 
-const struct prompt_key *prompt_shortcuts(int *count);
-
 int  prompt_live_key(void *ud, tty_event *ev);
 
 int  prompt_input_rows(struct prompt *p, int cols);

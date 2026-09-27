@@ -511,16 +511,6 @@ void ui_pad(int cells)
     }
 }
 
-int ui_reflow_rows(const int *row_widths, int count, int cols)
-{
-    if (cols <= 0)
-        return count > 0 ? count : 0;
-    int rows = 0;
-    for (int i = 0; i < count; i++)
-        rows += row_widths[i] > 0 ? (row_widths[i] + cols - 1) / cols : 1;
-    return rows;
-}
-
 void ui_flush(void)
 {
     struct sink *s = sink_top();

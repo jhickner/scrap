@@ -390,26 +390,3 @@ int reminders_drain_due(time_t now, int (*take)(const char *text, void *ud),
     store_unlock(lock);
     return taken;
 }
-
-struct pop_once {
-    char  *out;
-    size_t n;
-    int    got;
-};
-
-static int take_one(const char *text, void *ud)
-{
-    struct pop_once *p = ud;
-    if (p->got)
-        return 0;
-    snprintf(p->out, p->n, "%s", text);
-    p->got = 1;
-    return 1;
-}
-
-int reminders_pop_due(time_t now, char *out, size_t n)
-{
-    struct pop_once p = {out, n, 0};
-    reminders_drain_due(now, take_one, &p);
-    return p.got;
-}

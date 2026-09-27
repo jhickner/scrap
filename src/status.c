@@ -35,7 +35,6 @@ static int              dirty;
 
 static int   sticky_on;
 static char *sticky_text;
-static int   sticky_drawn;
 static int   sticky_tracking;
 static int   sticky_busy;
 static unsigned sticky_mark;
@@ -179,17 +178,11 @@ int status_sticky_measure(void)
 
 void status_paint_sticky(void)
 {
-    sticky_drawn = 0;
     if (!sticky_showing())
         return;
 
     struct ui_wrap w = sticky_wrap(0);
-    sticky_drawn = ui_wrap_paint(sticky_text, &w);
-}
-
-int status_sticky_rows(void)
-{
-    return sticky_drawn;
+    ui_wrap_paint(sticky_text, &w);
 }
 
 void status_paint_spin(void)
@@ -332,13 +325,6 @@ void status_sticky_busy(int on)
 }
 
 void status_sticky_erased(void) { sticky_tracking = 0; }
-
-const char *status_sticky_offscreen(void)
-{
-    if (!sticky_on || !sticky_text)
-        return NULL;
-    return sticky_gone() ? sticky_text : NULL;
-}
 
 void status_end(void)
 {

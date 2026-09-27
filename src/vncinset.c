@@ -258,13 +258,6 @@ void vncinset_set_width(struct vncinset *v, int pct)
     v->pct = pct;
 }
 
-int vncinset_width(const struct vncinset *v) { return v ? v->pct : VNCINSET_WIDTH_DEFAULT; }
-
-enum vncinset_side vncinset_side(const struct vncinset *v)
-{
-    return v ? v->side : VNCINSET_RIGHT;
-}
-
 static int latest(struct vncinset *v, struct vncinset_frame *f)
 {
     memset(f, 0, sizeof *f);

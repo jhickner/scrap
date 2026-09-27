@@ -29,7 +29,6 @@ const char *voice_mode_name(int mode);
 
 int         voice_mode_of(const char *name);
 int  voice_wake(void);
-void voice_set_wake(int on);
 
 int  voice_apply(int on, int speak, char *err, size_t size);
 

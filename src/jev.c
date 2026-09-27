@@ -369,8 +369,6 @@ int jev_fds(int *out, int max)
     return n;
 }
 
-const struct jev_result *jev_last(void) { return &last; }
-
 void jev_reset(void)
 {
     teardown();
