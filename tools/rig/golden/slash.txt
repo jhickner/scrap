@@ -15,9 +15,9 @@
 
 
 
-
-
-
+▌ ▄▀▀ ▄▀▀ █▀▄ ▄▀▄ █▀▄
+▌ ▄▄▀ ▀▄▄ █▀▄ █▀█ █▀
+▌ @<name>
 ▌ scrap › claude › default › medium
 ▌ <rig>/work
 

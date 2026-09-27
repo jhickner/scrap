@@ -919,7 +919,7 @@ int main(int argc, char **argv)
     }
 
     if (!resume || !cmd_resume(session))
-        hud_print(session);
+        hud_print_launch(session);
 
     if (tabs_arg) {
         unlink(tabs_arg);

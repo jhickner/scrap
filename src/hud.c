@@ -25,6 +25,13 @@
 #define BRANCH "\xee\x82\xa0"
 
 #define SEG_MAX 8
+#define HUD_ROWS 3
+
+static const char *const logo[] = {
+    UI_BAR " \xe2\x96\x84\xe2\x96\x80\xe2\x96\x80 \xe2\x96\x84\xe2\x96\x80\xe2\x96\x80 \xe2\x96\x88\xe2\x96\x80\xe2\x96\x84 \xe2\x96\x84\xe2\x96\x80\xe2\x96\x84 \xe2\x96\x88\xe2\x96\x80\xe2\x96\x84",
+    UI_BAR " \xe2\x96\x84\xe2\x96\x84\xe2\x96\x80 \xe2\x96\x80\xe2\x96\x84\xe2\x96\x84 \xe2\x96\x88\xe2\x96\x80\xe2\x96\x84 \xe2\x96\x88\xe2\x96\x80\xe2\x96\x88 \xe2\x96\x88\xe2\x96\x80",
+};
+#define LOGO_COLS 21
 
 struct seg {
     char        *text;
@@ -37,8 +44,9 @@ struct row {
 };
 
 struct hud {
-    struct row row[2];
+    struct row row[HUD_ROWS];
     int        restarts;
+    int        logo;
 
     int        restored;
 };
@@ -87,6 +95,14 @@ static void row_paint(const struct row *r, int cols)
     }
     ui_esc(ui_style(UI_RESET));
     ui_put("\n");
+}
+
+static void row_name(const struct session *s, struct row *r)
+{
+    if (!session_name(s)[0])
+        return;
+    row_add(r, UI_BRAND, UI_BAR " ");
+    row_add(r, UI_ACCENT, "@%s", session_name(s));
 }
 
 static void row_identity(const struct session *s, struct row *r)
@@ -158,18 +174,29 @@ static void row_location(const struct session *s, struct row *r)
 
 static void hud_fill(struct hud *h, const struct session *s)
 {
-    row_free(&h->row[0]);
-    row_free(&h->row[1]);
-    row_identity(s, &h->row[0]);
-    row_location(s, &h->row[1]);
+    for (int i = 0; i < HUD_ROWS; i++)
+        row_free(&h->row[i]);
+    row_name(s, &h->row[0]);
+    row_identity(s, &h->row[1]);
+    row_location(s, &h->row[2]);
 }
 
 static void hud_render(void *ud, int cols)
 {
     const struct hud *h = ud;
 
-    row_paint(&h->row[0], cols);
-    row_paint(&h->row[1], cols);
+    if (h->logo && cols > LOGO_COLS) {
+        ui_esc(ui_style(UI_BRAND));
+        for (size_t i = 0; i < sizeof logo / sizeof *logo; i++) {
+            ui_esc("\x1b[K");
+            ui_put(logo[i]);
+            ui_put("\n");
+        }
+        ui_esc(ui_style(UI_RESET));
+    }
+    for (int i = 0; i < HUD_ROWS; i++)
+        if (h->row[i].n)
+            row_paint(&h->row[i], cols);
     if (h->restarts <= 0)
         return;
     ui_esc("\x1b[K");
@@ -183,8 +210,8 @@ static void hud_render(void *ud, int cols)
 static void hud_free(void *ud)
 {
     struct hud *h = ud;
-    row_free(&h->row[0]);
-    row_free(&h->row[1]);
+    for (int i = 0; i < HUD_ROWS; i++)
+        row_free(&h->row[i]);
     free(h);
 }
 
@@ -196,9 +223,10 @@ static char *hud_encode(void *ud)
     if (!st)
         return NULL;
     cJSON_AddNumberToObject(st, "restarts", h->restarts);
+    cJSON_AddNumberToObject(st, "logo", h->logo);
 
     cJSON *rows = cJSON_AddArrayToObject(st, "rows");
-    for (int i = 0; rows && i < 2; i++) {
+    for (int i = 0; rows && i < HUD_ROWS; i++) {
         cJSON *segs = cJSON_CreateArray();
         if (!segs)
             break;
@@ -235,9 +263,10 @@ void hud_load(const cJSON *st)
     if (!h)
         return;
     h->restarts = scrollback_int(st, "restarts");
+    h->logo = scrollback_int(st, "logo");
 
     const cJSON *rows = cJSON_GetObjectItem(st, "rows");
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < HUD_ROWS; i++) {
         const cJSON *seg;
         cJSON_ArrayForEach(seg, cJSON_GetArrayItem(rows, i))
             row_add(&h->row[i], (enum ui_role)scrollback_int(seg, "r"), "%s",
@@ -248,7 +277,7 @@ void hud_load(const cJSON *st)
     hud_place(h);
 }
 
-void hud_print(const struct session *s)
+static void hud_emit(const struct session *s, int logo)
 {
     if (!s)
         return;
@@ -274,8 +303,19 @@ void hud_print(const struct session *s)
     if (!h)
         return;
     h->restarts = restarts;
+    h->logo = logo;
     hud_fill(h, s);
     hud_place(h);
+}
+
+void hud_print(const struct session *s)
+{
+    hud_emit(s, 0);
+}
+
+void hud_print_launch(const struct session *s)
+{
+    hud_emit(s, 1);
 }
 
 int hud_restarted(void)
