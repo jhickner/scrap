@@ -201,9 +201,8 @@ static void hud_render(void *ud, int cols)
     if (h->restarts <= 0)
         return;
     ui_esc("\x1b[K");
-    ui_esc(ui_style(UI_DIM));
-    ui_put("  ");
-    ui_printf("restarted %dx", h->restarts);
+    ui_esc(ui_style(UI_ERROR));
+    ui_printf(UI_BAR " restarted %dx", h->restarts);
     ui_esc(ui_style(UI_RESET));
     ui_put("\n");
 }
