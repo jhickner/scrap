@@ -35,6 +35,21 @@ static char tmux_pane_index[8];
 
 static const struct session *slots[MAX_SLOTS];
 
+static int tmux_zoomed(const char *target)
+{
+    char quoted[256], cmd[512], line[8] = "";
+    if (!text_shell_quote(target, quoted, sizeof quoted) ||
+        snprintf(cmd, sizeof cmd, "tmux display-message -p -t %s '#{window_zoomed_flag}' 2>/dev/null",
+                 quoted) >= (int)sizeof cmd)
+        return 0;
+    FILE *p = popen(cmd, "r");
+    if (!p)
+        return 0;
+    char *got = fgets(line, sizeof line, p);
+    pclose(p);
+    return got && line[0] == '1';
+}
+
 static int tmux_do(const char *verb, const char *target)
 {
     pid_t pid = fork();
@@ -48,7 +63,12 @@ static int tmux_do(const char *verb, const char *target)
             if (null > STDERR_FILENO)
                 close(null);
         }
-        char *argv[] = {"tmux", (char *)verb, "-t", (char *)target, NULL};
+        char *argv[] = {"tmux", (char *)verb, "-t", (char *)target, NULL, NULL};
+        if (!strcmp(verb, "resize-pane")) {
+            argv[4] = argv[3];
+            argv[3] = argv[2];
+            argv[2] = "-Z";
+        }
         execvp(argv[0], argv);
         _exit(127);
     }
@@ -67,11 +87,15 @@ int livelist_jump(const struct live_session *v, char *why, int size)
             snprintf(why, (size_t)size, "that session is not in a tmux pane");
         return 0;
     }
+    const char *here = getenv("TMUX_PANE");
+    int zoom = here && *here && tmux_zoomed(here);
     if (!tmux_do("select-pane", v->pane) || !tmux_do("select-window", v->pane)) {
         if (why && size)
             snprintf(why, (size_t)size, "could not select the tmux pane");
         return 0;
     }
+    if (zoom && !tmux_zoomed(v->pane))
+        tmux_do("resize-pane", v->pane);
     return 1;
 }
 
