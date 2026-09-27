@@ -34,6 +34,7 @@ struct keyhelp_row;
 
 struct pick_live {
     const unsigned char *heading;
+    int                  group_gap;
 
     const unsigned char *spin;
     const char *const   *mark;

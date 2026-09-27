@@ -224,7 +224,8 @@ static int fit_rows(const struct view *v, int top, int budget)
 {
     int n = 0, used = 0;
     for (int row = top; row < v->count; row++) {
-        int lines = 1 + (row > top && (row_group(v, row) || row_apart(v, row)));
+        int lines = 1 + (row > top && ((row_group(v, row) && v->live->group_gap) ||
+                                       row_apart(v, row)));
         if (n && used + lines > budget)
             break;
         used += lines;
@@ -432,7 +433,7 @@ static void paint(void *ud)
     for (int row = v->top; row < end; row++) {
         int i = v->order ? v->order[row] : row;
         if (item_heading(v, i)) {
-            if (item_group(v, i) && row > v->top) {
+            if (item_group(v, i) && v->live->group_gap && row > v->top) {
                 ui_put("\n");
                 rows++;
             }
