@@ -17,6 +17,11 @@
 
 #define SETTING_STATUS_INTERVAL "status_seconds"
 
+#define SETTING_JUMP_LENGTH "jump_length"
+
+#define JUMP_LENGTH_DEFAULT 10
+#define JUMP_LENGTH_MAX     100
+
 #define STATUS_INTERVAL_DEFAULT 300
 
 #define SETTING_BACKEND      "backend"

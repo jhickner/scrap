@@ -24,6 +24,7 @@
 #include "scrollback.h"
 #include "sessionload.h"
 #include "session.h"
+#include "settings.h"
 #include "status.h"
 #include "text.h"
 #include "title.h"
@@ -365,7 +366,9 @@ void sessionswitch_step(int dir)
     o.n = livelist_load(&o.live);
 
     if (path_config_file(path, sizeof path, "active") &&
-        activelog_step(path, here, dir, open_somewhere, &o, id, sizeof id)) {
+        activelog_step(path, here, dir,
+                       settings_get_int(SETTING_JUMP_LENGTH, JUMP_LENGTH_DEFAULT),
+                       open_somewhere, &o, id, sizeof id)) {
         int at = tab_named(id);
         if (at >= 0)
             workspace_show(at);
