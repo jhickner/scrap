@@ -27,7 +27,7 @@ static void step(const char *path, const char *here, int dir, const char *closed
 
 int main(void)
 {
-    char path[] = "/tmp/mux-activelog-XXXXXX";
+    char path[] = "/tmp/scrap-activelog-XXXXXX";
     int fd = mkstemp(path);
     assert(fd >= 0);
     close(fd);

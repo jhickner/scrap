@@ -183,7 +183,7 @@ int main(void)
     setenv("COLUMNS", "80", 1);
     setenv("LINES", "24", 1);
 
-    char path[] = "/tmp/mux-chrometest-XXXXXX";
+    char path[] = "/tmp/scrap-chrometest-XXXXXX";
     int  wfd = mkstemp(path);
     tap_read = wfd >= 0 ? open(path, O_RDONLY) : -1;
     if (wfd < 0 || tap_read < 0) {

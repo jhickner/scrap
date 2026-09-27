@@ -268,7 +268,7 @@ static enum MHD_Result run_job(struct MHD_Connection *c, const char *url, const 
     if (api.stopping) {
         pthread_mutex_unlock(&api.lock);
         job_free(j);
-        return send_error(c, 503, "stopping", "this mux is shutting down");
+        return send_error(c, 503, "stopping", "this scrap is shutting down");
     }
     if (api.inbox_tail)
         api.inbox_tail->next = j;
@@ -286,7 +286,7 @@ static enum MHD_Result run_job(struct MHD_Connection *c, const char *url, const 
         j->abandoned = 1;
         pthread_mutex_unlock(&api.lock);
         return send_error(c, api.stopping ? 503 : 504, api.stopping ? "stopping" : "timeout",
-                          "no reply from the mux main loop");
+                          "no reply from the scrap main loop");
     }
     pthread_mutex_unlock(&api.lock);
     enum MHD_Result r = send_json(c, j->call.status, j->call.out);
@@ -364,7 +364,7 @@ int api_start(void)
         return 0;
     }
     snprintf(api.token, sizeof api.token, "%s", token);
-    const char *port_env = getenv("MUX_API_PORT");
+    const char *port_env = getenv("SCRAP_API_PORT");
     const char *port_cfg = settings_get(&cfg, "port", NULL);
     int port = atoi(port_env && *port_env ? port_env : port_cfg && *port_cfg ? port_cfg : "0");
     if (port <= 0 || port > 65535)
@@ -518,7 +518,7 @@ int api_register_dlv(char *msg, size_t n)
         goto done;
     }
     cJSON *hosts = cJSON_CreateArray(), *h;
-    cJSON *old = cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(cur, "backends"), "mux"), "settings"), "hosts");
+    cJSON *old = cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(cur, "backends"), "scrap"), "settings"), "hosts");
     cJSON_ArrayForEach(h, old) {
         const char *hn = cJSON_GetStringValue(cJSON_GetObjectItem(h, "name"));
         if (!hn || strcmp(hn, name))
@@ -529,7 +529,7 @@ int api_register_dlv(char *msg, size_t n)
     cJSON_AddStringToObject(me, "url", api.url);
     cJSON_AddItemToArray(hosts, me);
     cJSON *body = cJSON_CreateObject();
-    cJSON_AddStringToObject(body, "name", "mux");
+    cJSON_AddStringToObject(body, "name", "scrap");
     cJSON_AddItemToObject(cJSON_AddObjectToObject(body, "settings"), "hosts", hosts);
     cJSON_AddStringToObject(cJSON_AddObjectToObject(cJSON_AddObjectToObject(body, "secrets"), "host_tokens"), name, api.token);
     cJSON *r = dlv_call(base, key, "backend_set", body, err, sizeof err);

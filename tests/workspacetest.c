@@ -4,7 +4,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+#include "activelog.h"
 #include "chrome.h"
+#include "im.h"
 #include "cmd.h"
 #include "gitinfo.h"
 #include "prompt.h"
@@ -91,6 +93,9 @@ int session_work_count(const struct session *s) { return s ? s->work : 0; }
 int session_busy(const struct session *s) { return s && (s->busy || s->running); }
 int session_compact(const struct session *s) { (void)s; return 0; }
 const char *session_title(const struct session *s) { (void)s; return "tab"; }
+const char *session_name(const struct session *s) { (void)s; return NULL; }
+void session_republish(const struct session *s) { (void)s; }
+void activelog_add(const char *path, const char *id, int back) { (void)path; (void)id; (void)back; }
 const char *session_cwd(const struct session *s) { return s && s->cwd ? s->cwd : "."; }
 const char *session_id(const struct session *s) { (void)s; return NULL; }
 const char *session_backend(const struct session *s) { (void)s; return "grok"; }
@@ -315,7 +320,7 @@ int main(void)
 
     {
         struct session idle = {0}, busy = {0};
-        char dump[] = "/tmp/mux-ws-echo-XXXXXX";
+        char dump[] = "/tmp/scrap-ws-echo-XXXXXX";
         int dfd = mkstemp(dump);
         if (dfd < 0)
             fail("temp dump");

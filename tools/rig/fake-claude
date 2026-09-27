@@ -12,7 +12,7 @@ def emit(ev):
 
 
 def load_turns():
-    path = os.environ.get("MUXRIG_FIXTURE")
+    path = os.environ.get("SCRAPRIG_FIXTURE")
     if not path:
         return []
     turns, cur = [], []

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-R=./muxrig
+R=./scraprig
 n=$($R start --fixture fixtures/toolcall.jsonl); trap '$R stop $n' EXIT
 $R wait $n '❯'
 $R type $n 'list files'

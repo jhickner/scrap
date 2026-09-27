@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "chrome.h"
 #include "prompt.h"
 #include "session.h"
 #include "settings.h"

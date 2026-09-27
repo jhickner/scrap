@@ -287,7 +287,7 @@ double now_seconds(void)
 
 int path_config_dir(char *out, size_t size)
 {
-    const char *env = getenv("MUX_CONFIG_DIR");
+    const char *env = getenv("SCRAP_CONFIG_DIR");
     const char *home = getenv("HOME");
     if (env && *env) {
         if ((size_t)snprintf(out, size, "%s", env) >= size)

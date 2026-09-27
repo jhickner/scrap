@@ -18,11 +18,11 @@
 
 
 
-▌ mux › claude › default › medium
+▌ scrap › claude › default › medium
 ▌ <rig>/work
 
 ❯ /
-  /new  start a fresh conversation, or a new tab running the prompt
+  /new  open a new session, or a new tab running the prompt
   /clear  start a fresh conversation
   /model  switch model
   /effort  set reasoning/thinking effort

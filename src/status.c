@@ -55,7 +55,7 @@ void status_touch(void) { touched = 1; }
 
 static void trace_set(const char *field, const char *from, const char *to)
 {
-    const char *path = getenv("MUX_STATUS_TRACE");
+    const char *path = getenv("SCRAP_STATUS_TRACE");
     if (!path || !*path)
         return;
     FILE *f = fopen(path, "a");

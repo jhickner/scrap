@@ -25,7 +25,7 @@
 
 int dispatch_dir(char *out, size_t size)
 {
-    const char *env = getenv("MUX_DISPATCH_DIR");
+    const char *env = getenv("SCRAP_DISPATCH_DIR");
     if (env && *env)
         return (size_t)snprintf(out, size, "%s", env) < size;
     return path_config_subdir(out, size, "dispatch");

@@ -54,7 +54,7 @@ static int check_record(const char *path, const char *backend, const char *statu
 
 int main(void)
 {
-    char root[] = "/tmp/mux-tabs-XXXXXX";
+    char root[] = "/tmp/scrap-tabs-XXXXXX";
     if (!mkdtemp(root)) {
         perror("agenttabstest: mkdtemp");
         return 1;

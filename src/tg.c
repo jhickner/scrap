@@ -178,10 +178,10 @@ static int claim_telegram(void)
         return 1;
     if (errno == EWOULDBLOCK || errno == EAGAIN)
         snprintf(start_error, sizeof start_error,
-                 "telegram is already enabled by another mux instance");
+                 "telegram is already enabled by another scrap instance");
     else
         snprintf(start_error, sizeof start_error,
-                 "could not claim telegram for this mux instance: %s", strerror(errno));
+                 "could not claim telegram for this scrap instance: %s", strerror(errno));
     fprintf(stderr, APP_NAME ": %s\n", start_error);
     return 0;
 }
@@ -1279,8 +1279,8 @@ static void send_bridge_status(void)
 }
 
 static const char HELP[] =
-    "Anything you type is one turn in a live mux session, including the CLI's "
-    "own slash commands (/w, /email, /code-review, ...) and mux's (/model, "
+    "Anything you type is one turn in a live scrap session, including the CLI's "
+    "own slash commands (/w, /email, /code-review, ...) and scrap's (/model, "
     "/new, /cd, /backend, /session, ...).\n\n"
     "With a terminal attached these are that window's own tabs: switching "
     "here switches what the terminal shows, and the other way round.\n\n"
@@ -1293,7 +1293,7 @@ static const char HELP[] =
     "/artifacts   published files and their links\n"
     "/stop        abandon the turn in flight (or just say \"stop\")\n"
     "/tg          the bridge's own settings, and this\n\n"
-    "Settings live in ~/.config/mux/telegram.";
+    "Settings live in ~/.config/scrap/telegram.";
 
 static const char *arg_of(const char *line, const char *cmd)
 {

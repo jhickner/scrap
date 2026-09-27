@@ -9,7 +9,7 @@
 
 static int dir_path(char *out, size_t size)
 {
-    const char *env = getenv("MUX_ADDR_DIR");
+    const char *env = getenv("SCRAP_ADDR_DIR");
     if (env && *env)
         return (size_t)snprintf(out, size, "%s", env) < size;
     return path_config_subdir(out, size, "addr");

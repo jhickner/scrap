@@ -76,7 +76,7 @@ static void check_list(const char *skip_id, int newest, int oldest)
 
 int main(void)
 {
-    char root[] = "/tmp/mux-sessionlist-XXXXXX";
+    char root[] = "/tmp/scrap-sessionlist-XXXXXX";
     if (!mkdtemp(root)) {
         fail("temporary directory");
         return 1;

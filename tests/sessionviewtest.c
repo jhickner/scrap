@@ -186,7 +186,7 @@ static int state_isolation(struct screen *s)
 
 static int collapse_redraws(void)
 {
-    char path[] = "/tmp/mux-sessionviewtest-XXXXXX";
+    char path[] = "/tmp/scrap-sessionviewtest-XXXXXX";
     int  wfd = mkstemp(path);
     tap_read = wfd >= 0 ? open(path, O_RDONLY) : -1;
     if (wfd < 0 || tap_read < 0)

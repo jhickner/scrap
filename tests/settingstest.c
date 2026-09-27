@@ -16,7 +16,7 @@ static void fail(const char *what)
 
 int main(void)
 {
-    char path[] = "/tmp/mux-settingstest-XXXXXX";
+    char path[] = "/tmp/scrap-settingstest-XXXXXX";
     int  fd = mkstemp(path);
     if (fd < 0)
         return 1;
@@ -56,16 +56,16 @@ int main(void)
     free(b);
     free(c);
 
-    char root[] = "/tmp/mux-configdir-XXXXXX";
+    char root[] = "/tmp/scrap-configdir-XXXXXX";
     if (!mkdtemp(root))
         return 1;
     char want[128], got[4096];
     snprintf(want, sizeof want, "%s/a/b", root);
-    setenv("MUX_CONFIG_DIR", want, 1);
+    setenv("SCRAP_CONFIG_DIR", want, 1);
     if (!path_config_dir(got, sizeof got) || strcmp(got, want) != 0)
-        fail("MUX_CONFIG_DIR replaces the config directory");
+        fail("SCRAP_CONFIG_DIR replaces the config directory");
     if (access(want, F_OK) != 0)
-        fail("MUX_CONFIG_DIR is created with its parents");
+        fail("SCRAP_CONFIG_DIR is created with its parents");
     rmdir(want);
     snprintf(want, sizeof want, "%s/a", root);
     rmdir(want);

@@ -113,10 +113,10 @@ static int claim_relay(void)
         return 1;
     if (errno == EWOULDBLOCK || errno == EAGAIN)
         snprintf(start_error, sizeof start_error,
-                 "relay is already enabled by another mux instance");
+                 "relay is already enabled by another scrap instance");
     else
         snprintf(start_error, sizeof start_error,
-                 "could not claim relay for this mux instance: %s", strerror(errno));
+                 "could not claim relay for this scrap instance: %s", strerror(errno));
     fprintf(stderr, APP_NAME ": %s\n", start_error);
     return 0;
 }
@@ -1018,7 +1018,7 @@ int relay_start(struct session *s)
         return 0;
     }
     snprintf(rt.token, sizeof rt.token, "%s", token);
-    const char *port_env = getenv("MUX_RELAY_PORT");
+    const char *port_env = getenv("SCRAP_RELAY_PORT");
     rt.port = atoi(port_env && *port_env ? port_env : cfg_get("port", "0"));
     if (rt.port <= 0)
         rt.port = PORT_DEFAULT;
