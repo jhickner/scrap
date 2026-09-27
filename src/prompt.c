@@ -77,8 +77,8 @@ struct prompt {
     void        *split_ud;
     void       (*another)(void *ud);
     void        *another_ud;
-    void       (*back)(void *ud);
-    void        *back_ud;
+    void       (*step)(void *ud, int dir);
+    void        *step_ud;
     void       (*cycle)(void *ud, int delta);
     void        *cycle_ud;
     void       (*collapse)(void *ud);
@@ -689,7 +689,7 @@ static const struct prompt_key SHORTCUTS[] = {
     {"ctrl-tab / ctrl-shift-tab", "cycle to the next / previous session"},
     {"ctrl-t", "open a shell split in this directory"},
     {"ctrl-b", "open another session like this one, or reuse the idle one"},
-    {"ctrl-o", "jump back to the previous session"},
+    {"ctrl-o / ctrl-p", "step back / forward through recently active sessions"},
     {"ctrl-n", "cycle the colours of your input"},
     {"ctrl-f", "compact or full tool calls, redrawing the transcript"},
     {"page up/down", "scroll the transcript half a screen"},
@@ -788,13 +788,13 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             }
             return KEY_OK;
         }
-        if (ev->cp == KEY_CTRL('O')) {
-            if (p->back && !overlay_open(p)) {
+        if (ev->cp == KEY_CTRL('O') || ev->cp == KEY_CTRL('P')) {
+            if (p->step && !overlay_open(p)) {
                 if (live)
                     status_pause();
                 viewport_defer();
                 chrome_clear();
-                p->back(p->back_ud);
+                p->step(p->step_ud, ev->cp == KEY_CTRL('O') ? -1 : 1);
                 if (live)
                     status_resume();
             }
@@ -1029,10 +1029,10 @@ void prompt_set_another(struct prompt *p, void (*fn)(void *ud), void *ud)
     p->another_ud = ud;
 }
 
-void prompt_set_back(struct prompt *p, void (*fn)(void *ud), void *ud)
+void prompt_set_step(struct prompt *p, void (*fn)(void *ud, int dir), void *ud)
 {
-    p->back = fn;
-    p->back_ud = ud;
+    p->step = fn;
+    p->step_ud = ud;
 }
 
 void prompt_set_cycle(struct prompt *p, void (*fn)(void *ud, int delta), void *ud)
