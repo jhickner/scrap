@@ -64,6 +64,7 @@ static int item_apart(const struct view *v, int i)
 }
 
 #define LABEL_SHARE(cols) ((cols) * 3 / 5)
+#define LABEL_MIN 20
 
 static size_t col_max(const struct view *v, const char *const *col, size_t cap)
 {
@@ -91,11 +92,8 @@ static size_t lead_width(const struct view *v, int columns)
     return col_max(v, v->live->lead, cap);
 }
 
-static size_t align_width(const struct view *v, int columns, size_t lead_w)
+static size_t label_max(const struct view *v)
 {
-    if (!v->live || !v->live->align)
-        return 0;
-
     size_t width = 0;
     for (int row = 0; row < v->count; row++) {
         int i = v->order[row];
@@ -105,6 +103,15 @@ static size_t align_width(const struct view *v, int columns, size_t lead_w)
         if (cells > width)
             width = cells;
     }
+    return width;
+}
+
+static size_t align_width(const struct view *v, int columns, size_t lead_w)
+{
+    if (!v->live || !v->live->align)
+        return 0;
+
+    size_t width = label_max(v);
     size_t cap;
     if (lead_w) {
         int rest = columns - 4 - (int)lead_w - 2;
@@ -134,6 +141,19 @@ static size_t detail_width(const struct view *v, size_t cap)
     if (!width)
         return 0;
     return width > cap ? cap : width;
+}
+
+static size_t label_fit(const struct view *v, int columns, size_t lead_w, size_t detail_w)
+{
+    size_t natural = label_max(v);
+    size_t tail_w = col_max(v, v->live->tail, 32);
+    size_t rest = 4 + (lead_w ? lead_w + 2 : 0) + ((v->live->spin || v->live->mark) ? 2 : 0) +
+                  2 + detail_w + (tail_w ? 2 + tail_w : 0) + 1;
+    size_t floor = natural < LABEL_MIN ? natural : LABEL_MIN;
+    int    room = columns - (int)rest;
+    if (room < (int)floor)
+        return floor;
+    return (size_t)room < natural ? (size_t)room : natural;
 }
 
 static size_t fit_bytes(const char *s, size_t budget, int *cut)
@@ -426,7 +446,9 @@ static void paint(void *ud)
     int    base = chrome_gap();
     size_t lead_w = lead_width(v, columns);
     size_t pad_to = v->live && v->live->stack ? 0 : align_width(v, columns, lead_w);
-    size_t detail_w = detail_width(v, 24);
+    size_t detail_w = detail_width(v, 40);
+    if (pad_to && detail_w)
+        pad_to = label_fit(v, columns, lead_w, detail_w);
 
     for (int i = 0; i < HIT_MAX; i++)
         v->hit[i] = -1;
