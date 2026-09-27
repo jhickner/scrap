@@ -17,6 +17,7 @@
 #include "dirpick.h"
 #include "handoff.h"
 #include "hud.h"
+#include "keyhelp.h"
 #include "livelist.h"
 #include "models.h"
 #include "parent.h"
@@ -43,6 +44,21 @@
 #define KEY_TAKE   'y'
 
 static int show_all = 1;
+
+static const struct keyhelp_row SESSION_KEYS[] = {
+    {"GO", "enter/\xe2\x86\x92", "switch to it"},
+    {"GO", "g", "switch to it"},
+    {"GO", "y", "pull into this window"},
+    {"GO", "a", "pull every other window"},
+    {"GO", "tab/esc", "close the list"},
+    {"CHANGE", "r", "rename"},
+    {"CHANGE", "x", "close the session"},
+    {"CHANGE", "n", "new session"},
+    {"CHANGE", "c", "new, same directory"},
+    {"CHANGE", "p", "new, like this, with a prompt"},
+    {"LIST", "up/down", "move"},
+    {"LIST", "*", "this window only / every window"},
+};
 
 #define KEY_CTRL(c) ((c) & 0x1f)
 
@@ -834,7 +850,9 @@ static int switch_once(void)
     listing.sig = listing_sig(&listing);
     struct pick_live shown = {.heading = heading, .spin = spin, .mark = marks, .mark_role = roles,
                               .tail = tails,
-                              .align = 1, .tick = relist, .ud = &listing};
+                              .align = 1, .tick = relist, .ud = &listing,
+                              .keys = SESSION_KEYS,
+                              .nkeys = (int)(sizeof SESSION_KEYS / sizeof *SESSION_KEYS)};
     int picked = pick_run_live(title, items, n, initial, &shown, PICK_SEARCH_SLASH,
                                shortcuts, &pressed);
 

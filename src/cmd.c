@@ -1560,11 +1560,14 @@ static void do_help(struct session *s, const char *arg)
     ui_put("\n");
     help_heading("shortcuts");
 
-    help_row("!cmd", "run cmd in $SHELL instead of sending it to the agent");
     int                      key_count = 0;
     const struct prompt_key *keys = prompt_shortcuts(&key_count);
-    for (int i = 0; i < key_count; i++)
-        help_row(keys[i].key, keys[i].desc);
+    for (int i = 0; i < key_count; i++) {
+        char label[48];
+        snprintf(label, sizeof label, "%s%s", keys[i].key,
+                 keys[i].when == PROMPT_KEY_TURN ? " (turn)" : "");
+        help_row(label, keys[i].desc);
+    }
     ui_put("\n");
     help_heading("skills");
     help_row("", "your skills, CLAUDE.md, MCP servers and agents load by default.");

@@ -755,6 +755,7 @@ static void decode_csi(tty_event *ev, const int *params, int nparams, int final,
     case 'I': focus_change(ev, 1); return;
     case 'O': focus_change(ev, 0); return;
     case 'Z': emit(ev, TK_PREV_TAB); return;
+    case 'P': emit(ev, TK_F1); return;
     case 'u':
         if (nparams >= 1) {
             decode_modified(ev, params[0], mods, shifted);
@@ -772,6 +773,7 @@ static void decode_csi(tty_event *ev, const int *params, int nparams, int final,
         case 4: case 8: emit(ev, TK_END); return;
         case 5:         emit(ev, TK_PAGE_UP); return;
         case 6:         emit(ev, TK_PAGE_DOWN); return;
+        case 11:        emit(ev, TK_F1); return;
         default: break;
         }
     }
@@ -879,6 +881,7 @@ static void decode_escape(tty_event *ev)
         case 'D': emit(ev, TK_LEFT); return;
         case 'H': emit(ev, TK_HOME); return;
         case 'F': emit(ev, TK_END); return;
+        case 'P': emit(ev, TK_F1); return;
         default:  emit(ev, TK_NONE); return;
         }
     }

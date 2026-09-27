@@ -36,6 +36,7 @@ typedef enum {
     TK_MOUSE_DOWN,
     TK_FOCUS_IN,
     TK_FOCUS_OUT,
+    TK_F1,
 
     TK_NONE,
 } tty_key;

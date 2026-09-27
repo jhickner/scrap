@@ -21,9 +21,14 @@ void prompt_rehome(const char *root);
 
 char *prompt_read(struct prompt *p);
 
+enum prompt_key_when { PROMPT_KEY_ALWAYS, PROMPT_KEY_IDLE, PROMPT_KEY_TURN };
+
 struct prompt_key {
-    const char *key;
-    const char *desc;
+    const char          *group;
+    const char          *key;
+    const char          *brief;
+    const char          *desc;
+    enum prompt_key_when when;
 };
 
 const struct prompt_key *prompt_shortcuts(int *count);
@@ -69,6 +74,8 @@ void prompt_set_mic(struct prompt *p, void (*fn)(void *ud), void *ud);
 void prompt_set_another(struct prompt *p, void (*fn)(void *ud), void *ud);
 
 void prompt_set_step(struct prompt *p, void (*fn)(void *ud, int dir), void *ud);
+
+void prompt_set_busy(struct prompt *p, int (*fn)(void *ud), void *ud);
 
 void prompt_set_cycle(struct prompt *p, void (*fn)(void *ud, int delta), void *ud);
 
