@@ -27,6 +27,7 @@ struct session *workspace_prepare(const char *backend, const char *model, const 
 int  workspace_open(struct session *s);
 
 void workspace_show(int index);
+void workspace_log_active(void);
 
 void workspace_cycle(int delta);
 
