@@ -312,14 +312,78 @@ static int group_rows(const struct row *in, int n, struct row *out,
     return m;
 }
 
-static void jump(const struct live_session *v)
+static void here_id(char *out, size_t size)
 {
-    char why[256];
+    struct session *s = workspace_current();
+    const char *id = s ? session_id(s) : NULL;
+    snprintf(out, size, "%s", id ? id : "");
+}
+
+static void remember(const char *from)
+{
+    char path[4400];
+    if (!from[0] || !path_config_file(path, sizeof path, "back"))
+        return;
+    FILE *f = fopen(path, "w");
+    if (!f)
+        return;
+    fprintf(f, "%s\n", from);
+    fclose(f);
+}
+
+static int jump(const struct live_session *v)
+{
+    char from[128], why[256];
+    here_id(from, sizeof from);
     if (!livelist_jump(v, why, sizeof why)) {
         ui_error("%s", why);
         ui_put("\n");
         ui_flush();
+        return 0;
     }
+    remember(from);
+    return 1;
+}
+
+static void show_tab(int at)
+{
+    char from[128];
+    here_id(from, sizeof from);
+    if (at == workspace_index())
+        return;
+    workspace_show(at);
+    remember(from);
+}
+
+void sessionswitch_back(void)
+{
+    char path[4400], id[128] = "";
+    size_t len = 0;
+    char *text = path_config_file(path, sizeof path, "back")
+                     ? text_slurp(path, sizeof id, &len) : NULL;
+    if (text) {
+        snprintf(id, sizeof id, "%.*s", (int)strcspn(text, "\n"), text);
+        free(text);
+    }
+
+    int at = id[0] ? workspace_find_id(id) : -1;
+    if (at >= 0) {
+        show_tab(at);
+        return;
+    }
+
+    struct live_session *live = NULL;
+    int nlive = id[0] ? livelist_load(&live) : 0;
+    for (int i = 0; i < nlive; i++)
+        if (!live[i].mine && !strcmp(live[i].id, id)) {
+            jump(&live[i]);
+            free(live);
+            return;
+        }
+    free(live);
+    ui_note("%s", id[0] ? "the previous session is gone" : "no previous session");
+    ui_put("\n");
+    ui_flush();
 }
 
 static void waiting(int waited_ms, void *ud)
@@ -870,7 +934,7 @@ static int switch_once(void)
         if (chosen.kind == ROW_LIVE) {
             jump(&live[chosen.at]);
         } else if (chosen.kind == ROW_TAB) {
-            workspace_show(chosen.at);
+            show_tab(chosen.at);
         }
         free(live);
         return 0;
@@ -894,7 +958,7 @@ static int switch_once(void)
 
     switch (chosen.kind) {
     case ROW_TAB:
-        workspace_show(chosen.at);
+        show_tab(chosen.at);
         break;
     case ROW_LIVE:
         jump(&live[chosen.at]);
