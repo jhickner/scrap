@@ -6,6 +6,8 @@
 struct session;
 
 int  voice_start(char *err, size_t size);
+void voice_start_poll(void);
+int  voice_starting(void);
 void voice_stop(void);
 void voice_handoff(void);
 void voice_protect_handoff(void);

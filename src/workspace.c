@@ -69,7 +69,7 @@ static void spin_follow(void)
 
     if (want == spinning) {
         if (!want) {
-            if (status_spinning())
+            if (status_spinning() && !voice_starting())
                 status_end();
             return;
         }

@@ -33,6 +33,7 @@ int  sidechannel_fds(int *out, int max) { (void)out; (void)max; return 0; }
 void gitinfo_forget(void) {}
 void tg_refocus(void) {}
 void voice_refocus(void) {}
+int  voice_starting(void) { return 0; }
 static struct prompt *leave_prompt;
 static struct session *leave_session;
 static int left_before_switch;

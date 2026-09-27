@@ -261,6 +261,8 @@ static void begin(void)
     sends = 0;
     if (!voice_start(err, sizeof err))
         fail(err);
+    while (voice_starting())
+        voice_start_poll();
 }
 
 #define SAID_A "Listen. Okay, we'll test switching tabs again and see what happens. " \
