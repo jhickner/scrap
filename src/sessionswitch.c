@@ -81,7 +81,6 @@ struct row {
     int  spin;
     char mark[4];
     unsigned char role;
-    char channels[48];
     char id[128];
     char parent[128];
     char cwd[512];
@@ -95,16 +94,8 @@ static void row_status(struct row *r, const char *status)
 {
     r->spin = status && !strcmp(status, "working");
     int errored = status && !strcmp(status, "errored");
-    snprintf(r->mark, sizeof r->mark, "%.1s", errored ? "e" : r->channels);
+    snprintf(r->mark, sizeof r->mark, "%s", errored ? "e" : "");
     r->role = errored ? UI_ERROR : UI_OK;
-}
-
-static void add_channels(struct row *r)
-{
-    if (!r->channels[0])
-        return;
-    size_t len = strlen(r->detail);
-    snprintf(r->detail + len, sizeof r->detail - len, " \xc2\xb7 %s", r->channels);
 }
 
 static long last_active(const char *name)
@@ -134,83 +125,22 @@ static void tab_rows(struct row *rows, int *n)
         snprintf(r->detail, sizeof r->detail, "@%s %s %s", session_name(s),
                  session_backend(s),
                  models_short_name(session_backend(s), session_model_label(s)));
-        livelist_channels(r->channels, sizeof r->channels);
-        add_channels(r);
         row_status(r, status);
     }
 }
 
-#define MAX_PANES 256
-
-static struct {
-    char pane[16];
-    char window[16];
-    char name[64];
-} panes[MAX_PANES];
-static int npanes;
-
-static void panes_load(void)
-{
-    npanes = 0;
-    if (!getenv("TMUX"))
-        return;
-
-    FILE *p = popen("tmux list-panes -a -F "
-                    "'#{pane_id} #{window_id} #{window_index}:#{window_name}' "
-                    "2>/dev/null", "r");
-    if (!p)
-        return;
-    char line[256];
-    while (npanes < MAX_PANES && fgets(line, sizeof line, p)) {
-        char pane[16], window[16];
-        int  at = 0;
-        if (sscanf(line, "%15s %15s %n", pane, window, &at) < 2 || !at)
-            continue;
-        line[strcspn(line, "\n")] = '\0';
-        snprintf(panes[npanes].pane, sizeof panes[npanes].pane, "%s", pane);
-        snprintf(panes[npanes].window, sizeof panes[npanes].window, "%s", window);
-        snprintf(panes[npanes].name, sizeof panes[npanes].name, "%s", line + at);
-        npanes++;
-    }
-    pclose(p);
-}
-
-static int pane_at(const char *pane)
-{
-    for (int i = 0; i < npanes; i++)
-        if (!strcmp(panes[i].pane, pane))
-            return i;
-    return -1;
-}
-
 static void fill_live(struct row *r, const struct live_session *v)
 {
-    char when[32];
-    text_ago(v->ts, 1, when, sizeof when);
-
-    const char *here = livelist_tmux_window();
-    int at = v->pane[0] ? pane_at(v->pane) : -1;
-
-    const char *window = at >= 0 ? panes[at].window : (v->window[0] ? v->window : NULL);
-    const char *wname = at >= 0 ? panes[at].name : (v->wname[0] ? v->wname : NULL);
-    int in_tmux = here[0] != '\0';
-    int near = in_tmux && window && !strcmp(window, here);
-
-    char where[96] = "";
-    if (in_tmux && !near && wname && *wname)
-        snprintf(where, sizeof where, "%s \xc2\xb7 ", wname);
+    char when[32] = "";
+    if (r->ts)
+        text_ago(r->ts, 1, when, sizeof when);
 
     snprintf(r->label, sizeof r->label, "%s",
              v->title[0] ? v->title : "untitled");
     snprintf(r->detail, sizeof r->detail, "%s%s%s%s %s", v->name[0] ? "@" : "", v->name,
                  v->name[0] ? " " : "", v->backend,
                  models_short_name(v->backend, v->label[0] ? v->label : v->model));
-    snprintf(r->channels, sizeof r->channels, "%s", v->channels);
-    add_channels(r);
-    if (where[0])
-        snprintf(r->when, sizeof r->when, "%s%s", where, when);
-    else
-        snprintf(r->when, sizeof r->when, "%s", when);
+    snprintf(r->when, sizeof r->when, "%s", when);
     row_status(r, v->status);
 }
 
@@ -742,7 +672,6 @@ static int switch_once(void)
     }
 
     int nfound = 0;
-    panes_load();
     tab_rows(found, &nfound);
     live_rows(found, &nfound, live, nlive);
 
