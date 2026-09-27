@@ -763,9 +763,11 @@ static int run(const char *title, const struct pick_item *items, int count,
         }
         switch (ev.key) {
         case TK_UP:
+        case TK_SCROLL_UP:
             step(&v, -1);
             break;
         case TK_DOWN:
+        case TK_SCROLL_DOWN:
             step(&v, 1);
             break;
         case TK_HOME:
