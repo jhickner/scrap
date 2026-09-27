@@ -256,7 +256,7 @@ void workspace_log_active(void)
 {
     char path[4400];
     if (ntabs && tty_focused() && path_config_file(path, sizeof path, "active"))
-        activelog_add(path, session_id(tabs[cur].s), 0);
+        activelog_add(path, session_name(tabs[cur].s), 0);
 }
 
 void workspace_show(int index)
