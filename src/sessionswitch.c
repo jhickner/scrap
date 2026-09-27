@@ -11,6 +11,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "activelog.h"
 #include "ask.h"
 #include "cmd.h"
 #include "dirpick.h"
@@ -331,51 +332,44 @@ static int jump(const struct live_session *v)
     return 1;
 }
 
-static int go_to(const char *id, const struct live_session *live, int nlive)
+struct others {
+    struct live_session *live;
+    int                  n;
+};
+
+static const struct live_session *other(const struct others *o, const char *id)
 {
-    int at = workspace_find_id(id);
-    if (at >= 0) {
-        workspace_show(at);
-        return 1;
-    }
-    for (int i = 0; i < nlive; i++)
-        if (!live[i].mine && !strcmp(live[i].id, id)) {
-            jump(&live[i]);
-            return 1;
-        }
-    return 0;
+    for (int i = 0; i < o->n; i++)
+        if (!o->live[i].mine && !strcmp(o->live[i].id, id))
+            return &o->live[i];
+    return NULL;
 }
 
-void sessionswitch_back(void)
+static int open_somewhere(const char *id, void *ud)
 {
-    char path[4400], here[128];
+    return workspace_find_id(id) >= 0 || other(ud, id);
+}
+
+void sessionswitch_step(int dir)
+{
+    char path[4400], here[128], id[128];
     here_id(here, sizeof here);
-    size_t len = 0;
-    char *text = path_config_file(path, sizeof path, "active")
-                     ? text_slurp(path, 0, &len) : NULL;
-    struct live_session *live = NULL;
-    int nlive = text ? livelist_load(&live) : 0;
+    struct others o = {NULL, 0};
+    o.n = livelist_load(&o.live);
 
-    int went = 0;
-    for (char *end = text ? text + len : NULL; end && end > text && !went;) {
-        *end = '\0';
-        char *line = end;
-        while (line > text && line[-1] != '\n')
-            line--;
-        end = line > text ? line - 1 : text;
-
-        char *id = strchr(line, '\t');
-        id = id ? id + 1 : line;
-        if (*id && strcmp(id, here))
-            went = go_to(id, live, nlive);
+    if (path_config_file(path, sizeof path, "active") &&
+        activelog_step(path, here, dir, open_somewhere, &o, id, sizeof id)) {
+        int at = workspace_find_id(id);
+        if (at >= 0)
+            workspace_show(at);
+        else
+            jump(other(&o, id));
+    } else {
+        ui_note("%s", dir < 0 ? "no previous session" : "no next session");
+        ui_put("\n");
+        ui_flush();
     }
-    free(live);
-    free(text);
-    if (went)
-        return;
-    ui_note("no previous session");
-    ui_put("\n");
-    ui_flush();
+    free(o.live);
 }
 
 static void waiting(int waited_ms, void *ud)

@@ -33,7 +33,7 @@ CHECKS := kittywraptest overlaytest viewporttest imagerowtest chrometest imagefi
           sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
           dispatchtest voicetabtest grokbottailtest vncinsettest grokvnctest \
           settingstest jevtest
-CHECKS += agentsynctest sessionaddrtest apitest apihttptest
+CHECKS += agentsynctest sessionaddrtest apitest apihttptest activelogtest
 MANUAL_TOOLS := imagetest keydump palette pastetest spintest vncprobe
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,
@@ -258,6 +258,8 @@ $(BUILD)/jevtest: tests/jevtest.c $(BUILD)/jev.o $(BUILD)/vendor/cJSON.o | $(BUI
 $(BUILD)/voicetest: tests/voicetest.c src/voice.c $(BUILD)/jev.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
 $(BUILD)/voicetabtest: tests/voicetabtest.c tests/stubs/tabbar.c tests/stubs/vendorimpl.c src/voice.c $(BUILD)/jev.o $(BUILD)/workspace.o $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
+
+$(BUILD)/activelogtest: tests/activelogtest.c $(BUILD)/activelog.o $(BUILD)/text.o | $(BUILD)
 
 check: $(CHECK_BINS)
 	@for t in $^; do echo "$$t"; ./$$t || exit 1; done

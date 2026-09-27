@@ -374,10 +374,10 @@ static void focus_changed(int on)
         workspace_log_active();
 }
 
-static void back(void *ud)
+static void step(void *ud, int dir)
 {
     (void)ud;
-    sessionswitch_back();
+    sessionswitch_step(dir);
 }
 
 static void cycle_session(void *ud, int delta)
@@ -861,7 +861,7 @@ int main(int argc, char **argv)
     prompt_set_click(prompt, clicked, NULL);
     prompt_set_split(prompt, splitter, NULL);
     prompt_set_another(prompt, another, NULL);
-    prompt_set_back(prompt, back, NULL);
+    prompt_set_step(prompt, step, NULL);
     prompt_set_cycle(prompt, cycle_session, NULL);
     prompt_set_collapse(prompt, collapse_tools, NULL);
     view_collapse(session_compact(session));

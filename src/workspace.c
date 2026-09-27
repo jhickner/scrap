@@ -1,11 +1,10 @@
 #include "workspace.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
 
+#include "activelog.h"
 #include "block.h"
 #include "chrome.h"
 #include "cmd.h"
@@ -253,35 +252,11 @@ static void draft_load(int index)
     prompt_adopt_draft(tabs[index].draft, tabs[index].draft_cursor);
 }
 
-#define ACTIVE_LOG_MAX  (64 * 1024)
-#define ACTIVE_LOG_KEEP (16 * 1024)
-
-static int put_tail(FILE *f, void *ud)
-{
-    return fputs(ud, f) >= 0;
-}
-
 void workspace_log_active(void)
 {
-    const char *id = ntabs ? session_id(tabs[cur].s) : NULL;
     char path[4400];
-    if (!tty_focused() || !id || !*id || !path_config_file(path, sizeof path, "active"))
-        return;
-    FILE *f = fopen(path, "a");
-    if (!f)
-        return;
-    fprintf(f, "%ld\t%s\n", (long)time(NULL), id);
-    long size = ftell(f);
-    fclose(f);
-    if (size <= ACTIVE_LOG_MAX)
-        return;
-
-    size_t len = 0;
-    char *text = text_slurp(path, 0, &len);
-    char *tail = text && len > ACTIVE_LOG_KEEP ? strchr(text + len - ACTIVE_LOG_KEEP, '\n') : NULL;
-    if (tail)
-        text_spit(path, put_tail, tail + 1);
-    free(text);
+    if (ntabs && tty_focused() && path_config_file(path, sizeof path, "active"))
+        activelog_add(path, session_id(tabs[cur].s), 0);
 }
 
 void workspace_show(int index)
