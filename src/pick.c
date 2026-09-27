@@ -22,6 +22,7 @@
 struct view {
     int top;
     int visible;
+    int wheel_sel;
     const char *title;
     const struct pick_item *items;
     const struct pick_live *live;
@@ -237,10 +238,14 @@ static void place_window(struct view *v)
     int budget = visible_cap(v);
     if (fit_rows(v, 0, budget) < v->count)
         budget--;
-    if (v->sel < v->top)
-        v->top = v->sel;
-    while (v->top < v->sel && v->top + fit_rows(v, v->top, budget) <= v->sel)
-        v->top++;
+    if (v->sel != v->wheel_sel) {
+        if (v->sel < v->top)
+            v->top = v->sel;
+        while (v->top < v->sel && v->top + fit_rows(v, v->top, budget) <= v->sel)
+            v->top++;
+    }
+    if (v->top < 0)
+        v->top = 0;
     while (v->top > 0 && v->top - 1 + fit_rows(v, v->top - 1, budget) >= v->count)
         v->top--;
     v->visible = fit_rows(v, v->top, budget);
@@ -334,6 +339,7 @@ static void refilter(struct view *v)
     if (v->count)
         settle(v, 1);
     v->top = 0;
+    v->wheel_sel = -1;
     int cap = visible_cap(v);
     v->visible = v->count < cap ? v->count : cap;
     if (v->visible < 1)
@@ -679,6 +685,7 @@ static int run(const char *title, const struct pick_item *items, int count,
         return -1;
 
     struct view v = {0};
+    v.wheel_sel = -1;
     v.title = title;
     v.items = items;
     v.live = live;
@@ -763,12 +770,15 @@ static int run(const char *title, const struct pick_item *items, int count,
         }
         switch (ev.key) {
         case TK_UP:
-        case TK_SCROLL_UP:
             step(&v, -1);
             break;
         case TK_DOWN:
-        case TK_SCROLL_DOWN:
             step(&v, 1);
+            break;
+        case TK_SCROLL_UP:
+        case TK_SCROLL_DOWN:
+            v.wheel_sel = v.sel;
+            v.top += ev.key == TK_SCROLL_UP ? -1 : 1;
             break;
         case TK_HOME:
             if (!v.count)
