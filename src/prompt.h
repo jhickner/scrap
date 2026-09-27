@@ -68,6 +68,8 @@ void prompt_set_mic(struct prompt *p, void (*fn)(void *ud), void *ud);
 
 void prompt_set_another(struct prompt *p, void (*fn)(void *ud), void *ud);
 
+void prompt_set_back(struct prompt *p, void (*fn)(void *ud), void *ud);
+
 void prompt_set_cycle(struct prompt *p, void (*fn)(void *ud, int delta), void *ud);
 
 void prompt_set_collapse(struct prompt *p, void (*fn)(void *ud), void *ud);
