@@ -784,13 +784,7 @@ static void show_keys(struct prompt *p, int live)
             title = "prompt \xc2\xb7 turn running";
     }
 
-    if (live)
-        status_pause();
-    viewport_defer();
-    chrome_clear();
     keyhelp_show(title, shown, n, foot);
-    if (live)
-        status_resume();
 }
 
 const struct prompt_key *prompt_shortcuts(int *count)
