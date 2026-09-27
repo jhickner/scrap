@@ -3,7 +3,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-static uid_t test_uid(void) { return (uid_t)strtoul(getenv("MUX_TEST_UID"), NULL, 10); }
+static uid_t test_uid(void) { return (uid_t)strtoul(getenv("SCRAP_TEST_UID"), NULL, 10); }
 #define getuid test_uid
 #define MACOS_VOICE_IMPLEMENTATION
 #include "vendor/macos_voice.h"
@@ -42,7 +42,7 @@ int main(int argc, char **argv)
 
     char uid[32];
     snprintf(uid, sizeof uid, "%u", (unsigned)getpid() + 1000000);
-    assert(setenv("MUX_TEST_UID", uid, 1) == 0);
+    assert(setenv("SCRAP_TEST_UID", uid, 1) == 0);
     struct sockaddr_un addr = {.sun_family = AF_UNIX};
     snprintf(addr.sun_path, sizeof addr.sun_path, "/tmp/macos-voice-%u.sock", test_uid());
     int listener = socket(AF_UNIX, SOCK_STREAM, 0);

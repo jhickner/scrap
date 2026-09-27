@@ -10,7 +10,7 @@ struct session {
     int can_resume;
 };
 
-const char *sessionfork_program(void) { return "mux"; }
+const char *sessionfork_program(void) { return "scrap"; }
 const char *session_backend(const struct session *s) { (void)s; return "codex"; }
 const char *session_cwd(const struct session *s) { (void)s; return "/work"; }
 const char *session_id(const struct session *s) { return s->id; }

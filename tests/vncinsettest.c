@@ -165,7 +165,7 @@ static void test_state(void)
 
 static void test_screen(void)
 {
-    char path[] = "/tmp/mux-vncinsettest-XXXXXX";
+    char path[] = "/tmp/scrap-vncinsettest-XXXXXX";
     int  wfd = mkstemp(path);
     tap_read = wfd >= 0 ? open(path, O_RDONLY) : -1;
     if (wfd < 0 || tap_read < 0) {

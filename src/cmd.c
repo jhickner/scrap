@@ -1103,7 +1103,7 @@ static void do_cd(struct session *s, const char *arg)
         return;
     }
     if (chdir(resolved) != 0)
-        reply_error("the agent moved, but mux could not follow");
+        reply_error("the agent moved, but scrap could not follow");
     prompt_rehome(resolved);
 
     status_sticky_prompt(NULL);
@@ -1370,16 +1370,16 @@ static const struct cmd COMMANDS[] = {
      CMD_LIVE, do_tokenomics},
     {"/rename", "name this session, or ask the model to name it again", "[name]",
      0, do_rename},
-    {"/name", "show or set this session's @name for mux send", "[name]", 0, do_name},
+    {"/name", "show or set this session's @name for scrap send", "[name]", 0, do_name},
     {"/tail", "show bot messages that arrived since the last shown", "[count]", 0,
      do_tail},
     {"/vnc", "show the bot's desktop in an inset", "[left|right|off|test|size <percent>]",
      CMD_LIVE, do_vnc},
     {"/copy", "copy last response to clipboard", NULL, CMD_LIVE, do_copy},
-    {"/restart", "reload the mux binary, keeping this conversation", NULL, 0,
+    {"/restart", "reload the scrap binary, keeping this conversation", NULL, 0,
      do_restart},
     {"/help", "show this help", NULL, CMD_LIVE, do_help},
-    {"/quit", "quit mux", NULL, CMD_QUITS, NULL},
+    {"/quit", "quit scrap", NULL, CMD_QUITS, NULL},
     {"/exit", "alias for /quit", NULL, CMD_QUITS, NULL},
 };
 

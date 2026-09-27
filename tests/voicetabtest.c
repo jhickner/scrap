@@ -6,7 +6,9 @@
 #include <sys/stat.h>
 #include "settings.h"
 
+#include "activelog.h"
 #include "chrome.h"
+#include "im.h"
 #include "cmd.h"
 #include "gitinfo.h"
 #include "prompt.h"
@@ -64,6 +66,9 @@ int session_work_count(const struct session *s) { return s ? s->work : 0; }
 int session_busy(const struct session *s) { return s && (s->busy || s->running); }
 int session_compact(const struct session *s) { (void)s; return 0; }
 const char *session_title(const struct session *s) { (void)s; return "tab"; }
+const char *session_name(const struct session *s) { (void)s; return NULL; }
+void session_republish(const struct session *s) { (void)s; }
+void activelog_add(const char *path, const char *id, int back) { (void)path; (void)id; (void)back; }
 const char *session_last_reply(const struct session *s) { (void)s; return NULL; }
 const char *session_cwd(const struct session *s) { return s && s->cwd ? s->cwd : "."; }
 const char *session_id(const struct session *s) { (void)s; return NULL; }
@@ -618,7 +623,7 @@ static void check_trace(void)
     }
     snprintf(config, sizeof config, "%s/.config", home);
     mkdir(config, 0700);
-    snprintf(config, sizeof config, "%s/.config/mux", home);
+    snprintf(config, sizeof config, "%s/.config/scrap", home);
     mkdir(config, 0700);
     snprintf(settings, sizeof settings, "%s/settings", config);
     snprintf(log, sizeof log, "%s/voice-events.log", config);

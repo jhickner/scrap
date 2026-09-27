@@ -16,7 +16,7 @@
 #include "viewport.h"
 
 #define BRACKETED_PASTE_ON  "\x1b[?2004h"
-#define FOCUS_ENV           "MUX_FOCUSED"
+#define FOCUS_ENV           "SCRAP_FOCUSED"
 #define FOCUS_ON            "\x1b[?1004h"
 #define FOCUS_OFF           "\x1b[?1004l"
 

@@ -73,8 +73,8 @@ int main(void)
     role("grep -rn foo src | head -20", "head", 'c');
     role("cd /tmp && ls", "&&", 'o');
     role("cd /tmp && ls", "ls", 'c');
-    role("make; ./mux", ";", 'o');
-    role("make; ./mux", "./mux", 'c');
+    role("make; ./scrap", ";", 'o');
+    role("make; ./scrap", "./scrap", 'c');
     role("ls > out.txt", ">", 'o');
     role("ls 2>/dev/null", "2>", 'o');
 

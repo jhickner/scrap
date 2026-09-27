@@ -27,18 +27,20 @@
 #define READ_TURNS  3
 #define READ_BYTES  16000
 
-static const char *const ADJECTIVES[] = {
-    "amber", "bold", "brisk", "calm", "clear", "coral", "crisp", "dusty", "eager", "fair",
-    "fleet", "gentle", "glad", "golden", "green", "hazel", "ivory", "jade", "keen", "lucid",
-    "mellow", "misty", "noble", "olive", "pale", "quiet", "rapid", "rosy", "rustic", "sandy",
-    "sharp", "silver", "sleek", "solid", "steady", "swift", "tidy", "vivid", "warm", "wise",
-};
-
-static const char *const NOUNS[] = {
-    "badger", "bear", "cedar", "comet", "crane", "delta", "eagle", "ember", "falcon", "fern",
-    "finch", "fox", "harbor", "hawk", "heron", "lark", "lynx", "maple", "marten", "meadow",
-    "moth", "otter", "owl", "pine", "quail", "raven", "reef", "ridge", "river", "robin",
-    "sparrow", "spruce", "stone", "swan", "thrush", "tiger", "vale", "willow", "wolf", "wren",
+static const char *const PARTS[] = {
+    "anvil", "arc", "awl", "axle", "baffle", "ballast", "barrel", "bearing", "bellows", "bolt",
+    "boom", "bore", "bracket", "breech", "burr", "bushing", "cable", "cam", "chassis", "chisel",
+    "chrome", "cinder", "clamp", "claw", "clevis", "clinker", "clutch", "cog", "coil", "cotter",
+    "cowl", "crank", "crowbar", "diode", "dross", "duct", "fender", "filament", "filings",
+    "flange", "flechette", "flux", "flywheel", "fuse", "gantry", "gasket", "gear", "girder",
+    "grommet", "gusset", "hacksaw", "hinge", "hook", "hose", "hull", "husk", "jack", "jib", "jig",
+    "keel", "lead", "lug", "mallet", "manifold", "mast", "muzzle", "nozzle", "nut", "pawl",
+    "pellet", "pinion", "piston", "pivot", "plate", "plug", "prong", "pulley", "pump", "rasp",
+    "ratchet", "rebar", "rib", "rivet", "rocker", "rust", "scale", "screw", "seal", "servo",
+    "shard", "shim", "shiv", "shrapnel", "slag", "sliver", "slug", "socket", "solder", "solenoid",
+    "soot", "spar", "spark", "spike", "spindle", "sprocket", "staple", "strap", "strut", "stud",
+    "swarf", "tack", "talon", "tappet", "tin", "tine", "tongs", "torch", "truss", "tube", "valve",
+    "vent", "vise", "visor", "washer", "weld", "winch", "wire", "wrench", "yoke", "zinc",
 };
 
 #define COUNT(a) (sizeof(a) / sizeof(a)[0])
@@ -93,14 +95,16 @@ int intercom_name_taken(const char *name, const char *id)
 
 void intercom_name_new(char *out, size_t size)
 {
-    for (int tries = 0; tries < 64; tries++) {
-        snprintf(out, size, "%s-%s",
-                 ADJECTIVES[arc4random_uniform(COUNT(ADJECTIVES))],
-                 NOUNS[arc4random_uniform(COUNT(NOUNS))]);
+    for (int tries = 0; tries < 256; tries++) {
+        const char *part = PARTS[arc4random_uniform(COUNT(PARTS))];
+        if (tries < 64)
+            snprintf(out, size, "%s", part);
+        else
+            snprintf(out, size, "%s-%d", part, 2 + (tries - 64) / 16);
         if (!intercom_name_taken(out, NULL))
             return;
     }
-    snprintf(out, size, "session-%u", arc4random_uniform(100000));
+    snprintf(out, size, "scrap-%u", arc4random_uniform(100000));
 }
 
 int intercom_name_of(const char *id, char *out, size_t size)
@@ -131,19 +135,19 @@ char *intercom_note(const char *name)
     if (!name || !*name)
         return NULL;
     return text_dsprintf(
-        "This session is @%s in mux. Other mux sessions are reachable with the `mux` "
+        "This session is @%s in scrap. Other scrap sessions are reachable with the `scrap` "
         "command, run through Bash:\n"
-        "- `mux ls [--live] [--cwd DIR] [QUERY]` lists sessions, newest first; `--cwd .` "
+        "- `scrap ls [--live] [--cwd DIR] [QUERY]` lists sessions, newest first; `--cwd .` "
         "means this directory; QUERY also searches transcript text.\n"
-        "- `mux read TARGET [-n TURNS] [--bytes N]` prints a session's recent turns.\n"
-        "- `mux send TARGET TEXT` sends a message to a live session.\n"
-        "- `mux open TARGET` resumes a past session in a new tab.\n"
+        "- `scrap read TARGET [-n TURNS] [--bytes N]` prints a session's recent turns.\n"
+        "- `scrap send TARGET TEXT` sends a message to a live session.\n"
+        "- `scrap open TARGET` resumes a past session in a new tab.\n"
         "TARGET is @name, a session id prefix, or a title. Messages from other sessions "
-        "arrive prefixed `[from @name]`; answer them with `mux send @name ...` only when "
+        "arrive prefixed `[from @name]`; answer them with `scrap send @name ...` only when "
         "an answer is needed.\n"
-        "To coordinate with a live session: `mux ls --live --cwd .`, then `mux read "
-        "@name`, then `mux send @name ...`. To recover old context: `mux ls QUERY`, then "
-        "`mux read TARGET`.",
+        "To coordinate with a live session: `scrap ls --live --cwd .`, then `scrap read "
+        "@name`, then `scrap send @name ...`. To recover old context: `scrap ls QUERY`, then "
+        "`scrap read TARGET`.",
         name);
 }
 
@@ -403,7 +407,7 @@ static int cmd_ls(int argc, char **argv)
         else if (!query && argv[i][0] != '-')
             query = argv[i];
         else {
-            fprintf(stderr, "usage: mux ls [--live] [--cwd DIR] [QUERY]\n");
+            fprintf(stderr, "usage: scrap ls [--live] [--cwd DIR] [QUERY]\n");
             return 2;
         }
     }
@@ -411,7 +415,7 @@ static int cmd_ls(int argc, char **argv)
     char cwd[4096], real[4096];
     if (dir) {
         if (!realpath(dir, real)) {
-            fprintf(stderr, "mux: no such directory: %s\n", dir);
+            fprintf(stderr, "scrap: no such directory: %s\n", dir);
             return 1;
         }
         dir = real;
@@ -440,7 +444,7 @@ static const struct entry *lookup(struct entries *l, const char *target)
     collect(l, here(cwd, sizeof cwd) ? cwd : NULL, 0, 1);
     const struct entry *e = resolve(l, target);
     if (!e)
-        fprintf(stderr, "mux: no session matches %s\n", target);
+        fprintf(stderr, "scrap: no session matches %s\n", target);
     return e;
 }
 
@@ -460,7 +464,7 @@ static int cmd_read(int argc, char **argv)
             bad = 1;
     }
     if (bad || !target || turns < 1 || bytes < 1) {
-        fprintf(stderr, "usage: mux read TARGET [-n TURNS] [--bytes N]\n");
+        fprintf(stderr, "usage: scrap read TARGET [-n TURNS] [--bytes N]\n");
         return 2;
     }
 
@@ -473,7 +477,7 @@ static int cmd_read(int argc, char **argv)
 
     struct transcript t = {0};
     if (!sessionload_fill(&t, e->backend, e->cwd, e->id) || !t.count) {
-        fprintf(stderr, "mux: no transcript for %s\n", target);
+        fprintf(stderr, "scrap: no transcript for %s\n", target);
         transcript_free(&t);
         free(l.e);
         return 1;
@@ -528,7 +532,7 @@ static int request(long pid, cJSON *body, char *reply, size_t size)
         usleep(100000);
     }
     unlink(req);
-    snprintf(reply, size, "{\"error\":\"no answer from mux %ld\"}", pid);
+    snprintf(reply, size, "{\"error\":\"no answer from scrap %ld\"}", pid);
     return 1;
 }
 
@@ -537,7 +541,7 @@ static int answered(const char *reply, const char *done)
     cJSON      *o = cJSON_Parse(reply);
     const char *error = cJSON_GetStringValue(cJSON_GetObjectItem(o, "error"));
     if (error)
-        fprintf(stderr, "mux: %s\n", error);
+        fprintf(stderr, "scrap: %s\n", error);
     else
         printf("%s\n", done);
     cJSON_Delete(o);
@@ -575,7 +579,7 @@ static char *spill(const char *text)
 static int cmd_send(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: mux send TARGET TEXT\n");
+        fprintf(stderr, "usage: scrap send TARGET TEXT\n");
         return 2;
     }
     size_t len = 0;
@@ -594,7 +598,7 @@ static int cmd_send(int argc, char **argv)
     const struct entry *e = lookup(&l, argv[1]);
     int                 rc = 1;
     if (e && !e->live)
-        fprintf(stderr, "mux: %s is not live; resume it with `mux open %s`\n", argv[1],
+        fprintf(stderr, "scrap: %s is not live; resume it with `scrap open %s`\n", argv[1],
                 argv[1]);
     else if (e) {
         char *long_text = strlen(text) > INLINE_MAX ? spill(text) : NULL;
@@ -609,7 +613,7 @@ static int cmd_send(int argc, char **argv)
         snprintf(done, sizeof done, "sent to @%s", e->name[0] ? e->name : e->id);
         rc = request(e->pid, o, reply, sizeof reply) ? answered(reply, done) : 1;
         if (rc && !reply[0])
-            fprintf(stderr, "mux: could not write the request\n");
+            fprintf(stderr, "scrap: could not write the request\n");
         cJSON_Delete(o);
         free(long_text);
     }
@@ -621,13 +625,13 @@ static int cmd_send(int argc, char **argv)
 static int cmd_open(int argc, char **argv)
 {
     if (argc != 2) {
-        fprintf(stderr, "usage: mux open TARGET\n");
+        fprintf(stderr, "usage: scrap open TARGET\n");
         return 2;
     }
-    const char *owner = getenv("MUX_PID");
+    const char *owner = getenv("SCRAP_PID");
     long        pid = owner ? atol(owner) : 0;
     if (pid <= 0 || !livelist_alive(pid)) {
-        fprintf(stderr, "mux: mux open runs inside a mux session\n");
+        fprintf(stderr, "scrap: scrap open runs inside a scrap session\n");
         return 1;
     }
 
@@ -635,7 +639,7 @@ static int cmd_open(int argc, char **argv)
     const struct entry *e = lookup(&l, argv[1]);
     int                 rc = 1;
     if (e && e->live)
-        fprintf(stderr, "mux: %s is already live\n", argv[1]);
+        fprintf(stderr, "scrap: %s is already live\n", argv[1]);
     else if (e) {
         char   reply[1024] = "";
         cJSON *o = cJSON_CreateObject();

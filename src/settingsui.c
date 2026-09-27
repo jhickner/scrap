@@ -117,7 +117,7 @@ static const struct entry ENTRIES[] = {
      .about = "headings, bold, code, and the spinner",
      .group = UI_GROUP_EMPHASIS},
     {.name = "backend", .kind = S_BACKEND,
-     .about = "the CLI mux starts on"},
+     .about = "the CLI scrap starts on"},
 };
 
 static const char *choice_of(const struct entry *e)

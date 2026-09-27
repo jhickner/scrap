@@ -181,7 +181,7 @@ static enum MHD_Result dlv_handle(void *cls, struct MHD_Connection *c, const cha
     if (auth && !strcmp(auth, "Bearer dlv-key")) {
         code = 200;
         if (!strcmp(url, "/dlv/v1/backends"))
-            reply = "{\"backends\":{\"mux\":{\"settings\":{\"hosts\":[{\"name\":\"other\",\"url\":\"http://10.0.0.9:8791\"},"
+            reply = "{\"backends\":{\"scrap\":{\"settings\":{\"hosts\":[{\"name\":\"other\",\"url\":\"http://10.0.0.9:8791\"},"
                     "{\"name\":\"testhost\",\"url\":\"http://stale:1\"}]}}}}";
         else {
             snprintf(dlv_set, sizeof dlv_set, "%s", body);
@@ -243,7 +243,7 @@ static void test_register_dlv(void)
 int main(void)
 {
     curl_global_init(CURL_GLOBAL_DEFAULT);
-    setenv("MUX_API_PORT", "18793", 1);
+    setenv("SCRAP_API_PORT", "18793", 1);
     snprintf(base, sizeof base, "http://127.0.0.1:18793");
     if (!api_start()) {
         fputs("apihttptest: api_start failed\n", stderr);

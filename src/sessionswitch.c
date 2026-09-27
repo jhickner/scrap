@@ -117,7 +117,7 @@ static void tab_rows(struct row *rows, int *n)
         path_home_relative(session_cwd(s), r->cwd, sizeof r->cwd);
         r->ts = last_active(session_name(s));
         snprintf(r->label, sizeof r->label, "%s %s",
-                 i == workspace_index() ? "\xe2\x96\xb8" : "\xc2\xb7",
+                 i == workspace_index() ? "\xe2\x96\xb8" : "\xe2\xa7\x89",
                  title && *title ? title : "untitled");
         snprintf(r->id, sizeof r->id, "%s", session_id(s) ? session_id(s) : "");
         if (r->id[0])

@@ -495,7 +495,7 @@ static void pad_seam(int before, int own)
 
 static void loose_row(const char *body, size_t n)
 {
-    if (!getenv("MUX_STRICT_ENTRIES"))
+    if (!getenv("SCRAP_STRICT_ENTRIES"))
         return;
     while (n && (body[n - 1] == '\n' || body[n - 1] == '\r'))
         n--;
@@ -1635,7 +1635,7 @@ static void home_mark(void)
         home_cols = tty_screen_columns();
         char env[48];
         snprintf(env, sizeof env, "%d;%d;%d;%d", row, col, home_rows, home_cols);
-        setenv("MUX_HOME_CURSOR", env, 1);
+        setenv("SCRAP_HOME_CURSOR", env, 1);
     } else {
         home_row = home_col = 0;
     }
@@ -1705,7 +1705,7 @@ void viewport_inherit(void)
     if (active)
         return;
     active = 1;
-    const char *env = getenv("MUX_HOME_CURSOR");
+    const char *env = getenv("SCRAP_HOME_CURSOR");
     int         row = 0, col = 0, rows = 0, cols = 0;
     if (env && sscanf(env, "%d;%d;%d;%d", &row, &col, &rows, &cols) == 4 && row > 0 &&
         col > 0) {

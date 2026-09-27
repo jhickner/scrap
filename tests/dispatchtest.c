@@ -122,7 +122,7 @@ const char *session_id(const struct session *s)
 }
 const char *session_addr(const struct session *s)
 {
-    return s == &spawned ? "/tmp/mux-addr-fixture" : NULL;
+    return s == &spawned ? "/tmp/scrap-addr-fixture" : NULL;
 }
 int session_turn_running(const struct session *s)
 {
@@ -208,12 +208,12 @@ static void poll_once(void)
 
 int main(void)
 {
-    char dir[] = "/tmp/mux-dispatch-XXXXXX";
+    char dir[] = "/tmp/scrap-dispatch-XXXXXX";
     if (!mkdtemp(dir)) {
         perror("dispatchtest: mkdtemp");
         return 1;
     }
-    setenv("MUX_DISPATCH_DIR", dir, 1);
+    setenv("SCRAP_DISPATCH_DIR", dir, 1);
     unsetenv("TMUX_PANE");
 
     drop_req(dir, "titled",
@@ -237,7 +237,7 @@ int main(void)
     snprintf(spawned_id, sizeof spawned_id, "sess-1");
     poll_once();
     expect_res(dir, "titled", "\"session\":\"sess-1\"", "spawn reply carries the session id");
-    expect_res(dir, "titled", "\"addr\":\"/tmp/mux-addr-fixture\"",
+    expect_res(dir, "titled", "\"addr\":\"/tmp/scrap-addr-fixture\"",
                "spawn reply carries the session address file");
     if (strstr(read_res(dir, "titled"), "slot"))
         fail("spawn reply has no slot");

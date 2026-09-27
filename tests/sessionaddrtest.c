@@ -21,9 +21,9 @@ static char *slurp(const char *path)
 
 int main(void)
 {
-    char root[] = "/tmp/mux-sessionaddr-XXXXXX";
+    char root[] = "/tmp/scrap-sessionaddr-XXXXXX";
     assert(mkdtemp(root));
-    setenv("MUX_ADDR_DIR", root, 1);
+    setenv("SCRAP_ADDR_DIR", root, 1);
 
     char a[4300], b[4300];
     assert(sessionaddr_alloc(a, sizeof a));

@@ -60,7 +60,7 @@ static const char STORE[] =
 
 static int native_store(void)
 {
-    char home[] = "/tmp/mux-modelstest-XXXXXX";
+    char home[] = "/tmp/scrap-modelstest-XXXXXX";
     if (!mkdtemp(home))
         return fail("could not make a temp home");
 
@@ -128,7 +128,7 @@ static const char GROK_CACHE[] =
 
 static char *temp_home(void)
 {
-    static char home[] = "/tmp/mux-modelstest-home-XXXXXX";
+    static char home[] = "/tmp/scrap-modelstest-home-XXXXXX";
     return mkdtemp(home);
 }
 

@@ -57,7 +57,7 @@ int main(void)
     acts("git tag v1");
     acts("git");
     acts("git -c user.name=x commit");
-    acts("./mux --help");
+    acts("./scrap --help");
     acts("sudo ls");
     acts("ls | xargs rm");
 

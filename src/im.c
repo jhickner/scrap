@@ -270,7 +270,7 @@ static void osa_send(int file, const char *payload)
     if (file) {
         const char *home = getenv("HOME");
         const char *base = strrchr(payload, '/');
-        snprintf(staged, sizeof staged, "%s/Library/Messages/Attachments/mux", home ? home : "");
+        snprintf(staged, sizeof staged, "%s/Library/Messages/Attachments/scrap", home ? home : "");
         mkdir(staged, 0700);
         size_t n = strlen(staged);
         snprintf(staged + n, sizeof staged - n, "/%s", base ? base + 1 : payload);
@@ -782,7 +782,7 @@ int im_start(struct session *s)
     snprintf(lock, sizeof lock, "/tmp/" APP_NAME "-%lu-imessage", (unsigned long)getuid());
     owner_lock = filelock_acquire(lock, LOCK_EX | LOCK_NB);
     if (owner_lock < 0) {
-        fail_note("imessage is already enabled by another mux instance");
+        fail_note("imessage is already enabled by another scrap instance");
         return 0;
     }
 

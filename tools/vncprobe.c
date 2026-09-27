@@ -142,7 +142,7 @@ int main(int argc, char **argv)
             return 2;
         }
     }
-    grokbot *g = grokbot_open(NULL);
+    grokbot *g = grokbot_open();
     if (!g) {
         fprintf(stderr, "grokbot: %s\n", grokbot_error(NULL));
         return 1;

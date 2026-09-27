@@ -118,7 +118,7 @@ int main(void)
 {
     set_size(80, 30);
 
-    char path[] = "/tmp/mux-imagerowtest-XXXXXX";
+    char path[] = "/tmp/scrap-imagerowtest-XXXXXX";
     int  wfd = mkstemp(path);
     tap_read = wfd >= 0 ? open(path, O_RDONLY) : -1;
     if (wfd < 0 || tap_read < 0)

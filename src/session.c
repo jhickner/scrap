@@ -2350,7 +2350,7 @@ int session_argv(const struct session *s, char **out, int max, unsigned what)
 {
     const char *id = session_id(s);
     int resume = (what & SESSION_ARGV_RESUME) && id && session_can_resume(s);
-    return mux_argv(out, max, resume ? what : (what & ~SESSION_ARGV_RESUME),
+    return scrap_argv(out, max, resume ? what : (what & ~SESSION_ARGV_RESUME),
                     NULL, session_backend(s), session_cwd(s), session_model(s),
                     session_effort(s), id,
                     (what & SESSION_ARGV_SAFE) && s && !s->customizations, NULL);

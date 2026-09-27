@@ -123,7 +123,7 @@ void viewport_item_end(void) {}
 
 int main(void)
 {
-    char root[] = "/tmp/mux-sessionload-XXXXXX";
+    char root[] = "/tmp/scrap-sessionload-XXXXXX";
     expect(mkdtemp(root) != NULL, "temporary directory");
     setenv("CODEX_HOME", root, 1);
 

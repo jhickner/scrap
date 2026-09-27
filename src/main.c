@@ -116,7 +116,7 @@ static int state_enter(const char *arg)
         return 0;
     }
     static const char *const LEAVES[][2] = {
-        {"MUX_CONFIG_DIR", "config"},
+        {"SCRAP_CONFIG_DIR", "config"},
         {"AGENT_TABS_STATE_DIR", "tabs"},
         {"TMPDIR", "tmp"},
     };
@@ -126,9 +126,9 @@ static int state_enter(const char *arg)
         mkdir(path, 0700);
         setenv(LEAVES[i][0], path, 1);
     }
-    unsetenv("MUX_LIVE_DIR");
-    unsetenv("MUX_ADDR_DIR");
-    unsetenv("MUX_DISPATCH_DIR");
+    unsetenv("SCRAP_LIVE_DIR");
+    unsetenv("SCRAP_ADDR_DIR");
+    unsetenv("SCRAP_DISPATCH_DIR");
     return 1;
 }
 
@@ -146,16 +146,16 @@ static void usage(void)
             "  -s         safe mode: skip skills, CLAUDE.md, MCP servers, hooks\n"
             "  --telegram also answer over Telegram, in the same session\n"
             "  --relay    also answer a phone over WebSocket, in the same session\n"
-            "  --imessage also answer over iMessage, in the same session (config: ~/.config/mux/imessage)\n"
+            "  --imessage also answer over iMessage, in the same session (config: ~/.config/scrap/imessage)\n"
             "  --connect telegram|relay   the same thing, spelled out\n"
-            "  --api      serve the worker API (config: ~/.config/mux/api)\n"
-            "  --state dir  keep config and state under dir instead of ~/.config/mux\n"
+            "  --api      serve the worker API (config: ~/.config/scrap/api)\n"
+            "  --state dir  keep config and state under dir instead of ~/.config/scrap\n"
             "  -r         --resume: pick a past conversation to continue\n"
             "  --reopen   bring back the sessions of a window that is gone\n"
             "  --session id  resume a specific conversation (used by the fork commands)\n"
             "  --fork     with --session: branch off it instead of writing back to it\n"
-            "  --restore f  take over the screen from a restarting mux (used by /restart)\n"
-            "  --tabs f   reopen the sessions a restarting mux was holding (used by /restart)\n"
+            "  --restore f  take over the screen from a restarting scrap (used by /restart)\n"
+            "  --tabs f   reopen the sessions a restarting scrap was holding (used by /restart)\n"
             "  -h         this help\n"
             "  -V, --version  print the version and exit\n"
             "\n"
@@ -586,7 +586,7 @@ int main(int argc, char **argv)
                      !strcmp(argv[1], "send") || !strcmp(argv[1], "open")))
         return intercom_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "version")) {
-        printf(APP_NAME " %s\n", MUX_VERSION);
+        printf(APP_NAME " %s\n", SCRAP_VERSION);
         return 0;
     }
 
@@ -651,7 +651,7 @@ int main(int argc, char **argv)
         case 'I': imessage = 1; break;
         case 'A': api_on = 1; break;
         case 'X': state_arg = optarg; break;
-        case 'V': printf(APP_NAME " %s\n", MUX_VERSION); return 0;
+        case 'V': printf(APP_NAME " %s\n", SCRAP_VERSION); return 0;
         case 'N':
             if (!strcmp(optarg, "relay")) {
                 relay = 1;
@@ -720,7 +720,7 @@ int main(int argc, char **argv)
 
     char pid_env[24];
     snprintf(pid_env, sizeof pid_env, "%ld", (long)getpid());
-    setenv("MUX_PID", pid_env, 1);
+    setenv("SCRAP_PID", pid_env, 1);
 
     ui_init();
 

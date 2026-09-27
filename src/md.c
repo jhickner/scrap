@@ -220,7 +220,7 @@ static void link_open(const struct styled *s, int id)
     char buf[1024];
     if (!ui_color())
         return;
-    int n = snprintf(buf, sizeof buf, "\x1b]8;id=mux%d;%s\x1b\\", id, s->url[id - 1]);
+    int n = snprintf(buf, sizeof buf, "\x1b]8;id=scrap%d;%s\x1b\\", id, s->url[id - 1]);
     if (n > 0 && (size_t)n < sizeof buf)
         ui_esc(buf);
 }

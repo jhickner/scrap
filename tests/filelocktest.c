@@ -10,7 +10,7 @@
 
 int main(void)
 {
-    char dir[] = "/tmp/mux-filelock-XXXXXX";
+    char dir[] = "/tmp/scrap-filelock-XXXXXX";
     assert(mkdtemp(dir));
 
     char path[512];

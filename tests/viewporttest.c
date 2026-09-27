@@ -759,7 +759,7 @@ static void check_dump(void)
     viewport_item_end();
     viewport_item_persist(mute, "fake", no_encode);
 
-    char path[] = "/tmp/mux-dumptest-XXXXXX";
+    char path[] = "/tmp/scrap-dumptest-XXXXXX";
     int  fd = mkstemp(path);
     if (fd < 0) {
         fail("a dump file could be made");
@@ -863,7 +863,7 @@ int main(void)
 {
     set_size(80, 24);
 
-    char path[] = "/tmp/mux-viewporttest-XXXXXX";
+    char path[] = "/tmp/scrap-viewporttest-XXXXXX";
     int  wfd = mkstemp(path);
     tap_read = wfd >= 0 ? open(path, O_RDONLY) : -1;
     if (wfd < 0 || tap_read < 0) {

@@ -183,7 +183,7 @@ enum {
     SESSION_ARGV_FORK   = 1u << 3,
 };
 
-static inline int mux_argv(char **out, int max, unsigned what,
+static inline int scrap_argv(char **out, int max, unsigned what,
                            const char *program, const char *backend,
                            const char *cwd, const char *model,
                            const char *effort, const char *id, int safe,

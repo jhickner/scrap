@@ -135,7 +135,7 @@ static void drop_all(void)
 
 static int live_dir(char *out, size_t size)
 {
-    const char *env = getenv("MUX_LIVE_DIR");
+    const char *env = getenv("SCRAP_LIVE_DIR");
     if (env && *env)
         return (size_t)snprintf(out, size, "%s", env) < size;
 

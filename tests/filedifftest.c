@@ -49,7 +49,7 @@ static void check_supplied(void)
 static void check_snapshot(void)
 {
     struct filediff_snapshot snap = {0};
-    char path[] = "/tmp/mux-filedifftest-XXXXXX";
+    char path[] = "/tmp/scrap-filedifftest-XXXXXX";
     int  fd = mkstemp(path);
     if (fd < 0) {
         fail("a temp file to diff", NULL);
@@ -104,7 +104,7 @@ static void check_snapshot(void)
 static void check_unchanged(void)
 {
     struct filediff_snapshot snap = {0};
-    char path[] = "/tmp/mux-filedifftest-XXXXXX";
+    char path[] = "/tmp/scrap-filedifftest-XXXXXX";
     int  fd = mkstemp(path);
     if (fd < 0) {
         fail("a temp file to diff", NULL);
@@ -124,8 +124,8 @@ static void check_unchanged(void)
 static void check_interleaved(void)
 {
     struct filediff_snapshot one = {0}, two = {0};
-    char path_one[] = "/tmp/mux-filediff-one-XXXXXX";
-    char path_two[] = "/tmp/mux-filediff-two-XXXXXX";
+    char path_one[] = "/tmp/scrap-filediff-one-XXXXXX";
+    char path_two[] = "/tmp/scrap-filediff-two-XXXXXX";
     int fd_one = mkstemp(path_one), fd_two = mkstemp(path_two);
     if (fd_one < 0 || fd_two < 0) {
         if (fd_one >= 0) close(fd_one);

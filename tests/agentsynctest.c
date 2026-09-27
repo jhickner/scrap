@@ -8,7 +8,7 @@
 #include "agentsync.h"
 #include "text.h"
 
-static char root[] = "/tmp/mux-agentsync-XXXXXX";
+static char root[] = "/tmp/scrap-agentsync-XXXXXX";
 
 static void mk(const char *rel)
 {
@@ -91,7 +91,7 @@ int main(void)
     assert(exists(".codex/skills/own/SKILL.md"));
     assert(exists(".codex/skills/.system"));
 
-    char *src = slurp(".config/mux/hooks.json");
+    char *src = slurp(".config/scrap/hooks.json");
     assert(src);
     assert(strstr(src, "\"codex\":\t\"codex-hook.py\""));
     assert(strstr(src, "\"Notification\""));
@@ -113,12 +113,12 @@ int main(void)
     assert(strstr(codex, "\"PostToolUse\""));
     free(codex);
 
-    char *ext = slurp(".pi/agent/extensions/mux-hooks.ts");
+    char *ext = slurp(".pi/agent/extensions/scrap-hooks.ts");
     assert(ext);
     assert(strstr(ext, "session_start"));
     free(ext);
 
-    spit(".config/mux/hooks.json",
+    spit(".config/scrap/hooks.json",
          "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"all.sh\","
          "\"claude\":\"claude.sh\",\"pi\":false}]}],"
          "\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"end.sh\",\"codex\":false}]}]}}\n");

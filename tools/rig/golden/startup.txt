@@ -24,7 +24,7 @@
 
 
 
-▌ mux › claude › default › medium
+▌ scrap › claude › default › medium
 ▌ <rig>/work
 
 ❯
