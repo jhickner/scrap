@@ -52,6 +52,8 @@ struct pick_live {
 
     int align;
 
+    int stack;
+
     int  (*tick)(void *ud);
     void  *ud;
 
