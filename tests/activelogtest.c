@@ -52,9 +52,9 @@ int main(void)
     step(path, "d", -1, NULL, "c");
     activelog_add(path, "e", 0);
     step(path, "e", 1, NULL, NULL);
-    step(path, "e", -1, "b", "d");
-    step(path, "d", -1, "b", "c");
-    step(path, "c", -1, "b", "a");
+    step(path, "e", -1, "b", "c");
+    step(path, "c", -1, "b", "d");
+    step(path, "d", -1, "b", "a");
     step(path, "a", -1, "b", NULL);
 
     unlink(path);
