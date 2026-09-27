@@ -1,5 +1,6 @@
 #include "im.h"
 
+#include <copyfile.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -265,10 +266,20 @@ static int run_quiet(char *const argv[], const char *input)
 
 static void osa_send(int file, const char *payload)
 {
+    char staged[1200];
+    if (file) {
+        const char *home = getenv("HOME");
+        const char *base = strrchr(payload, '/');
+        snprintf(staged, sizeof staged, "%s/Library/Messages/Attachments/mux", home ? home : "");
+        mkdir(staged, 0700);
+        size_t n = strlen(staged);
+        snprintf(staged + n, sizeof staged - n, "/%s", base ? base + 1 : payload);
+        if (copyfile(payload, staged, NULL, COPYFILE_DATA) == 0)
+            payload = staged;
+        remember_sent(payload);
+    }
     char *argv[] = {"osascript", "-", rt.handle, file ? "file" : "text",
                     (char *)payload, NULL};
-    if (file)
-        remember_sent(payload);
     run_quiet(argv, SEND_SCRIPT);
 }
 
