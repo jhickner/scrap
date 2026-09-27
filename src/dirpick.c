@@ -8,9 +8,10 @@
 #include <unistd.h>
 
 #include "pick.h"
+#include "text.h"
 
 #define DIR_MAX   6000
-#define DIR_DEPTH 3
+#define DIR_DEPTH 2
 
 static const char *SKIP[] = {"node_modules", "target", "build",  "dist",
                              "venv",         ".git",   "Library", "__pycache__"};
@@ -104,20 +105,28 @@ static int cmp_item(const void *a, const void *b)
     return dx != dy ? dx - dy : strcmp(x->label, y->label);
 }
 
-char *dirpick_run(const char *title, const char *seed)
+char *dirpick_run(const char *title, const char *current)
 {
     const char *home = getenv("HOME");
     if (!home || !*home)
         return NULL;
 
+    char root[4096];
+    snprintf(root, sizeof root, "%s/working", home);
     struct list l = {0};
-    list_add(&l, "~");
-    walk(&l, home, "~", 1);
-    if (!l.count)
-        return NULL;
+    list_add(&l, "~/working");
+    walk(&l, root, "~/working", 1);
     qsort(l.items, (size_t)l.count, sizeof *l.items, cmp_item);
 
-    int   which = pick_run_query(title, l.items, l.count, 0, seed);
+    char now[4096] = "";
+    if (current)
+        path_home_relative(current, now, sizeof now);
+    int initial = 0;
+    for (int i = 0; i < l.count; i++)
+        if (!strcmp(l.items[i].label, now))
+            initial = i;
+
+    int   which = l.count ? pick_run_filter(title, l.items, l.count, initial) : -1;
     char *out = NULL;
     if (which >= 0) {
         const char *label = l.items[which].label;

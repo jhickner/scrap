@@ -20,6 +20,7 @@
 #include "keyhelp.h"
 #include "livelist.h"
 #include "models.h"
+#include "newsession.h"
 #include "parent.h"
 #include "pick.h"
 #include "scrollback.h"
@@ -530,101 +531,6 @@ static void close_live(const struct live_session *v, const struct live_session *
     ui_flush();
 }
 
-static int spawn_new(const char *backend, const char *model, const char *cwd,
-                     const char *prompt)
-{
-    struct session *here = workspace_current();
-    if (!cwd)
-        cwd = here ? session_cwd(here) : NULL;
-    int at = workspace_spawn(backend, model, NULL, cwd, NULL);
-    if (at < 0) {
-        const char *why = session_start_error();
-        if (why)
-            ui_error("could not start %s: %s", backend, why);
-        else
-            ui_error("could not start the %s CLI", backend);
-        ui_put("\n");
-        ui_flush();
-        return 0;
-    }
-    if (prompt && *prompt)
-        workspace_send(at, prompt, NULL);
-    hud_print(workspace_current());
-    ui_flush();
-    return 0;
-}
-
-static int new_default(void)
-{
-    return spawn_new(cmd_default_backend(), NULL, NULL, NULL);
-}
-
-static int new_custom(void)
-{
-    int count = 0, initial = 0;
-    const struct pick_item *choices = cmd_backend_choices(&count);
-    const char *want = cmd_default_backend();
-    for (int i = 0; i < count; i++)
-        if (!strcmp(choices[i].label, want))
-            initial = i;
-
-    for (;;) {
-        int which = pick_run("a new session in which backend", choices, count, initial);
-        if (which < 0)
-            return 1;
-        const char *backend = choices[which].label;
-
-        int models = 0;
-        const struct pick_item *list = cmd_model_choices(backend, &models);
-        const char *model = NULL;
-        char       *typed = NULL;
-        int         named = !strcmp(backend, "grokbot");
-        if (named && !models) {
-            typed = ask_run("a bot or group name", NULL);
-            if (!typed || !*typed) {
-                free(typed);
-                continue;
-            }
-            model = typed;
-        } else if (models > 1 || (named && models)) {
-            int pickedm = pick_run_filter(named ? "which bot or group" : "which model",
-                                          list, models, 0);
-            if (pickedm < 0)
-                continue;
-            model = list[pickedm].label;
-        }
-
-        char *cwd = named ? NULL : dirpick_run("a working directory", "~/working");
-        if (!named && !cwd)
-            continue;
-
-        char *line = ask_run("a prompt to start with, or nothing", NULL);
-        if (!line) {
-            free(cwd);
-            free(typed);
-            continue;
-        }
-        int again = spawn_new(backend, model, cwd, line);
-        free(cwd);
-        free(typed);
-        free(line);
-        return again;
-    }
-}
-
-static int open_new(void)
-{
-    const struct pick_item how[] = {
-        {"default", "the default backend and model"},
-        {"custom", "a backend, a model, a directory and a prompt"},
-    };
-
-    int which = pick_run("a new session", how, 2, 0);
-    if (which < 0)
-        return 1;
-    return which == 1 ? new_custom() : new_default();
-}
-
 static const char *row_cwd(const struct row *r, const struct live_session *live)
 {
     if (r->kind == ROW_TAB) {
@@ -950,14 +856,14 @@ static int switch_once(void)
     }
 
     if (chosen.kind == ROW_NEW && (pressed == KEY_GO || pressed == '\n')) {
-        int again = open_new();
+        int again = (newsession_run());
         resume_row = picked;
         free(live);
         return again;
     }
 
     if (pressed == KEY_NEW) {
-        int again = open_new();
+        int again = (newsession_run());
         resume_row = picked;
         free(live);
         return again;
@@ -965,7 +871,7 @@ static int switch_once(void)
 
     if (pressed == KEY_HERE) {
         const char *cwd = row_cwd(&chosen, live);
-        int again = cwd && *cwd ? spawn_new(cmd_default_backend(), NULL, cwd, NULL) : 1;
+        int again = cwd && *cwd ? (newsession_spawn(cmd_default_backend(), NULL, NULL, cwd), 0) : 1;
         resume_row = picked;
         free(live);
         return again;
@@ -1021,7 +927,7 @@ static int switch_once(void)
         break;
     case ROW_NEW:
         {
-            int again = open_new();
+            int again = (newsession_run());
             resume_row = picked;
             free(live);
             return again;

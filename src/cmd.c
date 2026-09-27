@@ -15,6 +15,7 @@
 #include "jev.h"
 #include "relay.h"
 #include "models.h"
+#include "newsession.h"
 #include "pick.h"
 #include "reopen.h"
 #include "prompt.h"
@@ -154,7 +155,7 @@ static const struct pick_item *model_choices(const struct session *s, int *count
     return cmd_model_choices(session_backend(s), count);
 }
 
-static const struct pick_item *cmd_effort_choices(const char *backend, int *count)
+const struct pick_item *cmd_effort_choices(const char *backend, int *count)
 {
     if (!strcmp(backend, "claude")) {
         *count = COUNT(CLAUDE_EFFORTS);
@@ -1045,6 +1046,12 @@ static void do_clear(struct session *s, const char *arg)
 
 static void do_new(struct session *s, const char *arg)
 {
+    if ((!arg || !*arg) && frontend_has_keyboard() && !chrome_modal_active()) {
+        newsession_run();
+        viewport_flush();
+        ui_flush();
+        return;
+    }
     if (!arg || !*arg) {
         do_clear(s, arg);
         return;
@@ -1325,7 +1332,7 @@ static void do_fork_t(struct session *s, const char *arg)
 }
 
 static const struct cmd COMMANDS[] = {
-    {"/new", "start a fresh conversation, or a new tab running the prompt",
+    {"/new", "open a new session, or a new tab running the prompt",
      "[prompt]", CMD_SELF_ECHOES | CMD_LIVE_ARG, do_new},
     {"/clear", "start a fresh conversation", NULL, 0, do_clear},
     {"/model", "switch model", "[name]", 0, do_model},
