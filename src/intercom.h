@@ -35,6 +35,10 @@ char *intercom_read(const char *target, long turns, long bytes, char *msg, size_
 
 cJSON *intercom_live_json(void);
 
+long intercom_owner(cJSON *o, char *msg, size_t size);
+
+void intercom_set_window(void);
+
 char *intercom_serve(const cJSON *o);
 
 int intercom_attach(const char *target, char *msg, size_t size);

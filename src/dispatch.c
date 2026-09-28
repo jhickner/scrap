@@ -1,8 +1,6 @@
 #include "dispatch.h"
 
-#include <arpa/inet.h>
 #include <errno.h>
-#include <netinet/in.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/stat.h>
@@ -314,22 +312,51 @@ int dispatch_send(int at, const char *line)
     return deliver(at, line, line);
 }
 
-static struct dispatch_net net;
+static char *(*serve_extra)(const cJSON *o, int fd, int *kept);
 
-static void serve(int fd, const char *text, const char *host)
+void dispatch_hand_off(int fd, long pid, const cJSON *o)
+{
+    struct sockaddr_un sa = {.sun_family = AF_UNIX};
+    char              *json = cJSON_PrintUnformatted(o);
+    char              *line = json ? text_dsprintf("%s\n", json) : NULL;
+    int u = line && dispatch_socket_path(pid, sa.sun_path, sizeof sa.sun_path)
+                ? socket(AF_UNIX, SOCK_STREAM, 0)
+                : -1;
+    size_t len = line ? strlen(line) : 0;
+    char   ctl[CMSG_SPACE(sizeof(int))] = {0};
+    struct iovec   iov = {.iov_base = line, .iov_len = len};
+    struct msghdr  m = {.msg_iov = &iov, .msg_iovlen = 1, .msg_control = ctl,
+                        .msg_controllen = sizeof ctl};
+    struct cmsghdr *c = CMSG_FIRSTHDR(&m);
+    c->cmsg_level = SOL_SOCKET;
+    c->cmsg_type = SCM_RIGHTS;
+    c->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(c), &fd, sizeof fd);
+    int ok = u >= 0 && connect(u, (struct sockaddr *)&sa, sizeof sa) == 0 &&
+             sendmsg(u, &m, 0) == (ssize_t)len;
+    if (u >= 0)
+        close(u);
+    free(line);
+    free(json);
+    if (ok) {
+        close(fd);
+        return;
+    }
+    char why[80];
+    snprintf(why, sizeof why, "scrap %ld is not running", pid);
+    reply_error(fd, why, NULL);
+}
+
+static void serve(int fd, const char *text)
 {
     cJSON *o = cJSON_Parse(text);
     if (!o) {
         reply(fd, "{\"error\": \"bad json\"}");
         return;
     }
-    if (host) {
-        cJSON_DeleteItemFromObject(o, "host");
-        cJSON_AddStringToObject(o, "host", host);
-    }
 
     int   kept = 0;
-    char *answer = net.serve ? net.serve(o, fd, &kept) : NULL;
+    char *answer = serve_extra ? serve_extra(o, fd, &kept) : NULL;
     if (kept) {
         cJSON_Delete(o);
         return;
@@ -382,16 +409,14 @@ static void serve(int fd, const char *text, const char *host)
     cJSON_Delete(o);
 }
 
-#define NET_RETRY_S 5
-
-static int  listen_fd = -1, net_fd = -1, dir_fd = -1, net_port;
+static int  listen_fd = -1;
 static char listen_path[200];
 
 static struct client {
     int    fd;
+    int    passed;
     char  *buf;
     size_t len;
-    char   peer[64];
 } clients[CLIENT_MAX];
 
 static void unlisten(void)
@@ -413,7 +438,7 @@ static void listen_once(void)
         return;
     tried = (long)getpid();
     for (int i = 0; i < CLIENT_MAX; i++)
-        clients[i].fd = -1;
+        clients[i].fd = clients[i].passed = -1;
     struct sockaddr_un sa = {.sun_family = AF_UNIX};
     if (!dispatch_socket_path((long)getpid(), sa.sun_path, sizeof sa.sun_path))
         return;
@@ -432,70 +457,17 @@ static void listen_once(void)
     atexit(unlisten);
 }
 
-static int listen_tcp(const char *ip, int port, int *bound)
+void dispatch_serve_with(char *(*serve)(const cJSON *o, int fd, int *kept))
 {
-    struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
-    if (inet_pton(AF_INET, ip, &sa.sin_addr) != 1)
-        return -1;
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    int on = 1;
-    if (fd < 0)
-        return -1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof on);
-    socklen_t len = sizeof sa;
-    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) != 0 || listen(fd, CLIENT_MAX) != 0 ||
-        getsockname(fd, (struct sockaddr *)&sa, &len) != 0) {
-        close(fd);
-        return -1;
-    }
-    nonblocking(fd);
-    if (bound)
-        *bound = ntohs(sa.sin_port);
-    return fd;
-}
-
-static void listen_net(void)
-{
-    static struct timespec last;
-    struct timespec        now;
-    if (!net.bind || (net_fd >= 0 && dir_fd >= 0))
-        return;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    if (last.tv_sec && now.tv_sec - last.tv_sec < NET_RETRY_S)
-        return;
-    last = now;
-    const char *ip = net.bind();
-    if (!ip)
-        return;
-    if (net_fd < 0)
-        net_fd = listen_tcp(ip, 0, &net_port);
-    if (dir_fd < 0 && net.port > 0)
-        dir_fd = listen_tcp(ip, net.port, NULL);
-}
-
-void dispatch_net(const struct dispatch_net *config)
-{
-    net = *config;
-}
-
-int dispatch_serving(void)
-{
-    return net.bind != NULL;
-}
-
-int dispatch_net_port(void)
-{
-    return net_fd >= 0 ? net_port : 0;
+    serve_extra = serve;
 }
 
 int dispatch_fds(int *out, int max)
 {
     listen_once();
     int n = 0;
-    int listeners[] = {listen_fd, net_fd, dir_fd};
-    for (int i = 0; i < 3 && n < max; i++)
-        if (listeners[i] >= 0)
-            out[n++] = listeners[i];
+    if (listen_fd >= 0 && n < max)
+        out[n++] = listen_fd;
     for (int i = 0; i < CLIENT_MAX && n < max; i++)
         if (clients[i].fd >= 0)
             out[n++] = clients[i].fd;
@@ -508,21 +480,21 @@ static void drop(struct client *c)
     c->buf = NULL;
     c->len = 0;
     c->fd = -1;
-    c->peer[0] = '\0';
+    c->passed = -1;
 }
 
 static void finish(struct client *c, int answer)
 {
     char *text = c->buf;
-    int   fd = c->fd;
-    char  peer[64], host[256] = "";
-    snprintf(peer, sizeof peer, "%s", c->peer);
+    int   fd = c->fd, passed = c->passed;
     c->buf = NULL;
     drop(c);
-    if (answer && peer[0] && (!net.peer || !net.peer(peer, host, sizeof host)))
-        reply(fd, "{\"error\": \"not the same tailscale user\"}");
-    else if (answer && text && *text)
-        serve(fd, text, peer[0] ? host : NULL);
+    if (passed >= 0) {
+        close(fd);
+        fd = passed;
+    }
+    if (answer && text && *text)
+        serve(fd, text);
     else if (answer)
         reply(fd, "{\"error\": \"empty request\"}");
     else
@@ -534,7 +506,23 @@ static void take(struct client *c)
 {
     char chunk[4096];
     for (;;) {
-        ssize_t n = recv(c->fd, chunk, sizeof chunk, 0);
+        char           ctl[CMSG_SPACE(sizeof(int))];
+        struct iovec   iov = {.iov_base = chunk, .iov_len = sizeof chunk};
+        struct msghdr  m = {.msg_iov = &iov, .msg_iovlen = 1, .msg_control = ctl,
+                            .msg_controllen = sizeof ctl};
+        ssize_t        n = recvmsg(c->fd, &m, 0);
+        for (struct cmsghdr *h = n > 0 ? CMSG_FIRSTHDR(&m) : NULL; h; h = CMSG_NXTHDR(&m, h)) {
+            int got;
+            if (h->cmsg_level != SOL_SOCKET || h->cmsg_type != SCM_RIGHTS)
+                continue;
+            memcpy(&got, CMSG_DATA(h), sizeof got);
+            if (c->passed >= 0)
+                close(got);
+            else {
+                fcntl(got, F_SETFD, FD_CLOEXEC);
+                c->passed = got;
+            }
+        }
         if (n < 0 && errno == EINTR)
             continue;
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
@@ -547,6 +535,8 @@ static void take(struct client *c)
                                                          : NULL;
         if (!grown) {
             int fd = c->fd;
+            if (c->passed >= 0)
+                close(c->passed);
             drop(c);
             reply(fd, "{\"error\": \"request too large\"}");
             return;
@@ -564,12 +554,10 @@ static void take(struct client *c)
     }
 }
 
-static void accept_on(int lfd, int tcp)
+static void accept_on(int lfd)
 {
     for (;;) {
-        struct sockaddr_storage sa;
-        socklen_t               len = sizeof sa;
-        int                     fd = accept(lfd, (struct sockaddr *)&sa, &len);
+        int fd = accept(lfd, NULL, NULL);
         if (fd < 0)
             break;
         struct client *slot = NULL;
@@ -582,26 +570,15 @@ static void accept_on(int lfd, int tcp)
         }
         nonblocking(fd);
         slot->fd = fd;
-        slot->peer[0] = '\0';
-        if (tcp && sa.ss_family == AF_INET)
-            inet_ntop(AF_INET, &((struct sockaddr_in *)&sa)->sin_addr, slot->peer,
-                      sizeof slot->peer);
-        else if (tcp)
-            snprintf(slot->peer, sizeof slot->peer, "?");
     }
 }
 
 void dispatch_poll(void)
 {
     listen_once();
-    listen_net();
     settle_pending();
     if (listen_fd >= 0)
-        accept_on(listen_fd, 0);
-    if (net_fd >= 0)
-        accept_on(net_fd, 1);
-    if (dir_fd >= 0)
-        accept_on(dir_fd, 1);
+        accept_on(listen_fd);
     for (int i = 0; i < CLIENT_MAX; i++)
         if (clients[i].fd >= 0)
             take(&clients[i]);

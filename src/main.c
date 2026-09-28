@@ -31,6 +31,7 @@
 #include "sessionprefs.h"
 #include "sessionfork.h"
 #include "sessionload.h"
+#include "netd.h"
 #include "sessionpresent.h"
 #include "sessionswitch.h"
 #include "sessionview.h"
@@ -602,6 +603,8 @@ int main(int argc, char **argv)
                      !strcmp(argv[1], "send") || !strcmp(argv[1], "open") ||
                      !strcmp(argv[1], "attach")))
         return intercom_main(argc - 1, argv + 1);
+    if (argc > 1 && !strcmp(argv[1], "net"))
+        return netd_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "version")) {
         printf(APP_NAME " %s\n", SCRAP_VERSION);
         return 0;
@@ -866,10 +869,9 @@ int main(int argc, char **argv)
         return 1;
     }
     prompt_set_completer(intercom_complete);
-    dispatch_net(&(struct dispatch_net){.bind = tailnet_bind_ip,
-                                        .port = tailnet_dir_port(),
-                                        .peer = tailnet_peer,
-                                        .serve = serve_extra});
+    dispatch_serve_with(serve_extra);
+    intercom_set_window();
+    netd_ensure();
     session_add_listener(stream_event, NULL);
     prompt_file_completion(prompt, cwd);
     if (have_config) {

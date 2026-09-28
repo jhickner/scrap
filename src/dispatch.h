@@ -9,18 +9,9 @@ int dispatch_fds(int *out, int max);
 
 #include "vendor/cJSON.h"
 
-struct dispatch_net {
-    const char *(*bind)(void);
-    int         port;
-    int         (*peer)(const char *ip, char *host, size_t size);
-    char       *(*serve)(const cJSON *o, int fd, int *kept);
-};
+void dispatch_serve_with(char *(*serve)(const cJSON *o, int fd, int *kept));
 
-void dispatch_net(const struct dispatch_net *config);
-
-int dispatch_net_port(void);
-
-int dispatch_serving(void);
+void dispatch_hand_off(int fd, long pid, const cJSON *o);
 
 int dispatch_dir(char *out, size_t size);
 

@@ -12,8 +12,9 @@ usage: scraprig <command> ...
          [--scrap path] [-- scrap args]
          start scrap; prints the instance name. --share dir: instances started
          with the same dir share live sessions, dispatch, session names, and
-         net config. --net: listen on the tailscale address at port N (default
-         random; with --share, the first instance picks it)
+         net config. --net: the instance's scrap net broker listens on the
+         tailscale address at port N (default random; with --share, the first
+         instance picks it); without it no broker runs
   send   name keys...        tmux send-keys names: Enter Escape C-c Tab Up
   type   name text           literal text
   say    name text [regex]   type text, Enter, then wait for regex
@@ -98,6 +99,8 @@ cmd_start() {
         ip="$(tailscale ip -4 2>/dev/null | head -1 || true)"
         [ -n "$ip" ] || { rm -rf "$dir"; die "no tailscale address"; }
         printf 'port = %s\nbind = %s\n' "${port:-$((20000 + RANDOM % 20000))}" "$ip" > "$conf/net"
+    elif [ "$net" = 0 ] && [ ! -s "$conf/net" ]; then
+        echo 'broker = off' > "$conf/net"
     fi
     local path="$PATH"
     if [ "$fake" = 1 ]; then

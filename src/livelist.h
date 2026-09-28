@@ -20,7 +20,6 @@ struct live_session {
     int  unseen;
     char pane[32];
     long ts;
-    int  port;
     int  mine;
 };
 

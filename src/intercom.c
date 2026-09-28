@@ -65,11 +65,18 @@ static void field_at(const char *row, int index, char *out, size_t size)
     snprintf(out, size, "%.*s", (int)n, row ? row : "");
 }
 
+static int window;
+
+void intercom_set_window(void)
+{
+    window = 1;
+}
+
 static const char *route(const char *target, char *host, size_t size, const char **local)
 {
     const char *name = tailnet_split(target, host, size);
     *local = target;
-    if (name && dispatch_serving() && tailnet_is_self(host)) {
+    if (name && window && tailnet_is_self(host)) {
         *local = name;
         return NULL;
     }
@@ -685,11 +692,36 @@ cJSON *intercom_live_json(void)
         cJSON_AddStringToObject(o, "title", v[i].title);
         cJSON_AddStringToObject(o, "status", v[i].status);
         cJSON_AddNumberToObject(o, "ts", (double)v[i].ts);
-        cJSON_AddNumberToObject(o, "port", v[i].port);
         cJSON_AddItemToArray(a, o);
     }
     free(v);
     return a;
+}
+
+long intercom_owner(cJSON *o, char *msg, size_t size)
+{
+    const char *to = jstr(o, "to");
+    if (!*to)
+        return 0;
+    struct entries      l = {0};
+    long                pid = -1;
+    collect(&l, NULL, 1, 0);
+    const struct entry *e = resolve(&l, to);
+    if (!e)
+        snprintf(msg, size, "no live session matches %s", to);
+    else {
+        pid = e->pid;
+        cJSON_DeleteItemFromObject(o, "session");
+        cJSON_DeleteItemFromObject(o, "name");
+        cJSON_AddStringToObject(o, "session", e->id);
+        if (e->name[0])
+            cJSON_AddStringToObject(o, "name", e->name);
+        if (cJSON_GetObjectItem(o, "attach"))
+            cJSON_ReplaceItemInObject(o, "attach", cJSON_CreateString(e->id));
+        cJSON_DeleteItemFromObject(o, "to");
+    }
+    free(l.e);
+    return pid;
 }
 
 static int request(long pid, cJSON *body, char *reply, size_t size)
@@ -876,14 +908,10 @@ int intercom_attach(const char *target, char *msg, size_t size)
     int         fd = -1;
     if (remote) {
         char ip[256], err[512];
-        int  port;
-        if (!tailnet_locate(host, remote, ip, sizeof ip, &port, id, sizeof id, msg, size))
-            return -1;
-        fd = tailnet_connect(ip, port, 3, err, sizeof err);
+        tailnet_resolve(host, ip, sizeof ip);
+        fd = tailnet_connect(ip, tailnet_dir_port(), 3, err, sizeof err);
         if (fd < 0)
             snprintf(msg, size, "%s: %s", host, err);
-        if (remote[0] == '@')
-            snprintf(name, sizeof name, "%s", remote + 1);
     } else {
         struct entries      l = {0};
         char                cwd[4096];
@@ -908,6 +936,8 @@ int intercom_attach(const char *target, char *msg, size_t size)
     cJSON_AddStringToObject(o, "attach", id);
     if (name[0])
         cJSON_AddStringToObject(o, "name", name);
+    if (remote)
+        cJSON_AddStringToObject(o, "to", remote);
     char  *json = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     size_t len = json ? strlen(json) : 0;

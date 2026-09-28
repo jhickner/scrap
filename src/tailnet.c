@@ -53,6 +53,11 @@ int tailnet_dir_port(void)
     return p > 0 && p < 65536 ? p : PORT_DEFAULT;
 }
 
+int tailnet_broker(void)
+{
+    return strcmp(cfg_get("broker", "on"), "off") != 0;
+}
+
 const char *tailnet_bind_ip(void)
 {
     const char *set = cfg_get("bind", NULL);
@@ -349,60 +354,18 @@ static cJSON *directory(const char *ip, char *msg, size_t size)
     return ask(ip, tailnet_dir_port(), req, SURVEY_TIMEOUT, msg, size);
 }
 
-static const cJSON *find(const cJSON *dir, const char *target)
-{
-    const char *name = target[0] == '@' ? target + 1 : NULL;
-    cJSON      *o;
-    cJSON_ArrayForEach(o, cJSON_GetObjectItem((cJSON *)dir, "sessions"))
-    {
-        if (name ? !strcmp(jstr(o, "name"), name)
-                 : *jstr(o, "id") && !strncmp(jstr(o, "id"), target, strlen(target)))
-            return o;
-    }
-    return NULL;
-}
-
-int tailnet_locate(const char *host, const char *target, char *ip, size_t ipsize, int *port,
-                   char *id, size_t idsize, char *msg, size_t size)
-{
-    char   err[512];
-    tailnet_resolve(host, ip, ipsize);
-    cJSON *dir = directory(ip, err, sizeof err);
-    if (!dir) {
-        snprintf(msg, size, "%s: %s", host, err);
-        return 0;
-    }
-    const cJSON *e = find(dir, target);
-    cJSON       *port_item = e ? cJSON_GetObjectItem((cJSON *)e, "port") : NULL;
-    int          p = cJSON_IsNumber(port_item) ? (int)port_item->valuedouble : 0;
-    if (!e)
-        snprintf(msg, size, "%s: no live session matches %s", host, target);
-    else if (p <= 0)
-        snprintf(msg, size, "%s: %s is not reachable on the tailnet", host, target);
-    else {
-        *port = p;
-        snprintf(id, idsize, "%s", jstr(e, "id"));
-    }
-    cJSON_Delete(dir);
-    return e && p > 0;
-}
-
 int tailnet_send(const char *host, const char *from, const char *target, const char *text,
                  char *msg, size_t size)
 {
-    char ip[256], id[128];
-    int  port;
-    if (!tailnet_locate(host, target, ip, sizeof ip, &port, id, sizeof id, msg, size))
-        return 1;
+    char ip[256];
+    tailnet_resolve(host, ip, sizeof ip);
     cJSON *req = cJSON_CreateObject();
     cJSON_AddStringToObject(req, "send", text);
-    cJSON_AddStringToObject(req, "session", id);
-    if (target[0] == '@')
-        cJSON_AddStringToObject(req, "name", target + 1);
+    cJSON_AddStringToObject(req, "to", target);
     if (from && *from)
         cJSON_AddStringToObject(req, "from", from);
     char   err[512];
-    cJSON *r = ask(ip, port, req, SEND_TIMEOUT, err, sizeof err);
+    cJSON *r = ask(ip, tailnet_dir_port(), req, SEND_TIMEOUT, err, sizeof err);
     if (!r) {
         snprintf(msg, size, "%s: %s", host, err);
         return 1;

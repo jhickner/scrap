@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "netd.h"
 #include "ask.h"
 #include "cmd.h"
 #include "tailnet.h"
@@ -138,6 +139,7 @@ static void spawn_on(const struct row *r)
 
 void netpick_run(struct session *s)
 {
+    netd_ensure();
     cJSON *machines = tailnet_survey();
     if (!machines) {
         ui_error("tailscale status is unavailable");

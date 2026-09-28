@@ -33,9 +33,11 @@ tools/rig/scraprig stop $n
 - `--share dir` gives instances started with the same dir one set of live
   sessions, dispatch requests, and session names, so they can reach each
   other with `scrap send`.
-- `--net` makes an instance listen on the tailscale address at a random port
-  (or `--port N`); instances sharing a dir share it, so `machine:@name`
-  targets reach them, not the installed scrap. `scraprig machine` prints the
+- `--net` gives an instance a `scrap net` broker on the tailscale address at
+  a random port (or `--port N`); instances sharing a dir share one broker, so
+  `machine:@name` targets reach them, not the installed scrap. Without
+  `--net` no broker runs. A broker exits once its instance or share dir is
+  removed. `scraprig machine` prints the
   tailnet name, `net name` the ip and port, and `cli name ls --net` (or
   `read`, `send`, `attach`) runs the scrap CLI with an instance's config.
   `say name text [regex]` types a line, sends Enter, and waits for regex.
