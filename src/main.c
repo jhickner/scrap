@@ -210,7 +210,10 @@ static void offer_project_trust(struct session *s)
 {
     if (!session_take_trust_request(s))
         return;
-    if (confirm_run("trust this folder in codex?") && !session_trust_project(s)) {
+    if (!confirm_run("trust this folder in codex?"))
+        return;
+    workspace_settle(s);
+    if (!session_trust_project(s)) {
         viewport_item_begin(VIEWPORT_ROWS(1, 1));
         ui_error("could not trust this folder or reload Codex");
         viewport_item_end();
