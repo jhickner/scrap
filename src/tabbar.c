@@ -13,8 +13,7 @@
 #include "workspace.h"
 
 #define NAME_CELLS 14
-#define INSET      2
-#define BUTTON_W   5
+#define BUTTON_W   4
 
 #define DOT "\xe2\x97\x8f"
 #define BAR "\xe2\x94\x82"
@@ -108,6 +107,7 @@ struct tab {
 static struct tab tabs[WORKSPACE_MAX];
 static int        ntabs;
 static int        box_col = -1;
+static int        box_w;
 
 static void rule(int cells)
 {
@@ -133,20 +133,17 @@ static void paint_row(void *ud, int line, int w)
         ui_put(t->name);
         ui_pad(w - 2 - t->cells);
     } else if (at == ntabs) {
-        ui_put("\xe2\x95\xb0" RULE "\xe2\x94\xac" RULE RULE RULE "\xe2\x94\xac");
-        rule(w - BUTTON_W - INSET);
+        ui_put("\xe2\x95\xb0");
+        rule(w - 1 - BUTTON_W);
+        ui_put("\xe2\x94\xac");
+        rule(BUTTON_W - 1);
     } else if (at == ntabs + 1) {
-        ui_pad(INSET);
         ui_put(BAR " ");
         ui_esc(ui_style(UI_ACCENT));
-        ui_put("+");
-        ui_esc(ui_style(UI_DIM));
-        ui_put(" " BAR);
-        ui_pad(w - INSET - BUTTON_W);
+        ui_put("+ ");
     } else {
-        ui_pad(INSET);
-        ui_put("\xe2\x95\xb0" RULE RULE RULE "\xe2\x95\xaf");
-        ui_pad(w - INSET - BUTTON_W);
+        ui_put("\xe2\x95\xb0");
+        rule(BUTTON_W - 1);
     }
     ui_esc(ui_style(UI_RESET));
 }
@@ -180,8 +177,8 @@ void tabbar_cover(char **rows, int n, int cols)
             widest = t->cells;
     }
     int w = widest + 3;
-    if (w < BUTTON_W + INSET + 1)
-        w = BUTTON_W + INSET + 1;
+    if (w < BUTTON_W + 2)
+        w = BUTTON_W + 2;
     if (w > cols)
         return;
 
@@ -189,6 +186,8 @@ void tabbar_cover(char **rows, int n, int cols)
     int            r;
     struct overlay o = {.col = cols - w, .w = w, .rows = 1, .paint_row = paint_row, .ud = &r};
     for (r = 0; r < height; r++) {
+        o.w = r > ntabs ? BUTTON_W : w;
+        o.col = cols - o.w;
         ui_sink_begin();
         overlay_put(rows[r] ? rows[r] : "", &o);
         char *out = ui_sink_end();
@@ -201,6 +200,7 @@ void tabbar_cover(char **rows, int n, int cols)
         rows[r] = out;
     }
     box_col = cols - w;
+    box_w = w;
 }
 
 int tabbar_hit(int row, int col)
@@ -212,7 +212,7 @@ int tabbar_hit(int row, int col)
         return TABBAR_NONE;
     if (at < ntabs)
         return tabs[at].index;
-    if (at == ntabs + 1 && x >= INSET && x < INSET + BUTTON_W)
+    if (at == ntabs + 1 && x >= box_w - BUTTON_W)
         return TABBAR_NEW;
     return TABBAR_NONE;
 }
