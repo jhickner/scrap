@@ -688,6 +688,7 @@ cJSON *intercom_live_json(void)
         cJSON_AddStringToObject(o, "name", v[i].name);
         cJSON_AddStringToObject(o, "id", v[i].id);
         cJSON_AddStringToObject(o, "backend", v[i].backend);
+        cJSON_AddStringToObject(o, "model", v[i].label[0] ? v[i].label : v[i].model);
         cJSON_AddStringToObject(o, "cwd", v[i].cwd);
         char   title[200];
         if (!v[i].id[0] || !title_lookup(v[i].id, title, sizeof title))

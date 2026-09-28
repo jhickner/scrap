@@ -214,7 +214,9 @@ static void remote_rows(struct row *rows, int *n, const cJSON *m)
         snprintf(r.machine, sizeof r.machine, "%s", machine);
         path_home_relative(jstr(o, "cwd"), r.cwd, sizeof r.cwd);
         snprintf(r.label, sizeof r.label, "%s", *jstr(o, "title") ? jstr(o, "title") : "untitled");
-        snprintf(r.detail, sizeof r.detail, "%s @%s", jstr(o, "backend"), name);
+        const char *model = jstr(o, "model");
+        snprintf(r.detail, sizeof r.detail, "%s%s%s @%s", jstr(o, "backend"), *model ? " " : "",
+                 *model ? models_short_name(jstr(o, "backend"), model) : "", name);
         const cJSON *ts = cJSON_GetObjectItem((cJSON *)o, "ts");
         r.ts = cJSON_IsNumber(ts) ? (long)ts->valuedouble : 0;
         if (r.ts)

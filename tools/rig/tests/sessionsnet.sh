@@ -23,15 +23,15 @@ $R snap $a | grep -q 'mirror' && fail "remote shown before *"
 $R send $a '*'
 $R wait $a 'blackhole · checking' 3
 $R wait $a '⌂ '
-to 'claude @bee'
+to 'claude fake @bee  *just now'
 $R wait $a 'blackhole · no answer' 8
-$R snap $a | grep -q '→.*claude @bee' || fail "cursor moved on refresh: $($R snap $a)"
+$R snap $a | grep -q '→.*claude fake @bee  *just now' || fail "cursor moved on refresh: $($R snap $a)"
 
 $R send $a r
 $R idle $a 300
 $R type $a 'beehive'
 $R send $a Enter
-$R wait $a '→ *beehive *claude @bee' 5
+$R wait $a '→ *beehive *claude fake @bee  *just now' 5
 
 $R send $a Enter
 $R wait $a '\[ mirror:@bee \]' 5
@@ -40,8 +40,8 @@ $R wait $b 'echo: over the mirror'
 
 $R say $a '/sessions' 'sessions'
 $R wait $a '^  mirror$' 5
-$R snap $a | grep -q 'beehive *claude @bee' && fail "attached session listed twice: $($R snap $a)"
-to 'claude @cee'
+$R snap $a | grep -q 'beehive *claude fake @bee  *just now' && fail "attached session listed twice: $($R snap $a)"
+to 'claude fake @cee  *just now'
 $R send $a x
 $R wait $c 'Pane is dead' 5
 $R idle $a 300
