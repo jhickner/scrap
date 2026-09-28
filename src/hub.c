@@ -500,12 +500,68 @@ static int self_path(char *out, size_t size)
     return realpath(raw, real) && (size_t)snprintf(out, size, "%s", real) < size;
 }
 
+#ifndef __APPLE__
+#define UNIT_NAME APP_NAME "-hub.service"
+
 static int install(void)
 {
-#ifndef __APPLE__
-    fprintf(stderr, APP_NAME ": hub --install uses launchd; run `scrap hub` under your init system\n");
-    return 1;
+    char exe[PATH_MAX], unit[PATH_MAX], log[4200];
+    const char *home = getenv("HOME");
+    if (!home || !self_path(exe, sizeof exe) || !path_config_file(log, sizeof log, "hub.log"))
+        return 1;
+    snprintf(unit, sizeof unit, "%s/.config/systemd/user", home);
+    char mk[PATH_MAX + 16];
+    snprintf(mk, sizeof mk, "mkdir -p '%s'", unit);
+    if (system(mk) != 0)
+        return 1;
+    snprintf(unit + strlen(unit), sizeof unit - strlen(unit), "/" UNIT_NAME);
+    FILE *f = fopen(unit, "w");
+    if (!f) {
+        fprintf(stderr, APP_NAME ": cannot write %s\n", unit);
+        return 1;
+    }
+    fprintf(f,
+            "[Unit]\n"
+            "Description=" APP_NAME " hub\n"
+            "After=network-online.target\n\n"
+            "[Service]\n"
+            "ExecStart=%s hub\n"
+            "Restart=always\n"
+            "RestartSec=10\n"
+            "StandardOutput=append:%s\n"
+            "StandardError=append:%s\n\n"
+            "[Install]\n"
+            "WantedBy=default.target\n",
+            exe, log, log);
+    if (fclose(f) != 0)
+        return 1;
+    if (system("systemctl --user daemon-reload && systemctl --user enable " UNIT_NAME
+               " && systemctl --user restart " UNIT_NAME) != 0) {
+        fprintf(stderr, APP_NAME ": systemctl --user enable failed\n");
+        return 1;
+    }
+    printf("hub installed: %s runs %s hub; log %s\n", unit, exe, log);
+    return 0;
+}
+
+static int uninstall(void)
+{
+    char unit[PATH_MAX];
+    const char *home = getenv("HOME");
+    if (!home)
+        return 1;
+    if (system("systemctl --user disable --now " UNIT_NAME " 2>/dev/null") != 0)
+        fprintf(stderr, APP_NAME ": hub was not loaded\n");
+    snprintf(unit, sizeof unit, "%s/.config/systemd/user/" UNIT_NAME, home);
+    unlink(unit);
+    if (system("systemctl --user daemon-reload") != 0)
+        fprintf(stderr, APP_NAME ": systemctl --user daemon-reload failed\n");
+    printf("hub removed\n");
+    return 0;
+}
 #else
+static int install(void)
+{
     char exe[PATH_MAX], plist[PATH_MAX], log[4200], domain[64], cmd[PATH_MAX * 2];
     const char *home = getenv("HOME");
     if (!home || !self_path(exe, sizeof exe) || !path_config_file(log, sizeof log, "hub.log"))
@@ -541,14 +597,10 @@ static int install(void)
     }
     printf("hub installed: %s runs %s hub; log %s\n", plist, exe, log);
     return 0;
-#endif
 }
 
 static int uninstall(void)
 {
-#ifndef __APPLE__
-    return 1;
-#else
     char plist[PATH_MAX], cmd[PATH_MAX * 2];
     const char *home = getenv("HOME");
     if (!home)
@@ -560,8 +612,8 @@ static int uninstall(void)
     unlink(plist);
     printf("hub removed\n");
     return 0;
-#endif
 }
+#endif
 
 static void reload(int sig)
 {

@@ -1,5 +1,7 @@
 #include "im.h"
 
+#ifdef __APPLE__
+
 #include <copyfile.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -933,3 +935,29 @@ void im_forget_session(struct session *s)
 {
     tgbridge_forget(&rt.bridge, s);
 }
+
+#else
+
+#include <stdio.h>
+
+#include "app.h"
+
+int im_start(struct session *s)
+{
+    (void)s;
+    fprintf(stderr, APP_NAME ": imessage requires macOS\n");
+    return 0;
+}
+
+void im_stop(void) {}
+const char *im_label(void) { return NULL; }
+const char *im_system_note(void) { return NULL; }
+int im_fds(int *out, int max) { (void)out; (void)max; return 0; }
+int im_pending(void) { return 0; }
+char *im_take_line(void) { return NULL; }
+void im_run_line(char *line) { (void)line; }
+struct session *im_session(void) { return NULL; }
+void im_refocus(void) {}
+void im_forget_session(struct session *s) { (void)s; }
+
+#endif

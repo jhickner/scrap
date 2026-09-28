@@ -67,7 +67,12 @@ VNC_LIBS += -framework Security -framework CoreFoundation -lsqlite3
 endif
 LIBS += $(VNC_LIBS)
 ifneq ($(shell uname -s),Darwin)
-LIBS += -lutil
+LIBS += -lutil -lm
+# glibc hides wcwidth, strptime and strcasestr without _GNU_SOURCE and lacks
+# arc4random before 2.36; libbsd supplies it. gcc's extra warnings stay
+# visible but do not fail the build.
+ALL_CFLAGS += -D_GNU_SOURCE $(shell pkg-config --cflags libbsd-overlay 2>/dev/null) -Wno-error
+LIBS += $(shell pkg-config --libs libbsd-overlay 2>/dev/null)
 endif
 
 # libjpeg-turbo decodes a jpeg straight out of the DCT at 1/2, 1/4 or 1/8
@@ -273,8 +278,9 @@ install: $(BIN)
 	  cp -R $(VOICE_HELPER) $(VOICE_HELPER_DIR)/; \
 	fi
 	@# -URG would parse as -U RG, a user. -a because the scrap running this is an
-	@# ancestor of pkill, and ancestors are excluded by default.
-	@pkill -SIGURG -a -x $(BIN) || true
+	@# ancestor of pkill, and ancestors are excluded by default on macOS; procps
+	@# pkill has no -a and does not exclude them.
+	@pkill -SIGURG $(if $(filter Darwin,$(shell uname -s)),-a) -x $(BIN) || true
 
 # The helper is opt-in: it needs swift and macOS 26.
 voice-helper: | $(BUILD)
