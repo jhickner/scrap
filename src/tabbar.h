@@ -1,12 +1,10 @@
 #ifndef TABBAR_H
 #define TABBAR_H
 
-int  tabbar_rows(int cols);
-
 int  tabbar_stale(void);
 
-void tabbar_paint(int cols);
+void tabbar_cover(char **rows, int n, int cols);
 
-int  tabbar_hit(int col);
+int  tabbar_hit(int row, int col);
 
 #endif

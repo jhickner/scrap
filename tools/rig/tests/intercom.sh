@@ -33,4 +33,5 @@ $R wait $a 'ran: scrap: @b is not live; resume it with .?scrap open @b'
 $R type $a 'run: scrap open @b'
 $R send $a Enter
 $R wait $a 'ran: opened @b in a new tab'
-$R wait $a '^@b  \[ @a \]$'
+$R wait $a '│ [^@]*@b *$'
+$R snap $a | head -1 | grep -q '│ [^@]*@a *$'

@@ -14,7 +14,7 @@ for n in $a $b; do
 done
 $R say $b '/name bee' 'now @bee'
 
-$R say $a "/attach $me:@bee" "\[ $me:@bee \]"
+$R say $a "/attach $me:@bee" "│ [^@]*$me:@bee *\$"
 $R wait $a '▌ hello'
 $R say $a 'from a' 'echo: from a'
 $R wait $b 'echo: from a'
@@ -22,12 +22,13 @@ $R say $b 'typed on b' 'echo: typed on b'
 $R wait $a '▌ typed on b'
 $R wait $a 'echo: typed on b'
 $R say $a '/restart' 'restarted 1x' 15
-$R wait $a "\[ $me:@bee \]"
+$R wait $a "│ [^@]*$me:@bee *\$"
 $R say $a 'after restart'
 $R wait $b 'echo: after restart'
 $R say $a "/attach $me:@bee"
 $R idle $a
 $R snap $a | grep -q 'no live session' && { $R snap $a; echo "remotetab: re-attach failed"; exit 1; }
-$R snap $a | tail -1 | grep -q "^@[a-z0-9_-]*  \[ $me:@bee \]\$"
+$R snap $a | head -1 | grep -q "│ [^@]*$me:@bee *\$"
+[ "$($R snap $a | head -4 | grep -c '│ [^@]*@[a-z0-9_-]* *$')" = 2 ]
 $R say $a '/attach @nobody' 'no live session matches @nobody'
 echo "remotetab: ok"

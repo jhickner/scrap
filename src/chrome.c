@@ -6,7 +6,6 @@
 #include "prompt.h"
 #include "sidechannel.h"
 #include "status.h"
-#include "tabbar.h"
 #include "tty.h"
 #include "ui.h"
 #include "viewport.h"
@@ -19,7 +18,6 @@ static int              kept;
 static int budget;
 static int full;
 static int spin_row = -1;
-static int tab_row = -1;
 static int above_rows;
 
 void chrome_bind(struct prompt *p) { bound = p; }
@@ -33,7 +31,6 @@ int chrome_rows_left(void)
 static void wipe(void)
 {
     spin_row = -1;
-    tab_row = -1;
     above_rows = 0;
     block_clear();
 }
@@ -49,7 +46,6 @@ void chrome_keep_above(void)
 {
     block_keep(above_rows);
     spin_row = -1;
-    tab_row = -1;
     above_rows = 0;
 }
 
@@ -280,8 +276,7 @@ void chrome_paint(void)
         block_begin();
         budget = tty_rows() - 1;
         spin_row = -1;
-        tab_row = -1;
-        above_rows = 0;
+            above_rows = 0;
         if (chrome_gap())
             ui_put("\n");
         block_fill(full);
@@ -300,17 +295,15 @@ void chrome_paint(void)
 
     int input_rows = prompt_input_rows(bound, cols);
     int gap = chrome_gap();
-    int tabs = tabbar_rows(cols);
 
     struct heights h = above_measure(cols);
     struct above a = {1, 1, 1, 1};
-    fit_above(&a, &h, tty_rows() - 1 - input_rows - spinning - gap - tabs);
+    fit_above(&a, &h, tty_rows() - 1 - input_rows - spinning - gap);
 
     block_begin();
     block_fill(0);
     budget = tty_rows() - 1;
     spin_row = -1;
-    tab_row = -1;
 
     if (gap)
         ui_put("\n");
@@ -359,22 +352,7 @@ void chrome_paint(void)
     int first = ui_sink_rows();
     prompt_paint_input(bound, input_rows, &caret_row, &caret_col);
 
-    if (tabs) {
-        ui_put("\n");
-        tab_row = ui_sink_rows();
-        tabbar_paint(cols);
-    }
-
     block_end(first + caret_row, caret_col);
-}
-
-int chrome_tab_at(int row, int col)
-{
-    int top = viewport_chrome_top();
-
-    if (tab_row < 0 || top < 0 || row - 1 - top != tab_row)
-        return -1;
-    return tabbar_hit(col);
 }
 
 int chrome_paint_spin(void)
@@ -384,10 +362,5 @@ int chrome_paint_spin(void)
     block_row_begin(spin_row);
     status_paint_spin();
     block_row_end();
-    if (tab_row >= 0) {
-        block_row_begin(tab_row);
-        tabbar_paint(ui_columns());
-        block_row_end();
-    }
     return 1;
 }

@@ -34,7 +34,7 @@ $R send $a Enter
 $R wait $a '→ *beehive *claude fake @bee  *just now' 5
 
 $R send $a Enter
-$R wait $a '\[ mirror:@bee \]' 5
+$R wait $a '│ [^@]*mirror:@bee *$' 5
 $R say $a 'over the mirror' 'echo: over the mirror'
 $R wait $b 'echo: over the mirror'
 

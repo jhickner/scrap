@@ -16,6 +16,5 @@ void hud_load(const cJSON *st);
 
 int  hud_restarted(void);
 
-void hud_badge_cover(const struct session *s, char **rows, int n, int cols);
 
 #endif

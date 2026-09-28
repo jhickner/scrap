@@ -1,27 +1,26 @@
 #include "tabbar.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "overlay.h"
 #include "session.h"
+#include "settings.h"
 #include "status.h"
 #include "text.h"
 #include "ui.h"
 #include "workspace.h"
 
 #define NAME_CELLS 14
-#define NAME_CELLS_MIN 4
-#define MIN_COLS   24
+#define INSET      2
 
 #define DOT "\xe2\x97\x8f"
+#define BAR "\xe2\x94\x82"
+#define RULE "\xe2\x94\x80"
 
 static int    frame;
 static double frame_at;
-
-int tabbar_rows(int cols)
-{
-    return workspace_count() > 1 && cols >= MIN_COLS;
-}
 
 static unsigned digest(void)
 {
@@ -32,12 +31,12 @@ static unsigned digest(void)
     h = h * 16777619u + (unsigned)workspace_index();
     for (int i = 0; i < n; i++) {
         const struct session *s = workspace_at(i);
-        const char           *title = session_title(s);
+        const char           *name = session_name(s);
 
         for (const char *p = workspace_status(s); *p; p++)
             h = h * 16777619u + (unsigned char)*p;
         h = h * 16777619u + (unsigned)(session_unseen(s) ? 1 : 0);
-        for (const char *p = title ? title : ""; *p; p++)
+        for (const char *p = name ? name : ""; *p; p++)
             h = h * 16777619u + (unsigned char)*p;
     }
     return h;
@@ -45,32 +44,24 @@ static unsigned digest(void)
 
 static unsigned painted;
 
-static struct { int start, end; } span[WORKSPACE_MAX];
-static int spans;
-
 static int spin_due(void)
 {
     for (int i = 0; i < workspace_count(); i++)
-        if (i != workspace_index() &&
-            !strcmp(workspace_status(workspace_at(i)), "working"))
+        if (!strcmp(workspace_status(workspace_at(i)), "working"))
             return (now_seconds() - frame_at) * 1000.0 >= SPIN_FRAME_MS;
     return 0;
 }
 
 int tabbar_stale(void)
 {
-    if (workspace_count() < 2)
-        return 0;
     return digest() != painted || spin_due();
 }
 
-static const char *mark(int at, enum ui_role *role)
+static const char *mark(const struct session *s, enum ui_role *role)
 {
-    const struct session *s = workspace_at(at);
-    const char           *status = workspace_status(s);
+    const char *status = workspace_status(s);
 
-    if (!strcmp(status, "working") &&
-        (at != workspace_index() || !session_turn_running(s))) {
+    if (!strcmp(status, "working")) {
         *role = UI_SPIN;
         return spin_glyph(frame);
     }
@@ -85,116 +76,141 @@ static const char *mark(int at, enum ui_role *role)
     return NULL;
 }
 
-static void name_of(const struct session *s, size_t cells, char *out, size_t size)
+static void name_of(const struct session *s, char *out, size_t size)
 {
-    char        at[48];
-    const char *title = session_title(s);
-    if (!title || !*title) {
-        session_address(s, at, sizeof at);
-        title = at;
-    }
+    char        at[256];
+    const char *name = at;
 
-    size_t len = strlen(title);
-    size_t fit = ui_fit_visible(title, len, cells);
+    if (session_remote(s) || session_name(s)[0])
+        session_address(s, at, sizeof at);
+    else
+        name = session_title(s) ? session_title(s) : "";
+
+    size_t len = strlen(name);
+    size_t fit = ui_fit_visible(name, len, NAME_CELLS);
     if (fit == len) {
-        snprintf(out, size, "%s", title);
+        snprintf(out, size, "%s", name);
         return;
     }
-    fit = ui_fit_visible(title, len, cells - 1);
-    snprintf(out, size, "%.*s\xe2\x80\xa6", (int)fit, title);
+    fit = ui_fit_visible(name, len, NAME_CELLS - 1);
+    snprintf(out, size, "%.*s\xe2\x80\xa6", (int)fit, name);
 }
 
-static size_t frame_cells(int at)
+struct tab {
+    int  index;
+    char name[256];
+};
+
+static struct tab tabs[WORKSPACE_MAX];
+static int        ntabs;
+static int        box_col = -1;
+
+static void rule(int cells)
 {
-    enum ui_role role;
-    return (at ? 2 : 0) + (mark(at, &role) ? 2 : 0) +
-           (at == workspace_index() ? 4 : 0);
+    for (int i = 0; i < cells; i++)
+        ui_put(RULE);
 }
 
-static size_t name_cells(int n, size_t budget)
+static void paint_row(void *ud, int at, int w)
 {
-    for (size_t cap = NAME_CELLS; cap >= NAME_CELLS_MIN; cap--) {
-        size_t need = 0;
-        for (int i = 0; i < n; i++) {
-            char name[256];
-            name_of(workspace_at(i), cap, name, sizeof name);
-            need += frame_cells(i) + ui_cells(name);
+    (void)ud;
+    int last = ntabs > 1 ? ntabs + 1 : 1;
+    int inset = at >= 2 ? INSET : 0;
+
+    ui_esc(ui_style(UI_DIM));
+    if (at == 1) {
+        ui_put("\xe2\x95\xb0");
+        if (ntabs > 1) {
+            ui_put(RULE "\xe2\x94\xac");
+            rule(w - 3);
+        } else {
+            rule(w - 1);
         }
-        if (need <= budget)
-            return cap;
-    }
-    return 0;
-}
+    } else if (at == last) {
+        ui_pad(INSET);
+        ui_put("\xe2\x95\xb0");
+        rule(w - INSET - 1);
+    } else {
+        const struct tab     *t = &tabs[at ? at - 1 : 0];
+        const struct session *s = workspace_at(t->index);
+        enum ui_role          role = UI_DIM;
+        const char           *glyph = mark(s, &role);
 
-void tabbar_paint(int cols)
-{
-    int    n = workspace_count();
-    size_t budget = cols > 1 ? (size_t)(cols - 1) : 1;
-    int    left = n;
-    size_t at = 1;
-
-    spin_advance(&frame, &frame_at);
-    painted = digest();
-    size_t cells = name_cells(n, budget);
-    if (!cells)
-        cells = NAME_CELLS_MIN;
-    spans = 0;
-    ui_esc(UI_ERASE_EOL);
-
-    for (int i = 0; i < n; i++) {
-        struct session *s = workspace_at(i);
-        enum ui_role    role = UI_DIM;
-        const char     *glyph = mark(i, &role);
-        char            name[256];
-
-        name_of(s, cells, name, sizeof name);
-
-        int    here = i == workspace_index();
-        size_t gap = i ? 2 : 0;
-        size_t need = frame_cells(i) + ui_cells(name);
-        if (need > budget)
-            break;
-
-        if (i) {
-            ui_esc(ui_style(UI_DIM));
-            ui_put("  ");
-        }
+        ui_pad(inset);
+        ui_put(BAR " ");
         if (glyph) {
             ui_esc(ui_style(role));
             ui_put(glyph);
             ui_put(" ");
+        } else {
+            ui_put("  ");
         }
-        ui_esc(ui_style(here ? UI_TEXT : UI_DIM));
-        if (here)
-            ui_put("[ ");
-        ui_put(name);
-        if (here)
-            ui_put(" ]");
-
-        span[spans].start = (int)(at + gap);
-        span[spans].end = (int)(at + need - 1);
-        spans++;
-
-        at += need;
-        budget -= need;
-        left--;
-    }
-
-    if (left > 0) {
-        char rest[16];
-        snprintf(rest, sizeof rest, "  +%d", left);
-        if (ui_cells(rest) <= budget) {
-            ui_esc(ui_style(UI_DIM));
-            ui_put(rest);
-        }
+        ui_esc(ui_style(at ? UI_DIM : UI_ACCENT));
+        ui_put(t->name);
+        ui_pad(w - inset - 4 - (int)ui_cells(t->name));
     }
     ui_esc(ui_style(UI_RESET));
 }
 
-int tabbar_hit(int col)
+void tabbar_cover(char **rows, int n, int cols)
 {
-    for (int i = 0; i < spans; i++)
-        if (col >= span[i].start && col <= span[i].end)
-            return i;
+    int count = workspace_count();
+    int cur = workspace_index();
+
+    box_col = -1;
+    spin_advance(&frame, &frame_at);
+    painted = digest();
+    if (count < 1 || cur < 0 || n < 2)
+        return;
+    if (count == 1 && (!settings_get_int(SETTING_NAME_BADGE, 1) ||
+                       (!session_remote(workspace_at(cur)) && !session_name(workspace_at(cur))[0])))
+        return;
+
+    ntabs = 0;
+    tabs[ntabs++].index = cur;
+    for (int i = 0; i < count && ntabs < n - 1; i++)
+        if (i != cur)
+            tabs[ntabs++].index = i;
+
+    int widest = 0;
+    for (int i = 0; i < ntabs; i++) {
+        name_of(workspace_at(tabs[i].index), tabs[i].name, sizeof tabs[i].name);
+        int c = (int)ui_cells(tabs[i].name);
+        if (c > widest)
+            widest = c;
+    }
+    int w = widest + 5 + (ntabs > 1 ? INSET : 0);
+    if (w > cols)
+        return;
+
+    int height = ntabs > 1 ? ntabs + 2 : 2;
+    struct overlay o = {.col = cols - w, .w = w, .rows = height, .paint_row = paint_row};
+    for (int r = 0; r < height; r++) {
+        o.row = -r;
+        ui_sink_begin();
+        overlay_put(rows[r] ? rows[r] : "", &o);
+        char *out = ui_sink_end();
+        if (!out)
+            continue;
+        size_t len = strlen(out);
+        while (len && (out[len - 1] == '\n' || out[len - 1] == '\r'))
+            out[--len] = '\0';
+        free(rows[r]);
+        rows[r] = out;
+    }
+    box_col = cols - w;
+}
+
+int tabbar_hit(int row, int col)
+{
+    int at = row - 1;
+    int inset = at >= 2 ? INSET : 0;
+
+    if (box_col < 0 || col - 1 < box_col + inset)
+        return -1;
+    if (at == 0)
+        return tabs[0].index;
+    if (ntabs > 1 && at >= 2 && at <= ntabs)
+        return tabs[at - 1].index;
     return -1;
 }

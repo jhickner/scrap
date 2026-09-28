@@ -16,6 +16,7 @@
 #include "confirm.h"
 #include "gitinfo.h"
 #include "hud.h"
+#include "tabbar.h"
 #include "image.h"
 #include "docview.h"
 #include "stream.h"
@@ -337,7 +338,7 @@ static struct vncinset *inset_live(void)
 static void inset_cover(char **rows, int n, int cols)
 {
     vncinset_cover(inset_live(), rows, n, cols);
-    hud_badge_cover(workspace_current(), rows, n, cols);
+    tabbar_cover(rows, n, cols);
 }
 
 static int side_busy(void *ud)
@@ -365,7 +366,7 @@ static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
 static int clicked(void *ud, int row, int col)
 {
     (void)ud;
-    int tab = chrome_tab_at(row, col);
+    int tab = tabbar_hit(row, col);
     if (tab >= 0) {
         if (tab != workspace_index())
             workspace_show(tab);

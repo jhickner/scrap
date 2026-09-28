@@ -1,7 +1,5 @@
-
 #include "tabbar.h"
 
-int  tabbar_rows(int cols) { (void)cols; return 0; }
 int  tabbar_stale(void) { return 0; }
-void tabbar_paint(int cols) { (void)cols; }
-int  tabbar_hit(int col) { (void)col; return -1; }
+void tabbar_cover(char **rows, int n, int cols) { (void)rows; (void)n; (void)cols; }
+int  tabbar_hit(int row, int col) { (void)row; (void)col; return -1; }

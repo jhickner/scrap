@@ -13,7 +13,6 @@ void chrome_live_label(const char *(*fn)(void));
 
 int  chrome_paint_spin(void);
 
-int  chrome_tab_at(int row, int col);
 
 void chrome_clear(void);
 
