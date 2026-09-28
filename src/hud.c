@@ -195,6 +195,8 @@ static void hud_render(void *ud, int cols)
             ui_put("\n");
         }
         ui_esc(ui_style(UI_RESET));
+        ui_esc("\x1b[K");
+        ui_put("\n");
     }
     for (int i = 0; i < HUD_ROWS; i++)
         if (h->row[i].n)
