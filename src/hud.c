@@ -108,6 +108,9 @@ static void row_name(const struct session *s, struct row *r)
         row_add(r, UI_DIM, SEP);
         row_add(r, UI_ACCENT, "%s", at);
     }
+    int count = workspace_count();
+    if (count > 1)
+        row_add(r, UI_ACCENT, SEP "session %d/%d", workspace_index() + 1, count);
 }
 
 static void row_identity(const struct session *s, struct row *r)
@@ -116,13 +119,10 @@ static void row_identity(const struct session *s, struct row *r)
     const char *model = models_short_name(backend, session_model_label(s));
     const char *effort = session_effort_label(s);
     const char *chat = tg_label();
-    int         count = workspace_count();
 
     row_add(r, UI_BRAND, UI_BAR " ");
     row_add(r, UI_DIM, "%s" SEP "%s%s%s", backend, model,
             effort ? SEP : "", effort ? effort : "");
-    if (count > 1)
-        row_add(r, UI_ACCENT, SEP "session %d/%d", workspace_index() + 1, count);
     if (chat)
         row_add(r, UI_OK, SEP "%s", chat);
     if (relay_label())
