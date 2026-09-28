@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "md.h"
+#include "vendor/mermaid/mermaid.h"
 #include "ui.h"
 
 static int failures;
@@ -33,6 +34,19 @@ static void check_fits(const char *what, const char *src, int width)
         p = nl + 1;
     }
     free(out);
+}
+
+static void check_mermaid(const char *what, const char *src, const char *want)
+{
+    MermaidArt *art = mermaid_render(src, 0);
+    int         found = 0;
+    for (size_t i = 0; art && i < art->n && !found && !strstr(art->lines[0], "mermaid:"); i++)
+        found = strstr(art->lines[i], want) != NULL;
+    if (!found) {
+        fprintf(stderr, "FAIL %s: no row contains [%s]\n", what, want);
+        failures++;
+    }
+    mermaid_art_free(art);
 }
 
 static void check_widths(const char *what, const char *src)
@@ -74,6 +88,15 @@ int main(void)
     check_widths("styled text",
                  "- **Conversion path** / *non-PNG* (8): `photo.jpg`, [bmp](https://x.test/b), "
                  "tiff, webp, ico, anim.gif\n");
+
+    check_mermaid("a semicolon in a message label",
+                  "sequenceDiagram\n    A->>B: resolve; spill\n", "resolve; spill");
+    check_mermaid("semicolon-separated statements", "graph TD\n    A-->B; B-->Cee\n", "Cee");
+
+    check_widths("a mermaid diagram wider than the screen",
+                 "```mermaid\nsequenceDiagram\n    participant A as first participant\n"
+                 "    participant B as second participant\n    participant C as third participant\n"
+                 "    A->>C: a message long enough to cross the screen\n```\n");
 
     if (failures)
         return 1;

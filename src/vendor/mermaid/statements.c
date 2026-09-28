@@ -14,7 +14,7 @@ static void flush_statement(Buf *cur, StrVec *out) {
 static void split_statements(const char *line, StrVec *out) {
     Buf cur;
     buf_init(&cur);
-    bool in_quotes = false;
+    bool in_quotes = false, in_label = false;
     size_t len = strlen(line);
     for (size_t i = 0; i < len; i++) {
         char c = line[i];
@@ -25,7 +25,11 @@ static void split_statements(const char *line, StrVec *out) {
         }
         if (c == '"') { in_quotes = true; buf_push_char(&cur, c); }
         else if (c == '%' && i + 1 < len && line[i + 1] == '%') break;
-        else if (c == ';') flush_statement(&cur, out);
+        else if (c == ';' && !in_label) flush_statement(&cur, out);
+        else if (c == ':' && (line[i + 1] == ' ' || line[i + 1] == '\t')) {
+            in_label = true;
+            buf_push_char(&cur, c);
+        }
         else buf_push_char(&cur, c);
     }
     flush_statement(&cur, out);

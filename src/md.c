@@ -780,7 +780,11 @@ static void render_code_line(const char *line, int indent)
 static void render_mermaid(const char *src, int indent)
 {
     int width = ui_columns() - indent;
-    MermaidArt *art = mermaid_render(src, width > 20 ? width : 20);
+    MermaidArt *art = mermaid_render(src, 0);
+    if (art && art->n && strstr(art->lines[0], " mermaid: ")) {
+        mermaid_art_free(art);
+        art = mermaid_render(src, width > 20 ? width : 20);
+    }
     if (!art) {
         for (const char *p = src; *p;) {
             const char *nl = strchr(p, '\n');
@@ -800,7 +804,9 @@ static void render_mermaid(const char *src, int indent)
         last--;
     for (size_t i = first; i < last; i++) {
         ui_pad(indent);
-        put_safe(art->lines[i]);
+        char *row = art->lines[i];
+        row[ui_fit_bytes(row, width > 0 ? (size_t)width : 0)] = '\0';
+        put_safe(row);
         ui_put("\n");
     }
     mermaid_art_free(art);
