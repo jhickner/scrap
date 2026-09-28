@@ -37,6 +37,8 @@ cJSON *intercom_live_json(void);
 
 char *intercom_serve(const cJSON *o);
 
+int intercom_attach(const char *target, char *msg, size_t size);
+
 char *intercom_net_list(const char *query);
 
 int intercom_main(int argc, char **argv);

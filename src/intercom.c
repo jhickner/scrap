@@ -1,11 +1,14 @@
 #include "intercom.h"
 
 #include <ctype.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -842,6 +845,123 @@ static int cmd_open(int argc, char **argv)
     return rc;
 }
 
+static int connect_unix(long pid)
+{
+    struct sockaddr_un sa = {.sun_family = AF_UNIX};
+    if (!dispatch_socket_path(pid, sa.sun_path, sizeof sa.sun_path))
+        return -1;
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd >= 0 && connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
+        close(fd);
+        fd = -1;
+    }
+    return fd;
+}
+
+int intercom_attach(const char *target, char *msg, size_t size)
+{
+    char        host[TAILNET_HOST_MAX], id[128] = "", name[INTERCOM_NAME_MAX] = "";
+    const char *remote = tailnet_split(target, host, sizeof host);
+    int         fd = -1;
+    if (remote) {
+        char ip[256], err[512];
+        int  port;
+        if (!tailnet_locate(host, remote, ip, sizeof ip, &port, id, sizeof id, msg, size))
+            return -1;
+        fd = tailnet_connect(ip, port, 3, err, sizeof err);
+        if (fd < 0)
+            snprintf(msg, size, "%s: %s", host, err);
+        if (remote[0] == '@')
+            snprintf(name, sizeof name, "%s", remote + 1);
+    } else {
+        struct entries      l = {0};
+        char                cwd[4096];
+        collect(&l, here(cwd, sizeof cwd) ? cwd : NULL, 1, 0);
+        const struct entry *e = resolve(&l, target);
+        if (!e)
+            snprintf(msg, size, "no live session matches %s", target);
+        else {
+            snprintf(id, sizeof id, "%s", e->id);
+            snprintf(name, sizeof name, "%s", e->name);
+            fd = connect_unix(e->pid);
+            if (fd < 0)
+                snprintf(msg, size, "scrap %ld is not running", e->pid);
+        }
+        free(l.e);
+    }
+    if (fd < 0)
+        return -1;
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "attach", id);
+    if (name[0])
+        cJSON_AddStringToObject(o, "name", name);
+    char  *json = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    size_t len = json ? strlen(json) : 0;
+    int    ok = json && send(fd, json, len, 0) == (ssize_t)len && send(fd, "\n", 1, 0) == 1;
+    free(json);
+    if (!ok) {
+        snprintf(msg, size, "could not write the attach request");
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static int cmd_attach(int argc, char **argv)
+{
+    if (argc != 2) {
+        fprintf(stderr, "usage: scrap attach TARGET\n");
+        return 2;
+    }
+    char msg[1200];
+    int  fd = intercom_attach(argv[1], msg, sizeof msg);
+    if (fd < 0) {
+        fprintf(stderr, "scrap: %s\n", msg);
+        return 1;
+    }
+    char  *typed = NULL;
+    size_t tcap = 0;
+    int    stdin_open = 1, started = 0;
+    for (;;) {
+        struct pollfd p[2] = {{.fd = fd, .events = POLLIN}, {.fd = 0, .events = POLLIN}};
+        if (poll(p, stdin_open && started ? 2 : 1, -1) < 0)
+            break;
+        if (p[0].revents) {
+            char    chunk[8192];
+            ssize_t n = read(fd, chunk, sizeof chunk);
+            if (n <= 0 || fwrite(chunk, 1, (size_t)n, stdout) != (size_t)n)
+                break;
+            fflush(stdout);
+            started = started || memchr(chunk, '\n', (size_t)n);
+            continue;
+        }
+        if (stdin_open && p[1].revents) {
+            ssize_t n = getline(&typed, &tcap, stdin);
+            if (n <= 0) {
+                stdin_open = 0;
+                continue;
+            }
+            text_chomp(typed);
+            cJSON *o = cJSON_CreateObject();
+            if (!strcmp(typed, "!interrupt"))
+                cJSON_AddBoolToObject(o, "interrupt", 1);
+            else
+                cJSON_AddStringToObject(o, "prompt", typed);
+            char *json = cJSON_PrintUnformatted(o);
+            cJSON_Delete(o);
+            if (json && (write(fd, json, strlen(json)) < 0 || write(fd, "\n", 1) < 0)) {
+                free(json);
+                break;
+            }
+            free(json);
+        }
+    }
+    free(typed);
+    close(fd);
+    return 0;
+}
+
 int intercom_main(int argc, char **argv)
 {
     if (!strcmp(argv[0], "ls"))
@@ -852,5 +972,7 @@ int intercom_main(int argc, char **argv)
         return cmd_send(argc, argv);
     if (!strcmp(argv[0], "open"))
         return cmd_open(argc, argv);
+    if (!strcmp(argv[0], "attach"))
+        return cmd_attach(argc, argv);
     return -1;
 }

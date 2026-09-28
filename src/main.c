@@ -18,6 +18,7 @@
 #include "hud.h"
 #include "image.h"
 #include "docview.h"
+#include "stream.h"
 #include "tailnet.h"
 #include "intercom.h"
 #include "imageview.h"
@@ -165,6 +166,7 @@ static void usage(void)
             "  " APP_NAME " read TARGET [-n TURNS] [--bytes N]   print a session's last turns\n"
             "  " APP_NAME " send TARGET TEXT   message a live session\n"
             "  " APP_NAME " open TARGET   resume a past session in a new tab\n"
+            "  " APP_NAME " attach TARGET   stream a live session as JSON lines; stdin lines are prompts\n"
             "\n"
             "With a prompt on the command line, answer it and exit.\n",
             choices);
@@ -184,6 +186,7 @@ static int idle_fds(void *ud, int *out, int max)
     n += relay_fds(out + n, max - n);
     n += api_fds(out + n, max - n);
     n += dispatch_fds(out + n, max - n);
+    n += stream_fds(out + n, max - n);
     n += im_fds(out + n, max - n);
     return n + tg_fds(out + n, max - n);
 }
@@ -219,6 +222,7 @@ static int idle_render(void *ud)
     sidechannel_poll();
     sidechannel_tick();
     dispatch_poll();
+    stream_poll();
 
     if (tg_pending() || relay_pending() || im_pending() || voice_pending())
         tty_wake();
@@ -536,9 +540,16 @@ static int discard_voice(void *ud)
     return voice_discard();
 }
 
+static char *serve_extra(const cJSON *o, int fd, int *kept)
+{
+    *kept = stream_serve(o, fd);
+    return *kept ? NULL : intercom_serve(o);
+}
+
 static void turn_done(struct session *s)
 {
     api_turn_done(s);
+    stream_turn_done(s);
     voice_turn_done(s);
     cmd_run_deferred(s);
 }
@@ -546,6 +557,7 @@ static void turn_done(struct session *s)
 static void turn_begin(struct session *s)
 {
     api_turn_begin(s);
+    stream_turn_begin(s);
     voice_turn_begin(s);
 }
 
@@ -585,7 +597,8 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "sync"))
         return agentsync_main(argc - 1, argv + 1);
     if (argc > 1 && (!strcmp(argv[1], "ls") || !strcmp(argv[1], "read") ||
-                     !strcmp(argv[1], "send") || !strcmp(argv[1], "open")))
+                     !strcmp(argv[1], "send") || !strcmp(argv[1], "open") ||
+                     !strcmp(argv[1], "attach")))
         return intercom_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "version")) {
         printf(APP_NAME " %s\n", SCRAP_VERSION);
@@ -849,7 +862,8 @@ int main(int argc, char **argv)
     dispatch_net(&(struct dispatch_net){.bind = tailnet_bind_ip,
                                         .port = tailnet_dir_port(),
                                         .peer = tailnet_peer,
-                                        .serve = intercom_serve});
+                                        .serve = serve_extra});
+    session_add_listener(stream_event, NULL);
     prompt_file_completion(prompt, cwd);
     if (have_config) {
         char history[4200];

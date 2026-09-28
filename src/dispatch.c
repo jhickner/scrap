@@ -325,7 +325,12 @@ static void serve(int fd, const char *text, const char *host)
         cJSON_AddStringToObject(o, "host", host);
     }
 
-    char *answer = net.serve ? net.serve(o) : NULL;
+    int   kept = 0;
+    char *answer = net.serve ? net.serve(o, fd, &kept) : NULL;
+    if (kept) {
+        cJSON_Delete(o);
+        return;
+    }
     if (answer) {
         reply(fd, answer);
         free(answer);

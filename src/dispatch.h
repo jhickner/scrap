@@ -13,7 +13,7 @@ struct dispatch_net {
     const char *(*bind)(void);
     int         port;
     int         (*peer)(const char *ip, char *host, size_t size);
-    char       *(*serve)(const cJSON *o);
+    char       *(*serve)(const cJSON *o, int fd, int *kept);
 };
 
 void dispatch_net(const struct dispatch_net *config);
