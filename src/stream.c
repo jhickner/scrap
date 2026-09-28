@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "cmd.h"
 #include "dispatch.h"
 #include "session.h"
 #include "transcript.h"
@@ -164,6 +165,12 @@ int stream_fds(int *out, int max)
     return n;
 }
 
+static void clear(struct session *s, void *ud)
+{
+    (void)ud;
+    cmd_dispatch(s, "/clear");
+}
+
 static void command(struct sub *u, const char *line)
 {
     cJSON      *o = cJSON_Parse(line);
@@ -172,6 +179,8 @@ static void command(struct sub *u, const char *line)
         dispatch_send(workspace_index_of(u->s), prompt);
     else if (cJSON_IsTrue(cJSON_GetObjectItem(o, "interrupt")))
         session_interrupt(u->s);
+    else if (cJSON_IsTrue(cJSON_GetObjectItem(o, "clear")) && !session_turn_running(u->s))
+        workspace_render(workspace_index_of(u->s), clear, NULL);
     cJSON_Delete(o);
 }
 

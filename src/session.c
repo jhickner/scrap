@@ -96,6 +96,7 @@ struct session {
     int      skip_naming;
     int      thinking;
     int      compact;
+    int      resetting;
     int      customizations;
     int      no_browser_login;
     int      fork_session;
@@ -326,7 +327,7 @@ int session_wake_fd(const struct session *s)
 
 int session_idle_fd(const struct session *s)
 {
-    if (!s || !s->agent || !s->agent->idle_fd || s->quiet)
+    if (!s || !s->agent || !s->agent->idle_fd || s->quiet || s->resetting)
         return -1;
     return s->agent->idle_fd(s->agent);
 }
@@ -445,7 +446,7 @@ int session_idle_pump(struct session *s)
 
     name_poll(s);
 
-    if (!s->agent->idle_pump || s->quiet)
+    if (!s->agent->idle_pump || s->quiet || s->resetting)
         return 0;
 
     if (!s->idle_busy) {
@@ -1662,7 +1663,12 @@ static int session_retarget(struct session *s, const char *model, const char *ef
 
 int session_clear(struct session *s)
 {
-    if (!s->agent || !s->agent->reset(s->agent))
+    if (!s->agent)
+        return 0;
+    s->resetting = 1;
+    int ok = s->agent->reset(s->agent);
+    s->resetting = 0;
+    if (!ok)
         return 0;
     reset_turns(s, RESET_BLOCK);
     tasks_reset(&s->tasks, s->backend);

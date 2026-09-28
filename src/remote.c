@@ -319,8 +319,12 @@ static void close_remote(Backend *b)
 
 static int reset(Backend *b)
 {
-    (void)b;
-    return 0;
+    struct remote *r = R(b);
+    if (r->closed || r->pending)
+        return 0;
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddBoolToObject(o, "clear", 1);
+    return put(r, o);
 }
 
 static void usage(Backend *b, long *tokens, long *window)
