@@ -11,6 +11,7 @@
 
 #include "dispatch.h"
 #include "files.h"
+#include "hub.h"
 #include "kvlog.h"
 #include "livelist.h"
 #include "sessionlist.h"
@@ -142,9 +143,11 @@ char *intercom_note(const char *name)
         "- `scrap read TARGET [-n TURNS] [--bytes N]` prints a session's recent turns.\n"
         "- `scrap send TARGET TEXT` sends a message to a live session.\n"
         "- `scrap open TARGET` resumes a past session in a new tab.\n"
-        "TARGET is @name, a session id prefix, or a title. Messages from other sessions "
-        "arrive prefixed `[from @name]`; answer them with `scrap send @name ...` only when "
-        "an answer is needed.\n"
+        "- `scrap ls --net` lists live sessions on every machine on the tailnet.\n"
+        "TARGET is @name, a session id prefix, or a title; machine:@name reaches a session "
+        "on another tailnet machine through `send` and `read`. Messages from other "
+        "sessions arrive prefixed `[from @name]` or `[from machine:@name]`; answer them "
+        "with `scrap send` to that exact address only when an answer is needed.\n"
         "To coordinate with a live session: `scrap ls --live --cwd .`, then `scrap read "
         "@name`, then `scrap send @name ...`. To recover old context: `scrap ls QUERY`, then "
         "`scrap read TARGET`.",
@@ -378,7 +381,7 @@ static const struct entry *resolve(struct entries *l, const char *target)
     return NULL;
 }
 
-static void print_entry(const struct entry *e)
+static void print_entry(FILE *out, const struct entry *e)
 {
     char who[INTERCOM_NAME_MAX + 2], where[1024];
     if (e->name[0])
@@ -386,7 +389,7 @@ static void print_entry(const struct entry *e)
     else
         snprintf(who, sizeof who, "%.8s", e->id);
     path_home_relative(e->cwd, where, sizeof where);
-    printf("%-20s %-4s %-8s %s  %s\n", who, e->live ? "live" : "past",
+    fprintf(out, "%-20s %-4s %-8s %s  %s\n", who, e->live ? "live" : "past",
            e->status[0] ? e->status : "-", where, e->title[0] ? e->title : "untitled");
 }
 
@@ -395,22 +398,73 @@ static int here(char *out, size_t size)
     return getcwd(out, size) != NULL;
 }
 
+static const char *jstr(const cJSON *o, const char *key)
+{
+    const char *s = cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)o, key));
+    return s ? s : "";
+}
+
+static int cmd_ls_net(const char *query)
+{
+    cJSON *machines = hub_survey();
+    if (!machines) {
+        fprintf(stderr, "scrap: tailscale status is unavailable\n");
+        return 1;
+    }
+    cJSON *m;
+    cJSON_ArrayForEach(m, machines)
+    {
+        const char *error = cJSON_GetStringValue(cJSON_GetObjectItem(m, "error"));
+        if (error) {
+            if (!query)
+                printf("%s: %s\n", jstr(m, "machine"), error);
+            continue;
+        }
+        int    shown = 0;
+        cJSON *o;
+        cJSON_ArrayForEach(o, cJSON_GetObjectItem(m, "sessions"))
+        {
+            struct entry e = {.live = 1};
+            snprintf(e.name, sizeof e.name, "%s", jstr(o, "name"));
+            snprintf(e.id, sizeof e.id, "%s", jstr(o, "id"));
+            snprintf(e.cwd, sizeof e.cwd, "%s", jstr(o, "cwd"));
+            snprintf(e.title, sizeof e.title, "%s", jstr(o, "title"));
+            snprintf(e.status, sizeof e.status, "%s", jstr(o, "status"));
+            if (query && !contains(e.name, query) && !contains(e.title, query) &&
+                !contains(e.cwd, query))
+                continue;
+            if (!shown++)
+                printf("%s\n", jstr(m, "machine"));
+            printf("  ");
+            print_entry(stdout, &e);
+        }
+        if (!shown && !query)
+            printf("%s: no live sessions\n", jstr(m, "machine"));
+    }
+    cJSON_Delete(machines);
+    return 0;
+}
+
 static int cmd_ls(int argc, char **argv)
 {
-    int         live_only = 0;
+    int         live_only = 0, net = 0;
     const char *dir = NULL, *query = NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--live"))
             live_only = 1;
+        else if (!strcmp(argv[i], "--net"))
+            net = 1;
         else if (!strcmp(argv[i], "--cwd") && i + 1 < argc)
             dir = argv[++i];
         else if (!query && argv[i][0] != '-')
             query = argv[i];
         else {
-            fprintf(stderr, "usage: scrap ls [--live] [--cwd DIR] [QUERY]\n");
+            fprintf(stderr, "usage: scrap ls [--live] [--net] [--cwd DIR] [QUERY]\n");
             return 2;
         }
     }
+    if (net)
+        return cmd_ls_net(query);
 
     char cwd[4096], real[4096];
     if (dir) {
@@ -432,7 +486,7 @@ static int cmd_ls(int argc, char **argv)
             !contains(e->cwd, query) && strncmp(e->id, query, strlen(query)) &&
             !transcript_has(e, query))
             continue;
-        print_entry(e);
+        print_entry(stdout, e);
     }
     free(l.e);
     return 0;
@@ -446,6 +500,40 @@ static const struct entry *lookup(struct entries *l, const char *target)
     if (!e)
         fprintf(stderr, "scrap: no session matches %s\n", target);
     return e;
+}
+
+char *intercom_read(const char *target, long turns, long bytes, char *msg, size_t size)
+{
+    struct entries l = {0};
+    char           cwd[4096];
+    collect(&l, here(cwd, sizeof cwd) ? cwd : NULL, 0, 1);
+    const struct entry *e = resolve(&l, target);
+    struct transcript   t = {0};
+    char               *out = NULL;
+    size_t              len = 0;
+    if (!e)
+        snprintf(msg, size, "no session matches %s", target);
+    else if (!sessionload_fill(&t, e->backend, e->cwd, e->id) || !t.count)
+        snprintf(msg, size, "no transcript for %s", target);
+    else {
+        size_t            first = t.count > (size_t)turns ? t.count - (size_t)turns : 0;
+        struct transcript tail = {t.turns + first, t.count - first, t.count - first};
+        char             *text = transcript_handoff(&tail, (size_t)bytes, NULL);
+        const char       *body = text ? strstr(text, "\n\n") : NULL;
+        FILE             *f = open_memstream(&out, &len);
+        if (f) {
+            print_entry(f, e);
+            fprintf(f, "id %s, last %zu of %zu turns\n\n%s", e->id, tail.count, t.count,
+                    body ? body + 2 : "");
+            fclose(f);
+        }
+        free(text);
+        if (!out)
+            snprintf(msg, size, "out of memory");
+    }
+    transcript_free(&t);
+    free(l.e);
+    return out;
 }
 
 static int cmd_read(int argc, char **argv)
@@ -468,73 +556,46 @@ static int cmd_read(int argc, char **argv)
         return 2;
     }
 
-    struct entries      l = {0};
-    const struct entry *e = lookup(&l, target);
-    if (!e) {
-        free(l.e);
+    char        host[HUB_HOST_MAX], msg[1200];
+    const char *name = hub_split(target, host, sizeof host);
+    char       *text = name ? hub_read(host, name, turns, bytes, msg, sizeof msg)
+                            : intercom_read(target, turns, bytes, msg, sizeof msg);
+    if (!text) {
+        fprintf(stderr, "scrap: %s\n", msg);
         return 1;
     }
-
-    struct transcript t = {0};
-    if (!sessionload_fill(&t, e->backend, e->cwd, e->id) || !t.count) {
-        fprintf(stderr, "scrap: no transcript for %s\n", target);
-        transcript_free(&t);
-        free(l.e);
-        return 1;
-    }
-    size_t            first = t.count > (size_t)turns ? t.count - (size_t)turns : 0;
-    struct transcript tail = {t.turns + first, t.count - first, t.count - first};
-    char             *text = transcript_handoff(&tail, (size_t)bytes, NULL);
-    const char       *body = text ? strstr(text, "\n\n") : NULL;
-
-    print_entry(e);
-    printf("id %s, last %zu of %zu turns\n\n%s", e->id, tail.count, t.count,
-           body ? body + 2 : "");
+    fputs(text, stdout);
     free(text);
-    transcript_free(&t);
-    free(l.e);
     return 0;
+}
+
+cJSON *intercom_live_json(void)
+{
+    struct live_session *v = NULL;
+    int                  n = livelist_load(&v);
+    cJSON               *a = cJSON_CreateArray();
+    for (int i = 0; i < n; i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "name", v[i].name);
+        cJSON_AddStringToObject(o, "id", v[i].id);
+        cJSON_AddStringToObject(o, "backend", v[i].backend);
+        cJSON_AddStringToObject(o, "cwd", v[i].cwd);
+        cJSON_AddStringToObject(o, "title", v[i].title);
+        cJSON_AddStringToObject(o, "status", v[i].status);
+        cJSON_AddNumberToObject(o, "ts", (double)v[i].ts);
+        cJSON_AddItemToArray(a, o);
+    }
+    free(v);
+    return a;
 }
 
 static int request(long pid, cJSON *body, char *reply, size_t size)
 {
-    char dir[4200], tmp[4400], req[4400], res[4400];
-    if (!dispatch_dir(dir, sizeof dir))
-        return 0;
-    mkdir(dir, 0700);
-    unsigned tag = arc4random();
-    snprintf(tmp, sizeof tmp, "%s/%ld-%08x.tmp", dir, pid, tag);
-    snprintf(req, sizeof req, "%s/%ld-%08x.req", dir, pid, tag);
-    snprintf(res, sizeof res, "%s/%ld-%08x.res", dir, pid, tag);
-
     char *json = cJSON_PrintUnformatted(body);
-    FILE *f = json ? fopen(tmp, "w") : NULL;
-    if (!f) {
-        free(json);
+    if (!json)
         return 0;
-    }
-    fputs(json, f);
+    dispatch_request(pid, json, reply, size, REPLY_WAIT);
     free(json);
-    if (fclose(f) != 0 || rename(tmp, req) != 0) {
-        unlink(tmp);
-        return 0;
-    }
-
-    for (int i = 0; i < REPLY_WAIT * 10; i++) {
-        char *got = text_slurp(res, 65536, NULL);
-        if (got) {
-            unlink(res);
-            text_chomp(got);
-            snprintf(reply, size, "%s", got);
-            free(got);
-            return 1;
-        }
-        if (pid == getpid())
-            dispatch_poll();
-        usleep(100000);
-    }
-    unlink(req);
-    snprintf(reply, size, "{\"error\":\"no answer from scrap %ld\"}", pid);
     return 1;
 }
 
@@ -578,8 +639,8 @@ static char *spill(const char *text)
                          strlen(text), path);
 }
 
-int intercom_send(const char *from, const char *target, const char *text, char *msg,
-                  size_t size)
+int intercom_deliver(const char *host, const char *from, const char *target, const char *text,
+                     char *msg, size_t size)
 {
     struct entries l = {0};
     char           cwd[4096];
@@ -598,6 +659,8 @@ int intercom_send(const char *from, const char *target, const char *text, char *
         cJSON_AddStringToObject(o, "session", e->id);
         if (from && *from)
             cJSON_AddStringToObject(o, "from", from);
+        if (host && *host)
+            cJSON_AddStringToObject(o, "host", host);
         if (request(e->pid, o, reply, sizeof reply)) {
             cJSON      *r = cJSON_Parse(reply);
             const char *error = cJSON_GetStringValue(cJSON_GetObjectItem(r, "error"));
@@ -614,6 +677,16 @@ int intercom_send(const char *from, const char *target, const char *text, char *
     }
     free(l.e);
     return rc;
+}
+
+int intercom_send(const char *from, const char *target, const char *text, char *msg,
+                  size_t size)
+{
+    char        host[HUB_HOST_MAX];
+    const char *name = hub_split(target, host, sizeof host);
+    if (name)
+        return hub_send(host, from, name, text, msg, size);
+    return intercom_deliver(NULL, from, target, text, msg, size);
 }
 
 static int cmd_send(int argc, char **argv)

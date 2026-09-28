@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 
+#include "vendor/cJSON.h"
 #include "vendor/repl.h"
 
 #define INTERCOM_NAME_MAX 40
@@ -24,6 +25,13 @@ int intercom_complete(void *ctx, const char *token, ReplCandidate *out, int max)
 
 int intercom_send(const char *from, const char *target, const char *text, char *msg,
                   size_t size);
+
+int intercom_deliver(const char *host, const char *from, const char *target, const char *text,
+                     char *msg, size_t size);
+
+char *intercom_read(const char *target, long turns, long bytes, char *msg, size_t size);
+
+cJSON *intercom_live_json(void);
 
 int intercom_main(int argc, char **argv);
 

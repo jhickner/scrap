@@ -18,6 +18,7 @@
 #include "hud.h"
 #include "image.h"
 #include "docview.h"
+#include "hub.h"
 #include "intercom.h"
 #include "imageview.h"
 #include "livelist.h"
@@ -160,10 +161,11 @@ static void usage(void)
             "  -V, --version  print the version and exit\n"
             "\n"
             "  " APP_NAME " version   the same, as a subcommand\n"
-            "  " APP_NAME " ls [--live] [--cwd DIR] [QUERY]   list sessions, newest first\n"
+            "  " APP_NAME " ls [--live] [--net] [--cwd DIR] [QUERY]   list sessions, newest first\n"
             "  " APP_NAME " read TARGET [-n TURNS] [--bytes N]   print a session's last turns\n"
             "  " APP_NAME " send TARGET TEXT   message a live session\n"
             "  " APP_NAME " open TARGET   resume a past session in a new tab\n"
+            "  " APP_NAME " hub [--install | --uninstall]   serve this machine's sessions on the tailnet\n"
             "\n"
             "With a prompt on the command line, answer it and exit.\n",
             choices);
@@ -182,6 +184,7 @@ static int idle_fds(void *ud, int *out, int max)
     n += voice_fds(out + n, max - n);
     n += relay_fds(out + n, max - n);
     n += api_fds(out + n, max - n);
+    n += dispatch_fds(out + n, max - n);
     n += im_fds(out + n, max - n);
     return n + tg_fds(out + n, max - n);
 }
@@ -585,6 +588,8 @@ int main(int argc, char **argv)
     if (argc > 1 && (!strcmp(argv[1], "ls") || !strcmp(argv[1], "read") ||
                      !strcmp(argv[1], "send") || !strcmp(argv[1], "open")))
         return intercom_main(argc - 1, argv + 1);
+    if (argc > 1 && !strcmp(argv[1], "hub"))
+        return hub_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "version")) {
         printf(APP_NAME " %s\n", SCRAP_VERSION);
         return 0;

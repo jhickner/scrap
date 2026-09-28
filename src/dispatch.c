@@ -1,9 +1,14 @@
 #include "dispatch.h"
 
-#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -14,8 +19,8 @@
 #include "vendor/cJSON.h"
 #include "workspace.h"
 
-#define POLL_MS      250
 #define REQUEST_MAX  65536
+#define CLIENT_MAX   16
 
 #define ID_WAIT_MS   30000
 
@@ -37,31 +42,45 @@ static const char *field(const cJSON *o, const char *key)
     return s && *s ? s : NULL;
 }
 
-static void reply(const char *dir, const char *base, const char *json)
+int dispatch_socket_path(long pid, char *out, size_t size)
 {
-    char tmp[4400], path[4400];
-    size_t stem = strlen(base) - 4;
-    if ((size_t)snprintf(tmp, sizeof tmp, "%s/%.*s.res.tmp", dir, (int)stem, base) >= sizeof tmp)
-        return;
-    snprintf(path, sizeof path, "%s/%.*s.res", dir, (int)stem, base);
-
-    FILE *f = fopen(tmp, "w");
-    if (!f)
-        return;
-    fputs(json, f);
-    fputc('\n', f);
-    fclose(f);
-    rename(tmp, path);
+    char dir[4200];
+    if (!dispatch_dir(dir, sizeof dir))
+        return 0;
+    return (size_t)snprintf(out, size, "%s/%ld.sock", dir, pid) < size &&
+           strlen(out) < sizeof ((struct sockaddr_un *)0)->sun_path;
 }
 
-static void reply_error(const char *dir, const char *base, const char *what, const char *id)
+static void reply(int fd, const char *json)
+{
+    if (fd < 0)
+        return;
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
+    size_t len = strlen(json);
+    char  *line = malloc(len + 2);
+    if (line) {
+        memcpy(line, json, len);
+        line[len] = '\n';
+        for (size_t off = 0; off < len + 1;) {
+            ssize_t n = send(fd, line + off, len + 1 - off, 0);
+            if (n <= 0 && errno != EINTR)
+                break;
+            if (n > 0)
+                off += (size_t)n;
+        }
+        free(line);
+    }
+    close(fd);
+}
+
+static void reply_error(int fd, const char *what, const char *id)
 {
     cJSON *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "error", what);
     if (id)
         cJSON_AddStringToObject(r, "session", id);
     char *json = cJSON_PrintUnformatted(r);
-    reply(dir, base, json ? json : "{\"error\": \"oom\"}");
+    reply(fd, json ? json : "{\"error\": \"oom\"}");
     free(json);
     cJSON_Delete(r);
 }
@@ -82,25 +101,25 @@ static int index_of_id(const cJSON *target)
     return workspace_find_id(id);
 }
 
-static void close_session(const char *dir, const char *base, const cJSON *target)
+static void close_session(int fd, const cJSON *target)
 {
     if (!cJSON_IsString(target) || !target->valuestring || !*target->valuestring) {
-        reply_error(dir, base, "close takes a session id", NULL);
+        reply_error(fd, "close takes a session id", NULL);
         return;
     }
     const char *id = target->valuestring;
     int at = index_of_id(target);
     struct session *s = workspace_at(at);
     if (!s) {
-        reply_error(dir, base, "no such session", id);
+        reply_error(fd, "no such session", id);
         return;
     }
     if (at == workspace_index()) {
-        reply_error(dir, base, "session is in view", id);
+        reply_error(fd, "session is in view", id);
         return;
     }
     if (session_turn_running(s) || workspace_queued(at)) {
-        reply_error(dir, base, "session is busy", id);
+        reply_error(fd, "session is busy", id);
         return;
     }
 
@@ -109,7 +128,7 @@ static void close_session(const char *dir, const char *base, const cJSON *target
     cJSON_AddStringToObject(r, "session", id);
     char *json = cJSON_PrintUnformatted(r);
     workspace_close(at);
-    reply(dir, base, json ? json : "{\"ok\":true}");
+    reply(fd, json ? json : "{\"ok\":true}");
     free(json);
     cJSON_Delete(r);
 }
@@ -145,50 +164,53 @@ static int deliver(int at, const char *line, const char *shown)
     return workspace_send(at, line, shown);
 }
 
-static void send_session(const char *dir, const char *base, const cJSON *o, const cJSON *send)
+static void send_session(int fd, const cJSON *o, const cJSON *send)
 {
     const char *line = cJSON_GetStringValue(send);
     cJSON *target = cJSON_GetObjectItem((cJSON *)o, "session");
     if (!cJSON_IsString(target) || !target->valuestring || !*target->valuestring) {
-        reply_error(dir, base, "send takes a session id", NULL);
+        reply_error(fd, "send takes a session id", NULL);
         return;
     }
     const char *id = target->valuestring;
     int at = index_of_id(target);
     if (!workspace_at(at)) {
-        reply_error(dir, base, "no such session", id);
+        reply_error(fd, "no such session", id);
         return;
     }
     if (!line || !*line) {
-        reply_error(dir, base, "bad line", id);
+        reply_error(fd, "bad line", id);
         return;
     }
 
-    const char *from = field(o, "from");
-    if (from && !pair_allowed(from, id)) {
-        reply_error(dir, base, "too many messages to this session in the last minute", id);
+    const char *name = field(o, "from"), *host = field(o, "host");
+    char        from[200] = "";
+    if (name)
+        snprintf(from, sizeof from, "%s%s@%s", host ? host : "", host ? ":" : "", name);
+    if (name && !pair_allowed(from, id)) {
+        reply_error(fd, "too many messages to this session in the last minute", id);
         return;
     }
-    char *framed = from ? text_dsprintf("[from @%s] %s", from, line) : NULL;
-    char *shown = from ? text_dsprintf("from @%s: %s", from, line) : NULL;
-    int   sent = from ? framed && shown && deliver(at, framed, shown) : dispatch_send(at, line);
+    char *framed = name ? text_dsprintf("[from %s] %s", from, line) : NULL;
+    char *shown = name ? text_dsprintf("from %s: %s", from, line) : NULL;
+    int   sent = name ? framed && shown && deliver(at, framed, shown) : dispatch_send(at, line);
     free(framed);
     free(shown);
     if (!sent)
-        reply_error(dir, base, "could not send line", id);
+        reply_error(fd, "could not send line", id);
     else {
         cJSON *r = cJSON_CreateObject();
         cJSON_AddBoolToObject(r, "ok", 1);
         cJSON_AddStringToObject(r, "session", id);
         char *json = cJSON_PrintUnformatted(r);
-        reply(dir, base, json ? json : "{\"ok\":true}");
+        reply(fd, json ? json : "{\"ok\":true}");
         free(json);
         cJSON_Delete(r);
     }
 }
 
 struct pending {
-    char            base[256];
+    int             fd;
     struct session *s;
     struct timespec since;
 };
@@ -200,53 +222,49 @@ static long since_ms(const struct timespec *then, const struct timespec *now)
     return (now->tv_sec - then->tv_sec) * 1000 + (now->tv_nsec - then->tv_nsec) / 1000000;
 }
 
-static void reply_spawn(const char *dir, const char *base, const char *id, const char *addr)
+static void reply_spawn(int fd, const char *id, const char *addr)
 {
     cJSON *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "session", id);
     if (addr && *addr)
         cJSON_AddStringToObject(r, "addr", addr);
     char *json = cJSON_PrintUnformatted(r);
-    reply(dir, base, json ? json : "{\"error\": \"oom\"}");
+    reply(fd, json ? json : "{\"error\": \"oom\"}");
     free(json);
     cJSON_Delete(r);
 }
 
-static void hold_spawn(const char *dir, const char *base, struct session *s)
+static void hold_spawn(int fd, struct session *s)
 {
     for (int i = 0; i < WORKSPACE_MAX; i++) {
-        if (pendings[i].base[0])
+        if (pendings[i].s)
             continue;
-        if ((size_t)snprintf(pendings[i].base, sizeof pendings[i].base, "%s", base) >=
-            sizeof pendings[i].base) {
-            pendings[i].base[0] = '\0';
-            break;
-        }
+        pendings[i].fd = fd;
         pendings[i].s = s;
         clock_gettime(CLOCK_MONOTONIC, &pendings[i].since);
         return;
     }
-    reply_error(dir, base, "session id unavailable", NULL);
+    reply_error(fd, "session id unavailable", NULL);
 }
 
-static void settle_pending(const char *dir)
+static void settle_pending(void)
 {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     for (int i = 0; i < WORKSPACE_MAX; i++) {
-        if (!pendings[i].base[0])
+        if (!pendings[i].s)
             continue;
-        int at = workspace_index_of(pendings[i].s);
+        int         at = workspace_index_of(pendings[i].s);
         const char *id = at >= 0 ? session_id(workspace_at(at)) : NULL;
         if (id)
-            reply_spawn(dir, pendings[i].base, id, session_addr(workspace_at(at)));
+            reply_spawn(pendings[i].fd, id, session_addr(workspace_at(at)));
         else if (at < 0)
-            reply_error(dir, pendings[i].base, "session ended before it reported an id", NULL);
+            reply_error(pendings[i].fd, "session ended before it reported an id", NULL);
         else if (since_ms(&pendings[i].since, &now) < ID_WAIT_MS)
             continue;
         else
-            reply_error(dir, pendings[i].base, "session id unavailable", NULL);
-        pendings[i].base[0] = '\0';
+            reply_error(pendings[i].fd, "session id unavailable", NULL);
+        pendings[i].fd = -1;
         pendings[i].s = NULL;
     }
 }
@@ -283,24 +301,24 @@ int dispatch_send(int at, const char *line)
     return deliver(at, line, line);
 }
 
-static void serve(const char *dir, const char *base, const char *text)
+static void serve(int fd, const char *text)
 {
     cJSON *o = cJSON_Parse(text);
     if (!o) {
-        reply(dir, base, "{\"error\": \"bad json\"}");
+        reply(fd, "{\"error\": \"bad json\"}");
         return;
     }
 
     cJSON *target = cJSON_GetObjectItem(o, "close");
     if (target) {
-        close_session(dir, base, target);
+        close_session(fd, target);
         cJSON_Delete(o);
         return;
     }
 
     cJSON *send = cJSON_GetObjectItem(o, "send");
     if (send) {
-        send_session(dir, base, o, send);
+        send_session(fd, o, send);
         cJSON_Delete(o);
         return;
     }
@@ -314,59 +332,203 @@ static void serve(const char *dir, const char *base, const char *text)
     if (at < 0) {
         char out[300];
         snprintf(out, sizeof out, "{\"error\": \"could not start the %s CLI\"}", backend);
-        reply(dir, base, out);
+        reply(fd, out);
         cJSON_Delete(o);
         return;
     }
 
     const char *id = session_id(workspace_at(at));
     if (id)
-        reply_spawn(dir, base, id, session_addr(workspace_at(at)));
+        reply_spawn(fd, id, session_addr(workspace_at(at)));
     else
-        hold_spawn(dir, base, workspace_at(at));
+        hold_spawn(fd, workspace_at(at));
     cJSON_Delete(o);
+}
+
+static int listen_fd = -1;
+static char listen_path[200];
+
+static struct client {
+    int    fd;
+    char  *buf;
+    size_t len;
+} clients[CLIENT_MAX];
+
+static void unlisten(void)
+{
+    if (listen_fd >= 0)
+        unlink(listen_path);
+}
+
+static int nonblocking(int fd)
+{
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    return fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+}
+
+static void listen_once(void)
+{
+    static long tried;
+    if (listen_fd >= 0 || tried == (long)getpid())
+        return;
+    tried = (long)getpid();
+    for (int i = 0; i < CLIENT_MAX; i++)
+        clients[i].fd = -1;
+    struct sockaddr_un sa = {.sun_family = AF_UNIX};
+    if (!dispatch_socket_path((long)getpid(), sa.sun_path, sizeof sa.sun_path))
+        return;
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0)
+        return;
+    unlink(sa.sun_path);
+    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) != 0 || listen(fd, CLIENT_MAX) != 0) {
+        close(fd);
+        return;
+    }
+    chmod(sa.sun_path, 0600);
+    nonblocking(fd);
+    listen_fd = fd;
+    snprintf(listen_path, sizeof listen_path, "%s", sa.sun_path);
+    atexit(unlisten);
+}
+
+int dispatch_fds(int *out, int max)
+{
+    listen_once();
+    int n = 0;
+    if (listen_fd >= 0 && n < max)
+        out[n++] = listen_fd;
+    for (int i = 0; i < CLIENT_MAX && n < max; i++)
+        if (clients[i].fd >= 0)
+            out[n++] = clients[i].fd;
+    return n;
+}
+
+static void drop(struct client *c)
+{
+    free(c->buf);
+    c->buf = NULL;
+    c->len = 0;
+    c->fd = -1;
+}
+
+static void finish(struct client *c, int answer)
+{
+    char *text = c->buf;
+    int   fd = c->fd;
+    c->buf = NULL;
+    drop(c);
+    if (answer && text && *text)
+        serve(fd, text);
+    else if (answer)
+        reply(fd, "{\"error\": \"empty request\"}");
+    else
+        close(fd);
+    free(text);
+}
+
+static void take(struct client *c)
+{
+    char chunk[4096];
+    for (;;) {
+        ssize_t n = recv(c->fd, chunk, sizeof chunk, 0);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            return;
+        if (n <= 0) {
+            finish(c, n == 0 && c->len);
+            return;
+        }
+        char *grown = c->len + (size_t)n <= REQUEST_MAX ? realloc(c->buf, c->len + (size_t)n + 1)
+                                                         : NULL;
+        if (!grown) {
+            int fd = c->fd;
+            drop(c);
+            reply(fd, "{\"error\": \"request too large\"}");
+            return;
+        }
+        c->buf = grown;
+        memcpy(c->buf + c->len, chunk, (size_t)n);
+        c->len += (size_t)n;
+        c->buf[c->len] = '\0';
+        char *nl = strchr(c->buf, '\n');
+        if (nl) {
+            *nl = '\0';
+            finish(c, 1);
+            return;
+        }
+    }
 }
 
 void dispatch_poll(void)
 {
-    static struct timespec last;
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    long ms = (now.tv_sec - last.tv_sec) * 1000 + (now.tv_nsec - last.tv_nsec) / 1000000;
-    if (last.tv_sec && ms >= 0 && ms < POLL_MS)
+    listen_once();
+    settle_pending();
+    if (listen_fd < 0)
         return;
-    last = now;
-
-    char dir[4200];
-    if (!dispatch_dir(dir, sizeof dir))
-        return;
-
-    settle_pending(dir);
-
-    DIR *d = opendir(dir);
-    if (!d)
-        return;
-
-    char prefix[32];
-    int plen = snprintf(prefix, sizeof prefix, "%ld-", (long)getpid());
-
-    struct dirent *e;
-    while ((e = readdir(d))) {
-        size_t len = strlen(e->d_name);
-        if (len <= (size_t)plen + 4 || strncmp(e->d_name, prefix, plen))
+    for (;;) {
+        int fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0)
+            break;
+        struct client *slot = NULL;
+        for (int i = 0; i < CLIENT_MAX && !slot; i++)
+            if (clients[i].fd < 0)
+                slot = &clients[i];
+        if (!slot) {
+            close(fd);
             continue;
-        if (strcmp(e->d_name + len - 4, ".req"))
-            continue;
-
-        char path[4400];
-        if ((size_t)snprintf(path, sizeof path, "%s/%s", dir, e->d_name) >= sizeof path)
-            continue;
-        char *text = text_slurp(path, REQUEST_MAX, NULL);
-        unlink(path);
-        if (!text)
-            continue;
-        serve(dir, e->d_name, text);
-        free(text);
+        }
+        nonblocking(fd);
+        slot->fd = fd;
     }
-    closedir(d);
+    for (int i = 0; i < CLIENT_MAX; i++)
+        if (clients[i].fd >= 0)
+            take(&clients[i]);
+}
+
+int dispatch_request(long pid, const char *json, char *out, size_t size, int wait_s)
+{
+    struct sockaddr_un sa = {.sun_family = AF_UNIX};
+    if (!dispatch_socket_path(pid, sa.sun_path, sizeof sa.sun_path)) {
+        snprintf(out, size, "{\"error\":\"no dispatch directory\"}");
+        return 0;
+    }
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0 || connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
+        if (fd >= 0)
+            close(fd);
+        snprintf(out, size, "{\"error\":\"scrap %ld is not running\"}", pid);
+        return 0;
+    }
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    size_t len = strlen(json);
+    int    ok = send(fd, json, len, 0) == (ssize_t)len && send(fd, "\n", 1, 0) == 1;
+    size_t got = 0;
+    out[0] = '\0';
+    for (int waited = 0; ok && waited < wait_s * 1000;) {
+        if (pid == (long)getpid())
+            dispatch_poll();
+        struct pollfd p = {.fd = fd, .events = POLLIN};
+        int           r = poll(&p, 1, 100);
+        waited += 100;
+        if (r <= 0)
+            continue;
+        ssize_t n = recv(fd, out + got, size - 1 - got, 0);
+        if (n <= 0)
+            break;
+        got += (size_t)n;
+        out[got] = '\0';
+        if (memchr(out, '\n', got) || got == size - 1)
+            break;
+    }
+    close(fd);
+    char *nl = strchr(out, '\n');
+    if (nl)
+        *nl = '\0';
+    if (!out[0]) {
+        snprintf(out, size, "{\"error\":\"no answer from scrap %ld\"}", pid);
+        return 0;
+    }
+    return 1;
 }

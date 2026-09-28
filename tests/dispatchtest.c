@@ -1,6 +1,9 @@
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -163,18 +166,42 @@ static void reset_case(void)
     memset(&spawned, 0, sizeof spawned);
 }
 
+struct conn {
+    char id[64];
+    int  fd;
+    char res[512];
+};
+
+static struct conn conns[32];
+
+static struct conn *conn_of(const char *id)
+{
+    for (int i = 0; i < 32; i++)
+        if (!strcmp(conns[i].id, id))
+            return &conns[i];
+    return NULL;
+}
+
 static char *read_res(const char *dir, const char *id)
 {
-    char path[512];
-    snprintf(path, sizeof path, "%s/%ld-%s.res", dir, (long)getpid(), id);
-    FILE *f = fopen(path, "r");
-    if (!f)
+    (void)dir;
+    struct conn *c = conn_of(id);
+    if (!c)
         return NULL;
-    static char buf[512];
-    size_t n = fread(buf, 1, sizeof buf - 1, f);
-    buf[n] = '\0';
-    fclose(f);
-    return buf;
+    if (c->fd >= 0) {
+        struct pollfd p = {.fd = c->fd, .events = POLLIN};
+        if (poll(&p, 1, 0) <= 0)
+            return NULL;
+        size_t  have = strlen(c->res);
+        ssize_t n = recv(c->fd, c->res + have, sizeof c->res - 1 - have, 0);
+        if (n > 0)
+            c->res[have + (size_t)n] = '\0';
+        if (n <= 0 || strchr(c->res, '\n')) {
+            close(c->fd);
+            c->fd = -1;
+        }
+    }
+    return c->res[0] ? c->res : NULL;
 }
 
 static void expect_res(const char *dir, const char *id, const char *needle, const char *what)
@@ -188,15 +215,20 @@ static void expect_res(const char *dir, const char *id, const char *needle, cons
 
 static void drop_req(const char *dir, const char *id, const char *json)
 {
-    char path[512];
-    snprintf(path, sizeof path, "%s/%ld-%s.req", dir, (long)getpid(), id);
-    FILE *f = fopen(path, "w");
-    if (!f) {
-        fail("write request");
+    (void)dir;
+    static int used;
+    struct conn *c = &conns[used++];
+    snprintf(c->id, sizeof c->id, "%s", id);
+    c->res[0] = '\0';
+    struct sockaddr_un sa = {.sun_family = AF_UNIX};
+    dispatch_socket_path((long)getpid(), sa.sun_path, sizeof sa.sun_path);
+    c->fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (c->fd < 0 || connect(c->fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
+        fail("connect");
         return;
     }
-    fputs(json, f);
-    fclose(f);
+    if (send(c->fd, json, strlen(json), 0) < 0 || send(c->fd, "\n", 1, 0) != 1)
+        fail("write request");
 }
 
 static void poll_once(void)
@@ -215,6 +247,7 @@ int main(void)
     }
     setenv("SCRAP_DISPATCH_DIR", dir, 1);
     unsetenv("TMUX_PANE");
+    dispatch_poll();
 
     drop_req(dir, "titled",
              "{\"backend\":\"grok\",\"model\":\"grok-4.6\",\"cwd\":\"/work\","
@@ -345,13 +378,8 @@ int main(void)
 
     {
         char path[512];
-        const char *ids[] = {"titled", "plain", "empty", "long", "idle-send", "busy-send",
-                             "unknown-send", "unaddressed-send", "slot-send", "slot-close",
-                             "unknown-close", "close-id", "dead-send", "dead-close", NULL};
-        for (int i = 0; ids[i]; i++) {
-            snprintf(path, sizeof path, "%s/%ld-%s.res", dir, (long)getpid(), ids[i]);
-            unlink(path);
-        }
+        dispatch_socket_path((long)getpid(), path, sizeof path);
+        unlink(path);
     }
     rmdir(dir);
     if (failures) {
