@@ -174,6 +174,9 @@ static const struct task *note_lifecycle(struct tasktab *t, const backend_event 
         snprintf(a->status, sizeof a->status, "%s", ev->name);
         changed = 1;
     }
+    for (int i = 0; !a->cmd[0] && ev->parent && i < TASKS_MAX; i++)
+        if (t->shell[i].id[0] && !strcmp(t->shell[i].id, ev->parent))
+            snprintf(a->cmd, sizeof a->cmd, "%s", t->shell[i].cmd);
     if (tasks_done(a) && !a->ended)
         a->ended = time(NULL);
 
@@ -204,6 +207,20 @@ static const char *spawn_desc(const cJSON *in)
             return v;
     }
     return NULL;
+}
+
+static void note_shell(struct tasktab *t, const backend_event *ev)
+{
+    if (!ev->id || !*ev->id || !ev->input_json || !toolstyle_is_shell(ev->name))
+        return;
+    cJSON      *in = cJSON_Parse(ev->input_json);
+    const char *cmd = cJSON_GetStringValue(cJSON_GetObjectItem(in, "command"));
+    if (cmd && *cmd) {
+        int i = t->shell_next++ % TASKS_MAX;
+        snprintf(t->shell[i].id, sizeof t->shell[i].id, "%s", ev->id);
+        text_one_line(cmd, t->shell[i].cmd, sizeof t->shell[i].cmd);
+    }
+    cJSON_Delete(in);
 }
 
 static const struct task *note_launch(struct tasktab *t, const backend_event *ev)
@@ -241,6 +258,8 @@ const struct task *tasks_note(struct tasktab *t, const backend_event *ev, int *r
             return NULL;
         return note_lifecycle(t, ev, repeat);
     }
+    if (ev->kind == BACKEND_EV_TOOL)
+        note_shell(t, ev);
     if (ev->kind == BACKEND_EV_TOOL && !t->lifecycle)
         return note_launch(t, ev);
     return NULL;
@@ -272,18 +291,30 @@ void tasks_duration(char *out, size_t size, long secs)
         snprintf(out, size, "%ldh%02ldm", secs / 3600, (secs % 3600) / 60);
 }
 
-void tasks_line(const struct task *a, char *out, size_t size)
+void tasks_line(const struct task *a, char *out, size_t size, size_t *cmd_at, size_t *cmd_len)
 {
     char took[32] = "";
     char what[160];
+    char head[48];
 
+    if (cmd_at)
+        *cmd_at = 0;
+    if (cmd_len)
+        *cmd_len = 0;
     if (!a) {
         snprintf(out, size, "%s", "");
         return;
     }
     if (tasks_done(a))
         tasks_duration(took, sizeof took, (long)(a->ended - a->started));
-    text_one_line(a->desc[0] ? a->desc : a->id, what, sizeof what);
-    snprintf(out, size, "agent %s: %s%s%s", a->status, what, took[0] ? " in " : "",
-             took);
+    text_one_line(a->cmd[0] ? a->cmd : a->desc[0] ? a->desc : a->id, what, sizeof what);
+    snprintf(head, sizeof head, "%s %s: ", a->cmd[0] ? "bash" : "agent", a->status);
+    snprintf(out, size, "%s%s%s%s", head, what, took[0] ? " in " : "", took);
+    size_t at = strlen(head), len = strlen(out);
+    if (a->cmd[0] && at < len) {
+        if (cmd_at)
+            *cmd_at = at;
+        if (cmd_len)
+            *cmd_len = len - at < strlen(what) ? len - at : strlen(what);
+    }
 }

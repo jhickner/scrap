@@ -648,7 +648,7 @@ static void send_tool_line(const backend_event *ev)
 static void send_task_line(const struct task *a)
 {
     char line[240];
-    tasks_line(a, line, sizeof line);
+    tasks_line(a, line, sizeof line, NULL, NULL);
     send_note(line);
 }
 

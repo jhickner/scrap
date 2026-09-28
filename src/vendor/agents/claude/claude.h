@@ -681,6 +681,7 @@ static void cl_emit(claude_client *c, cJSON *ev, const char *type) {
             out.kind = CLAUDE_EV_TOOL;
             out.name = cJSON_GetStringValue(cJSON_GetObjectItem(blk, "name"));
             if (!out.name) out.name = "?";
+            out.id = cJSON_GetStringValue(cJSON_GetObjectItem(blk, "id"));
             out.input_json = is;
             cl_sink(c, &out);
             free(is);

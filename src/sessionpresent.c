@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "highlight.h"
 #include "md.h"
 #include "prompt.h"
 #include "status.h"
@@ -74,13 +75,34 @@ static void paint_note(const char *line)
     viewport_item_end();
 }
 
-static int task_hold(struct sessionpresent *p, const char *line)
+static void paint_task(const char *line, size_t cmd_at, size_t cmd_len)
+{
+    size_t         len = strlen(line);
+    unsigned char *spans = cmd_len && cmd_at + cmd_len <= len ? malloc(len) : NULL;
+    if (!spans) {
+        paint_note(line);
+        return;
+    }
+    memset(spans, (unsigned char)UI_RESET, len);
+    highlight_shell(line + cmd_at, cmd_len, spans + cmd_at);
+    viewport_item_begin(VIEWPORT_ROWS(1, 1));
+    ui_put_spans(line, len, spans, UI_DIM);
+    ui_esc(ui_style(UI_RESET));
+    ui_put("\n");
+    ui_flush();
+    viewport_item_end();
+    free(spans);
+}
+
+static int task_hold(struct sessionpresent *p, const char *line, size_t cmd_at, size_t cmd_len)
 {
     if (!p->call_open || p->task_held >= SESSIONPRESENT_TASK_HOLD_MAX)
         return 0;
     if (!p->task_held)
         p->task_held_at = now_seconds();
     snprintf(p->task_hold[p->task_held], sizeof p->task_hold[0], "%s", line);
+    p->task_hold_cmd[p->task_held][0] = cmd_at;
+    p->task_hold_cmd[p->task_held][1] = cmd_len;
     p->task_held++;
     return 1;
 }
@@ -89,7 +111,7 @@ static int task_unhold(struct sessionpresent *p)
 {
     int held = p->task_held;
     for (int i = 0; i < held; i++)
-        paint_note(p->task_hold[i]);
+        paint_task(p->task_hold[i], p->task_hold_cmd[i][0], p->task_hold_cmd[i][1]);
     p->task_held = 0;
     return held;
 }
@@ -149,14 +171,15 @@ void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
         char line[240];
         if (!task_change || (p->call_open && !tasks_done(task_change)))
             break;
-        tasks_line(task_change, line, sizeof line);
-        if (task_hold(p, line))
+        size_t cmd_at, cmd_len;
+        tasks_line(task_change, line, sizeof line, &cmd_at, &cmd_len);
+        if (task_hold(p, line, cmd_at, cmd_len))
             break;
         if (hide) {
             status_pause();
             paused = 1;
         }
-        paint_note(line);
+        paint_task(line, cmd_at, cmd_len);
         break;
     }
 

@@ -15,6 +15,7 @@ struct task {
     char   type[40];
     char   status[24];
     char   latest[240];
+    char   cmd[240];
     time_t started, ended;
     int    repeats;
     int    inferred;
@@ -26,6 +27,11 @@ struct tasktab {
     int         seq;
     int         lifecycle;
     char        tag[16];
+    struct {
+        char id[64];
+        char cmd[240];
+    } shell[TASKS_MAX];
+    int shell_next;
 };
 
 void tasks_reset(struct tasktab *t, const char *tag);
@@ -46,7 +52,7 @@ void tasks_label(const struct task *a, char *out, size_t size);
 
 int tasks_drop(struct tasktab *t);
 
-void tasks_line(const struct task *a, char *out, size_t size);
+void tasks_line(const struct task *a, char *out, size_t size, size_t *cmd_at, size_t *cmd_len);
 
 void tasks_duration(char *out, size_t size, long secs);
 

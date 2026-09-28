@@ -17,6 +17,7 @@ struct sessionpresent {
     char  *streamed;
     size_t streamed_len, streamed_cap;
     char   task_hold[SESSIONPRESENT_TASK_HOLD_MAX][240];
+    size_t task_hold_cmd[SESSIONPRESENT_TASK_HOLD_MAX][2];
     int    task_held;
     double task_held_at;
     int    call_open;
