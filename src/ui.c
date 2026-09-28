@@ -1,5 +1,7 @@
 #include "ui.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <locale.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -7,59 +9,72 @@
 #include <string.h>
 #include <unistd.h>
 #include <wchar.h>
+#include <sys/wait.h>
 
 #include "app.h"
 #include "viewport.h"
 #include "settings.h"
 #include "tty.h"
-#include "vendor/screen_color.h"
-#include "vendor/colors.h"
+#include "text.h"
 
 static int use_color;
 static int raw_newlines;
 
 static const struct {
     const char *attr;
-    int         slot;
+    const char *key;
+    unsigned    rgb;
     int         tint;
 } ROLES[UI_RESET] = {
-    [UI_ACCENT]  = { NULL, COLOR_BASE9, 0 },
-    [UI_ECHO]    = { NULL, COLOR_BASE9, 90 },
-    [UI_TEXT]    = { "39", -1, 0 },
-    [UI_STICKY]  = { NULL, COLOR_BASE9, 90 },
-    [UI_STICKY_DONE] = { NULL, COLOR_BASE11, 90 },
-    [UI_BRAND]   = { NULL, COLOR_BASE12, 0 },
-    [UI_SIDE]    = { NULL, COLOR_BASE12, 90 },
-    [UI_CHROME]  = { NULL, COLOR_UI_BORDER_FLOAT, 0 },
-    [UI_DIM]     = { NULL, COLOR_UI_DIM, 0 },
-    [UI_BODY]    = { NULL, COLOR_BASE5, 0 },
-    [UI_BOLD]    = { "1",  COLOR_BASE12, 0 },
-    [UI_ITALIC]  = { "3",  COLOR_BASE12, 0 },
-    [UI_CODE]    = { NULL, COLOR_BASE12, 0 },
-    [UI_HEADING] = { "1",  COLOR_BASE12, 0 },
-    [UI_LINK]    = { "4",  COLOR_BASE13, 0 },
-    [UI_ERROR]   = { NULL, COLOR_UI_MSG_ERROR, 0 },
-    [UI_OK]      = { NULL, COLOR_BASE11, 0 },
-    [UI_THINKING] = { "3", COLOR_BASE14, 0 },
-    [UI_TOOL]    = { NULL, COLOR_BASE12, 0 },
-    [UI_SPIN]    = { NULL, COLOR_BASE12, 0 },
-    [UI_BASH]    = { NULL, COLOR_BASE8, 90 },
-    [UI_SYN_CMD]     = { NULL, COLOR_BASE13, 0 },
-    [UI_SYN_KEYWORD] = { NULL, COLOR_BASE14, 0 },
-    [UI_SYN_STRING]  = { NULL, COLOR_BASE11, 0 },
-    [UI_SYN_COMMENT] = { NULL, COLOR_UI_DIM, 0 },
-    [UI_SYN_VAR]     = { NULL, COLOR_BASE9, 0 },
-    [UI_SYN_OP]      = { NULL, COLOR_BASE5, 0 },
-    [UI_SYN_FLAG]    = { NULL, COLOR_BASE4, 0 },
-    [UI_SYN_NUMBER]  = { NULL, COLOR_BASE10, 0 },
+    [UI_ACCENT]  = { NULL, "input", 0x22a2c9, 0 },
+    [UI_ECHO]    = { NULL, "input_echo", 0x22a2c9, 90 },
+    [UI_TEXT]    = { "39", NULL, 0, 0 },
+    [UI_STICKY]  = { NULL, "sticky", 0x22a2c9, 90 },
+    [UI_STICKY_DONE] = { NULL, "sticky_done", 0xac9739, 90 },
+    [UI_BRAND]   = { NULL, "brand", 0xdfe2f1, 0 },
+    [UI_SIDE]    = { NULL, "side", 0xdfe2f1, 90 },
+    [UI_CHROME]  = { NULL, "chrome", 0x5e6687, 0 },
+    [UI_DIM]     = { NULL, "dim", 0x6b7394, 0 },
+    [UI_BODY]    = { NULL, "body", 0x979db4, 0 },
+    [UI_BOLD]    = { "1",  "bold", 0xdfe2f1, 0 },
+    [UI_ITALIC]  = { "3",  "italic", 0xdfe2f1, 0 },
+    [UI_CODE]    = { NULL, "code", 0xdfe2f1, 0 },
+    [UI_HEADING] = { "1",  "heading", 0xdfe2f1, 0 },
+    [UI_LINK]    = { "4",  "link", 0x3d8fd1, 0 },
+    [UI_ERROR]   = { NULL, "error", 0xc94922, 0 },
+    [UI_OK]      = { NULL, "ok", 0xac9739, 0 },
+    [UI_THINKING] = { "3", "thinking", 0x6679cc, 0 },
+    [UI_TOOL]    = { NULL, "tool", 0xdfe2f1, 0 },
+    [UI_SPIN]    = { NULL, "spinner", 0xdfe2f1, 0 },
+    [UI_BASH]    = { NULL, "bash", 0xc94922, 90 },
+    [UI_SYN_CMD]     = { NULL, "syntax_command", 0x3d8fd1, 0 },
+    [UI_SYN_KEYWORD] = { NULL, "syntax_keyword", 0x6679cc, 0 },
+    [UI_SYN_STRING]  = { NULL, "syntax_string", 0xac9739, 0 },
+    [UI_SYN_COMMENT] = { NULL, "syntax_comment", 0x6b7394, 0 },
+    [UI_SYN_VAR]     = { NULL, "syntax_variable", 0xc76b29, 0 },
+    [UI_SYN_OP]      = { NULL, "syntax_operator", 0x979db4, 0 },
+    [UI_SYN_FLAG]    = { NULL, "syntax_flag", 0x898ea4, 0 },
+    [UI_SYN_NUMBER]  = { NULL, "syntax_number", 0xc08b30, 0 },
 };
+
+#define BACKGROUND_DEFAULT 0x202746
+#define CURSOR_DEFAULT     0xf5f7ff
 
 static char styles[UI_RESET][64];
 
-static int slots[UI_RESET];
+static unsigned rgb[UI_RESET];
+static unsigned background = BACKGROUND_DEFAULT;
+static unsigned cursor = CURSOR_DEFAULT;
+static int      term_bg = -1;
+static int      term_bg_shown;
+static int      term_active;
 
 static char sel_bg[48];
 static int  sel_row;
+
+#define R(c) (((c) >> 16) & 0xff)
+#define G(c) (((c) >> 8) & 0xff)
+#define B(c) ((c) & 0xff)
 
 static unsigned mix(unsigned fg, unsigned bg, int pct)
 {
@@ -68,140 +83,79 @@ static unsigned mix(unsigned fg, unsigned bg, int pct)
 
 static void build_sel_bg(void)
 {
-    if (!use_color) {
-        sel_bg[0] = '\0';
-        return;
-    }
-    Color a = color_get((ColorIndex)slots[UI_ACCENT]);
-    Color b = color_get(COLOR_BASE0);
+    unsigned a = rgb[UI_ACCENT];
     snprintf(sel_bg, sizeof sel_bg, "\x1b[48;2;%u;%u;%um",
-             mix(a.r, b.r, 92), mix(a.g, b.g, 92), mix(a.b, b.b, 92));
+             mix(R(a), R(background), 92), mix(G(a), G(background), 92),
+             mix(B(a), B(background), 92));
 }
 
 static void build_style(int role)
 {
     const char *attr = ROLES[role].attr;
-    if (slots[role] < 0) {
+    if (!ROLES[role].key) {
         snprintf(styles[role], sizeof styles[role], "\x1b[%sm", attr ? attr : "0");
         return;
     }
-    Color c = color_get((ColorIndex)slots[role]);
+    unsigned c = rgb[role];
+    int      t = ROLES[role].tint;
     char wash[24] = "";
-    if (ROLES[role].tint > 0) {
-        Color b = color_get(COLOR_BASE0);
-        snprintf(wash, sizeof wash, ";48;2;%u;%u;%u",
-                 mix(c.r, b.r, ROLES[role].tint), mix(c.g, b.g, ROLES[role].tint),
-                 mix(c.b, b.b, ROLES[role].tint));
-    }
+    if (t > 0)
+        snprintf(wash, sizeof wash, ";48;2;%u;%u;%u", mix(R(c), R(background), t),
+                 mix(G(c), G(background), t), mix(B(c), B(background), t));
     snprintf(styles[role], sizeof styles[role], "\x1b[%s%s38;2;%u;%u;%u%sm",
-             attr ? attr : "", attr ? ";" : "", c.r, c.g, c.b, wash);
+             attr ? attr : "", attr ? ";" : "", R(c), G(c), B(c), wash);
 }
 
-static const struct {
-    int         slot;
-    const char *name;
-} SWATCH[] = {
-    {COLOR_BASE6,  "base6"},   {COLOR_BASE7,  "base7"},
-    {COLOR_BASE8,  "red"},     {COLOR_BASE9,  "orange"},
-    {COLOR_BASE10, "yellow"},  {COLOR_BASE11, "green"},
-    {COLOR_BASE12, "lightblue"}, {COLOR_BASE13, "blue"},
-    {COLOR_BASE14, "violet"},  {COLOR_BASE15, "magenta"},
-};
-#define SWATCH_N (COUNT(SWATCH))
-
-static const struct {
-    const char  *key;
-    enum ui_role roles[10];
-} GROUPS[] = {
-    [UI_GROUP_INPUT]    = {SETTING_COLOR_INPUT,
-                           {UI_ACCENT, UI_ECHO, UI_STICKY, UI_RESET}},
-    [UI_GROUP_EMPHASIS] = {SETTING_COLOR_EMPHASIS,
-                           {UI_BOLD, UI_ITALIC, UI_CODE, UI_HEADING, UI_SPIN,
-                            UI_BRAND, UI_SIDE, UI_TOOL, UI_RESET}},
-};
-#define GROUP_N (COUNT(GROUPS))
-
-static int cursor[GROUP_N];
-
-static void apply_group(int group, int at)
+static unsigned hex(const struct settings *theme, const char *key, unsigned fallback)
 {
-    cursor[group] = at + 1;
-    for (int i = 0; GROUPS[group].roles[i] != UI_RESET; i++) {
-        int role = GROUPS[group].roles[i];
-        slots[role] = SWATCH[at].slot;
-        build_style(role);
-    }
-    if (group == UI_GROUP_INPUT)
-        build_sel_bg();
+    const char *v = settings_get(theme, key, NULL);
+    char       *end;
+    if (!v || *v != '#')
+        return fallback;
+    unsigned long c = strtoul(v + 1, &end, 16);
+    return end == v + 7 && !*end ? (unsigned)c : fallback;
 }
 
-static int saved_swatch(int group)
+static int theme_path(const char *name, char *path, size_t cap)
 {
-    const char *name = settings_get_str(GROUPS[group].key, NULL);
-    if (!name)
-        return -1;
-    for (int i = 0; i < SWATCH_N; i++)
-        if (strcmp(SWATCH[i].name, name) == 0)
-            return i;
-    return -1;
+    char leaf[256];
+    return *name && *name != '.' && !strchr(name, '/') &&
+           (size_t)snprintf(leaf, sizeof leaf, "themes/%s", name) < sizeof leaf &&
+           path_config_file(path, cap, leaf) && !access(path, R_OK);
 }
 
-static int swatch_at(enum ui_group group)
+static void load_theme(const char *path)
 {
-    if (!cursor[group]) {
-        cursor[group] = 1;
-        for (int i = 0; i < SWATCH_N; i++)
-            if (SWATCH[i].slot == slots[GROUPS[group].roles[0]])
-                cursor[group] = i + 1;
-    }
-    return cursor[group] - 1;
+    static struct settings theme;
+    settings_load(&theme, path);
+
+    background = hex(&theme, "background", BACKGROUND_DEFAULT);
+    cursor = hex(&theme, "cursor", CURSOR_DEFAULT);
+    term_bg = (int)hex(&theme, "terminal_background", (unsigned)-1);
+    for (int i = 0; i < UI_RESET; i++)
+        if (ROLES[i].key)
+            rgb[i] = hex(&theme, ROLES[i].key, ROLES[i].rgb);
+    for (int i = 0; i < UI_RESET; i++)
+        build_style(i);
+    build_sel_bg();
 }
 
-int ui_swatches(const char *const **out)
+int ui_theme_set(const char *name, int save)
 {
-    static const char *names[SWATCH_N];
-
-    for (int i = 0; i < SWATCH_N; i++)
-        names[i] = SWATCH[i].name;
-    *out = names;
-    return SWATCH_N;
-}
-
-const char *ui_swatch(enum ui_group group)
-{
-    if (!use_color || group < 0 || group >= GROUP_N)
-        return "";
-    return SWATCH[swatch_at(group)].name;
-}
-
-int ui_swatch_set(enum ui_group group, const char *name)
-{
-    if (!use_color || group < 0 || group >= GROUP_N)
+    char path[4096];
+    if (!use_color || !theme_path(name, path, sizeof path))
         return 0;
-
-    for (int i = 0; i < SWATCH_N; i++)
-        if (!strcmp(SWATCH[i].name, name)) {
-            apply_group(group, i);
-            settings_set_str(GROUPS[group].key, SWATCH[i].name);
-            return 1;
-        }
-    return 0;
+    load_theme(path);
+    if (term_active)
+        ui_term_colors();
+    if (save)
+        settings_set_str(SETTING_THEME, name);
+    return 1;
 }
 
-const char *ui_cycle(enum ui_group group, int delta)
+const char *ui_theme(void)
 {
-    static char label[64];
-
-    if (!use_color || group < 0 || group >= GROUP_N)
-        return "";
-    int at = (swatch_at(group) + delta % SWATCH_N + SWATCH_N) % SWATCH_N;
-    apply_group(group, at);
-    settings_set_str(GROUPS[group].key, SWATCH[at].name);
-
-    Color c = color_get((ColorIndex)SWATCH[at].slot);
-    snprintf(label, sizeof label, "%s #%02x%02x%02x (%d/%d)",
-             SWATCH[at].name, c.r, c.g, c.b, at + 1, SWATCH_N);
-    return label;
+    return settings_get_str(SETTING_THEME, "default");
 }
 
 void ui_init(void)
@@ -213,18 +167,8 @@ void ui_init(void)
     if (!use_color)
         return;
 
-    colors_init();
-    for (int i = 0; i < UI_RESET; i++) {
-        slots[i] = ROLES[i].slot;
-        build_style(i);
-    }
-    build_sel_bg();
-
-    for (int g = 0; g < GROUP_N; g++) {
-        int at = saved_swatch(g);
-        if (at >= 0)
-            apply_group(g, at);
-    }
+    char path[4096];
+    load_theme(theme_path(ui_theme(), path, sizeof path) ? path : "");
 }
 
 const char *ui_style(enum ui_role role)
@@ -257,20 +201,69 @@ void ui_row_sel(int on)
 
 int ui_color(void) { return use_color; }
 
-void ui_cursor_plain(void)
+static int tmux_bg(const char *color)
+{
+    const char *pane = getenv("TMUX_PANE");
+    if (!getenv("TMUX") || !pane || !*pane)
+        return 0;
+
+    char style[32];
+    snprintf(style, sizeof style, "bg=%s", color ? color : "");
+    char *set[] = {"tmux", "set", "-p", "-t", (char *)pane, "window-style", style, ";",
+                   "set", "-p", "-t", (char *)pane, "window-active-style", style, NULL};
+    char *unset[] = {"tmux", "set", "-pu", "-t", (char *)pane, "window-style", ";",
+                     "set", "-pu", "-t", (char *)pane, "window-active-style", NULL};
+
+    pid_t pid = fork();
+    if (pid < 0)
+        return 0;
+    if (pid == 0) {
+        int null = open("/dev/null", O_RDWR);
+        if (null >= 0) {
+            dup2(null, STDIN_FILENO);
+            dup2(null, STDOUT_FILENO);
+            dup2(null, STDERR_FILENO);
+        }
+        execvp("tmux", color ? set : unset);
+        _exit(127);
+    }
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+        ;
+    return 1;
+}
+
+static void term_bg_apply(void)
+{
+    char color[8];
+    snprintf(color, sizeof color, "#%06x", (unsigned)term_bg);
+    if (term_bg >= 0 && !tmux_bg(color))
+        printf("\x1b]11;%s\x07", color);
+    else if (term_bg < 0 && term_bg_shown && !tmux_bg(NULL))
+        fputs("\x1b]111\x07", stdout);
+    term_bg_shown = term_bg >= 0;
+}
+
+void ui_term_colors(void)
 {
     if (!use_color)
         return;
-    Color c = color_get(COLOR_UI_CURSOR_FG);
-    printf("\x1b]12;#%02x%02x%02x\x07", c.r, c.g, c.b);
+    term_active = 1;
+    printf("\x1b]12;#%06x\x07", cursor);
+    term_bg_apply();
     fflush(stdout);
 }
 
-void ui_cursor_restore(void)
+void ui_term_colors_restore(void)
 {
     if (!use_color)
         return;
+    term_active = 0;
     fputs("\x1b]112\x07", stdout);
+    int keep = term_bg;
+    term_bg = -1;
+    term_bg_apply();
+    term_bg = keep;
     fflush(stdout);
 }
 

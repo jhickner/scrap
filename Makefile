@@ -34,7 +34,7 @@ CHECKS := kittywraptest overlaytest viewporttest imagerowtest chrometest imagefi
           dispatchtest voicetabtest grokbottailtest vncinsettest grokvnctest \
           settingstest jevtest
 CHECKS += agentsynctest sessionaddrtest apitest apihttptest activelogtest
-MANUAL_TOOLS := imagetest keydump palette pastetest spintest vncprobe
+MANUAL_TOOLS := imagetest keydump pastetest spintest vncprobe
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,
 # tools/ is driven by hand. Both lists stay explicit so that dropping in a new
@@ -154,8 +154,6 @@ $(CHECK_BINS): $(BUILD)/%: tests/%.c | $(BUILD)
 
 $(MANUAL_BINS): $(BUILD)/%: tools/%.c | $(BUILD)
 	$(CC) $(ALL_CFLAGS) -MMD -MP -o $@ $(filter %.c %.o,$^) $(LDFLAGS) $(TOOL_LIBS)
-
-$(BUILD)/palette: tools/palette.c src/vendor/colors.h | $(BUILD)
 
 $(BUILD)/spintest: tools/spintest.c tests/stubs/tabbar.c tests/stubs/keyhelp.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 

@@ -1,5 +1,6 @@
 #include "cmd.h"
 
+#include <dirent.h>
 #include <stdarg.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -547,6 +548,77 @@ static void do_tools(struct session *s, const char *arg)
     settings_set_int(SETTING_COMPACT, compact);
     view_collapse(compact);
     reply_note("tool calls: %s", compact ? "one row each" : "full blocks with output");
+}
+
+static int by_name(const void *a, const void *b)
+{
+    return strcmp(((const struct pick_item *)a)->label, ((const struct pick_item *)b)->label);
+}
+
+static void preview_theme(int index, void *ud)
+{
+    const struct pick_item *items = ud;
+    if (ui_theme_set(items[index].label, 0)) {
+        viewport_restyle();
+        viewport_paint();
+    }
+}
+
+static int pick_theme(char *chosen, size_t cap)
+{
+    char dir[4096];
+    DIR *d = path_config_subdir(dir, sizeof dir, "themes") ? opendir(dir) : NULL;
+    struct pick_item items[64];
+    int count = 0, initial = 0;
+    for (struct dirent *e; d && count < COUNT(items) && (e = readdir(d));)
+        if (e->d_name[0] != '.')
+            items[count++] = (struct pick_item){strdup(e->d_name), NULL};
+    if (d)
+        closedir(d);
+    if (!count) {
+        reply_note("no themes in %s", dir);
+        return 0;
+    }
+    qsort(items, count, sizeof *items, by_name);
+
+    char was[256];
+    snprintf(was, sizeof was, "%s", ui_theme());
+    for (int i = 0; i < count; i++)
+        if (!strcmp(items[i].label, was))
+            initial = i;
+    struct pick_live live = {.select = preview_theme, .ud = items};
+    int index = pick_run_live("theme", items, count, initial, &live, PICK_SEARCH_SLASH,
+                              NULL, NULL);
+    snprintf(chosen, cap, "%s", index >= 0 ? items[index].label : "");
+    for (int i = 0; i < count; i++)
+        free((char *)items[i].label);
+    if (index < 0 && ui_theme_set(was, 0)) {
+        viewport_restyle();
+        viewport_paint();
+    }
+    viewport_flush();
+    ui_flush();
+    return index >= 0;
+}
+
+static void do_theme(struct session *s, const char *arg)
+{
+    (void)s;
+    char chosen[256];
+    if (!arg || !*arg) {
+        if (!can_pick("/theme <name>") || !pick_theme(chosen, sizeof chosen))
+            return;
+    } else {
+        snprintf(chosen, sizeof chosen, "%s", arg);
+    }
+
+    if (!ui_theme_set(chosen, 1)) {
+        reply_error("no theme %s", chosen);
+        return;
+    }
+    viewport_restyle();
+    viewport_paint();
+    reply_note("theme: %s", chosen);
 }
 
 static void do_sticky(struct session *s, const char *arg)
@@ -1413,6 +1485,7 @@ static const struct cmd COMMANDS[] = {
      do_thinking},
     {"/tools", "how much of each tool call to show", "[compact|full]", CMD_LIVE,
      do_tools},
+    {"/theme", "switch the colour theme", "[name]", CMD_LIVE, do_theme},
     {"/sticky", "float the prompt above the spinner", "[on|off]", CMD_LIVE, do_sticky},
     {"/relay", "answer over the phone relay", "[on|off]", CMD_LIVE, do_relay},
     {"/telegram", "answer over Telegram", "[on|off]", CMD_LIVE, do_telegram},

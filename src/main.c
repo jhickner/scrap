@@ -91,7 +91,7 @@ static void start_failed(const char *backend)
 static void restore_terminal(void)
 {
     viewport_end();
-    ui_cursor_restore();
+    ui_term_colors_restore();
     tty_raw_end();
 }
 
@@ -766,7 +766,7 @@ int main(int argc, char **argv)
         }
         atexit(restore_terminal);
         ui_raw(1);
-        ui_cursor_plain();
+        ui_term_colors();
 
         if (!restore_arg && tty_input_waiting()) {
             ui_esc("\r");

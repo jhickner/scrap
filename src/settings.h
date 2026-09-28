@@ -74,8 +74,7 @@
 
 #define SETTING_VOICE_COMPLETE "voice_complete"
 
-#define SETTING_COLOR_INPUT    "color_input"
-#define SETTING_COLOR_EMPHASIS "color_emphasis"
+#define SETTING_THEME "theme"
 
 #define MAX_SETTING_KEY    64
 #define MAX_SETTING_VALUE  256

@@ -4,7 +4,3 @@
 
 #define REPL_IMPLEMENTATION
 #include "repl.h"
-
-#include "screen_color.h"
-#define COLORS_IMPLEMENTATION
-#include "colors.h"

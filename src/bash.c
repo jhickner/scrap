@@ -325,7 +325,7 @@ static void hand_over(int was_raw)
     viewport_suspend();
     if (was_raw) {
         ui_raw(0);
-        ui_cursor_restore();
+        ui_term_colors_restore();
         ui_esc("\x1b[?2004l");
     }
     ui_flush();
@@ -502,7 +502,7 @@ void bash_run(const char *line)
         if (was_raw) {
             ui_esc("\x1b[?2004h");
             ui_raw(1);
-            ui_cursor_plain();
+            ui_term_colors();
         }
         block_forget();
         viewport_resume();

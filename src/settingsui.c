@@ -16,7 +16,7 @@
 #include "ui.h"
 #include "voice.h"
 
-enum kind { S_FLAG, S_PERMISSION, S_ROWS, S_COLOR, S_BACKEND, S_CHOICE, S_NOUL };
+enum kind { S_FLAG, S_PERMISSION, S_ROWS, S_BACKEND, S_CHOICE, S_NOUL };
 
 struct entry {
     const char *name;
@@ -36,7 +36,6 @@ struct entry {
     int                nchoices;
     double             deff;
 
-    enum ui_group group;
 };
 
 static const char *const VOICE_MODES[] = {"auto", "wake", "jev"};
@@ -110,12 +109,6 @@ static const struct entry ENTRIES[] = {
     {.name = "folder sort", .kind = S_CHOICE,
      .about = "order of working folders in /sessions: by name, or most recently active first",
      .key = SETTING_FOLDER_SORT, .choices = FOLDER_SORTS, .nchoices = (int)COUNT(FOLDER_SORTS)},
-    {.name = "input colour", .kind = S_COLOR,
-     .about = "the prompt, its echo, and the sticky line",
-     .group = UI_GROUP_INPUT},
-    {.name = "emphasis colour", .kind = S_COLOR,
-     .about = "headings, bold, code, and the spinner",
-     .group = UI_GROUP_EMPHASIS},
     {.name = "backend", .kind = S_BACKEND,
      .about = "the CLI scrap starts on"},
 };
@@ -222,9 +215,6 @@ static void value_of(const struct session *s, int at, char *out, size_t cap)
             snprintf(out, cap, "%d", rows);
         break;
     }
-    case S_COLOR:
-        snprintf(out, cap, "%s", ui_swatch(e->group));
-        break;
     case S_BACKEND:
         snprintf(out, cap, "%s", cmd_default_backend());
         break;
@@ -283,28 +273,6 @@ static void edit_rows(const struct entry *e)
         snprintf(title, sizeof title, "%s \xe2\x80\x94 a number from %d to %d",
                  e->name, e->low, e->high);
     }
-}
-
-static void edit_color(const struct entry *e)
-{
-    const char *const *names = NULL;
-    int                count = ui_swatches(&names);
-    struct pick_item   items[24];
-
-    if (count > (int)COUNT(items))
-        count = (int)COUNT(items);
-
-    const char *now = ui_swatch(e->group);
-    int         initial = 0;
-    for (int i = 0; i < count; i++) {
-        items[i] = (struct pick_item){names[i], NULL};
-        if (!strcmp(names[i], now))
-            initial = i;
-    }
-
-    int index = pick_run(e->name, items, count, initial);
-    if (index >= 0)
-        ui_swatch_set(e->group, names[index]);
 }
 
 static void edit_backend(void)
@@ -386,9 +354,6 @@ static void edit(struct session *s, int at)
         break;
     case S_ROWS:
         edit_rows(e);
-        break;
-    case S_COLOR:
-        edit_color(e);
         break;
     case S_BACKEND:
         edit_backend();

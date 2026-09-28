@@ -8,10 +8,6 @@
 #define REPL_IMPLEMENTATION
 #include "repl.h"
 
-#include "screen_color.h"
-#define COLORS_IMPLEMENTATION
-#include "colors.h"
-
 #define MACOS_VOICE_IMPLEMENTATION
 #include "macos_voice.h"
 

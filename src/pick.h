@@ -52,6 +52,7 @@ struct pick_live {
     int stack;
 
     int  (*tick)(void *ud);
+    void (*select)(int index, void *ud);
     void  *ud;
 
     int *cursor;

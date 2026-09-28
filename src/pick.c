@@ -773,6 +773,7 @@ static int run(const char *title, const struct pick_item *items, int count,
     chrome_modal(paint, &v);
 
     int result = -1;
+    int selected = v.count ? v.order[v.sel] : -1;
     for (;;) {
         tty_event ev;
         int turning = animating(&v);
@@ -968,6 +969,10 @@ static int run(const char *title, const struct pick_item *items, int count,
         default:
             continue;
         }
+        int now = (v.count && v.sel < v.count) ? v.order[v.sel] : -1;
+        if (live && live->select && now != selected && now >= 0 && !row_heading(&v, v.sel))
+            live->select(now, live->ud);
+        selected = now;
         chrome_paint();
     }
 

@@ -37,11 +37,6 @@ enum ui_role {
     UI_RESET,
 };
 
-enum ui_group {
-    UI_GROUP_INPUT,
-    UI_GROUP_EMPHASIS,
-};
-
 #define UI_BAR "\xe2\x96\x8c"
 
 #define UI_CURSOR_SHOW  "\x1b[?25h"
@@ -64,14 +59,11 @@ void ui_row_sel(int on);
 
 int ui_color(void);
 
-const char *ui_cycle(enum ui_group group, int delta);
+int         ui_theme_set(const char *name, int save);
+const char *ui_theme(void);
 
-int         ui_swatches(const char *const **out);
-const char *ui_swatch(enum ui_group group);
-int         ui_swatch_set(enum ui_group group, const char *name);
-
-void ui_cursor_plain(void);
-void ui_cursor_restore(void);
+void ui_term_colors(void);
+void ui_term_colors_restore(void);
 
 void ui_raw(int on);
 void ui_put(const char *s);

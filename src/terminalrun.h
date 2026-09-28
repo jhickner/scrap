@@ -22,7 +22,7 @@ static inline int terminal_run_external(const char *command)
         exit(1);
     }
     ui_raw(1);
-    ui_cursor_plain();
+    ui_term_colors();
     block_forget();
     viewport_resume();
     return status;

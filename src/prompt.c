@@ -639,34 +639,6 @@ enum key_result {
     KEY_CANCEL,
 };
 
-static void cycle_colors(struct prompt *p, int live, int mine)
-{
-    const char *label = ui_cycle(mine ? UI_GROUP_INPUT : UI_GROUP_EMPHASIS, 1);
-
-    if (live)
-        status_pause();
-
-    p->frame_ok = 0;
-    if (p->replay) {
-        status_sticky_erased();
-        p->replay(p->replay_ud);
-    }
-    ui_esc(ui_style(UI_BRAND));
-    ui_put(UI_BAR);
-    ui_esc(ui_style(mine ? UI_ACCENT : UI_BOLD));
-    ui_printf(" %s: %s", mine ? "your input" : "reply highlights", label);
-    ui_esc(ui_style(UI_RESET));
-    ui_put("\n");
-    ui_flush();
-
-    if (live) {
-        status_resume();
-        status_touch();
-    } else {
-        repaint(p);
-    }
-}
-
 #define KEY_CTRL(c) ((c) - 'A' + 1)
 
 static const struct prompt_key SHORTCUTS[] = {
@@ -712,8 +684,6 @@ static const struct prompt_key SHORTCUTS[] = {
      "scroll the transcript half a screen", PROMPT_KEY_ALWAYS},
     {"VIEW", "ctrl-l", "clear screen",
      "clear the screen", PROMPT_KEY_ALWAYS},
-    {"VIEW", "ctrl-n", "input colour",
-     "cycle the colours of your input", PROMPT_KEY_ALWAYS},
     {"VIEW", "click img", "full size",
      "open an image at full size, \xe2\x86\x90\xe2\x86\x92 to step", PROMPT_KEY_ALWAYS},
     {"VIEW", "? / F1", "this help",
@@ -885,10 +855,6 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
                 if (live)
                     status_resume();
             }
-            return KEY_OK;
-        }
-        if (ev->cp == KEY_CTRL('N')) {
-            cycle_colors(p, live, 1);
             return KEY_OK;
         }
         if (ev->cp == KEY_CTRL('L')) {

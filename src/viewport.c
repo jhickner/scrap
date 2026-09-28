@@ -292,6 +292,15 @@ void viewport_item_stale(unsigned mark)
     layout_changed();
 }
 
+void viewport_restyle(void)
+{
+    for (int i = 0; i < nitems; i++)
+        if (items[i].render)
+            items[i].cols = -1;
+    dirty = 1;
+    layout_changed();
+}
+
 void viewport_on_width(viewport_width_fn fn)
 {
     on_width = fn;
