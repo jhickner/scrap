@@ -108,6 +108,53 @@ void intercom_name_new(char *out, size_t size)
     snprintf(out, size, "scrap-%u", arc4random_uniform(100000));
 }
 
+static int suffix_of(const char *name, const char *base, int n)
+{
+    if (strncmp(name, base, (size_t)n))
+        return -1;
+    const char *p = name + n;
+    if (!*p)
+        return 1;
+    for (const char *q = p; *q; q++)
+        if (!isdigit((unsigned char)*q))
+            return -1;
+    return atoi(p);
+}
+
+void intercom_name_next(const char *base, char *out, size_t size)
+{
+    int n = (int)strlen(base);
+    while (n > 0 && isdigit((unsigned char)base[n - 1]))
+        n--;
+
+    int  top = 1;
+    char path[4200], have[INTERCOM_NAME_MAX];
+    if (registry_path(path, sizeof path)) {
+        struct kvlog_map *m = kvlog_fresh(path);
+        for (int i = 0; i < m->n; i++) {
+            field_at(m->ents[i].val, 0, have, sizeof have);
+            int k = suffix_of(have, base, n);
+            if (k > top)
+                top = k;
+        }
+    }
+    struct live_session *live = NULL;
+    int                  count = livelist_load(&live);
+    for (int i = 0; i < count; i++) {
+        int k = suffix_of(live[i].name, base, n);
+        if (k > top)
+            top = k;
+    }
+    free(live);
+
+    for (int i = top + 1; i < top + 100; i++) {
+        snprintf(out, size, "%.*s%d", n, base, i);
+        if (intercom_name_valid(out) && !intercom_name_taken(out, NULL))
+            return;
+    }
+    intercom_name_new(out, size);
+}
+
 int intercom_name_of(const char *id, char *out, size_t size)
 {
     char path[4200], row[8400];

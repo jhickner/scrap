@@ -33,6 +33,8 @@ void livelist_channels(char *out, int size);
 
 int livelist_load(struct live_session **out);
 
+int livelist_name_holder(const struct session *s, const char *name, char *id, int size);
+
 int livelist_closed_load(struct live_session **out);
 
 int livelist_alive(long pid);

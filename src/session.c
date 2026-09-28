@@ -97,6 +97,7 @@ struct session {
     int      customizations;
     int      no_browser_login;
     int      fork_session;
+    int      fork_named;
     char    *permission;
     char    *error_note;
     int      idle_busy;
@@ -1118,6 +1119,18 @@ void session_set_browser_login(struct session *s, int on) { s->no_browser_login 
 
 void session_set_fork(struct session *s, int on) { s->fork_session = on; }
 
+static void claim_name(struct session *s)
+{
+    char other[128];
+    if (!s->name[0] || !livelist_name_holder(s, s->name, other, sizeof other))
+        return;
+    char fresh[INTERCOM_NAME_MAX];
+    intercom_name_next(s->name, fresh, sizeof fresh);
+    snprintf(s->name, sizeof s->name, "%s", fresh);
+    if (s->id[0] && strcmp(other, s->id))
+        intercom_register(s->id, s->name, s->backend, s->cwd);
+}
+
 static void set_id(struct session *s, const char *id)
 {
     int changed = strcmp(s->id, id) != 0;
@@ -1126,6 +1139,7 @@ static void set_id(struct session *s, const char *id)
     if (changed) {
         if (!intercom_name_of(s->id, s->name, sizeof s->name))
             intercom_register(s->id, s->name, s->backend, s->cwd);
+        claim_name(s);
         if (s->held_title[0]) {
             title_set(s->id, s->held_title);
             s->held_title[0] = '\0';
@@ -1167,8 +1181,14 @@ static int restart(struct session *s, const char *resume_id)
     Backend *previous = s->agent;
     s->agent = NULL;
     start_error[0] = '\0';
-    if (resume_id)
+    char parent[INTERCOM_NAME_MAX];
+    if (resume_id && s->fork_session && !s->fork_named &&
+        intercom_name_of(resume_id, parent, sizeof parent)) {
+        intercom_name_next(parent, s->name, sizeof s->name);
+        s->fork_named = 1;
+    } else if (resume_id && !s->fork_named)
         intercom_name_of(resume_id, s->name, sizeof s->name);
+    claim_name(s);
 
     Backend *b = agent(s);
     if (!b || !b->start(b, resume_id)) {

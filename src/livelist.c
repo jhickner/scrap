@@ -401,6 +401,26 @@ static void forget_reopened(struct live_session *closed, int n,
     }
 }
 
+int livelist_name_holder(const struct session *s, const char *name, char *id, int size)
+{
+    int mine = -1;
+    for (int i = 0; i < MAX_SLOTS; i++)
+        if (slots[i] == s)
+            mine = i;
+
+    struct live_session *live = NULL;
+    int                  n = livelist_load(&live);
+    int                  held = 0;
+    for (int i = 0; i < n && !held; i++) {
+        if (strcmp(live[i].name, name) || (live[i].pid == (long)getpid() && live[i].slot == mine))
+            continue;
+        snprintf(id, (size_t)size, "%s", live[i].id);
+        held = 1;
+    }
+    free(live);
+    return held;
+}
+
 int livelist_closed_load(struct live_session **out)
 {
     struct live_session *live = NULL;

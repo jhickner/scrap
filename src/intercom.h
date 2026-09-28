@@ -14,6 +14,8 @@ int intercom_name_valid(const char *name);
 
 int intercom_name_taken(const char *name, const char *id);
 
+void intercom_name_next(const char *base, char *out, size_t size);
+
 int intercom_name_of(const char *id, char *out, size_t size);
 
 void intercom_register(const char *id, const char *name, const char *backend,
