@@ -1511,11 +1511,22 @@ int cmd_runs_mid_turn(const char *line)
     return c && !(c->flags & CMD_QUITS);
 }
 
+static int live(const struct cmd *c, const char *arg)
+{
+    if (c->flags & CMD_LIVE)
+        return 1;
+    if (!(c->flags & CMD_LIVE_ARG))
+        return 0;
+    if (arg && *arg)
+        return 1;
+    return c->run == do_new && frontend_has_keyboard() && !chrome_modal_active();
+}
+
 int cmd_runs_live(const char *line)
 {
     const char       *arg;
     const struct cmd *c = cmd_for_line(line, &arg);
-    return c && ((c->flags & CMD_LIVE) || ((c->flags & CMD_LIVE_ARG) && arg && *arg));
+    return c && live(c, arg);
 }
 
 #define DEFERRED_MAX 8
@@ -1532,7 +1543,7 @@ void cmd_dispatch_live(struct session *s, const char *line)
     if (!c || (c->flags & CMD_QUITS))
         return;
 
-    if ((c->flags & CMD_LIVE) || ((c->flags & CMD_LIVE_ARG) && arg && *arg)) {
+    if (live(c, arg)) {
         c->run(s, arg);
         return;
     }
