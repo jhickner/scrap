@@ -49,14 +49,14 @@ static int    open_paid;
 
 static int    tail_pad;
 
-#define OPEN_MAX 4
+#define OPEN_DEPTH 4
 
 struct open_frame {
     void  *ud;
     void (*free_ud)(void *);
 };
 
-static struct open_frame open_stack[OPEN_MAX];
+static struct open_frame open_stack[OPEN_DEPTH];
 static int open_depth;
 
 static int in_render;
@@ -569,7 +569,7 @@ unsigned viewport_item_begin(const struct viewport_entry *e)
 
     int depth = open_depth++;
     if (depth > 0 || in_render) {
-        if (depth < OPEN_MAX) {
+        if (depth < OPEN_DEPTH) {
             open_stack[depth].ud = ud;
             open_stack[depth].free_ud = free_ud;
         } else if (free_ud && ud) {
@@ -607,7 +607,7 @@ void viewport_item_end(void)
         return;
     int depth = --open_depth;
     if (depth > 0 || in_render) {
-        if (depth < OPEN_MAX) {
+        if (depth < OPEN_DEPTH) {
             struct open_frame *f = &open_stack[depth];
             if (f->free_ud && f->ud)
                 f->free_ud(f->ud);

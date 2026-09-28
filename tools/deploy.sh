@@ -8,4 +8,4 @@ cd "$(dirname "$0")/.."
 
 rsync -az --delete --exclude /build --exclude /scrap --exclude /map --exclude /.claude \
     ./ "$host:$dir/"
-ssh "$host" "cd $dir && make -j4 install >/dev/null 2>make.log || { cat make.log >&2; exit 1; }; ~/.local/bin/scrap -V"
+ssh "$host" "export PATH=/opt/homebrew/bin:/usr/local/bin:\$PATH; cd $dir && make -j4 install >/dev/null 2>make.log || { cat make.log >&2; exit 1; }; ~/.local/bin/scrap -V"
