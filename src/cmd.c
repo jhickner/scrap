@@ -21,7 +21,7 @@
 #include "restart.h"
 #include "session.h"
 #include "image.h"
-#include "hub.h"
+#include "tailnet.h"
 #include "netpick.h"
 #include "intercom.h"
 #include "sessionfork.h"
@@ -1173,7 +1173,7 @@ static void do_name(struct session *s, const char *arg)
 
 static void do_send(struct session *s, const char *arg)
 {
-    char        target[HUB_HOST_MAX + INTERCOM_NAME_MAX + 2];
+    char        target[TAILNET_HOST_MAX + INTERCOM_NAME_MAX + 2];
     const char *text = arg ? strchr(arg, ' ') : NULL;
     size_t      n = text ? (size_t)(text - arg) : 0;
 

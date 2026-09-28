@@ -1,6 +1,8 @@
 #include "dispatch.h"
 
+#include <arpa/inet.h>
 #include <errno.h>
+#include <netinet/in.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/stat.h>
@@ -309,11 +311,25 @@ int dispatch_send(int at, const char *line)
     return deliver(at, line, line);
 }
 
-static void serve(int fd, const char *text)
+static struct dispatch_net net;
+
+static void serve(int fd, const char *text, const char *host)
 {
     cJSON *o = cJSON_Parse(text);
     if (!o) {
         reply(fd, "{\"error\": \"bad json\"}");
+        return;
+    }
+    if (host) {
+        cJSON_DeleteItemFromObject(o, "host");
+        cJSON_AddStringToObject(o, "host", host);
+    }
+
+    char *answer = net.serve ? net.serve(o) : NULL;
+    if (answer) {
+        reply(fd, answer);
+        free(answer);
+        cJSON_Delete(o);
         return;
     }
 
@@ -353,13 +369,16 @@ static void serve(int fd, const char *text)
     cJSON_Delete(o);
 }
 
-static int listen_fd = -1;
+#define NET_RETRY_S 5
+
+static int  listen_fd = -1, net_fd = -1, dir_fd = -1, net_port;
 static char listen_path[200];
 
 static struct client {
     int    fd;
     char  *buf;
     size_t len;
+    char   peer[64];
 } clients[CLIENT_MAX];
 
 static void unlisten(void)
@@ -400,12 +419,65 @@ static void listen_once(void)
     atexit(unlisten);
 }
 
+static int listen_tcp(const char *ip, int port, int *bound)
+{
+    struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
+    if (inet_pton(AF_INET, ip, &sa.sin_addr) != 1)
+        return -1;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int on = 1;
+    if (fd < 0)
+        return -1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof on);
+    socklen_t len = sizeof sa;
+    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) != 0 || listen(fd, CLIENT_MAX) != 0 ||
+        getsockname(fd, (struct sockaddr *)&sa, &len) != 0) {
+        close(fd);
+        return -1;
+    }
+    nonblocking(fd);
+    if (bound)
+        *bound = ntohs(sa.sin_port);
+    return fd;
+}
+
+static void listen_net(void)
+{
+    static struct timespec last;
+    struct timespec        now;
+    if (!net.bind || (net_fd >= 0 && dir_fd >= 0))
+        return;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (last.tv_sec && now.tv_sec - last.tv_sec < NET_RETRY_S)
+        return;
+    last = now;
+    const char *ip = net.bind();
+    if (!ip)
+        return;
+    if (net_fd < 0)
+        net_fd = listen_tcp(ip, 0, &net_port);
+    if (dir_fd < 0 && net.port > 0)
+        dir_fd = listen_tcp(ip, net.port, NULL);
+}
+
+void dispatch_net(const struct dispatch_net *config)
+{
+    net = *config;
+}
+
+int dispatch_net_port(void)
+{
+    return net_fd >= 0 ? net_port : 0;
+}
+
 int dispatch_fds(int *out, int max)
 {
     listen_once();
     int n = 0;
-    if (listen_fd >= 0 && n < max)
-        out[n++] = listen_fd;
+    int listeners[] = {listen_fd, net_fd, dir_fd};
+    for (int i = 0; i < 3 && n < max; i++)
+        if (listeners[i] >= 0)
+            out[n++] = listeners[i];
     for (int i = 0; i < CLIENT_MAX && n < max; i++)
         if (clients[i].fd >= 0)
             out[n++] = clients[i].fd;
@@ -418,16 +490,21 @@ static void drop(struct client *c)
     c->buf = NULL;
     c->len = 0;
     c->fd = -1;
+    c->peer[0] = '\0';
 }
 
 static void finish(struct client *c, int answer)
 {
     char *text = c->buf;
     int   fd = c->fd;
+    char  peer[64], host[256] = "";
+    snprintf(peer, sizeof peer, "%s", c->peer);
     c->buf = NULL;
     drop(c);
-    if (answer && text && *text)
-        serve(fd, text);
+    if (answer && peer[0] && (!net.peer || !net.peer(peer, host, sizeof host)))
+        reply(fd, "{\"error\": \"not the same tailscale user\"}");
+    else if (answer && text && *text)
+        serve(fd, text, peer[0] ? host : NULL);
     else if (answer)
         reply(fd, "{\"error\": \"empty request\"}");
     else
@@ -469,14 +546,12 @@ static void take(struct client *c)
     }
 }
 
-void dispatch_poll(void)
+static void accept_on(int lfd, int tcp)
 {
-    listen_once();
-    settle_pending();
-    if (listen_fd < 0)
-        return;
     for (;;) {
-        int fd = accept(listen_fd, NULL, NULL);
+        struct sockaddr_storage sa;
+        socklen_t               len = sizeof sa;
+        int                     fd = accept(lfd, (struct sockaddr *)&sa, &len);
         if (fd < 0)
             break;
         struct client *slot = NULL;
@@ -489,7 +564,26 @@ void dispatch_poll(void)
         }
         nonblocking(fd);
         slot->fd = fd;
+        slot->peer[0] = '\0';
+        if (tcp && sa.ss_family == AF_INET)
+            inet_ntop(AF_INET, &((struct sockaddr_in *)&sa)->sin_addr, slot->peer,
+                      sizeof slot->peer);
+        else if (tcp)
+            snprintf(slot->peer, sizeof slot->peer, "?");
     }
+}
+
+void dispatch_poll(void)
+{
+    listen_once();
+    listen_net();
+    settle_pending();
+    if (listen_fd >= 0)
+        accept_on(listen_fd, 0);
+    if (net_fd >= 0)
+        accept_on(net_fd, 1);
+    if (dir_fd >= 0)
+        accept_on(dir_fd, 1);
     for (int i = 0; i < CLIENT_MAX; i++)
         if (clients[i].fd >= 0)
             take(&clients[i]);

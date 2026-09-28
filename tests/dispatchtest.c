@@ -65,6 +65,7 @@ struct session *workspace_at(int index)
     return index == spawn_at && spawned_open ? &spawned : NULL;
 }
 int workspace_index(void) { return 0; }
+int workspace_count(void) { return spawned_open ? spawn_at + 1 : 1; }
 int workspace_index_of(const struct session *s)
 {
     if (s == &current_tab)
@@ -122,6 +123,11 @@ const char *session_id(const struct session *s)
     if (s == &spawned && spawned_id[0])
         return spawned_id;
     return NULL;
+}
+const char *session_name(const struct session *s)
+{
+    (void)s;
+    return "";
 }
 const char *session_addr(const struct session *s)
 {

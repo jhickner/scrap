@@ -11,7 +11,7 @@
 
 #include "dispatch.h"
 #include "files.h"
-#include "hub.h"
+#include "tailnet.h"
 #include "kvlog.h"
 #include "livelist.h"
 #include "sessionlist.h"
@@ -453,7 +453,7 @@ static const char *jstr(const cJSON *o, const char *key)
 
 char *intercom_net_list(const char *query)
 {
-    cJSON *machines = hub_survey();
+    cJSON *machines = tailnet_survey();
     if (!machines)
         return NULL;
     char  *text = NULL;
@@ -618,9 +618,9 @@ static int cmd_read(int argc, char **argv)
         return 2;
     }
 
-    char        host[HUB_HOST_MAX], msg[1200];
-    const char *name = hub_split(target, host, sizeof host);
-    char       *text = name ? hub_read(host, name, turns, bytes, msg, sizeof msg)
+    char        host[TAILNET_HOST_MAX], msg[1200];
+    const char *name = tailnet_split(target, host, sizeof host);
+    char       *text = name ? tailnet_read(host, name, turns, bytes, msg, sizeof msg)
                             : intercom_read(target, turns, bytes, msg, sizeof msg);
     if (!text) {
         fprintf(stderr, "scrap: %s\n", msg);
@@ -629,6 +629,32 @@ static int cmd_read(int argc, char **argv)
     fputs(text, stdout);
     free(text);
     return 0;
+}
+
+char *intercom_serve(const cJSON *o)
+{
+    cJSON *r = NULL;
+    char   msg[1200];
+    if (cJSON_GetObjectItem((cJSON *)o, "ls")) {
+        r = cJSON_CreateObject();
+        cJSON_AddStringToObject(r, "machine", tailnet_self_name());
+        cJSON_AddItemToObject(r, "sessions", intercom_live_json());
+    } else if (cJSON_IsString(cJSON_GetObjectItem((cJSON *)o, "read"))) {
+        cJSON *n = cJSON_GetObjectItem((cJSON *)o, "n"), *b = cJSON_GetObjectItem((cJSON *)o, "bytes");
+        long   turns = cJSON_IsNumber(n) ? (long)n->valuedouble : READ_TURNS;
+        long   bytes = cJSON_IsNumber(b) ? (long)b->valuedouble : READ_BYTES;
+        char  *text = intercom_read(cJSON_GetObjectItem((cJSON *)o, "read")->valuestring,
+                                    turns < 1 ? 1 : turns, bytes < 1 ? 1 : bytes, msg, sizeof msg);
+        r = cJSON_CreateObject();
+        if (text)
+            cJSON_AddStringToObject(r, "text", text);
+        else
+            cJSON_AddStringToObject(r, "error", msg);
+        free(text);
+    }
+    char *out = r ? cJSON_PrintUnformatted(r) : NULL;
+    cJSON_Delete(r);
+    return out;
 }
 
 cJSON *intercom_live_json(void)
@@ -645,6 +671,7 @@ cJSON *intercom_live_json(void)
         cJSON_AddStringToObject(o, "title", v[i].title);
         cJSON_AddStringToObject(o, "status", v[i].status);
         cJSON_AddNumberToObject(o, "ts", (double)v[i].ts);
+        cJSON_AddNumberToObject(o, "port", v[i].port);
         cJSON_AddItemToArray(a, o);
     }
     free(v);
@@ -746,10 +773,10 @@ int intercom_deliver(const char *host, const char *from, const char *target, con
 int intercom_send(const char *from, const char *target, const char *text, char *msg,
                   size_t size)
 {
-    char        host[HUB_HOST_MAX];
-    const char *name = hub_split(target, host, sizeof host);
+    char        host[TAILNET_HOST_MAX];
+    const char *name = tailnet_split(target, host, sizeof host);
     if (name)
-        return hub_send(host, from, name, text, msg, size);
+        return tailnet_send(host, from, name, text, msg, size);
     return intercom_deliver(NULL, from, target, text, msg, size);
 }
 

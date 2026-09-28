@@ -81,6 +81,7 @@ cmd_start() {
         mkdir -p "$share/live" "$share/dispatch" "$dir/state/config"
         touch "$share/names"
         for leaf in live dispatch names; do ln -s "$share/$leaf" "$dir/state/config/$leaf"; done
+        [ -f "$share/net" ] && ln -s "$share/net" "$dir/state/config/net"
     fi
     local path="$PATH"
     if [ "$fake" = 1 ]; then

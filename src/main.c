@@ -18,7 +18,7 @@
 #include "hud.h"
 #include "image.h"
 #include "docview.h"
-#include "hub.h"
+#include "tailnet.h"
 #include "intercom.h"
 #include "imageview.h"
 #include "livelist.h"
@@ -165,7 +165,6 @@ static void usage(void)
             "  " APP_NAME " read TARGET [-n TURNS] [--bytes N]   print a session's last turns\n"
             "  " APP_NAME " send TARGET TEXT   message a live session\n"
             "  " APP_NAME " open TARGET   resume a past session in a new tab\n"
-            "  " APP_NAME " hub [--install | --uninstall]   serve this machine's sessions on the tailnet\n"
             "\n"
             "With a prompt on the command line, answer it and exit.\n",
             choices);
@@ -588,8 +587,6 @@ int main(int argc, char **argv)
     if (argc > 1 && (!strcmp(argv[1], "ls") || !strcmp(argv[1], "read") ||
                      !strcmp(argv[1], "send") || !strcmp(argv[1], "open")))
         return intercom_main(argc - 1, argv + 1);
-    if (argc > 1 && !strcmp(argv[1], "hub"))
-        return hub_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "version")) {
         printf(APP_NAME " %s\n", SCRAP_VERSION);
         return 0;
@@ -849,6 +846,10 @@ int main(int argc, char **argv)
         return 1;
     }
     prompt_set_completer(intercom_complete);
+    dispatch_net(&(struct dispatch_net){.bind = tailnet_bind_ip,
+                                        .port = tailnet_dir_port(),
+                                        .peer = tailnet_peer,
+                                        .serve = intercom_serve});
     prompt_file_completion(prompt, cwd);
     if (have_config) {
         char history[4200];

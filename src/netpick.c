@@ -5,7 +5,7 @@
 #include <string.h>
 
 #include "ask.h"
-#include "hub.h"
+#include "tailnet.h"
 #include "intercom.h"
 #include "keyhelp.h"
 #include "pick.h"
@@ -26,7 +26,7 @@ static const struct keyhelp_row NET_KEYS[] = {
 struct row {
     char label[128];
     char detail[1200];
-    char target[HUB_HOST_MAX + INTERCOM_NAME_MAX + 2];
+    char target[TAILNET_HOST_MAX + INTERCOM_NAME_MAX + 2];
 };
 
 static const char *jstr(const cJSON *o, const char *key)
@@ -97,7 +97,7 @@ static void send_to(struct session *s, const char *target)
 
 void netpick_run(struct session *s)
 {
-    cJSON *machines = hub_survey();
+    cJSON *machines = tailnet_survey();
     if (!machines) {
         ui_error("tailscale status is unavailable");
         ui_put("\n");

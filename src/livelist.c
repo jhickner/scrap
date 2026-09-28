@@ -12,6 +12,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "dispatch.h"
 #include "api.h"
 #include "im.h"
 #include "parent.h"
@@ -213,6 +214,8 @@ void livelist_publish(const struct session *s, const char *status)
     cJSON_AddStringToObject(rec, "channels", channels);
     cJSON_AddNumberToObject(rec, "unseen", session_unseen(s) ? 1 : 0);
     cJSON_AddNumberToObject(rec, "ts", (double)time(NULL));
+    if (dispatch_net_port())
+        cJSON_AddNumberToObject(rec, "port", dispatch_net_port());
     const char *pane = getenv("TMUX_PANE");
     if (pane && *pane)
         cJSON_AddStringToObject(rec, "pane", pane);
@@ -328,6 +331,7 @@ static int load_dir(const char *where, int live, struct live_session **out)
         v->pid = number(rec, "pid");
         v->slot = (int)number(rec, "slot");
         v->ts = number(rec, "ts");
+        v->port = (int)number(rec, "port");
         copy_str(v->backend, sizeof v->backend, rec, "backend");
         copy_str(v->model, sizeof v->model, rec, "model");
         copy_str(v->label, sizeof v->label, rec, "label");
