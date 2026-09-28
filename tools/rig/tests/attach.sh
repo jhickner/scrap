@@ -7,7 +7,8 @@ ip=$(tailscale ip -4 2>/dev/null | head -1 || true)
 if [ -z "$ip" ]; then echo "attach: skipped, no tailscale address"; exit 0; fi
 me=$(tailscale status --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["Self"]["DNSName"].split(".")[0])')
 share=$(mktemp -d /tmp/scraprig-share.XXXXXX)
-printf 'port = %s\nbind = %s\n' "$((20000 + RANDOM % 20000))" "$ip" > "$share/net"
+port=$((20000 + RANDOM % 20000))
+printf 'port = %s\nbind = %s\n' "$port" "$ip" > "$share/net"
 b=$($R start --fake --share "$share")
 trap '$R stop $b 2>/dev/null || true; rm -rf "$share"' EXIT
 fail() { echo "attach: $*" >&2; exit 1; }
@@ -36,4 +37,10 @@ grep -q '"turn":"done"' "$out" || fail "no turn done: $(cat "$out")"
 
 SCRAP_CONFIG_DIR="$cfg" timeout 3 "$scrap" attach "$me:@bee" > "$share/remote" 2>&1 < /dev/null || true
 grep -q '"user":"typed on b"' "$share/remote" || fail "remote attach history: $(cat "$share/remote")"
+reply=$(printf '{"cwd":"~","prompt":"first words"}\n' | nc -w 40 "$ip" "$port")
+name=$(echo "$reply" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("name",""))')
+[ -n "$name" ] || fail "spawn reply has no name: $reply"
+SCRAP_CONFIG_DIR="$cfg" timeout 3 "$scrap" attach "$me:@$name" > "$share/spawned" 2>&1 < /dev/null || true
+grep -q '"user":"first words"' "$share/spawned" || fail "spawned session history: $(cat "$share/spawned")"
+grep -q "\"cwd\":\"$HOME\"" "$share/spawned" || fail "spawn did not expand ~: $(cat "$share/spawned")"
 echo "attach: ok"

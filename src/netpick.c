@@ -9,6 +9,7 @@
 #include "tailnet.h"
 #include "intercom.h"
 #include "keyhelp.h"
+#include "newsession.h"
 #include "pick.h"
 #include "session.h"
 #include "text.h"
@@ -31,6 +32,9 @@ struct row {
     char detail[1200];
     char target[TAILNET_HOST_MAX + INTERCOM_NAME_MAX + 2];
     char id[128];
+    char machine[TAILNET_HOST_MAX];
+    int  spawn;
+    int  self;
 };
 
 static const char *jstr(const cJSON *o, const char *key)
@@ -79,6 +83,14 @@ static int build(cJSON *machines, struct row *rows, unsigned char *heading, unsi
             snprintf(r->target, sizeof r->target, "%s%s@%s", self ? "" : machine,
                      self ? "" : ":", name);
         }
+        if (!*error && n < MAX_ROWS) {
+            struct row *r = &rows[n];
+            heading[n++] = 0;
+            snprintf(r->label, sizeof r->label, "+ new session");
+            snprintf(r->machine, sizeof r->machine, "%s", machine);
+            r->spawn = 1;
+            r->self = self;
+        }
     }
     return n;
 }
@@ -98,6 +110,30 @@ static void send_to(struct session *s, const char *target)
         ui_flush();
     }
     free(text);
+}
+
+static void spawn_on(const struct row *r)
+{
+    if (r->self) {
+        newsession_run();
+        return;
+    }
+    char title[300];
+    snprintf(title, sizeof title, "folder on %s", r->machine);
+    char *cwd = ask_run(title, "~");
+    if (!cwd)
+        return;
+    char target[sizeof r->target], msg[1200];
+    ui_note("starting a session on %s\xe2\x80\xa6", r->machine);
+    ui_flush();
+    if (tailnet_spawn(r->machine, cwd, target, sizeof target, msg, sizeof msg))
+        cmd_attach(target);
+    else {
+        ui_error("%s", msg);
+        ui_put("\n");
+        ui_flush();
+    }
+    free(cwd);
 }
 
 void netpick_run(struct session *s)
@@ -137,9 +173,12 @@ void netpick_run(struct session *s)
                    : -1;
 
     char target[sizeof rows->target] = "", id[128] = "";
+    struct row spawn = {0};
     if (picked >= 0 && !heading[picked]) {
         snprintf(target, sizeof target, "%s", rows[picked].target);
         snprintf(id, sizeof id, "%s", rows[picked].id);
+        if (rows[picked].spawn)
+            spawn = rows[picked];
     }
     free(items);
     free(rows);
@@ -148,6 +187,10 @@ void netpick_run(struct session *s)
     free(roles);
     free(marks);
     int here = id[0] ? workspace_find_id(id) : -1;
+    if (spawn.spawn) {
+        spawn_on(&spawn);
+        return;
+    }
     if (!target[0])
         return;
     if (pressed == KEY_SEND)

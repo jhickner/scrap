@@ -25,6 +25,7 @@
 #define REPLY_MAX      (4 * 1024 * 1024)
 #define SEND_TIMEOUT   20
 #define SURVEY_TIMEOUT 3
+#define SPAWN_TIMEOUT  40
 #define WHOIS_TTL      60
 #define WHOIS_SLOTS    32
 
@@ -397,6 +398,27 @@ char *tailnet_read(const char *host, const char *target, long turns, long bytes,
     char *text = strdup(jstr(r, "text"));
     cJSON_Delete(r);
     return text;
+}
+
+int tailnet_spawn(const char *host, const char *cwd, char *target, size_t tsize, char *msg,
+                  size_t size)
+{
+    char ip[256], err[512];
+    tailnet_resolve(host, ip, sizeof ip);
+    cJSON *req = cJSON_CreateObject();
+    if (cwd && *cwd)
+        cJSON_AddStringToObject(req, "cwd", cwd);
+    cJSON *r = ask(ip, tailnet_dir_port(), req, SPAWN_TIMEOUT, err, sizeof err);
+    if (!r) {
+        snprintf(msg, size, "%s: %s", host, err);
+        return 0;
+    }
+    if (*jstr(r, "name"))
+        snprintf(target, tsize, "%s:@%s", host, jstr(r, "name"));
+    else
+        snprintf(target, tsize, "%s:%s", host, jstr(r, "session"));
+    cJSON_Delete(r);
+    return 1;
 }
 
 struct probe {

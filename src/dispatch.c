@@ -232,10 +232,13 @@ static long since_ms(const struct timespec *then, const struct timespec *now)
     return (now->tv_sec - then->tv_sec) * 1000 + (now->tv_nsec - then->tv_nsec) / 1000000;
 }
 
-static void reply_spawn(int fd, const char *id, const char *addr)
+static void reply_spawn(int fd, struct session *s)
 {
-    cJSON *r = cJSON_CreateObject();
+    const char *id = session_id(s), *addr = session_addr(s), *name = session_name(s);
+    cJSON      *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "session", id);
+    if (name && *name)
+        cJSON_AddStringToObject(r, "name", name);
     if (addr && *addr)
         cJSON_AddStringToObject(r, "addr", addr);
     char *json = cJSON_PrintUnformatted(r);
@@ -267,7 +270,7 @@ static void settle_pending(void)
         int         at = workspace_index_of(pendings[i].s);
         const char *id = at >= 0 ? session_id(workspace_at(at)) : NULL;
         if (id)
-            reply_spawn(pendings[i].fd, id, session_addr(workspace_at(at)));
+            reply_spawn(pendings[i].fd, workspace_at(at));
         else if (at < 0)
             reply_error(pendings[i].fd, "session ended before it reported an id", NULL);
         else if (since_ms(&pendings[i].since, &now) < ID_WAIT_MS)
@@ -356,7 +359,13 @@ static void serve(int fd, const char *text, const char *host)
     if (!backend)
         backend = cmd_default_backend();
 
-    int at = dispatch_spawn(backend, field(o, "model"), field(o, "effort"), field(o, "cwd"),
+    const char *cwd = field(o, "cwd"), *home = getenv("HOME");
+    char        expanded[4096];
+    if (cwd && cwd[0] == '~' && (cwd[1] == '\0' || cwd[1] == '/') && home) {
+        snprintf(expanded, sizeof expanded, "%s%s", home, cwd + 1);
+        cwd = expanded;
+    }
+    int at = dispatch_spawn(backend, field(o, "model"), field(o, "effort"), cwd,
                             field(o, "title"), field(o, "resume"), NULL, field(o, "prompt"));
     if (at < 0) {
         char out[300];
@@ -366,9 +375,8 @@ static void serve(int fd, const char *text, const char *host)
         return;
     }
 
-    const char *id = session_id(workspace_at(at));
-    if (id)
-        reply_spawn(fd, id, session_addr(workspace_at(at)));
+    if (session_id(workspace_at(at)))
+        reply_spawn(fd, workspace_at(at));
     else
         hold_spawn(fd, workspace_at(at));
     cJSON_Delete(o);
