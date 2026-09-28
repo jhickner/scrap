@@ -168,12 +168,20 @@ static void send_session(int fd, const cJSON *o, const cJSON *send)
 {
     const char *line = cJSON_GetStringValue(send);
     cJSON *target = cJSON_GetObjectItem((cJSON *)o, "session");
-    if (!cJSON_IsString(target) || !target->valuestring || !*target->valuestring) {
-        reply_error(fd, "send takes a session id", NULL);
+    const char *id = cJSON_GetStringValue(target), *name = field(o, "name");
+    int at = index_of_id(target);
+    /* A session has no id until its first turn; address it by name. */
+    for (int i = 0; at < 0 && (!id || !*id) && name && i < workspace_count(); i++) {
+        const char *mine = session_name(workspace_at(i));
+        if (mine && !strcmp(mine, name))
+            at = i;
+    }
+    if ((!id || !*id) && !name) {
+        reply_error(fd, "send takes a session id or name", NULL);
         return;
     }
-    const char *id = target->valuestring;
-    int at = index_of_id(target);
+    if (!id || !*id)
+        id = name;
     if (!workspace_at(at)) {
         reply_error(fd, "no such session", id);
         return;
@@ -183,17 +191,17 @@ static void send_session(int fd, const cJSON *o, const cJSON *send)
         return;
     }
 
-    const char *name = field(o, "from"), *host = field(o, "host");
+    const char *sender = field(o, "from"), *host = field(o, "host");
     char        from[200] = "";
-    if (name)
-        snprintf(from, sizeof from, "%s%s@%s", host ? host : "", host ? ":" : "", name);
-    if (name && !pair_allowed(from, id)) {
+    if (sender)
+        snprintf(from, sizeof from, "%s%s@%s", host ? host : "", host ? ":" : "", sender);
+    if (sender && !pair_allowed(from, id)) {
         reply_error(fd, "too many messages to this session in the last minute", id);
         return;
     }
-    char *framed = name ? text_dsprintf("[from %s] %s", from, line) : NULL;
-    char *shown = name ? text_dsprintf("from %s: %s", from, line) : NULL;
-    int   sent = name ? framed && shown && deliver(at, framed, shown) : dispatch_send(at, line);
+    char *framed = sender ? text_dsprintf("[from %s] %s", from, line) : NULL;
+    char *shown = sender ? text_dsprintf("from %s: %s", from, line) : NULL;
+    int   sent = sender ? framed && shown && deliver(at, framed, shown) : dispatch_send(at, line);
     free(framed);
     free(shown);
     if (!sent)

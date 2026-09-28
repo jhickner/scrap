@@ -253,9 +253,9 @@ static void fill(char *dst, size_t size, const char *src)
 
 static void add(struct entries *l, const struct entry *e)
 {
-    if (!e->id[0])
+    if (!e->id[0] && !e->live)
         return;
-    struct entry *have = find_id(l, e->id);
+    struct entry *have = e->id[0] ? find_id(l, e->id) : NULL;
     if (have) {
         fill(have->name, sizeof have->name, e->name);
         fill(have->title, sizeof have->title, e->title);
@@ -369,7 +369,7 @@ static void collect(struct entries *l, const char *cwd, int live_only, int up)
     }
 
     for (int i = 0; i < l->n; i++)
-        if (!l->e[i].title[0])
+        if (!l->e[i].title[0] && l->e[i].id[0])
             title_lookup(l->e[i].id, l->e[i].title, sizeof l->e[i].title);
     qsort(l->e, (size_t)l->n, sizeof *l->e, newest);
 }
@@ -386,7 +386,7 @@ static int contains(const char *hay, const char *needle)
 static int transcript_has(const struct entry *e, const char *query)
 {
     char path[4096];
-    if (!sessionload_path(e->backend, e->cwd, e->id, path, sizeof path))
+    if (!e->id[0] || !sessionload_path(e->backend, e->cwd, e->id, path, sizeof path))
         return 0;
     FILE *f = fopen(path, "rb");
     if (!f)
@@ -719,6 +719,8 @@ int intercom_deliver(const char *host, const char *from, const char *target, con
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "send", long_text ? long_text : text);
         cJSON_AddStringToObject(o, "session", e->id);
+        if (e->name[0])
+            cJSON_AddStringToObject(o, "name", e->name);
         if (from && *from)
             cJSON_AddStringToObject(o, "from", from);
         if (host && *host)
