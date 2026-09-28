@@ -11,6 +11,6 @@ $R wait $n 'session 2/2'
 $R wait $n 'echo: second tab'
 $R send $n BTab
 $R idle $n
-$R snap $n | head -1 | grep -q "│ [^@]*$first *\$"
+[ "$($R tab $n)" = "$first" ]
 $R send $n BTab
 $R wait $n 'echo: second tab'

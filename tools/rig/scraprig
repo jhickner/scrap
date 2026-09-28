@@ -25,6 +25,7 @@ usage: scraprig <command> ...
   idle   name [ms] [secs]    until the screen is unchanged for ms (default 500)
   snap   name [-e]           print the screen, instance dir as <rig>; -e keeps colour
   expect name golden [--update]   compare the screen to a golden file
+  tab    name                print the highlighted session in the tab box
   log    name                scrap stderr
   dir    name                the instance directory
   stop   name
@@ -200,6 +201,9 @@ snap)
     inst "${1:-}"
     if [ "${2:-}" = -e ]; then snap "$1" -e; else snap "$1"; fi ;;
 expect) inst "${1:-}"; [ $# -ge 2 ] || usage; cmd_expect "$@" ;;
+tab)
+    inst "${1:-}"
+    screen "$1" -e | grep '│' | grep -oE $'\e\\[38;2;34;162;201m[^ \e]*@[a-z0-9_:.-]+' | head -1 | sed $'s/\e\\[[0-9;]*m//' ;;
 log) inst "${1:-}"; cat "$ROOT/$1/stderr" ;;
 dir) inst "${1:-}"; echo "$ROOT/$1" ;;
 stop) inst "${1:-}"; cmd_stop "$1" ;;

@@ -10,6 +10,7 @@
 #include "app.h"
 #include "bash.h"
 #include "chrome.h"
+#include "newsession.h"
 #include "cmd.h"
 #include "frontend.h"
 #include "pick.h"
@@ -367,6 +368,14 @@ static int clicked(void *ud, int row, int col)
 {
     (void)ud;
     int tab = tabbar_hit(row, col);
+    if (tab == TABBAR_NEW) {
+        if (!chrome_modal_active()) {
+            newsession_run();
+            viewport_flush();
+            ui_flush();
+        }
+        return 1;
+    }
     if (tab >= 0) {
         if (tab != workspace_index())
             workspace_show(tab);

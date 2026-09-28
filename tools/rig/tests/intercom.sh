@@ -34,4 +34,4 @@ $R type $a 'run: scrap open @b'
 $R send $a Enter
 $R wait $a 'ran: opened @b in a new tab'
 $R wait $a '│ [^@]*@b *$'
-$R snap $a | head -1 | grep -q '│ [^@]*@a *$'
+[ "$($R tab $a)" = @a ]

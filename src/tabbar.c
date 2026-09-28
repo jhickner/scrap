@@ -14,6 +14,7 @@
 
 #define NAME_CELLS 14
 #define INSET      2
+#define BUTTON_W   5
 
 #define DOT "\xe2\x97\x8f"
 #define BAR "\xe2\x94\x82"
@@ -114,38 +115,38 @@ static void rule(int cells)
         ui_put(RULE);
 }
 
-static void paint_row(void *ud, int at, int w)
+static void paint_row(void *ud, int line, int w)
 {
-    (void)ud;
-    int last = ntabs > 1 ? ntabs + 1 : 1;
-    int inset = at >= 2 ? INSET : 0;
+    int at = *(int *)ud + line;
 
     ui_esc(ui_style(UI_DIM));
-    if (at == 1) {
-        ui_put("\xe2\x95\xb0");
-        if (ntabs > 1) {
-            ui_put(RULE "\xe2\x94\xac");
-            rule(w - 3);
-        } else {
-            rule(w - 1);
-        }
-    } else if (at == last) {
-        ui_pad(INSET);
-        ui_put("\xe2\x95\xb0");
-        rule(w - INSET - 1);
-    } else {
-        const struct tab *t = &tabs[at ? at - 1 : 0];
+    if (at < ntabs) {
+        const struct tab *t = &tabs[at];
 
-        ui_pad(inset);
         ui_put(BAR " ");
         if (t->glyph) {
             ui_esc(ui_style(t->role));
             ui_put(t->glyph);
             ui_put(" ");
         }
-        ui_esc(ui_style(at ? UI_DIM : UI_ACCENT));
+        ui_esc(ui_style(t->index == workspace_index() ? UI_ACCENT : UI_DIM));
         ui_put(t->name);
-        ui_pad(w - inset - 2 - t->cells);
+        ui_pad(w - 2 - t->cells);
+    } else if (at == ntabs) {
+        ui_put("\xe2\x95\xb0" RULE "\xe2\x94\xac" RULE RULE RULE "\xe2\x94\xac");
+        rule(w - BUTTON_W - INSET);
+    } else if (at == ntabs + 1) {
+        ui_pad(INSET);
+        ui_put(BAR " ");
+        ui_esc(ui_style(UI_ACCENT));
+        ui_put("+");
+        ui_esc(ui_style(UI_DIM));
+        ui_put(" " BAR);
+        ui_pad(w - INSET - BUTTON_W);
+    } else {
+        ui_pad(INSET);
+        ui_put("\xe2\x95\xb0" RULE RULE RULE "\xe2\x95\xaf");
+        ui_pad(w - INSET - BUTTON_W);
     }
     ui_esc(ui_style(UI_RESET));
 }
@@ -158,23 +159,19 @@ void tabbar_cover(char **rows, int n, int cols)
     box_col = -1;
     spin_advance(&frame, &frame_at);
     painted = digest();
-    if (count < 1 || cur < 0 || n < 2)
+    if (count < 1 || cur < 0 || n < 4)
         return;
     if (count == 1 && (!settings_get_int(SETTING_NAME_BADGE, 1) ||
                        (!session_remote(workspace_at(cur)) && !session_name(workspace_at(cur))[0])))
         return;
 
-    ntabs = 0;
-    tabs[ntabs++].index = cur;
-    for (int i = 0; i < count && ntabs < n - 1; i++)
-        if (i != cur)
-            tabs[ntabs++].index = i;
-
+    ntabs = count < n - 3 ? count : n - 3;
     int widest = 0;
     for (int i = 0; i < ntabs; i++) {
         struct tab           *t = &tabs[i];
-        const struct session *s = workspace_at(t->index);
+        const struct session *s = workspace_at(i);
 
+        t->index = i;
         name_of(s, t->name, sizeof t->name);
         t->role = UI_DIM;
         t->glyph = mark(s, &t->role);
@@ -182,14 +179,16 @@ void tabbar_cover(char **rows, int n, int cols)
         if (t->cells > widest)
             widest = t->cells;
     }
-    int w = widest + 3 + (ntabs > 1 ? INSET : 0);
+    int w = widest + 3;
+    if (w < BUTTON_W + INSET + 1)
+        w = BUTTON_W + INSET + 1;
     if (w > cols)
         return;
 
-    int height = ntabs > 1 ? ntabs + 2 : 2;
-    struct overlay o = {.col = cols - w, .w = w, .rows = height, .paint_row = paint_row};
-    for (int r = 0; r < height; r++) {
-        o.row = -r;
+    int height = ntabs + 3;
+    int            r;
+    struct overlay o = {.col = cols - w, .w = w, .rows = 1, .paint_row = paint_row, .ud = &r};
+    for (r = 0; r < height; r++) {
         ui_sink_begin();
         overlay_put(rows[r] ? rows[r] : "", &o);
         char *out = ui_sink_end();
@@ -207,13 +206,13 @@ void tabbar_cover(char **rows, int n, int cols)
 int tabbar_hit(int row, int col)
 {
     int at = row - 1;
-    int inset = at >= 2 ? INSET : 0;
+    int x = col - 1 - box_col;
 
-    if (box_col < 0 || col - 1 < box_col + inset)
-        return -1;
-    if (at == 0)
-        return tabs[0].index;
-    if (ntabs > 1 && at >= 2 && at <= ntabs)
-        return tabs[at - 1].index;
-    return -1;
+    if (box_col < 0 || x < 0)
+        return TABBAR_NONE;
+    if (at < ntabs)
+        return tabs[at].index;
+    if (at == ntabs + 1 && x >= INSET && x < INSET + BUTTON_W)
+        return TABBAR_NEW;
+    return TABBAR_NONE;
 }
