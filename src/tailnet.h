@@ -13,6 +13,10 @@ int tailnet_broker(void);
 
 const char *tailnet_bind_ip(void);
 
+int tailnet_serve(void);
+
+int tailnet_serve_forward(int port);
+
 const char *tailnet_self_name(void);
 
 int tailnet_is_self(const char *host);

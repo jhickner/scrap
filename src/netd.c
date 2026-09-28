@@ -26,6 +26,7 @@
 #include "handoff.h"
 #include "intercom.h"
 #include "livelist.h"
+#include "proxyproto.h"
 #include "tailnet.h"
 #include "title.h"
 #include "vendor/cJSON.h"
@@ -130,6 +131,30 @@ static char *request_line(int fd)
     return NULL;
 }
 
+static int recv_all(int fd, unsigned char *buf, size_t n)
+{
+    size_t got = 0;
+    while (got < n) {
+        ssize_t r = recv(fd, buf + got, n - got, 0);
+        if (r < 0 && errno == EINTR)
+            continue;
+        if (r <= 0)
+            return 0;
+        got += (size_t)r;
+    }
+    return 1;
+}
+
+static int proxy_peer(int fd, char *ip, size_t size)
+{
+    unsigned char hdr[PROXYPROTO_HEAD + 216];
+    if (!recv_all(fd, hdr, PROXYPROTO_HEAD))
+        return 0;
+    size_t n = proxyproto_len(hdr);
+    return n && n <= sizeof hdr && recv_all(fd, hdr + PROXYPROTO_HEAD, n - PROXYPROTO_HEAD) &&
+           proxyproto_source(hdr, n, ip, size);
+}
+
 static long newest_scrap(void)
 {
     struct live_session *v = NULL;
@@ -210,7 +235,7 @@ static void *serve(void *ud)
     int            fd = c->fd;
     struct timeval limit = {.tv_sec = READ_TIMEOUT_S}, none = {0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &limit, sizeof limit);
-    char *line = request_line(fd);
+    char *line = !tailnet_serve() || proxy_peer(fd, c->ip, sizeof c->ip) ? request_line(fd) : NULL;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &none, sizeof none);
     char   host[256];
     cJSON *o = line ? cJSON_Parse(line) : NULL;
@@ -291,7 +316,7 @@ int netd_main(int argc, char **argv)
         }
         if (stat(lock, &now) != 0 || now.st_ino != held.st_ino || now.st_dev != held.st_dev)
             return 0;
-        const char *ip = tailnet_bind_ip();
+        const char *ip = tailnet_serve() ? "127.0.0.1" : tailnet_bind_ip();
         if (lfd >= 0 && (!ip || strcmp(ip, bound))) {
             printf("scrap net: %s went away\n", bound);
             close(lfd);
@@ -302,6 +327,8 @@ int netd_main(int argc, char **argv)
             if (lfd >= 0) {
                 snprintf(bound, sizeof bound, "%s", ip);
                 printf("scrap net: %s on %s:%d\n", tailnet_self_name(), bound, port);
+                if (tailnet_serve() && !tailnet_serve_forward(port))
+                    printf("scrap net: tailscale serve --tcp %d failed\n", port);
             } else
                 printf("scrap net: cannot listen on %s:%d: %s\n", ip, port, strerror(errno));
         }

@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +33,7 @@ extern char **environ;
 #define SPAWN_TIMEOUT  40
 #define WHOIS_TTL      60
 #define WHOIS_SLOTS    32
+#define CLI_TIMEOUT    5
 
 static struct settings cfg;
 static int             cfg_loaded;
@@ -62,6 +64,34 @@ const char *tailnet_bind_ip(void)
 {
     const char *set = cfg_get("bind", NULL);
     return set ? set : wsd_tailscale_ip();
+}
+
+int tailnet_serve(void)
+{
+    return !strcmp(cfg_get("listener", "direct"), "serve");
+}
+
+static const char *cli(void);
+
+int tailnet_serve_forward(int port)
+{
+    char p[16], dest[48];
+    snprintf(p, sizeof p, "%d", port);
+    snprintf(dest, sizeof dest, "tcp://127.0.0.1:%d", port);
+    char *argv[] = {(char *)cli(), "serve", "--bg", "--yes", "--tcp", p, "--proxy-protocol", "2",
+                    dest, NULL};
+    posix_spawn_file_actions_t acts;
+    posix_spawn_file_actions_init(&acts);
+    posix_spawn_file_actions_addopen(&acts, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    posix_spawn_file_actions_addopen(&acts, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+    posix_spawn_file_actions_addopen(&acts, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    pid_t pid;
+    int   status = -1;
+    if (posix_spawnp(&pid, argv[0], &acts, NULL, argv, environ) == 0)
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+            ;
+    posix_spawn_file_actions_destroy(&acts);
+    return status == 0;
 }
 
 static const char *cli(void)
@@ -95,13 +125,29 @@ static cJSON *tailscale(const char *verb, const char *arg)
     posix_spawn_file_actions_addopen(&acts, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
     posix_spawn_file_actions_addopen(&acts, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
     char *argv[] = {(char *)cli(), (char *)verb, (char *)"--json", (char *)arg, NULL};
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
+    posix_spawnattr_setpgroup(&attr, 0);
     pid_t pid;
-    int   ok = posix_spawnp(&pid, argv[0], &acts, NULL, argv, environ) == 0;
+    int   ok = posix_spawnp(&pid, argv[0], &acts, &attr, argv, environ) == 0;
+    posix_spawnattr_destroy(&attr);
     posix_spawn_file_actions_destroy(&acts);
     close(fds[1]);
     char  *buf = ok ? malloc(CLI_MAX + 1) : NULL;
     size_t got = 0;
+    time_t until = time(NULL) + CLI_TIMEOUT;
     while (buf && got < CLI_MAX) {
+        struct pollfd p = {.fd = fds[0], .events = POLLIN};
+        int           left = (int)(until - time(NULL));
+        int           r = left > 0 ? poll(&p, 1, left * 1000) : 0;
+        if (r < 0 && errno == EINTR)
+            continue;
+        if (r == 0) {
+            kill(-pid, SIGKILL);
+            got = 0;
+            break;
+        }
         ssize_t n = read(fds[0], buf + got, CLI_MAX - got);
         if (n < 0 && errno == EINTR)
             continue;
