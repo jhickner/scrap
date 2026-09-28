@@ -1,0 +1,133 @@
+#include "netpick.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "ask.h"
+#include "hub.h"
+#include "intercom.h"
+#include "keyhelp.h"
+#include "pick.h"
+#include "session.h"
+#include "text.h"
+#include "ui.h"
+
+#define MAX_ROWS 256
+#define KEY_SEND 's'
+
+static const struct keyhelp_row NET_KEYS[] = {
+    {"GO", "enter/s", "send a message"},
+    {"GO", "tab/esc", "close the list"},
+    {"LIST", "up/down", "move"},
+    {"LIST", "/", "search"},
+};
+
+struct row {
+    char label[128];
+    char detail[1200];
+    char target[HUB_HOST_MAX + INTERCOM_NAME_MAX + 2];
+};
+
+static const char *jstr(const cJSON *o, const char *key)
+{
+    const char *s = cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)o, key));
+    return s ? s : "";
+}
+
+static int build(cJSON *machines, struct row *rows, unsigned char *heading)
+{
+    int    n = 0;
+    cJSON *m;
+    cJSON_ArrayForEach(m, machines)
+    {
+        const char *machine = jstr(m, "machine"), *error = jstr(m, "error");
+        int         self = cJSON_IsTrue(cJSON_GetObjectItem(m, "self"));
+        cJSON      *list = cJSON_GetObjectItem(m, "sessions");
+        if (n >= MAX_ROWS)
+            break;
+        heading[n] = PICK_HEADING;
+        if (*error)
+            snprintf(rows[n].label, sizeof rows[n].label, "%s \xc2\xb7 %s", machine, error);
+        else if (!cJSON_GetArraySize(list))
+            snprintf(rows[n].label, sizeof rows[n].label, "%s \xc2\xb7 no live sessions", machine);
+        else
+            snprintf(rows[n].label, sizeof rows[n].label, "%s", machine);
+        n++;
+        cJSON *o;
+        cJSON_ArrayForEach(o, list)
+        {
+            const char *name = jstr(o, "name");
+            if (!*name || n >= MAX_ROWS)
+                continue;
+            char where[1024];
+            path_home_relative(jstr(o, "cwd"), where, sizeof where);
+            struct row *r = &rows[n];
+            heading[n++] = 0;
+            snprintf(r->label, sizeof r->label, "@%s", name);
+            snprintf(r->detail, sizeof r->detail, "%-8s %s  %s", jstr(o, "status"), where,
+                     *jstr(o, "title") ? jstr(o, "title") : "untitled");
+            snprintf(r->target, sizeof r->target, "%s%s@%s", self ? "" : machine,
+                     self ? "" : ":", name);
+        }
+    }
+    return n;
+}
+
+static void send_to(struct session *s, const char *target)
+{
+    char title[300];
+    snprintf(title, sizeof title, "message to %s", target);
+    char *text = ask_run(title, NULL);
+    if (text && *text) {
+        char msg[1200];
+        if (intercom_send(s ? session_name(s) : NULL, target, text, msg, sizeof msg))
+            ui_error("%s", msg);
+        else
+            ui_note("%s", msg);
+        ui_put("\n");
+        ui_flush();
+    }
+    free(text);
+}
+
+void netpick_run(struct session *s)
+{
+    cJSON *machines = hub_survey();
+    if (!machines) {
+        ui_error("tailscale status is unavailable");
+        ui_put("\n");
+        ui_flush();
+        return;
+    }
+    struct row       *rows = calloc(MAX_ROWS, sizeof *rows);
+    unsigned char    *heading = calloc(MAX_ROWS, 1);
+    struct pick_item *items = calloc(MAX_ROWS, sizeof *items);
+    int               n = rows && heading && items ? build(machines, rows, heading) : 0;
+    cJSON_Delete(machines);
+
+    int initial = 0;
+    while (initial < n && heading[initial])
+        initial++;
+    for (int i = 0; i < n; i++) {
+        items[i].label = rows[i].label;
+        items[i].detail = rows[i].detail;
+    }
+
+    char             shortcuts[] = {KEY_SEND, PICK_KEY_RIGHT, '\t', 0};
+    int              pressed = 0;
+    struct pick_live shown = {.heading = heading, .align = 1, .keys = NET_KEYS,
+                              .nkeys = (int)(sizeof NET_KEYS / sizeof *NET_KEYS)};
+    int picked = n ? pick_run_live("net", items, n, initial < n ? initial : 0, &shown,
+                                   PICK_SEARCH_SLASH, shortcuts, &pressed)
+                   : -1;
+
+    char target[sizeof rows->target] = "";
+    if (picked >= 0 && !heading[picked])
+        snprintf(target, sizeof target, "%s", rows[picked].target);
+    free(items);
+    free(rows);
+    free(heading);
+    if (target[0])
+        send_to(s, target);
+}

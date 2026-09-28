@@ -326,8 +326,10 @@ cJSON *hub_survey(void)
         snprintf(p->ip, sizeof p->ip, "%s", node_ip(it));
         p->result = cJSON_CreateObject();
         cJSON_AddStringToObject(p->result, "machine", p->machine);
-        if (it == self)
+        if (it == self) {
+            cJSON_AddBoolToObject(p->result, "self", 1);
             cJSON_AddItemToObject(p->result, "sessions", intercom_live_json());
+        }
         else if (!cJSON_IsTrue(cJSON_GetObjectItem(it, "Online")))
             cJSON_AddStringToObject(p->result, "error", "offline");
         else

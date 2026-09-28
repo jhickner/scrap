@@ -22,6 +22,7 @@
 #include "session.h"
 #include "image.h"
 #include "hub.h"
+#include "netpick.h"
 #include "intercom.h"
 #include "sessionfork.h"
 #include "sessionlist.h"
@@ -1198,20 +1199,9 @@ static void do_send(struct session *s, const char *arg)
 
 static void do_net(struct session *s, const char *arg)
 {
-    (void)s;
-    char *text = intercom_net_list(arg && *arg ? arg : NULL);
-    viewport_item_begin(VIEWPORT_ROWS(1, 1));
-    if (!text)
-        ui_error("tailscale status is unavailable");
-    else if (!*text)
-        ui_note("no matching sessions");
-    char *save = NULL;
-    for (char *line = text ? strtok_r(text, "\n", &save) : NULL; line;
-         line = strtok_r(NULL, "\n", &save))
-        ui_note("%s", line);
-    viewport_item_end();
-    ui_flush();
-    free(text);
+    (void)arg;
+    if (can_pick("/net"))
+        netpick_run(s);
 }
 
 static int split_command(const char *line, char *name, size_t size, const char **arg)
@@ -1419,7 +1409,7 @@ static const struct cmd COMMANDS[] = {
      0, do_rename},
     {"/name", "show or set this session's @name for scrap send", "[name]", 0, do_name},
     {"/send", "send a message to another session", "@name text", CMD_LIVE_ARG, do_send},
-    {"/net", "live sessions on this machine and other tailnet machines", "[query]", 0, do_net},
+    {"/net", "live sessions on this machine and other tailnet machines", NULL, 0, do_net},
     {"/tail", "show bot messages that arrived since the last shown", "[count]", 0,
      do_tail},
     {"/vnc", "show the bot's desktop in an inset", "[left|right|off|test|size <percent>]",
