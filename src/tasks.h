@@ -13,6 +13,7 @@ struct task {
     char   parent[40];
     char   desc[140];
     char   type[40];
+    char   task_type[32];
     char   status[24];
     char   latest[240];
     char   cmd[240];

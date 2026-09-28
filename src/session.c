@@ -147,7 +147,7 @@ struct session {
 
 struct evcopy {
     backend_event  ev;
-    char          *text, *name, *input_json, *arg, *diff, *id, *parent;
+    char          *text, *name, *input_json, *arg, *diff, *id, *parent, *task_type;
     double         queued_at;
     struct evcopy *next;
 };
@@ -249,6 +249,7 @@ static void evcopy_free(struct evcopy *e)
     free(e->diff);
     free(e->id);
     free(e->parent);
+    free(e->task_type);
     free(e);
 }
 
@@ -265,6 +266,7 @@ static void enqueue(struct session *s, const backend_event *ev)
     e->ev.diff = e->diff = dup_or_null(ev->diff);
     e->ev.id = e->id = dup_or_null(ev->id);
     e->ev.parent = e->parent = dup_or_null(ev->parent);
+    e->ev.task_type = e->task_type = dup_or_null(ev->task_type);
     e->queued_at = now_seconds();
 
     pthread_mutex_lock(&s->lock);

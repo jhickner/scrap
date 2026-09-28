@@ -63,7 +63,8 @@ typedef enum {
     BACKEND_EV_TRUST,       /* the current project needs a trust decision       */
     BACKEND_EV_WARNING,     /* text: an actionable backend configuration notice */
     BACKEND_EV_TASK,        /* id, name (status), text (description or summary),
-                               arg (subagent type): a background task the agent
+                               arg (subagent type or workflow name), task_type:
+                               a background task the agent
                                started, which outlives the turn that started it */
 } backend_event_kind;
 
@@ -78,6 +79,8 @@ typedef struct {
     const char *diff;       /* authoritative unified patch for a tool result;
                                NULL when the driver does not report one         */
     const char *id;         /* TASK: the backend's own id for the task          */
+    const char *task_type;  /* TASK: what the task is (local_bash, local_agent,
+                               ...); NULL when the driver does not say          */
     const char *parent;     /* the tool call this event belongs to rather than
                                the session itself -- a subagent's own work comes
                                up the same stream. NULL for the session's own,
@@ -379,6 +382,7 @@ static void backend_claude_event(void *ud, const claude_event *e) {
     backend_claude *x = ((Backend *)ud)->ctx;
     backend_event ev = { .text = e->text, .name = e->name, .input_json = e->input_json,
                          .arg = e->arg, .id = e->id, .parent = e->parent,
+                         .task_type = e->task_type,
                          .failed = e->failed };
     switch (e->kind) {
     case CLAUDE_EV_ASSISTANT:   ev.kind = BACKEND_EV_ASSISTANT;   break;

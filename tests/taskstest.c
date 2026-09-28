@@ -96,8 +96,8 @@ static void lifecycle(void)
     expect(a && a->ended != 0, 1, "end stamped");
 
     char line[240];
-    tasks_line(a, line, sizeof line);
-    expect(strncmp(line, "agent completed: review the diff in ", 35) == 0, 1,
+    tasks_line(a, line, sizeof line, NULL, NULL);
+    expect(strncmp(line, "[agent completed] review the diff in ", 37) == 0, 1,
            "line names the status and the task");
 
     int repeat = 0;
@@ -148,9 +148,33 @@ static void eviction(void)
     expect_text(tasks_at(&t, 0)->id, "t1", "the oldest finished entry went");
 }
 
+static void kind_line(const char *task_type, const char *arg, const char *want)
+{
+    struct tasktab t;
+    char           line[240];
+
+    tasks_reset(&t, "claude");
+    backend_event ev = {.kind = BACKEND_EV_TASK, .id = "k", .name = "completed",
+                        .text = "x", .arg = arg, .task_type = task_type};
+    tasks_line(tasks_note(&t, &ev, NULL), line, sizeof line, NULL, NULL);
+    expect(strncmp(line, want, strlen(want)) == 0, 1, want);
+}
+
+static void kinds(void)
+{
+    kind_line("local_bash", NULL, "[bash completed] ");
+    kind_line("local_agent", "Explore", "[agent explore completed] ");
+    kind_line("local_workflow", "review_changes", "[workflow review_changes completed] ");
+    kind_line("monitor_mcp", NULL, "[monitor completed] ");
+    kind_line("in_process_teammate", NULL, "[teammate completed] ");
+    kind_line("new_kind", NULL, "[new kind completed] ");
+    kind_line(NULL, NULL, "[agent completed] ");
+}
+
 int main(void)
 {
     lifecycle();
+    kinds();
     inferred();
     eviction();
     by_parent();

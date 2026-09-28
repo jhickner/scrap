@@ -268,6 +268,7 @@ void stream_event(void *ud, struct session *s, const backend_event *ev)
     add_str(e, "diff", ev->diff);
     add_str(e, "id", ev->id);
     add_str(e, "parent", ev->parent);
+    add_str(e, "task_type", ev->task_type);
     if (ev->failed)
         cJSON_AddBoolToObject(e, "failed", 1);
     cJSON *o = cJSON_CreateObject();

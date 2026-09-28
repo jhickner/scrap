@@ -119,6 +119,7 @@ static void forward(struct remote *r, const cJSON *e)
         .diff = jstr(e, "diff"),
         .id = jstr(e, "id"),
         .parent = jstr(e, "parent"),
+        .task_type = jstr(e, "task_type"),
         .failed = cJSON_IsTrue(cJSON_GetObjectItem((cJSON *)e, "failed")),
     };
     r->on_event(r->event_ud, &ev);

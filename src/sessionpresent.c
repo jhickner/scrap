@@ -78,14 +78,18 @@ static void paint_note(const char *line)
 static void paint_task(const char *line, size_t cmd_at, size_t cmd_len)
 {
     size_t         len = strlen(line);
-    unsigned char *spans = cmd_len && cmd_at + cmd_len <= len ? malloc(len) : NULL;
+    unsigned char *spans = malloc(len + 1);
     if (!spans) {
         paint_note(line);
         return;
     }
     memset(spans, (unsigned char)UI_RESET, len);
-    highlight_shell(line + cmd_at, cmd_len, spans + cmd_at);
+    size_t tag = strcspn(line, "]");
+    memset(spans, (unsigned char)UI_TOOL, tag < len ? tag + 1 : 0);
+    if (cmd_len && cmd_at + cmd_len <= len)
+        highlight_shell(line + cmd_at, cmd_len, spans + cmd_at);
     viewport_item_begin(VIEWPORT_ROWS(1, 1));
+    ui_put("  ");
     ui_put_spans(line, len, spans, UI_DIM);
     ui_esc(ui_style(UI_RESET));
     ui_put("\n");

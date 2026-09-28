@@ -1,6 +1,7 @@
 #include "tasks.h"
 
 #include <ctype.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -159,6 +160,8 @@ static const struct task *note_lifecycle(struct tasktab *t, const backend_event 
     }
     if (ev->arg && *ev->arg)
         snprintf(a->type, sizeof a->type, "%s", ev->arg);
+    if (ev->task_type && *ev->task_type)
+        snprintf(a->task_type, sizeof a->task_type, "%s", ev->task_type);
     if (ev->parent && *ev->parent && !a->parent[0])
         snprintf(a->parent, sizeof a->parent, "%s", ev->parent);
     if (ev->text && *ev->text) {
@@ -291,11 +294,28 @@ void tasks_duration(char *out, size_t size, long secs)
         snprintf(out, size, "%ldh%02ldm", secs / 3600, (secs % 3600) / 60);
 }
 
+static void task_kind(const struct task *a, char *out, size_t size)
+{
+    static const char *const names[][2] = {
+        {"local_bash", "bash"},         {"local_agent", "agent"},
+        {"remote_agent", "remote agent"}, {"in_process_teammate", "teammate"},
+        {"local_workflow", "workflow"}, {"monitor_mcp", "monitor"},
+    };
+    const char *kind = a->task_type[0] ? a->task_type : a->cmd[0] ? "bash" : "agent";
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (!strcmp(kind, names[i][0]))
+            kind = names[i][1];
+    snprintf(out, size, "%s%s%s", kind, a->type[0] ? " " : "", a->type);
+    for (char *p = out; *p; p++)
+        *p = p - out < (ptrdiff_t)strlen(kind) && *p == '_' ? ' ' : (char)tolower((unsigned char)*p);
+}
+
 void tasks_line(const struct task *a, char *out, size_t size, size_t *cmd_at, size_t *cmd_len)
 {
     char took[32] = "";
     char what[160];
-    char head[48];
+    char kind[96];
+    char head[128];
 
     if (cmd_at)
         *cmd_at = 0;
@@ -308,7 +328,8 @@ void tasks_line(const struct task *a, char *out, size_t size, size_t *cmd_at, si
     if (tasks_done(a))
         tasks_duration(took, sizeof took, (long)(a->ended - a->started));
     text_one_line(a->cmd[0] ? a->cmd : a->desc[0] ? a->desc : a->id, what, sizeof what);
-    snprintf(head, sizeof head, "%s %s: ", a->cmd[0] ? "bash" : "agent", a->status);
+    task_kind(a, kind, sizeof kind);
+    snprintf(head, sizeof head, "[%s %s] ", kind, a->status);
     snprintf(out, size, "%s%s%s%s", head, what, took[0] ? " in " : "", took);
     size_t at = strlen(head), len = strlen(out);
     if (a->cmd[0] && at < len) {

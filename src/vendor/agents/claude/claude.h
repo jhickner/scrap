@@ -160,7 +160,10 @@ typedef struct {
     const char *name;       /* tool name, model name for INIT, status for TASK */
     const char *input_json; /* tool input as compact JSON, for TOOL */
     const char *id;         /* TASK: the CLI's task id */
-    const char *arg;        /* TASK: the subagent type, when it reports one */
+    const char *arg;        /* TASK: the subagent type or workflow name, when
+                               it reports one */
+    const char *task_type;  /* TASK: local_bash, local_agent, local_workflow,
+                               ... when it reports one */
     const char *parent;     /* the tool call this belongs to, when it is not the
                                session's own work: the Agent tool_use whose
                                subagent produced the message, and on TASK the
@@ -840,6 +843,9 @@ static int cl_handle_line(claude_client *c, const char *line, char **out) {
             if (!out.name)
                 out.name = !strcmp(sub, "task_started") ? "running" : "";
             out.arg = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "subagent_type"));
+            if (!out.arg)
+                out.arg = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "workflow_name"));
+            out.task_type = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "task_type"));
             out.parent = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "tool_use_id"));
             out.text = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "description"));
             if (!out.text)
