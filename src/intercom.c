@@ -404,20 +404,21 @@ static const char *jstr(const cJSON *o, const char *key)
     return s ? s : "";
 }
 
-static int cmd_ls_net(const char *query)
+char *intercom_net_list(const char *query)
 {
     cJSON *machines = hub_survey();
-    if (!machines) {
-        fprintf(stderr, "scrap: tailscale status is unavailable\n");
-        return 1;
-    }
+    if (!machines)
+        return NULL;
+    char  *text = NULL;
+    size_t len = 0;
+    FILE  *out = open_memstream(&text, &len);
     cJSON *m;
     cJSON_ArrayForEach(m, machines)
     {
         const char *error = cJSON_GetStringValue(cJSON_GetObjectItem(m, "error"));
         if (error) {
-            if (!query)
-                printf("%s: %s\n", jstr(m, "machine"), error);
+            if (!query && out)
+                fprintf(out, "%s: %s\n", jstr(m, "machine"), error);
             continue;
         }
         int    shown = 0;
@@ -430,18 +431,32 @@ static int cmd_ls_net(const char *query)
             snprintf(e.cwd, sizeof e.cwd, "%s", jstr(o, "cwd"));
             snprintf(e.title, sizeof e.title, "%s", jstr(o, "title"));
             snprintf(e.status, sizeof e.status, "%s", jstr(o, "status"));
-            if (query && !contains(e.name, query) && !contains(e.title, query) &&
-                !contains(e.cwd, query))
+            if (!out || (query && !contains(e.name, query) && !contains(e.title, query) &&
+                         !contains(e.cwd, query)))
                 continue;
             if (!shown++)
-                printf("%s\n", jstr(m, "machine"));
-            printf("  ");
-            print_entry(stdout, &e);
+                fprintf(out, "%s\n", jstr(m, "machine"));
+            fprintf(out, "  ");
+            print_entry(out, &e);
         }
-        if (!shown && !query)
-            printf("%s: no live sessions\n", jstr(m, "machine"));
+        if (!shown && !query && out)
+            fprintf(out, "%s: no live sessions\n", jstr(m, "machine"));
     }
+    if (out)
+        fclose(out);
     cJSON_Delete(machines);
+    return text ? text : strdup("");
+}
+
+static int cmd_ls_net(const char *query)
+{
+    char *text = intercom_net_list(query);
+    if (!text) {
+        fprintf(stderr, "scrap: tailscale status is unavailable\n");
+        return 1;
+    }
+    fputs(text, stdout);
+    free(text);
     return 0;
 }
 

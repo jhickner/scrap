@@ -33,6 +33,8 @@ char *intercom_read(const char *target, long turns, long bytes, char *msg, size_
 
 cJSON *intercom_live_json(void);
 
+char *intercom_net_list(const char *query);
+
 int intercom_main(int argc, char **argv);
 
 #endif
