@@ -689,7 +689,10 @@ cJSON *intercom_live_json(void)
         cJSON_AddStringToObject(o, "id", v[i].id);
         cJSON_AddStringToObject(o, "backend", v[i].backend);
         cJSON_AddStringToObject(o, "cwd", v[i].cwd);
-        cJSON_AddStringToObject(o, "title", v[i].title);
+        char   title[200];
+        if (!v[i].id[0] || !title_lookup(v[i].id, title, sizeof title))
+            snprintf(title, sizeof title, "%s", v[i].title);
+        cJSON_AddStringToObject(o, "title", title);
         cJSON_AddStringToObject(o, "status", v[i].status);
         cJSON_AddNumberToObject(o, "ts", (double)v[i].ts);
         cJSON_AddItemToArray(a, o);

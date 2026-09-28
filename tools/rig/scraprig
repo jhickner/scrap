@@ -90,9 +90,9 @@ cmd_start() {
     echo "$scrap" > "$dir/scrap"
     local conf="$dir/state/config"
     if [ -n "$share" ]; then
-        mkdir -p "$share/live" "$share/dispatch"
+        mkdir -p "$share/live" "$share/dispatch" "$share/handoff"
         touch "$share/names"
-        for leaf in live dispatch names net; do ln -s "$share/$leaf" "$conf/$leaf"; done
+        for leaf in live dispatch names net handoff; do ln -s "$share/$leaf" "$conf/$leaf"; done
     fi
     if [ "$net" = 1 ] && { [ -n "$port" ] || [ ! -s "$conf/net" ]; }; then
         local ip

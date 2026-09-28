@@ -28,6 +28,8 @@
 
 #define SETTING_FOLDER_SORT  "folder_sort"
 
+#define SETTING_SESSIONS_REMOTE "sessions_remote"
+
 #define SETTING_CHROME       "chrome"
 
 #define SETTING_SHUNT        "shunt"

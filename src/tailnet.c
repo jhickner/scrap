@@ -408,6 +408,40 @@ char *tailnet_read(const char *host, const char *target, long turns, long bytes,
     return text;
 }
 
+static int manage(const char *host, cJSON *req, char *msg, size_t size)
+{
+    char ip[256], err[512];
+    tailnet_resolve(host, ip, sizeof ip);
+    cJSON *r = ask(ip, tailnet_dir_port(), req, SEND_TIMEOUT, err, sizeof err);
+    if (!r) {
+        snprintf(msg, size, "%s: %s", host, err);
+        return 1;
+    }
+    int ok = cJSON_IsTrue(cJSON_GetObjectItem(r, "ok"));
+    cJSON_Delete(r);
+    if (!ok)
+        snprintf(msg, size, "%s runs an older scrap", host);
+    return !ok;
+}
+
+int tailnet_close(const char *host, const char *target, char *msg, size_t size)
+{
+    cJSON *req = cJSON_CreateObject();
+    cJSON_AddBoolToObject(req, "ls", 1);
+    cJSON_AddStringToObject(req, "kill", target);
+    return manage(host, req, msg, size);
+}
+
+int tailnet_rename(const char *host, const char *target, const char *title, char *msg,
+                   size_t size)
+{
+    cJSON *req = cJSON_CreateObject();
+    cJSON_AddBoolToObject(req, "ls", 1);
+    cJSON_AddStringToObject(req, "rename", target);
+    cJSON_AddStringToObject(req, "title", title);
+    return manage(host, req, msg, size);
+}
+
 int tailnet_spawn(const char *host, const char *cwd, char *target, size_t tsize, char *msg,
                   size_t size)
 {

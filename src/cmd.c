@@ -22,7 +22,6 @@
 #include "session.h"
 #include "image.h"
 #include "tailnet.h"
-#include "netpick.h"
 #include "intercom.h"
 #include "sessionfork.h"
 #include "sessionlist.h"
@@ -1230,13 +1229,6 @@ static void do_attach(struct session *s, const char *arg)
     cmd_attach(arg);
 }
 
-static void do_net(struct session *s, const char *arg)
-{
-    (void)arg;
-    if (can_pick("/net"))
-        netpick_run(s);
-}
-
 static int split_command(const char *line, char *name, size_t size, const char **arg)
 {
     if (*line != '/')
@@ -1429,7 +1421,7 @@ static const struct cmd COMMANDS[] = {
     {"/permission", "how the CLI gates tool calls", "[mode]", 0, do_permission},
     {"/settings", "show and change every setting", NULL, 0, do_settings},
     {"/resume", "resume a past conversation", NULL, 0, do_resume},
-    {"/sessions", "every session: this window's, other windows', past ones", NULL,
+    {"/sessions", "sessions in every window, and on other tailnet machines", NULL,
      CMD_LIVE, do_sessions},
     {"/fork", "fork into a new tab, tmux split, or tmux window",
      "[tab|horizontal|vertical|window]", CMD_LIVE, do_fork},
@@ -1444,7 +1436,6 @@ static const struct cmd COMMANDS[] = {
     {"/send", "send a message to another session", "@name text", CMD_LIVE_ARG, do_send},
     {"/attach", "open a live session from another window or machine in a tab", "machine:@name", 0,
      do_attach},
-    {"/net", "live sessions on this machine and other tailnet machines", NULL, 0, do_net},
     {"/tail", "show bot messages that arrived since the last shown", "[count]", 0,
      do_tail},
     {"/vnc", "show the bot's desktop in an inset", "[left|right|off|test|size <percent>]",

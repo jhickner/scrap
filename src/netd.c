@@ -23,9 +23,11 @@
 #endif
 
 #include "dispatch.h"
+#include "handoff.h"
 #include "intercom.h"
 #include "livelist.h"
 #include "tailnet.h"
+#include "title.h"
 #include "vendor/cJSON.h"
 
 #define REQUEST_MAX 65536
@@ -149,10 +151,35 @@ struct conn {
     char ip[INET6_ADDRSTRLEN];
 };
 
+static void manage(int fd, cJSON *o)
+{
+    const char *killed = cJSON_GetStringValue(cJSON_GetObjectItem(o, "kill"));
+    const char *renamed = cJSON_GetStringValue(cJSON_GetObjectItem(o, "rename"));
+    const char *title = cJSON_GetStringValue(cJSON_GetObjectItem(o, "title"));
+    char        msg[600] = "";
+    cJSON_DeleteItemFromObject(o, "to");
+    cJSON_AddStringToObject(o, "to", killed ? killed : renamed ? renamed : "");
+    long        pid = intercom_owner(o, msg, sizeof msg);
+    const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(o, "session"));
+    if (pid <= 0 || !id || !*id) {
+        fail(fd, msg[0] ? msg : "no such session");
+        return;
+    }
+    if (killed ? !handoff_close(pid, id, NULL, NULL) : !title || !title_set(id, title)) {
+        fail(fd, killed ? "could not close that session" : "bad name");
+        return;
+    }
+    cJSON *r = cJSON_CreateObject();
+    cJSON_AddBoolToObject(r, "ok", 1);
+    answer(fd, r);
+}
+
 static void route(int fd, cJSON *o)
 {
     char msg[600] = "";
-    if (cJSON_GetObjectItem(o, "to")) {
+    if (cJSON_GetObjectItem(o, "kill") || cJSON_GetObjectItem(o, "rename"))
+        manage(fd, o);
+    else if (cJSON_GetObjectItem(o, "to")) {
         long pid = intercom_owner(o, msg, sizeof msg);
         if (pid > 0)
             dispatch_hand_off(fd, pid, o);

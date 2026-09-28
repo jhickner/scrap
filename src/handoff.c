@@ -189,3 +189,18 @@ int handoff_kill(long pid, const char *id, char *screen, size_t size,
 {
     return ask(pid, id, 1, screen, size, tick, ud);
 }
+
+int handoff_close(long pid, const char *id, void (*tick)(int waited_ms, void *ud), void *ud)
+{
+    char screen[4400];
+    if (handoff_kill(pid, id, screen, sizeof screen, tick, ud)) {
+        unlink(screen);
+        return 1;
+    }
+    struct live_session *live = NULL;
+    int                  n = livelist_load(&live), held = 0;
+    for (int i = 0; i < n; i++)
+        held += live[i].pid == pid;
+    free(live);
+    return held == 1 && pid > 0 && kill((pid_t)pid, SIGTERM) == 0;
+}

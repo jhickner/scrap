@@ -8,6 +8,8 @@ import json, sys
 st = json.load(sys.stdin)
 st.setdefault("Peer", {})["blackhole"] = {"DNSName": "blackhole.example.ts.net.", "HostName": "blackhole",
     "TailscaleIPs": ["100.64.255.254"], "UserID": st["Self"]["UserID"], "Online": True, "OS": "linux"}
+st["Peer"]["mirror"] = {"DNSName": "mirror.example.ts.net.", "HostName": "mirror",
+    "TailscaleIPs": st["Self"]["TailscaleIPs"], "UserID": st["Self"]["UserID"], "Online": True, "OS": "linux"}
 print(json.dumps(st))'
 else
     exec "$real" "$@"
