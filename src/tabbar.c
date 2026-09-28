@@ -90,7 +90,7 @@ static void name_of(const struct session *s, size_t cells, char *out, size_t siz
     char        at[48];
     const char *title = session_title(s);
     if (!title || !*title) {
-        snprintf(at, sizeof at, "@%s", session_name(s));
+        session_address(s, at, sizeof at);
         title = at;
     }
 

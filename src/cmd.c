@@ -1161,7 +1161,9 @@ static void do_rename(struct session *s, const char *arg)
 static void do_name(struct session *s, const char *arg)
 {
     viewport_item_begin(VIEWPORT_ROWS(1, 1));
-    if (!arg || !*arg)
+    if (session_remote(s))
+        ui_note("this tab is %s; name it on that machine", session_remote(s));
+    else if (!arg || !*arg)
         ui_note("this session is @%s", session_name(s));
     else if (session_set_name(s, arg[0] == '@' ? arg + 1 : arg))
         ui_note("this session is now @%s", session_name(s));

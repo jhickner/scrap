@@ -102,9 +102,11 @@ static void row_name(const struct session *s, struct row *r)
     row_add(r, UI_BRAND, UI_BAR " ");
     row_add(r, UI_BOLD, APP_NAME);
     row_add(r, UI_DIM, SEP "%s", app_version);
-    if (session_name(s)[0]) {
+    if (session_remote(s) || session_name(s)[0]) {
+        char at[256];
+        session_address(s, at, sizeof at);
         row_add(r, UI_DIM, SEP);
-        row_add(r, UI_ACCENT, "@%s", session_name(s));
+        row_add(r, UI_ACCENT, "%s", at);
     }
 }
 
@@ -139,14 +141,19 @@ static void row_identity(const struct session *s, struct row *r)
 static void row_location(const struct session *s, struct row *r)
 {
     const char *dir = session_workdir(s);
+    const char *remote = session_remote(s);
 
     char path[1024];
     path_home_relative(dir, path, sizeof path);
 
-    const struct gitinfo *g = gitinfo_get(dir);
+    static const struct gitinfo none;
+    const struct gitinfo *g = remote ? &none : gitinfo_get(dir);
 
     row_add(r, UI_BRAND, UI_BAR " ");
-    row_add(r, UI_CHROME, "%s", path);
+    if (remote)
+        row_add(r, UI_CHROME, "%.*s:%s", (int)strcspn(remote, ":"), remote, path);
+    else
+        row_add(r, UI_CHROME, "%s", path);
     if (g->repo)
         row_add(r, UI_DIM, " on " BRANCH " %s%s%s%s",
                 g->branch[0] ? g->branch : "detached",

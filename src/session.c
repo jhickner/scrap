@@ -1143,10 +1143,12 @@ static void set_id(struct session *s, const char *id)
     int changed = strcmp(s->id, id) != 0;
     snprintf(s->id, sizeof s->id, "%s", id);
     sessionaddr_write(s->addr, s->id);
-    if (changed) {
+    if (changed && !s->remote) {
         if (!intercom_name_of(s->id, s->name, sizeof s->name))
             intercom_register(s->id, s->name, s->backend, s->cwd);
         claim_name(s);
+    }
+    if (changed) {
         if (s->held_title[0]) {
             title_set(s->id, s->held_title);
             s->held_title[0] = '\0';
@@ -1160,7 +1162,7 @@ static void set_id(struct session *s, const char *id)
         }
         if (!s->retitle)
             title_lookup(s->id, s->title, sizeof s->title);
-        if (s->context_tokens <= 0) {
+        if (!s->remote && s->context_tokens <= 0) {
             long tokens, window;
             if (sessionload_context(s->backend, s->cwd, s->id, &tokens, &window)) {
                 s->context_tokens = tokens;
@@ -2176,12 +2178,22 @@ void session_turn_wait(struct session *s)
 int session_set_remote(struct session *s, const char *target)
 {
     replace(&s->remote, target);
+    if (s->remote)
+        s->name[0] = '\0';
     return s->remote != NULL;
 }
 
 const char *session_remote(const struct session *s)
 {
     return s ? s->remote : NULL;
+}
+
+const char *session_remote_field(const struct session *s, const char *key)
+{
+    if (!s || !s->remote || !s->agent)
+        return NULL;
+    const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(remote_history(s->agent), key));
+    return v && *v ? v : NULL;
 }
 
 int session_remote_connected(const struct session *s)
@@ -2367,7 +2379,7 @@ long session_context_window(const struct session *s)
 
 const char *session_effort_label(const struct session *s)
 {
-    if (!session_can_set_effort(s))
+    if (s->remote || !session_can_set_effort(s))
         return NULL;
     const char *effort = spin_effort(s);
     return effort_is_off(effort) || !strcmp(effort, "default") ? NULL : effort;
@@ -2387,12 +2399,28 @@ int session_can_resume(const struct session *s)
     return s->agent && (s->agent->caps & BACKEND_CAP_RESUME);
 }
 
-const char *session_cwd(const struct session *s) { return s->cwd; }
+const char *session_cwd(const struct session *s)
+{
+    const char *remote = session_remote_field(s, "cwd");
+    return remote ? remote : s->cwd;
+}
 const char *session_workdir(const struct session *s)
 {
-    return s->workdir ? s->workdir : s->cwd;
+    return s->workdir ? s->workdir : session_cwd(s);
 }
-const char *session_backend(const struct session *s) { return s->backend; }
+const char *session_backend(const struct session *s)
+{
+    const char *remote = session_remote_field(s, "backend");
+    return remote ? remote : s->backend;
+}
+
+void session_address(const struct session *s, char *out, size_t size)
+{
+    if (s && s->remote)
+        snprintf(out, size, "%s", s->remote);
+    else
+        snprintf(out, size, "@%s", s ? s->name : "");
+}
 
 int session_tail_mark(const struct session *s, const char *bot,
                       struct grokbottail_mark *out)

@@ -133,8 +133,10 @@ const char *session_title(const struct session *s);
 int         session_set_remote(struct session *s, const char *target);
 const char *session_remote(const struct session *s);
 int         session_remote_connected(const struct session *s);
+const char *session_remote_field(const struct session *s, const char *key);
 
 const char *session_name(const struct session *s);
+void        session_address(const struct session *s, char *out, size_t size);
 
 int session_set_name(struct session *s, const char *name);
 

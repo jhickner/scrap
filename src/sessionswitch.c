@@ -121,9 +121,10 @@ static void tab_rows(struct row *rows, int *n)
         snprintf(r->id, sizeof r->id, "%s", session_id(s) ? session_id(s) : "");
         if (r->id[0])
             parent_of(r->id, r->parent, sizeof r->parent);
-        snprintf(r->detail, sizeof r->detail, "%s %s @%s", session_backend(s),
-                 models_short_name(session_backend(s), session_model_label(s)),
-                 session_name(s));
+        char at[256];
+        session_address(s, at, sizeof at);
+        snprintf(r->detail, sizeof r->detail, "%s %s %s", session_backend(s),
+                 models_short_name(session_backend(s), session_model_label(s)), at);
         row_status(r, status);
     }
 }

@@ -28,6 +28,6 @@ $R wait $b 'echo: after restart'
 $R say $a "/attach $me:@bee"
 $R idle $a
 $R snap $a | grep -q 'no live session' && { $R snap $a; echo "remotetab: re-attach failed"; exit 1; }
-$R snap $a | tail -1 | grep -q "^\[ $me:@bee \]  @[a-z0-9_-]*\$"
+$R snap $a | tail -1 | grep -q "^@[a-z0-9_-]*  \[ $me:@bee \]\$"
 $R say $a '/attach @nobody' 'no live session matches @nobody'
 echo "remotetab: ok"
