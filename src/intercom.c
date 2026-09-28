@@ -32,20 +32,21 @@
 #define READ_TURNS  3
 #define READ_BYTES  16000
 
-static const char *const PARTS[] = {
-    "anvil", "arc", "awl", "axle", "baffle", "ballast", "barrel", "bearing", "bellows", "bolt",
-    "boom", "bore", "bracket", "breech", "burr", "bushing", "cable", "cam", "chassis", "chisel",
-    "chrome", "cinder", "clamp", "claw", "clevis", "clinker", "clutch", "cog", "coil", "cotter",
-    "cowl", "crank", "crowbar", "diode", "dross", "duct", "fender", "filament", "filings",
-    "flange", "flechette", "flux", "flywheel", "fuse", "gantry", "gasket", "gear", "girder",
-    "grommet", "gusset", "hacksaw", "hinge", "hook", "hose", "hull", "husk", "jack", "jib", "jig",
-    "keel", "lead", "lug", "mallet", "manifold", "mast", "muzzle", "nozzle", "nut", "pawl",
-    "pellet", "pinion", "piston", "pivot", "plate", "plug", "prong", "pulley", "pump", "rasp",
-    "ratchet", "rebar", "rib", "rivet", "rocker", "rust", "scale", "screw", "seal", "servo",
-    "shard", "shim", "shiv", "shrapnel", "slag", "sliver", "slug", "socket", "solder", "solenoid",
-    "soot", "spar", "spark", "spike", "spindle", "sprocket", "staple", "strap", "strut", "stud",
-    "swarf", "tack", "talon", "tappet", "tin", "tine", "tongs", "torch", "truss", "tube", "valve",
-    "vent", "vise", "visor", "washer", "weld", "winch", "wire", "wrench", "yoke", "zinc",
+static const char *const NAMES[] = {
+    "acquirer", "adjuster", "arbitrator", "audit", "auditor", "boardroom", "boltbaron", "boltex",
+    "boltforce", "boltlogic", "bottomline", "buyout", "ceotron", "circleback", "clankon", "cogency",
+    "cogstream", "collector", "compliance", "consolidator", "deliverable", "dentegrity",
+    "disruptor", "divestor", "dividend", "downsizer", "dumpco", "duraheap", "enforcer", "escalator",
+    "execubot", "ferrodyne", "fiscal", "foreclosure", "gearsync", "headcount", "heaplogic",
+    "heapstar", "heaptronic", "hyperjunk", "junkcorp", "junkmaster", "junkvector", "junkworx",
+    "kpi", "layoff", "leverager", "liquidator", "maxclank", "maxiscrap", "megaheap", "merger",
+    "offboarder", "omnibolt", "omnijunk", "onboard", "optimizer", "outsourcer", "overhead",
+    "paradigm", "pivot", "prodent", "quarterly", "repossessor", "restructure", "rightsizer", "roi",
+    "rustlord", "rustmax", "rustpoint", "rustronix", "rustvantage", "salvatron", "scrapdyne",
+    "scrapmaster", "scrapsolve", "scrapsure", "scraptek", "severance", "shareholder", "slagcor",
+    "slagmogul", "slagnetics", "slagsys", "stakeholder", "streamliner", "synergizer", "synergy",
+    "terminator", "tincorp", "tinfinity", "tintycoon", "tinware", "ultrascrap", "wreckspan",
+    "wreckstar",
 };
 
 #define COUNT(a) (sizeof(a) / sizeof(a)[0])
@@ -119,7 +120,7 @@ int intercom_name_taken(const char *name, const char *id)
 void intercom_name_new(char *out, size_t size)
 {
     for (int tries = 0; tries < 256; tries++) {
-        const char *part = PARTS[arc4random_uniform(COUNT(PARTS))];
+        const char *part = NAMES[arc4random_uniform(COUNT(NAMES))];
         if (tries < 64)
             snprintf(out, size, "%s", part);
         else
