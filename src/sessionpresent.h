@@ -34,6 +34,7 @@ void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
 void sessionpresent_expire(struct sessionpresent *p, int quiet);
 void sessionpresent_break(struct sessionpresent *p);
 
+void sessionpresent_prompt(const char *text);
 void sessionpresent_replay(const struct transcript *transcript);
 
 void sessionpresent_spin(const char *backend, const char *effort, double quiet,

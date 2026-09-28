@@ -50,6 +50,27 @@ static int        safe;
 static void     (*on_finish)(struct session *s);
 static void     (*on_turn)(struct session *s);
 
+int workspace_spawn_remote(const char *target, char *why, size_t size)
+{
+    char            here[4096];
+    struct session *s = ntabs < WORKSPACE_MAX
+                            ? workspace_prepare("claude", NULL, NULL,
+                                                getcwd(here, sizeof here) ? here : NULL, NULL)
+                            : NULL;
+    if (!s || !session_set_remote(s, target) || !session_start(s)) {
+        const char *err = session_start_error();
+        snprintf(why, size, "%s", err && *err ? err : "could not open that session");
+        session_free(s);
+        return -1;
+    }
+    int at = workspace_open(s);
+    if (at < 0) {
+        snprintf(why, size, "too many tabs");
+        session_free(s);
+    }
+    return at;
+}
+
 static void follow(const struct session *s);
 
 void workspace_on_finish(void (*fn)(struct session *s))

@@ -22,6 +22,7 @@
 #include "image.h"
 #include "intercom.h"
 #include "livelist.h"
+#include "remote.h"
 #include "restart.h"
 #include "models.h"
 #include "parent.h"
@@ -51,6 +52,7 @@
 
 struct session {
     Backend *agent;
+    char    *remote;
     char    *backend;
     char    *cwd;
     char    *workdir;
@@ -355,6 +357,8 @@ static const char *tabs_provider(const struct session *s)
 
 static void publish(const struct session *s, const char *status)
 {
+    if (s->remote)
+        return;
     agenttabs_publish(s, session_backend(s), status, tabs_provider(s));
     livelist_publish(s, status);
 }
@@ -453,6 +457,8 @@ int session_idle_pump(struct session *s)
     int busy = s->agent->idle_pump(s->agent) ? 1 : 0;
     int continuation = s->agent->take_continuation &&
                        s->agent->take_continuation(s->agent);
+    if (continuation && s->remote && remote_prompt(s->agent) && *remote_prompt(s->agent))
+        sessionpresent_prompt(remote_prompt(s->agent));
     sessionpresent_expire(&s->present, s->quiet);
     session_set_drawing(was);
 
@@ -786,7 +792,7 @@ void session_replay(struct session *s)
     hud_print(s);
     if (!s)
         return;
-    if ((s->id[0] || grokbottail_applies(s)) && sessionload_into(s))
+    if (!s->remote && (s->id[0] || grokbottail_applies(s)) && sessionload_into(s))
         return;
     sessionpresent_replay(&s->transcript);
 }
@@ -817,6 +823,7 @@ void session_free(struct session *s)
     free(s->asked);
     retire(s->agent);
     free(s->backend);
+    free(s->remote);
     free(s->cwd);
     free(s->workdir);
     free(s->model);
@@ -954,9 +961,9 @@ static Backend *agent(struct session *s)
     o.plugin_dir = shunt_plugin_dir(s);
     o.env = (const char *const *)s->env;
 
-    char *joined = session_system(s, s->handoff);
+    char *joined = s->remote ? NULL : session_system(s, s->handoff);
     o.system = joined;
-    s->agent = backend_open_ex(&o);
+    s->agent = s->remote ? remote_open(s->remote) : backend_open_ex(&o);
     free(joined);
     if (s->agent) {
         s->agent->set_event_cb(s->agent, on_event, s);
@@ -1173,6 +1180,27 @@ static const char *saved_id(const struct session *s)
     return s->id[0] && s->saved ? s->id : NULL;
 }
 
+static void adopt_remote(struct session *s, Backend *b)
+{
+    const cJSON *h = remote_history(b);
+    const char  *backend = cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)h, "backend"));
+    const char  *model = cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)h, "model"));
+    if (backend && *backend)
+        replace(&s->backend, backend);
+    replace(&s->model, model && *model ? model : NULL);
+    replace(&s->resolved, model && *model ? model : NULL);
+    transcript_clear(&s->transcript);
+    cJSON *t;
+    cJSON_ArrayForEach(t, cJSON_GetObjectItem((cJSON *)h, "turns"))
+    {
+        const char *user = cJSON_GetStringValue(cJSON_GetObjectItem(t, "user"));
+        const char *reply = cJSON_GetStringValue(cJSON_GetObjectItem(t, "assistant"));
+        transcript_add(&s->transcript, s->backend, user ? user : "", reply ? reply : "",
+                       cJSON_IsTrue(cJSON_GetObjectItem(t, "interrupted")));
+    }
+    snprintf(s->title, sizeof s->title, "%s", s->remote);
+}
+
 static int restart(struct session *s, const char *resume_id)
 {
     if (s->running)
@@ -1182,13 +1210,16 @@ static int restart(struct session *s, const char *resume_id)
     s->agent = NULL;
     start_error[0] = '\0';
     char parent[INTERCOM_NAME_MAX];
-    if (resume_id && s->fork_session && !s->fork_named &&
+    if (s->remote)
+        ;
+    else if (resume_id && s->fork_session && !s->fork_named &&
         intercom_name_of(resume_id, parent, sizeof parent)) {
         intercom_name_next(parent, s->name, sizeof s->name);
         s->fork_named = 1;
     } else if (resume_id && !s->fork_named)
         intercom_name_of(resume_id, s->name, sizeof s->name);
-    claim_name(s);
+    if (!s->remote)
+        claim_name(s);
 
     Backend *b = agent(s);
     if (!b || !b->start(b, resume_id)) {
@@ -1203,6 +1234,8 @@ static int restart(struct session *s, const char *resume_id)
         return 0;
     }
     retire(previous);
+    if (s->remote)
+        adopt_remote(s, b);
     tasks_reset(&s->tasks, s->backend);
     s->stall_seen = s->stall_told = 0;
     s->stall_at = 0;
@@ -1797,7 +1830,7 @@ static int session_reground(struct session *s)
 static int turn_ready(struct session *s, const char *text)
 {
     replace(&s->error_note, NULL);
-    if (session_reground(s))
+    if (s->remote || session_reground(s))
         return 1;
     replace(&s->failed_prompt, text);
     return 0;
@@ -1880,7 +1913,7 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
         replace(&s->failed_prompt, continuing ? NULL : text);
         if (continuing)
             continuation_fallback(s);
-    } else if (!continuing) {
+    } else if (!continuing || s->remote) {
         transcript_add(&s->transcript, s->backend, text, reply, m.interrupted);
         replace(&s->failed_prompt, NULL);
     } else {
@@ -1908,9 +1941,11 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
 
     gitinfo_forget();
 
-    update_title(s);
-    remember_model(s);
-    remember_window(s);
+    if (!s->remote) {
+        update_title(s);
+        remember_model(s);
+        remember_window(s);
+    }
     if (!s->quiet)
         sessionpresent_footer(elapsed, s->context_tokens, s->context_window,
                               s->cost_usd, s->title);
@@ -2019,7 +2054,7 @@ int session_turn_continue_begin(struct session *s)
         return 0;
     }
 
-    turn_prepare(s, NULL);
+    turn_prepare(s, s->remote ? remote_prompt(s->agent) : NULL);
     voice_trace("turn.continue", "tab=%p", (void *)s);
     replace(&s->asked, NULL);
     s->reply = NULL;
@@ -2136,6 +2171,17 @@ void session_turn_wait(struct session *s)
         struct pollfd p = {.fd = fd, .events = POLLIN};
         poll(&p, 1, -1);
     }
+}
+
+int session_set_remote(struct session *s, const char *target)
+{
+    replace(&s->remote, target);
+    return s->remote != NULL;
+}
+
+const char *session_remote(const struct session *s)
+{
+    return s ? s->remote : NULL;
 }
 
 const char *session_title(const struct session *s)

@@ -1,6 +1,8 @@
 #ifndef WORKSPACE_H
 #define WORKSPACE_H
 
+#include <stddef.h>
+
 struct session;
 
 #define WORKSPACE_MAX 12
@@ -15,6 +17,7 @@ void workspace_republish(void);
 int  workspace_index(void);
 int  workspace_index_of(const struct session *s);
 
+int  workspace_spawn_remote(const char *target, char *why, size_t size);
 int  workspace_spawn(const char *backend, const char *model, const char *effort,
                      const char *cwd, const char *id);
 

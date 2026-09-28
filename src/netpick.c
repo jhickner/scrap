@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "ask.h"
+#include "cmd.h"
 #include "tailnet.h"
 #include "intercom.h"
 #include "keyhelp.h"
@@ -12,12 +13,14 @@
 #include "session.h"
 #include "text.h"
 #include "ui.h"
+#include "workspace.h"
 
 #define MAX_ROWS 256
 #define KEY_SEND 's'
 
 static const struct keyhelp_row NET_KEYS[] = {
-    {"GO", "enter/s", "send a message"},
+    {"GO", "enter/\xe2\x86\x92", "open in a tab"},
+    {"GO", "s", "send a message"},
     {"GO", "tab/esc", "close the list"},
     {"LIST", "up/down", "move"},
     {"LIST", "/", "search"},
@@ -27,6 +30,7 @@ struct row {
     char label[128];
     char detail[1200];
     char target[TAILNET_HOST_MAX + INTERCOM_NAME_MAX + 2];
+    char id[128];
 };
 
 static const char *jstr(const cJSON *o, const char *key)
@@ -71,6 +75,7 @@ static int build(cJSON *machines, struct row *rows, unsigned char *heading, unsi
             roles[n - 1] = UI_ERROR;
             snprintf(r->detail, sizeof r->detail, "%s  %s", where,
                      *jstr(o, "title") ? jstr(o, "title") : "untitled");
+            snprintf(r->id, sizeof r->id, "%s", self ? jstr(o, "id") : "");
             snprintf(r->target, sizeof r->target, "%s%s@%s", self ? "" : machine,
                      self ? "" : ":", name);
         }
@@ -131,15 +136,24 @@ void netpick_run(struct session *s)
                                    PICK_SEARCH_SLASH, shortcuts, &pressed)
                    : -1;
 
-    char target[sizeof rows->target] = "";
-    if (picked >= 0 && !heading[picked])
+    char target[sizeof rows->target] = "", id[128] = "";
+    if (picked >= 0 && !heading[picked]) {
         snprintf(target, sizeof target, "%s", rows[picked].target);
+        snprintf(id, sizeof id, "%s", rows[picked].id);
+    }
     free(items);
     free(rows);
     free(heading);
     free(spin);
     free(roles);
     free(marks);
-    if (target[0])
+    int here = id[0] ? workspace_find_id(id) : -1;
+    if (!target[0])
+        return;
+    if (pressed == KEY_SEND)
         send_to(s, target);
+    else if (here >= 0)
+        workspace_show(here);
+    else
+        cmd_attach(target);
 }

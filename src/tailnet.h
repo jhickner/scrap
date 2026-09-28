@@ -13,6 +13,8 @@ const char *tailnet_bind_ip(void);
 
 const char *tailnet_self_name(void);
 
+int tailnet_is_self(const char *host);
+
 int tailnet_peer(const char *ip, char *host, size_t size);
 
 const char *tailnet_split(const char *target, char *host, size_t size);

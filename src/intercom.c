@@ -65,6 +65,17 @@ static void field_at(const char *row, int index, char *out, size_t size)
     snprintf(out, size, "%.*s", (int)n, row ? row : "");
 }
 
+static const char *route(const char *target, char *host, size_t size, const char **local)
+{
+    const char *name = tailnet_split(target, host, size);
+    *local = target;
+    if (name && dispatch_net_port() && tailnet_is_self(host)) {
+        *local = name;
+        return NULL;
+    }
+    return name;
+}
+
 int intercom_name_valid(const char *name)
 {
     size_t n = name ? strlen(name) : 0;
@@ -622,9 +633,9 @@ static int cmd_read(int argc, char **argv)
     }
 
     char        host[TAILNET_HOST_MAX], msg[1200];
-    const char *name = tailnet_split(target, host, sizeof host);
+    const char *local, *name = route(target, host, sizeof host, &local);
     char       *text = name ? tailnet_read(host, name, turns, bytes, msg, sizeof msg)
-                            : intercom_read(target, turns, bytes, msg, sizeof msg);
+                            : intercom_read(local, turns, bytes, msg, sizeof msg);
     if (!text) {
         fprintf(stderr, "scrap: %s\n", msg);
         return 1;
@@ -777,10 +788,10 @@ int intercom_send(const char *from, const char *target, const char *text, char *
                   size_t size)
 {
     char        host[TAILNET_HOST_MAX];
-    const char *name = tailnet_split(target, host, sizeof host);
+    const char *local, *name = route(target, host, sizeof host, &local);
     if (name)
         return tailnet_send(host, from, name, text, msg, size);
-    return intercom_deliver(NULL, from, target, text, msg, size);
+    return intercom_deliver(NULL, from, local, text, msg, size);
 }
 
 static int cmd_send(int argc, char **argv)
@@ -861,7 +872,7 @@ static int connect_unix(long pid)
 int intercom_attach(const char *target, char *msg, size_t size)
 {
     char        host[TAILNET_HOST_MAX], id[128] = "", name[INTERCOM_NAME_MAX] = "";
-    const char *remote = tailnet_split(target, host, sizeof host);
+    const char *local, *remote = route(target, host, sizeof host, &local);
     int         fd = -1;
     if (remote) {
         char ip[256], err[512];
@@ -877,9 +888,11 @@ int intercom_attach(const char *target, char *msg, size_t size)
         struct entries      l = {0};
         char                cwd[4096];
         collect(&l, here(cwd, sizeof cwd) ? cwd : NULL, 1, 0);
-        const struct entry *e = resolve(&l, target);
+        const struct entry *e = resolve(&l, local);
         if (!e)
-            snprintf(msg, size, "no live session matches %s", target);
+            snprintf(msg, size, "no live session matches %s", local);
+        else if (e->pid == (long)getpid())
+            snprintf(msg, size, "%s is a tab in this window", local);
         else {
             snprintf(id, sizeof id, "%s", e->id);
             snprintf(name, sizeof name, "%s", e->name);

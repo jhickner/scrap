@@ -42,4 +42,6 @@ int cmd_resume(struct session *s);
 
 int copy_to_clipboard(const char *text);
 
+void cmd_attach(const char *target);
+
 #endif

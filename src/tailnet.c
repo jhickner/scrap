@@ -463,6 +463,16 @@ cJSON *tailnet_survey(void)
     return out;
 }
 
+int tailnet_is_self(const char *host)
+{
+    const char *me = tailnet_self_name(), *bind = tailnet_bind_ip();
+    if (me && *me && !strcasecmp(host, me))
+        return 1;
+    char ip[256];
+    tailnet_resolve(host, ip, sizeof ip);
+    return bind && !strcmp(ip, bind);
+}
+
 const char *tailnet_self_name(void)
 {
     static char host[256];

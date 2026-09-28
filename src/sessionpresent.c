@@ -283,6 +283,11 @@ void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
     ui_flush();
 }
 
+void sessionpresent_prompt(const char *text)
+{
+    prompt_echo_message(text);
+}
+
 void sessionpresent_replay(const struct transcript *transcript)
 {
     if (!transcript)

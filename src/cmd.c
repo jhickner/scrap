@@ -1197,6 +1197,37 @@ static void do_send(struct session *s, const char *arg)
     ui_flush();
 }
 
+void cmd_attach(const char *target)
+{
+    char why[600];
+    int  at = -1;
+    for (int i = 0; i < workspace_count() && at < 0; i++) {
+        const char *remote = session_remote(workspace_at(i));
+        if (remote && !strcmp(remote, target))
+            at = i;
+    }
+    int fresh = at < 0;
+    if (fresh)
+        at = workspace_spawn_remote(target, why, sizeof why);
+    if (at < 0) {
+        reply(1, "%s", why);
+        return;
+    }
+    workspace_show(at);
+    if (fresh)
+        session_replay(workspace_at(at));
+}
+
+static void do_attach(struct session *s, const char *arg)
+{
+    (void)s;
+    if (!arg || !*arg) {
+        reply(1, "usage: /attach machine:@name");
+        return;
+    }
+    cmd_attach(arg);
+}
+
 static void do_net(struct session *s, const char *arg)
 {
     (void)arg;
@@ -1409,6 +1440,8 @@ static const struct cmd COMMANDS[] = {
      0, do_rename},
     {"/name", "show or set this session's @name for scrap send", "[name]", 0, do_name},
     {"/send", "send a message to another session", "@name text", CMD_LIVE_ARG, do_send},
+    {"/attach", "open a live session from another window or machine in a tab", "machine:@name", 0,
+     do_attach},
     {"/net", "live sessions on this machine and other tailnet machines", NULL, 0, do_net},
     {"/tail", "show bot messages that arrived since the last shown", "[count]", 0,
      do_tail},
