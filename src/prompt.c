@@ -438,7 +438,7 @@ void prompt_echo_load(const cJSON *st)
 
 static struct prompt *active;
 static struct prompt *completion_owner;
-static ReplCompleter  completer = files_complete;
+static ReplCompleter  name_completer;
 
 struct prompt *prompt_new(const ReplCommand *commands, int command_count)
 {
@@ -452,9 +452,9 @@ struct prompt *prompt_new(const ReplCommand *commands, int command_count)
     return p;
 }
 
-void prompt_set_completer(ReplCompleter fn)
+void prompt_set_name_completer(ReplCompleter fn)
 {
-    completer = fn;
+    name_completer = fn;
 }
 
 void prompt_file_completion(struct prompt *p, const char *root)
@@ -463,7 +463,8 @@ void prompt_file_completion(struct prompt *p, const char *root)
     free(p->file_root);
     p->file_root = strdup(root);
     if (p->file_root)
-        repl_set_completer(&p->repl, completer, p->file_root);
+        repl_set_completer(&p->repl, files_complete, p->file_root);
+    repl_set_name_completer(&p->repl, name_completer, NULL);
     files_prefetch(p->file_root);
 }
 
@@ -676,8 +677,10 @@ static const struct prompt_key SHORTCUTS[] = {
      "search history", PROMPT_KEY_ALWAYS},
     {"EDIT", "up/down", "history",
      "move through the completion list, else browse history", PROMPT_KEY_ALWAYS},
-    {"EDIT", "@", "complete a path",
+    {"EDIT", "#", "complete a path",
      "complete a file path from the working directory", PROMPT_KEY_ALWAYS},
+    {"EDIT", "@", "complete a session name",
+     "complete a live session name", PROMPT_KEY_ALWAYS},
     {"VIEW", "ctrl-f", "compact tool calls",
      "compact or full tool calls, redrawing the transcript", PROMPT_KEY_ALWAYS},
     {"VIEW", "pgup/dn", "scroll transcript",

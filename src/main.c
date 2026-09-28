@@ -902,7 +902,7 @@ int main(int argc, char **argv)
         workspace_end();
         return 1;
     }
-    prompt_set_completer(intercom_complete);
+    prompt_set_name_completer(intercom_complete);
     dispatch_serve_with(serve_extra);
     intercom_set_window();
     netd_ensure();

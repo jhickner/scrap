@@ -44,17 +44,17 @@ typedef struct {
 } ReplCommand;
 
 // One dropdown candidate: the text inserted in place of the active token, plus a
-// one-line description. Slash commands fill these from the registry; an @-file
-// completer (see ReplCompleter) fills them from the host.
+// one-line description. Slash commands fill these from the registry; the '#'
+// file and '@' name completers (see ReplCompleter) fill them from the host.
 typedef struct {
     char text[REPL_CAND_TEXT];
     char desc[REPL_CAND_DESC];
 } ReplCandidate;
 
-// Host callback supplying @-file (or other token) completions. `token` is the
-// active word with its leading '@' stripped; candidates are likewise bare, as
-// the '@' stays in the line on accept. Fill up to `max` candidates and
-// return the count. NULL when the host offers no file completion.
+// Host callback supplying '#' file or '@' name completions. `token` is the
+// active word with its sigil stripped; candidates are likewise bare. On accept
+// a '#' is replaced along with the token and an '@' stays in the line. Fill up
+// to `max` candidates and return the count.
 typedef int (*ReplCompleter)(void *ctx, const char *token,
                              ReplCandidate *out, int max);
 
@@ -122,15 +122,19 @@ typedef struct {
 
     // Completion dropdown. Candidates are recomputed from the token under the
     // cursor: a leading '/' (at column 0) filters the command registry; a leading
-    // '@' calls the host completer. accept replaces [tok_start,tok_end).
+    // '#' calls the file completer, '@' the name completer. accept replaces
+    // [tok_start,tok_end).
     const ReplCommand *commands; // borrowed pointer to a static table (may be NULL)
     int   command_count;
-    ReplCompleter completer;     // borrowed; @-file completions (may be NULL)
+    ReplCompleter completer;     // borrowed; '#' file completions (may be NULL)
     void *completer_ctx;
+    ReplCompleter name_completer; // borrowed; '@' name completions (may be NULL)
+    void *name_completer_ctx;
     ReplCandidate cands[REPL_MAX_COMMANDS];
     int   cand_count;
     int   tok_start, tok_end;    // byte range of the active token being completed
     bool  cand_is_command;       // true: slash command (append a space on accept)
+    bool  cand_is_name;          // true: '@' name (the sigil stays on accept)
     int   sel;                   // index into cands[]; -1 = nothing highlighted
     bool  dropdown_open;
     bool  suggest_off;           // suppress the inline history autosuggestion
@@ -161,8 +165,10 @@ typedef struct {
 } Repl;
 
 void        repl_init(Repl *r, const ReplCommand *commands, int command_count);
-// Register an @-file completer (borrowed callback + ctx). Optional.
+// Register a '#' file completer (borrowed callback + ctx). Optional.
 void        repl_set_completer(Repl *r, ReplCompleter fn, void *ctx);
+// Register an '@' name completer (borrowed callback + ctx). Optional.
+void        repl_set_name_completer(Repl *r, ReplCompleter fn, void *ctx);
 // Tell the repl how wide it renders, so arrow keys can walk wrapped rows.
 void        repl_set_width(Repl *r, int width);
 void        repl_free(Repl *r);               // release heap (buf/stash/history)
@@ -344,6 +350,11 @@ void repl_set_completer(Repl *r, ReplCompleter fn, void *ctx) {
     r->completer_ctx = ctx;
 }
 
+void repl_set_name_completer(Repl *r, ReplCompleter fn, void *ctx) {
+    r->name_completer = fn;
+    r->name_completer_ctx = ctx;
+}
+
 void repl_set_width(Repl *r, int width) {
     r->width = width > 0 ? width : 0;
 }
@@ -478,13 +489,14 @@ static int fuzzy_score(const char *name, const char *q, int qlen) {
 }
 
 // Recompute the dropdown candidates from the token under the cursor: a leading
-// '/' at column 0 fuzzy-filters the command registry; a leading '@' asks the
-// host completer; anything else closes the dropdown.
+// '/' at column 0 fuzzy-filters the command registry; a leading '#' asks the
+// file completer and '@' the name completer; anything else closes the dropdown.
 static void recompute_candidates(Repl *r) {
     r->cand_count = 0;
     r->sel = -1;
     r->dropdown_open = false;
     r->cand_is_command = false;
+    r->cand_is_name = false;
 
     int ts, te;
     active_token(r, &ts, &te);
@@ -513,17 +525,23 @@ static void recompute_candidates(Repl *r) {
         }
         r->cand_count = n;
         r->cand_is_command = true;
-    } else if (first == '@' && r->completer) {
+    } else if ((first == '#' && r->completer &&
+                !(te > ts + 1 && r->buf[ts + 1] >= '0' && r->buf[ts + 1] <= '9')) ||
+               (first == '@' && r->name_completer)) {
+        bool name = first == '@';
+        ReplCompleter fn = name ? r->name_completer : r->completer;
+        void *ctx = name ? r->name_completer_ctx : r->completer_ctx;
         char partial[REPL_CAND_TEXT];
         int pl = te - ts - 1;
         if (pl < 0) pl = 0;
         if (pl > REPL_CAND_TEXT - 1) pl = REPL_CAND_TEXT - 1;
         memcpy(partial, r->buf + ts + 1, (size_t)pl);
         partial[pl] = '\0';
-        int n = r->completer(r->completer_ctx, partial, r->cands, REPL_MAX_COMMANDS);
+        int n = fn(ctx, partial, r->cands, REPL_MAX_COMMANDS);
         if (n < 0) n = 0;
         if (n > REPL_MAX_COMMANDS) n = REPL_MAX_COMMANDS;
         r->cand_count = n;
+        r->cand_is_name = name;
     } else {
         return;
     }
@@ -896,10 +914,13 @@ static void accept_completion(Repl *r, int idx) {
     if (te > r->len) te = r->len;
     if (te < ts) te = ts;
 
-    // '@' triggers the completer but is not part of a path, so candidates carry
-    // the bare path and the sigil is left standing. A slash command's '/' is
-    // part of its name, so it gets replaced along with the rest of the token.
-    if (!r->cand_is_command && ts < r->len && r->buf[ts] == '@') ts++;
+    // An '@' name keeps its sigil. A '#' stays while a directory is accepted so
+    // the list can keep descending, and goes with the final file. A slash
+    // command's '/' is part of its name, so it is replaced.
+    size_t clen = strlen(text);
+    bool   dir = clen > 0 && text[clen - 1] == '/';
+    if (!r->cand_is_command && ts < r->len &&
+        (r->cand_is_name ? r->buf[ts] == '@' : r->buf[ts] == '#' && dir)) ts++;
 
     char *suffix = dupstr(r->buf + te);   // text after the token (incl. any space)
     if (!suffix) return;

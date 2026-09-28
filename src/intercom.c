@@ -13,17 +13,18 @@
 #include <unistd.h>
 
 #include "dispatch.h"
-#include "files.h"
 #include "tailnet.h"
 #include "kvlog.h"
 #include "livelist.h"
 #include "sessionlist.h"
+#include "session.h"
 #include "sessionload.h"
 #include "text.h"
 #include "title.h"
 #include "transcript.h"
 #include "vendor/agents/backend.h"
 #include "vendor/cJSON.h"
+#include "workspace.h"
 
 #define GREP_MAX    (4L * 1024 * 1024)
 #define INLINE_MAX  4000
@@ -224,21 +225,21 @@ char *intercom_note(const char *name)
 
 int intercom_complete(void *ctx, const char *token, ReplCandidate *out, int max)
 {
-    int n = 0;
-    if (!strpbrk(token, "/.")) {
-        struct live_session *live = NULL;
-        int                  count = livelist_load(&live);
-        for (int i = 0; i < count && n < max; i++) {
-            if (!live[i].name[0] || text_fuzzy_score(live[i].name, token) < 0)
-                continue;
-            snprintf(out[n].text, REPL_CAND_TEXT, "%s", live[i].name);
-            snprintf(out[n].desc, REPL_CAND_DESC, "%s", live[i].title);
-            n++;
-        }
-        free(live);
+    (void)ctx;
+    struct session      *self = workspace_current();
+    const char          *mine = self ? session_name(self) : "";
+    size_t               len = strlen(token);
+    struct live_session *live = NULL;
+    int                  count = livelist_load(&live), n = 0;
+    for (int i = 0; i < count && n < max; i++) {
+        if (!live[i].name[0] || strncasecmp(live[i].name, token, len) || !strcmp(live[i].name, mine))
+            continue;
+        snprintf(out[n].text, REPL_CAND_TEXT, "%s", live[i].name);
+        snprintf(out[n].desc, REPL_CAND_DESC, "%s", live[i].title);
+        n++;
     }
-    int files = n < max ? files_complete(ctx, token, out + n, max - n) : 0;
-    return n + (files > 0 ? files : 0);
+    free(live);
+    return n;
 }
 
 struct entry {
