@@ -8,6 +8,7 @@
 #include "cmd.h"
 #include "dirpick.h"
 #include "hud.h"
+#include "intercom.h"
 #include "pick.h"
 #include "session.h"
 #include "text.h"
@@ -15,7 +16,7 @@
 #include "workspace.h"
 
 int newsession_spawn(const char *backend, const char *model, const char *effort,
-                     const char *cwd)
+                     const char *cwd, const char *name)
 {
     struct session *here = workspace_current();
     if (!cwd)
@@ -31,6 +32,8 @@ int newsession_spawn(const char *backend, const char *model, const char *effort,
         ui_flush();
         return -1;
     }
+    if (name && *name && !session_set_name(workspace_current(), name))
+        ui_error("the name '%s' is taken; kept @%s", name, session_name(workspace_current()));
     hud_print(workspace_current());
     ui_flush();
     return at;
@@ -53,22 +56,25 @@ int newsession_run(void)
 {
     struct session *here = workspace_current();
     char backend[64], model[128] = "", effort[64] = "", cwd[4096] = "";
+    char name[INTERCOM_NAME_MAX] = "", note[INTERCOM_NAME_MAX + 32] = "";
     snprintf(backend, sizeof backend, "%s", cmd_default_backend());
     if (here)
         snprintf(cwd, sizeof cwd, "%s", session_cwd(here));
 
     for (;;) {
-        char rows[4][4200], shown[4096];
+        char rows[5][4200], shown[4096];
         path_home_relative(cwd, shown, sizeof shown);
         snprintf(rows[0], sizeof rows[0], "backend  %s", backend);
         snprintf(rows[1], sizeof rows[1], "model    %s", *model ? model : "default");
         snprintf(rows[2], sizeof rows[2], "effort   %s", *effort ? effort : "default");
         snprintf(rows[3], sizeof rows[3], "folder   %s", shown);
+        snprintf(rows[4], sizeof rows[4], "name     %s%s", *name ? name : "generated", note);
         const struct pick_item form[] = {
-            {"start", NULL}, {rows[0], NULL}, {rows[1], NULL}, {rows[2], NULL}, {rows[3], NULL},
+            {"start", NULL},  {rows[0], NULL}, {rows[1], NULL},
+            {rows[2], NULL},  {rows[3], NULL}, {rows[4], NULL},
         };
 
-        int at = pick_run("new session", form, 5, 0);
+        int at = pick_run("new session", form, 6, 0);
         if (at < 0)
             return 1;
 
@@ -77,7 +83,7 @@ int newsession_run(void)
         switch (at) {
         case 0:
             newsession_spawn(backend, *model ? model : NULL, *effort ? effort : NULL,
-                             *cwd ? cwd : NULL);
+                             *cwd ? cwd : NULL, name);
             return 0;
         case 1:
             list = cmd_backend_choices(&count);
@@ -117,6 +123,24 @@ int newsession_run(void)
             if (dir)
                 snprintf(cwd, sizeof cwd, "%s", dir);
             free(dir);
+            break;
+        }
+        case 5: {
+            char *typed = ask_run("name", name);
+            if (!typed)
+                break;
+            text_chomp(typed);
+            const char *want = typed + (typed[0] == '@');
+            note[0] = '\0';
+            if (!*want)
+                name[0] = '\0';
+            else if (!intercom_name_valid(want))
+                snprintf(note, sizeof note, "  (bad name '%s': letters, digits, - and _ only)", want);
+            else if (intercom_name_taken(want, NULL))
+                snprintf(note, sizeof note, "  ('%s' is taken)", want);
+            else
+                snprintf(name, sizeof name, "%s", want);
+            free(typed);
             break;
         }
         }

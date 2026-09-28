@@ -149,6 +149,7 @@ static void usage(void)
             "  -e effort  reasoning/thinking effort (default: the last /effort pick, else the CLI's own)\n"
             "  -C dir     working directory for the agent's tools\n"
             "  -s         safe mode: skip skills, CLAUDE.md, MCP servers, hooks\n"
+            "  --name x   session name (default: a generated one)\n"
             "  --telegram also answer over Telegram, in the same session\n"
             "  --relay    also answer a phone over WebSocket, in the same session\n"
             "  --imessage also answer over iMessage, in the same session (config: ~/.config/scrap/imessage)\n"
@@ -620,6 +621,7 @@ int main(int argc, char **argv)
         {"model",   required_argument, NULL, 'm'},
         {"effort",  required_argument, NULL, 'e'},
         {"dir",     required_argument, NULL, 'C'},
+        {"name",    required_argument, NULL, 'n'},
         {"safe",    no_argument,       NULL, 's'},
         {"resume",  no_argument,       NULL, 'r'},
         {"session", required_argument, NULL, 'S'},
@@ -642,6 +644,7 @@ int main(int argc, char **argv)
     const char *model = NULL;
     const char *effort = NULL;
     const char *dir = NULL;
+    const char *name = NULL;
     const char *session_arg = NULL;
     const char *restore_arg = NULL;
     const char *tabs_arg = NULL;
@@ -663,6 +666,7 @@ int main(int argc, char **argv)
         case 'm': model = optarg; break;
         case 'e': effort = optarg; break;
         case 'C': dir = optarg; break;
+        case 'n': name = optarg + (optarg[0] == '@'); break;
         case 's': safe_mode = 1; break;
         case 'r': resume = 1; break;
         case 'S': session_arg = optarg; break;
@@ -710,6 +714,15 @@ int main(int argc, char **argv)
         effort = NULL;
     sessionfork_set_program(argv[0]);
 
+    if (name && (resume || session_arg)) {
+        fprintf(stderr, APP_NAME ": --name does not combine with --resume or --session\n");
+        return 2;
+    }
+    if (name && !intercom_name_valid(name)) {
+        fprintf(stderr, APP_NAME ": bad name '%s': letters, digits, - and _ only\n", name);
+        return 2;
+    }
+
     if (resume && optind < argc) {
         fprintf(stderr, APP_NAME ": --resume takes no prompt\n");
         return 2;
@@ -732,6 +745,11 @@ int main(int argc, char **argv)
         char path[4200];
         snprintf(path, sizeof path, "%s/settings", config);
         settings_open(path);
+    }
+
+    if (name && intercom_name_taken(name, NULL)) {
+        fprintf(stderr, APP_NAME ": the name '%s' is taken\n", name);
+        return 1;
     }
 
     if (!pin_backend)
@@ -805,6 +823,8 @@ int main(int argc, char **argv)
                                                      session_permission_default())));
 
         session_adopt_id(session, session_arg);
+        if (name)
+            session_set_name(session, name);
         if (attach_arg)
             session_set_remote(session, attach_arg);
     }

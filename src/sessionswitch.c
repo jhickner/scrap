@@ -1068,7 +1068,7 @@ static int switch_once(void)
 
     if (pressed == KEY_HERE) {
         const char *cwd = row_cwd(&chosen, live);
-        int again = cwd && *cwd ? (newsession_spawn(cmd_default_backend(), NULL, NULL, cwd), 0) : 1;
+        int again = cwd && *cwd ? (newsession_spawn(cmd_default_backend(), NULL, NULL, cwd, NULL), 0) : 1;
         resume_row = picked;
         free(live);
         return again;
