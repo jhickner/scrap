@@ -519,8 +519,9 @@ struct probe {
 struct tailnet_survey {
     pthread_mutex_t lock;
     pthread_cond_t  changed;
-    int             refs, left, version, n;
+    int             refs, left, version, n, failed;
     struct probe   *probes;
+    cJSON          *self_sessions;
 };
 
 struct job {
@@ -538,6 +539,7 @@ static void release(struct tailnet_survey *s)
     for (int i = 0; i < s->n; i++)
         cJSON_Delete(s->probes[i].result);
     free(s->probes);
+    cJSON_Delete(s->self_sessions);
     pthread_mutex_destroy(&s->lock);
     pthread_cond_destroy(&s->changed);
     free(s);
@@ -575,69 +577,103 @@ static int by_machine(const void *a, const void *b)
     return strcasecmp(((const struct probe *)a)->machine, ((const struct probe *)b)->machine);
 }
 
-struct tailnet_survey *tailnet_survey_start(void)
+static void survey_fill(struct tailnet_survey *s, cJSON *st, cJSON *self_sessions)
 {
-    cJSON *st = tailscale("status", NULL);
-    if (!st)
-        return NULL;
-    struct tailnet_survey *s = calloc(1, sizeof *s);
-    int cap = cJSON_GetArraySize(cJSON_GetObjectItem(st, "Peer")) + 1;
-    if (s)
-        s->probes = calloc((size_t)cap, sizeof *s->probes);
-    if (!s || !s->probes) {
-        free(s);
-        cJSON_Delete(st);
-        return NULL;
+    int           cap = cJSON_GetArraySize(cJSON_GetObjectItem(st, "Peer")) + 1, n = 0, left = 0;
+    struct probe *probes = calloc((size_t)cap, sizeof *probes);
+    if (!probes) {
+        cJSON_Delete(self_sessions);
+        return;
     }
-    pthread_mutex_init(&s->lock, NULL);
-    pthread_cond_init(&s->changed, NULL);
-    s->refs = 1;
     cJSON *self = cJSON_GetObjectItem(st, "Self");
     for (cJSON *it = next_node(st, NULL); it; it = next_node(st, it)) {
-        char machine[sizeof s->probes->machine];
+        char machine[sizeof probes->machine];
         label(jstr(it, "DNSName"), machine, sizeof machine);
         if (is_phone(it) || !*node_ip(it) || (it != self && !surveyed(machine)))
             continue;
-        struct probe *p = &s->probes[s->n++];
+        struct probe *p = &probes[n++];
         snprintf(p->machine, sizeof p->machine, "%s", machine);
         snprintf(p->ip, sizeof p->ip, "%s", node_ip(it));
         p->result = cJSON_CreateObject();
         cJSON_AddStringToObject(p->result, "machine", p->machine);
         if (it == self) {
             cJSON_AddBoolToObject(p->result, "self", 1);
-            cJSON_AddItemToObject(p->result, "sessions", intercom_live_json());
+            cJSON_AddItemToObject(p->result, "sessions", self_sessions);
+            self_sessions = NULL;
         } else if (!cJSON_IsTrue(cJSON_GetObjectItem(it, "Online")))
             cJSON_AddStringToObject(p->result, "error", "offline");
         else {
             cJSON_AddStringToObject(p->result, "error", "checking");
             p->pending = 1;
-            s->left++;
+            left++;
         }
     }
+    cJSON_Delete(self_sessions);
+    if (n > 1)
+        qsort(probes + 1, (size_t)n - 1, sizeof *probes, by_machine);
+    pthread_mutex_lock(&s->lock);
+    s->probes = probes;
+    s->n = n;
+    s->left += left;
+    s->refs += left;
+    pthread_mutex_unlock(&s->lock);
+    for (int i = 0; i < n; i++) {
+        if (!probes[i].pending)
+            continue;
+        struct job *j = malloc(sizeof *j);
+        pthread_t   t;
+        if (j)
+            *j = (struct job){.s = s, .i = i};
+        if (j && pthread_create(&t, NULL, probe_run, j) == 0) {
+            pthread_detach(t);
+            continue;
+        }
+        free(j);
+        pthread_mutex_lock(&s->lock);
+        cJSON_ReplaceItemInObject(probes[i].result, "error", cJSON_CreateString("could not probe"));
+        s->left--;
+        s->refs--;
+        pthread_mutex_unlock(&s->lock);
+    }
+}
+
+static void *survey_run(void *ud)
+{
+    struct tailnet_survey *s = ud;
+    cJSON                 *st = tailscale("status", NULL);
+    if (st)
+        survey_fill(s, st, s->self_sessions);
+    s->self_sessions = NULL;
     cJSON_Delete(st);
-    if (s->n > 1)
-        qsort(s->probes + 1, (size_t)s->n - 1, sizeof *s->probes, by_machine);
-    for (int i = 0; i < s->n; i++) {
-        if (s->probes[i].pending) {
-            struct job *j = malloc(sizeof *j);
-            pthread_t   t;
-            if (j) {
-                *j = (struct job){.s = s, .i = i};
-                s->refs++;
-            }
-            if (j && pthread_create(&t, NULL, probe_run, j) == 0)
-                pthread_detach(t);
-            else {
-                if (j) {
-                    s->refs--;
-                    free(j);
-                }
-                cJSON_ReplaceItemInObject(s->probes[i].result, "error",
-                                          cJSON_CreateString("could not probe"));
-                s->left--;
-            }
-        }
-    }
+    pthread_mutex_lock(&s->lock);
+    s->failed = !s->probes;
+    s->left--;
+    s->version++;
+    pthread_cond_broadcast(&s->changed);
+    pthread_mutex_unlock(&s->lock);
+    release(s);
+    return NULL;
+}
+
+struct tailnet_survey *tailnet_survey_start(void)
+{
+    struct tailnet_survey *s = calloc(1, sizeof *s);
+    if (!s)
+        return NULL;
+    pthread_mutex_init(&s->lock, NULL);
+    pthread_cond_init(&s->changed, NULL);
+    s->refs = 2;
+    s->left = 1;
+    s->self_sessions = intercom_live_json();
+    pthread_t t;
+    if (pthread_create(&t, NULL, survey_run, s) != 0) {
+        cJSON_Delete(s->self_sessions);
+        s->self_sessions = NULL;
+        s->failed = 1;
+        s->left = 0;
+        s->refs = 1;
+    } else
+        pthread_detach(t);
     return s;
 }
 
@@ -663,7 +699,11 @@ cJSON *tailnet_survey_result(struct tailnet_survey *s, int *version, int *pendin
 {
     cJSON *out = cJSON_CreateArray();
     pthread_mutex_lock(&s->lock);
-    for (int i = 0; i < s->n; i++)
+    if (s->failed) {
+        cJSON_Delete(out);
+        out = NULL;
+    }
+    for (int i = 0; out && i < s->n; i++)
         cJSON_AddItemToArray(out, cJSON_Duplicate(s->probes[i].result, 1));
     if (version)
         *version = s->version;

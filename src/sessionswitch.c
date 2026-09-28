@@ -48,7 +48,6 @@
 #define KEY_TAKE   'y'
 #define KEY_STACK  ','
 
-#define SURVEY_SETTLE_MS 150
 #define SELF_MARK "\xe2\x8c\x82 "
 
 static int stacked;
@@ -359,8 +358,6 @@ static void survey_begin(void)
     netd_ensure();
     survey = tailnet_survey_start();
     survey_version = -1;
-    if (survey)
-        tailnet_survey_wait(survey, SURVEY_SETTLE_MS);
 }
 
 static void survey_stop(void)
@@ -431,7 +428,7 @@ static int layout(struct row *found, int nfound, struct row *out, unsigned char 
     int n = add_heading(out, heading, 0, SELF_MARK "%s%s", self && *self ? self : "this machine", "");
     n = machine_block(found, nfound, "", out, heading, n);
     n = add_new(out, heading, n, "");
-    if (!survey)
+    if (!machines)
         n = add_heading(out, heading, n, "%s%s", "tailscale status is unavailable", "");
     cJSON_ArrayForEach(m, machines)
     {
@@ -866,7 +863,15 @@ static int watch(void *ud)
     return survey_moved() ? PICK_TICK_REOPEN : relist(ud);
 }
 
-static int resume_row = -1;
+static int        resume_row = -1;
+static struct row resume_want;
+static int        resume_wanting, resume_fallback = -1;
+
+static int same_row(const struct row *a, const struct row *b)
+{
+    return a->kind == b->kind && !strcmp(a->machine, b->machine) && !strcmp(a->id, b->id) &&
+           !strcmp(a->target, b->target) && (a->kind != ROW_TAB || a->at == b->at);
+}
 
 static int switch_once(void)
 {
@@ -908,6 +913,13 @@ static int switch_once(void)
         initial = resume_row < n ? resume_row : n - 1;
         while (initial > 0 && heading[initial] == PICK_HEADING)
             initial--;
+        resume_fallback = initial;
+        for (int i = 0; resume_wanting && i < n; i++)
+            if (heading[i] != PICK_HEADING && same_row(&rows[i], &resume_want)) {
+                initial = i;
+                resume_fallback = -1;
+                resume_wanting = 0;
+            }
         resume_row = -1;
     }
 
@@ -952,6 +964,12 @@ static int switch_once(void)
     struct row chosen = {0};
     if (picked >= 0)
         chosen = rows[picked];
+    int at = picked >= 0 ? picked : cursor;
+    if (at >= 0 && at < n && !(resume_wanting && at == resume_fallback)) {
+        resume_want = rows[at];
+        resume_wanting = 1;
+    }
+    resume_fallback = -1;
     if (picked == PICK_REOPEN) {
         resume_row = cursor;
         free(items);
