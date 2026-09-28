@@ -9,7 +9,9 @@
 #include "app.h"
 #include "gitinfo.h"
 #include "models.h"
+#include "overlay.h"
 #include "scrollback.h"
+#include "settings.h"
 #include "session.h"
 #include "tg.h"
 #include "relay.h"
@@ -349,4 +351,48 @@ int hud_restarted(void)
     viewport_item_update(mark);
     ui_flush();
     return 1;
+}
+
+static void badge_row(void *ud, int at, int w)
+{
+    ui_esc(ui_style(UI_DIM));
+    if (at == 0) {
+        ui_put("\xe2\x94\x82 ");
+        ui_esc(ui_style(UI_ACCENT));
+        ui_put(ud);
+        ui_esc(ui_style(UI_RESET));
+        ui_put(" ");
+        return;
+    }
+    ui_put("\xe2\x95\xb0");
+    for (int i = 1; i < w; i++)
+        ui_put("\xe2\x94\x80");
+    ui_esc(ui_style(UI_RESET));
+}
+
+void hud_badge_cover(const struct session *s, char **rows, int n, int cols)
+{
+    if (!s || n < 2 || !settings_get_int(SETTING_NAME_BADGE, 1) || (!session_remote(s) && !session_name(s)[0]))
+        return;
+    char at[256];
+    session_address(s, at, sizeof at);
+    int w = (int)ui_cells(at) + 3;
+    if (w > cols)
+        return;
+
+    struct overlay o = {.row = 0, .col = cols - w, .w = w, .rows = 2, .paint_row = badge_row,
+                        .ud = at};
+    for (int r = 0; r < 2; r++) {
+        o.row = -r;
+        ui_sink_begin();
+        overlay_put(rows[r] ? rows[r] : "", &o);
+        char *out = ui_sink_end();
+        if (!out)
+            continue;
+        size_t len = strlen(out);
+        while (len && (out[len - 1] == '\n' || out[len - 1] == '\r'))
+            out[--len] = '\0';
+        free(rows[r]);
+        rows[r] = out;
+    }
 }

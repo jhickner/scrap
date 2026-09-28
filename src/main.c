@@ -336,6 +336,7 @@ static struct vncinset *inset_live(void)
 static void inset_cover(char **rows, int n, int cols)
 {
     vncinset_cover(inset_live(), rows, n, cols);
+    hud_badge_cover(workspace_current(), rows, n, cols);
 }
 
 static int side_busy(void *ud)
