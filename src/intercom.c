@@ -1,17 +1,20 @@
 #include "intercom.h"
 
 #include <ctype.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "dispatch.h"
 #include "files.h"
-#include "hub.h"
+#include "tailnet.h"
 #include "kvlog.h"
 #include "livelist.h"
 #include "sessionlist.h"
@@ -60,6 +63,24 @@ static void field_at(const char *row, int index, char *out, size_t size)
     }
     size_t n = row ? strcspn(row, "\t") : 0;
     snprintf(out, size, "%.*s", (int)n, row ? row : "");
+}
+
+static int window;
+
+void intercom_set_window(void)
+{
+    window = 1;
+}
+
+static const char *route(const char *target, char *host, size_t size, const char **local)
+{
+    const char *name = tailnet_split(target, host, size);
+    *local = target;
+    if (name && window && tailnet_is_self(host)) {
+        *local = name;
+        return NULL;
+    }
+    return name;
 }
 
 int intercom_name_valid(const char *name)
@@ -453,7 +474,7 @@ static const char *jstr(const cJSON *o, const char *key)
 
 char *intercom_net_list(const char *query)
 {
-    cJSON *machines = hub_survey();
+    cJSON *machines = tailnet_survey();
     if (!machines)
         return NULL;
     char  *text = NULL;
@@ -618,10 +639,10 @@ static int cmd_read(int argc, char **argv)
         return 2;
     }
 
-    char        host[HUB_HOST_MAX], msg[1200];
-    const char *name = hub_split(target, host, sizeof host);
-    char       *text = name ? hub_read(host, name, turns, bytes, msg, sizeof msg)
-                            : intercom_read(target, turns, bytes, msg, sizeof msg);
+    char        host[TAILNET_HOST_MAX], msg[1200];
+    const char *local, *name = route(target, host, sizeof host, &local);
+    char       *text = name ? tailnet_read(host, name, turns, bytes, msg, sizeof msg)
+                            : intercom_read(local, turns, bytes, msg, sizeof msg);
     if (!text) {
         fprintf(stderr, "scrap: %s\n", msg);
         return 1;
@@ -629,6 +650,32 @@ static int cmd_read(int argc, char **argv)
     fputs(text, stdout);
     free(text);
     return 0;
+}
+
+char *intercom_serve(const cJSON *o)
+{
+    cJSON *r = NULL;
+    char   msg[1200];
+    if (cJSON_GetObjectItem((cJSON *)o, "ls")) {
+        r = cJSON_CreateObject();
+        cJSON_AddStringToObject(r, "machine", tailnet_self_name());
+        cJSON_AddItemToObject(r, "sessions", intercom_live_json());
+    } else if (cJSON_IsString(cJSON_GetObjectItem((cJSON *)o, "read"))) {
+        cJSON *n = cJSON_GetObjectItem((cJSON *)o, "n"), *b = cJSON_GetObjectItem((cJSON *)o, "bytes");
+        long   turns = cJSON_IsNumber(n) ? (long)n->valuedouble : READ_TURNS;
+        long   bytes = cJSON_IsNumber(b) ? (long)b->valuedouble : READ_BYTES;
+        char  *text = intercom_read(cJSON_GetObjectItem((cJSON *)o, "read")->valuestring,
+                                    turns < 1 ? 1 : turns, bytes < 1 ? 1 : bytes, msg, sizeof msg);
+        r = cJSON_CreateObject();
+        if (text)
+            cJSON_AddStringToObject(r, "text", text);
+        else
+            cJSON_AddStringToObject(r, "error", msg);
+        free(text);
+    }
+    char *out = r ? cJSON_PrintUnformatted(r) : NULL;
+    cJSON_Delete(r);
+    return out;
 }
 
 cJSON *intercom_live_json(void)
@@ -649,6 +696,32 @@ cJSON *intercom_live_json(void)
     }
     free(v);
     return a;
+}
+
+long intercom_owner(cJSON *o, char *msg, size_t size)
+{
+    const char *to = jstr(o, "to");
+    if (!*to)
+        return 0;
+    struct entries      l = {0};
+    long                pid = -1;
+    collect(&l, NULL, 1, 0);
+    const struct entry *e = resolve(&l, to);
+    if (!e)
+        snprintf(msg, size, "no live session matches %s", to);
+    else {
+        pid = e->pid;
+        cJSON_DeleteItemFromObject(o, "session");
+        cJSON_DeleteItemFromObject(o, "name");
+        cJSON_AddStringToObject(o, "session", e->id);
+        if (e->name[0])
+            cJSON_AddStringToObject(o, "name", e->name);
+        if (cJSON_GetObjectItem(o, "attach"))
+            cJSON_ReplaceItemInObject(o, "attach", cJSON_CreateString(e->id));
+        cJSON_DeleteItemFromObject(o, "to");
+    }
+    free(l.e);
+    return pid;
 }
 
 static int request(long pid, cJSON *body, char *reply, size_t size)
@@ -746,11 +819,11 @@ int intercom_deliver(const char *host, const char *from, const char *target, con
 int intercom_send(const char *from, const char *target, const char *text, char *msg,
                   size_t size)
 {
-    char        host[HUB_HOST_MAX];
-    const char *name = hub_split(target, host, sizeof host);
+    char        host[TAILNET_HOST_MAX];
+    const char *local, *name = route(target, host, sizeof host, &local);
     if (name)
-        return hub_send(host, from, name, text, msg, size);
-    return intercom_deliver(NULL, from, target, text, msg, size);
+        return tailnet_send(host, from, name, text, msg, size);
+    return intercom_deliver(NULL, from, local, text, msg, size);
 }
 
 static int cmd_send(int argc, char **argv)
@@ -815,6 +888,123 @@ static int cmd_open(int argc, char **argv)
     return rc;
 }
 
+static int connect_unix(long pid)
+{
+    struct sockaddr_un sa = {.sun_family = AF_UNIX};
+    if (!dispatch_socket_path(pid, sa.sun_path, sizeof sa.sun_path))
+        return -1;
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd >= 0 && connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
+        close(fd);
+        fd = -1;
+    }
+    return fd;
+}
+
+int intercom_attach(const char *target, char *msg, size_t size)
+{
+    char        host[TAILNET_HOST_MAX], id[128] = "", name[INTERCOM_NAME_MAX] = "";
+    const char *local, *remote = route(target, host, sizeof host, &local);
+    int         fd = -1;
+    if (remote) {
+        char ip[256], err[512];
+        tailnet_resolve(host, ip, sizeof ip);
+        fd = tailnet_connect(ip, tailnet_dir_port(), 3, err, sizeof err);
+        if (fd < 0)
+            snprintf(msg, size, "%s: %s", host, err);
+    } else {
+        struct entries      l = {0};
+        char                cwd[4096];
+        collect(&l, here(cwd, sizeof cwd) ? cwd : NULL, 1, 0);
+        const struct entry *e = resolve(&l, local);
+        if (!e)
+            snprintf(msg, size, "no live session matches %s", local);
+        else if (e->pid == (long)getpid())
+            snprintf(msg, size, "%s is a tab in this window", local);
+        else {
+            snprintf(id, sizeof id, "%s", e->id);
+            snprintf(name, sizeof name, "%s", e->name);
+            fd = connect_unix(e->pid);
+            if (fd < 0)
+                snprintf(msg, size, "scrap %ld is not running", e->pid);
+        }
+        free(l.e);
+    }
+    if (fd < 0)
+        return -1;
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "attach", id);
+    if (name[0])
+        cJSON_AddStringToObject(o, "name", name);
+    if (remote)
+        cJSON_AddStringToObject(o, "to", remote);
+    char  *json = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    size_t len = json ? strlen(json) : 0;
+    int    ok = json && send(fd, json, len, 0) == (ssize_t)len && send(fd, "\n", 1, 0) == 1;
+    free(json);
+    if (!ok) {
+        snprintf(msg, size, "could not write the attach request");
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static int cmd_attach(int argc, char **argv)
+{
+    if (argc != 2) {
+        fprintf(stderr, "usage: scrap attach TARGET\n");
+        return 2;
+    }
+    char msg[1200];
+    int  fd = intercom_attach(argv[1], msg, sizeof msg);
+    if (fd < 0) {
+        fprintf(stderr, "scrap: %s\n", msg);
+        return 1;
+    }
+    char  *typed = NULL;
+    size_t tcap = 0;
+    int    stdin_open = 1, started = 0;
+    for (;;) {
+        struct pollfd p[2] = {{.fd = fd, .events = POLLIN}, {.fd = 0, .events = POLLIN}};
+        if (poll(p, stdin_open && started ? 2 : 1, -1) < 0)
+            break;
+        if (p[0].revents) {
+            char    chunk[8192];
+            ssize_t n = read(fd, chunk, sizeof chunk);
+            if (n <= 0 || fwrite(chunk, 1, (size_t)n, stdout) != (size_t)n)
+                break;
+            fflush(stdout);
+            started = started || memchr(chunk, '\n', (size_t)n);
+            continue;
+        }
+        if (stdin_open && p[1].revents) {
+            ssize_t n = getline(&typed, &tcap, stdin);
+            if (n <= 0) {
+                stdin_open = 0;
+                continue;
+            }
+            text_chomp(typed);
+            cJSON *o = cJSON_CreateObject();
+            if (!strcmp(typed, "!interrupt"))
+                cJSON_AddBoolToObject(o, "interrupt", 1);
+            else
+                cJSON_AddStringToObject(o, "prompt", typed);
+            char *json = cJSON_PrintUnformatted(o);
+            cJSON_Delete(o);
+            if (json && (write(fd, json, strlen(json)) < 0 || write(fd, "\n", 1) < 0)) {
+                free(json);
+                break;
+            }
+            free(json);
+        }
+    }
+    free(typed);
+    close(fd);
+    return 0;
+}
+
 int intercom_main(int argc, char **argv)
 {
     if (!strcmp(argv[0], "ls"))
@@ -825,5 +1015,7 @@ int intercom_main(int argc, char **argv)
         return cmd_send(argc, argv);
     if (!strcmp(argv[0], "open"))
         return cmd_open(argc, argv);
+    if (!strcmp(argv[0], "attach"))
+        return cmd_attach(argc, argv);
     return -1;
 }

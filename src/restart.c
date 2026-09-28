@@ -158,7 +158,7 @@ static int tabs_dump(const struct session *front, const char *path)
         struct session *s = workspace_at(i);
         const char *id = session_id(s);
 
-        if (s == front || !id || !*id || !session_can_resume(s))
+        if (s == front || (!session_remote(s) && (!id || !*id || !session_can_resume(s))))
             continue;
         if (!f && !(f = fopen(path, "w")))
             return 0;

@@ -230,10 +230,13 @@ static long since_ms(const struct timespec *then, const struct timespec *now)
     return (now->tv_sec - then->tv_sec) * 1000 + (now->tv_nsec - then->tv_nsec) / 1000000;
 }
 
-static void reply_spawn(int fd, const char *id, const char *addr)
+static void reply_spawn(int fd, struct session *s)
 {
-    cJSON *r = cJSON_CreateObject();
+    const char *id = session_id(s), *addr = session_addr(s), *name = session_name(s);
+    cJSON      *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "session", id);
+    if (name && *name)
+        cJSON_AddStringToObject(r, "name", name);
     if (addr && *addr)
         cJSON_AddStringToObject(r, "addr", addr);
     char *json = cJSON_PrintUnformatted(r);
@@ -265,7 +268,7 @@ static void settle_pending(void)
         int         at = workspace_index_of(pendings[i].s);
         const char *id = at >= 0 ? session_id(workspace_at(at)) : NULL;
         if (id)
-            reply_spawn(pendings[i].fd, id, session_addr(workspace_at(at)));
+            reply_spawn(pendings[i].fd, workspace_at(at));
         else if (at < 0)
             reply_error(pendings[i].fd, "session ended before it reported an id", NULL);
         else if (since_ms(&pendings[i].since, &now) < ID_WAIT_MS)
@@ -309,11 +312,59 @@ int dispatch_send(int at, const char *line)
     return deliver(at, line, line);
 }
 
+static char *(*serve_extra)(const cJSON *o, int fd, int *kept);
+
+void dispatch_hand_off(int fd, long pid, const cJSON *o)
+{
+    struct sockaddr_un sa = {.sun_family = AF_UNIX};
+    char              *json = cJSON_PrintUnformatted(o);
+    char              *line = json ? text_dsprintf("%s\n", json) : NULL;
+    int u = line && dispatch_socket_path(pid, sa.sun_path, sizeof sa.sun_path)
+                ? socket(AF_UNIX, SOCK_STREAM, 0)
+                : -1;
+    size_t len = line ? strlen(line) : 0;
+    char   ctl[CMSG_SPACE(sizeof(int))] = {0};
+    struct iovec   iov = {.iov_base = line, .iov_len = len};
+    struct msghdr  m = {.msg_iov = &iov, .msg_iovlen = 1, .msg_control = ctl,
+                        .msg_controllen = sizeof ctl};
+    struct cmsghdr *c = CMSG_FIRSTHDR(&m);
+    c->cmsg_level = SOL_SOCKET;
+    c->cmsg_type = SCM_RIGHTS;
+    c->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(c), &fd, sizeof fd);
+    int ok = u >= 0 && connect(u, (struct sockaddr *)&sa, sizeof sa) == 0 &&
+             sendmsg(u, &m, 0) == (ssize_t)len;
+    if (u >= 0)
+        close(u);
+    free(line);
+    free(json);
+    if (ok) {
+        close(fd);
+        return;
+    }
+    char why[80];
+    snprintf(why, sizeof why, "scrap %ld is not running", pid);
+    reply_error(fd, why, NULL);
+}
+
 static void serve(int fd, const char *text)
 {
     cJSON *o = cJSON_Parse(text);
     if (!o) {
         reply(fd, "{\"error\": \"bad json\"}");
+        return;
+    }
+
+    int   kept = 0;
+    char *answer = serve_extra ? serve_extra(o, fd, &kept) : NULL;
+    if (kept) {
+        cJSON_Delete(o);
+        return;
+    }
+    if (answer) {
+        reply(fd, answer);
+        free(answer);
+        cJSON_Delete(o);
         return;
     }
 
@@ -335,7 +386,13 @@ static void serve(int fd, const char *text)
     if (!backend)
         backend = cmd_default_backend();
 
-    int at = dispatch_spawn(backend, field(o, "model"), field(o, "effort"), field(o, "cwd"),
+    const char *cwd = field(o, "cwd"), *home = getenv("HOME");
+    char        expanded[4096];
+    if (cwd && cwd[0] == '~' && (cwd[1] == '\0' || cwd[1] == '/') && home) {
+        snprintf(expanded, sizeof expanded, "%s%s", home, cwd + 1);
+        cwd = expanded;
+    }
+    int at = dispatch_spawn(backend, field(o, "model"), field(o, "effort"), cwd,
                             field(o, "title"), field(o, "resume"), NULL, field(o, "prompt"));
     if (at < 0) {
         char out[300];
@@ -345,19 +402,19 @@ static void serve(int fd, const char *text)
         return;
     }
 
-    const char *id = session_id(workspace_at(at));
-    if (id)
-        reply_spawn(fd, id, session_addr(workspace_at(at)));
+    if (session_id(workspace_at(at)))
+        reply_spawn(fd, workspace_at(at));
     else
         hold_spawn(fd, workspace_at(at));
     cJSON_Delete(o);
 }
 
-static int listen_fd = -1;
+static int  listen_fd = -1;
 static char listen_path[200];
 
 static struct client {
     int    fd;
+    int    passed;
     char  *buf;
     size_t len;
 } clients[CLIENT_MAX];
@@ -381,7 +438,7 @@ static void listen_once(void)
         return;
     tried = (long)getpid();
     for (int i = 0; i < CLIENT_MAX; i++)
-        clients[i].fd = -1;
+        clients[i].fd = clients[i].passed = -1;
     struct sockaddr_un sa = {.sun_family = AF_UNIX};
     if (!dispatch_socket_path((long)getpid(), sa.sun_path, sizeof sa.sun_path))
         return;
@@ -398,6 +455,11 @@ static void listen_once(void)
     listen_fd = fd;
     snprintf(listen_path, sizeof listen_path, "%s", sa.sun_path);
     atexit(unlisten);
+}
+
+void dispatch_serve_with(char *(*serve)(const cJSON *o, int fd, int *kept))
+{
+    serve_extra = serve;
 }
 
 int dispatch_fds(int *out, int max)
@@ -418,14 +480,19 @@ static void drop(struct client *c)
     c->buf = NULL;
     c->len = 0;
     c->fd = -1;
+    c->passed = -1;
 }
 
 static void finish(struct client *c, int answer)
 {
     char *text = c->buf;
-    int   fd = c->fd;
+    int   fd = c->fd, passed = c->passed;
     c->buf = NULL;
     drop(c);
+    if (passed >= 0) {
+        close(fd);
+        fd = passed;
+    }
     if (answer && text && *text)
         serve(fd, text);
     else if (answer)
@@ -439,7 +506,23 @@ static void take(struct client *c)
 {
     char chunk[4096];
     for (;;) {
-        ssize_t n = recv(c->fd, chunk, sizeof chunk, 0);
+        char           ctl[CMSG_SPACE(sizeof(int))];
+        struct iovec   iov = {.iov_base = chunk, .iov_len = sizeof chunk};
+        struct msghdr  m = {.msg_iov = &iov, .msg_iovlen = 1, .msg_control = ctl,
+                            .msg_controllen = sizeof ctl};
+        ssize_t        n = recvmsg(c->fd, &m, 0);
+        for (struct cmsghdr *h = n > 0 ? CMSG_FIRSTHDR(&m) : NULL; h; h = CMSG_NXTHDR(&m, h)) {
+            int got;
+            if (h->cmsg_level != SOL_SOCKET || h->cmsg_type != SCM_RIGHTS)
+                continue;
+            memcpy(&got, CMSG_DATA(h), sizeof got);
+            if (c->passed >= 0)
+                close(got);
+            else {
+                fcntl(got, F_SETFD, FD_CLOEXEC);
+                c->passed = got;
+            }
+        }
         if (n < 0 && errno == EINTR)
             continue;
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
@@ -452,6 +535,8 @@ static void take(struct client *c)
                                                          : NULL;
         if (!grown) {
             int fd = c->fd;
+            if (c->passed >= 0)
+                close(c->passed);
             drop(c);
             reply(fd, "{\"error\": \"request too large\"}");
             return;
@@ -469,14 +554,10 @@ static void take(struct client *c)
     }
 }
 
-void dispatch_poll(void)
+static void accept_on(int lfd)
 {
-    listen_once();
-    settle_pending();
-    if (listen_fd < 0)
-        return;
     for (;;) {
-        int fd = accept(listen_fd, NULL, NULL);
+        int fd = accept(lfd, NULL, NULL);
         if (fd < 0)
             break;
         struct client *slot = NULL;
@@ -490,6 +571,14 @@ void dispatch_poll(void)
         nonblocking(fd);
         slot->fd = fd;
     }
+}
+
+void dispatch_poll(void)
+{
+    listen_once();
+    settle_pending();
+    if (listen_fd >= 0)
+        accept_on(listen_fd);
     for (int i = 0; i < CLIENT_MAX; i++)
         if (clients[i].fd >= 0)
             take(&clients[i]);

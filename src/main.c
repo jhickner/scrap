@@ -18,7 +18,8 @@
 #include "hud.h"
 #include "image.h"
 #include "docview.h"
-#include "hub.h"
+#include "stream.h"
+#include "tailnet.h"
 #include "intercom.h"
 #include "imageview.h"
 #include "livelist.h"
@@ -30,6 +31,8 @@
 #include "sessionprefs.h"
 #include "sessionfork.h"
 #include "sessionload.h"
+#include "netd.h"
+#include "sessionpresent.h"
 #include "sessionswitch.h"
 #include "sessionview.h"
 #include "settings.h"
@@ -157,6 +160,7 @@ static void usage(void)
             "  --fork     with --session: branch off it instead of writing back to it\n"
             "  --restore f  take over the screen from a restarting scrap (used by /restart)\n"
             "  --tabs f   reopen the sessions a restarting scrap was holding (used by /restart)\n"
+            "  --attach machine:@name   open a live session from another window or machine\n"
             "  -h         this help\n"
             "  -V, --version  print the version and exit\n"
             "\n"
@@ -165,7 +169,7 @@ static void usage(void)
             "  " APP_NAME " read TARGET [-n TURNS] [--bytes N]   print a session's last turns\n"
             "  " APP_NAME " send TARGET TEXT   message a live session\n"
             "  " APP_NAME " open TARGET   resume a past session in a new tab\n"
-            "  " APP_NAME " hub [--install | --uninstall]   serve this machine's sessions on the tailnet\n"
+            "  " APP_NAME " attach TARGET   stream a live session as JSON lines; stdin lines are prompts\n"
             "\n"
             "With a prompt on the command line, answer it and exit.\n",
             choices);
@@ -185,6 +189,7 @@ static int idle_fds(void *ud, int *out, int max)
     n += relay_fds(out + n, max - n);
     n += api_fds(out + n, max - n);
     n += dispatch_fds(out + n, max - n);
+    n += stream_fds(out + n, max - n);
     n += im_fds(out + n, max - n);
     return n + tg_fds(out + n, max - n);
 }
@@ -220,6 +225,7 @@ static int idle_render(void *ud)
     sidechannel_poll();
     sidechannel_tick();
     dispatch_poll();
+    stream_poll();
 
     if (tg_pending() || relay_pending() || im_pending() || voice_pending())
         tty_wake();
@@ -537,9 +543,16 @@ static int discard_voice(void *ud)
     return voice_discard();
 }
 
+static char *serve_extra(const cJSON *o, int fd, int *kept)
+{
+    *kept = stream_serve(o, fd);
+    return *kept ? NULL : intercom_serve(o);
+}
+
 static void turn_done(struct session *s)
 {
     api_turn_done(s);
+    stream_turn_done(s);
     voice_turn_done(s);
     cmd_run_deferred(s);
 }
@@ -547,6 +560,7 @@ static void turn_done(struct session *s)
 static void turn_begin(struct session *s)
 {
     api_turn_begin(s);
+    stream_turn_begin(s);
     voice_turn_begin(s);
 }
 
@@ -586,10 +600,11 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "sync"))
         return agentsync_main(argc - 1, argv + 1);
     if (argc > 1 && (!strcmp(argv[1], "ls") || !strcmp(argv[1], "read") ||
-                     !strcmp(argv[1], "send") || !strcmp(argv[1], "open")))
+                     !strcmp(argv[1], "send") || !strcmp(argv[1], "open") ||
+                     !strcmp(argv[1], "attach")))
         return intercom_main(argc - 1, argv + 1);
-    if (argc > 1 && !strcmp(argv[1], "hub"))
-        return hub_main(argc - 1, argv + 1);
+    if (argc > 1 && !strcmp(argv[1], "net"))
+        return netd_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "version")) {
         printf(APP_NAME " %s\n", SCRAP_VERSION);
         return 0;
@@ -607,6 +622,7 @@ int main(int argc, char **argv)
         {"fork",    no_argument,       NULL, 'F'},
         {"restore", required_argument, NULL, 'R'},
         {"tabs",    required_argument, NULL, 'B'},
+        {"attach",  required_argument, NULL, 'Y'},
         {"telegram", no_argument,      NULL, 'T'},
         {"relay",    no_argument,      NULL, 'W'},
         {"imessage", no_argument,      NULL, 'I'},
@@ -625,6 +641,7 @@ int main(int argc, char **argv)
     const char *session_arg = NULL;
     const char *restore_arg = NULL;
     const char *tabs_arg = NULL;
+    const char *attach_arg = NULL;
     const char *state_arg = NULL;
     int telegram = 0;
     int relay = 0;
@@ -648,6 +665,7 @@ int main(int argc, char **argv)
         case 'F': fork_session = 1; break;
         case 'R': restore_arg = optarg; break;
         case 'B': tabs_arg = optarg; break;
+        case 'Y': attach_arg = optarg; break;
         case 'T': telegram = 1; break;
         case 'W': relay = 1; break;
         case 'I': imessage = 1; break;
@@ -783,6 +801,8 @@ int main(int argc, char **argv)
                                                      session_permission_default())));
 
         session_adopt_id(session, session_arg);
+        if (attach_arg)
+            session_set_remote(session, attach_arg);
     }
 
     if (telegram && session && !tg_start(session))
@@ -849,6 +869,10 @@ int main(int argc, char **argv)
         return 1;
     }
     prompt_set_completer(intercom_complete);
+    dispatch_serve_with(serve_extra);
+    intercom_set_window();
+    netd_ensure();
+    session_add_listener(stream_event, NULL);
     prompt_file_completion(prompt, cwd);
     if (have_config) {
         char history[4200];
@@ -933,6 +957,8 @@ int main(int argc, char **argv)
 
     if (!resume && !restore_arg && (session_arg || grokbottail_applies(session)))
         sessionload_into(session);
+    if (attach_arg && !restore_arg)
+        sessionpresent_replay(session_transcript(session));
 
     if (api_on && interactive) {
         viewport_item_begin(VIEWPORT_ROWS(1, 1));

@@ -7,6 +7,12 @@ void dispatch_poll(void);
 
 int dispatch_fds(int *out, int max);
 
+#include "vendor/cJSON.h"
+
+void dispatch_serve_with(char *(*serve)(const cJSON *o, int fd, int *kept));
+
+void dispatch_hand_off(int fd, long pid, const cJSON *o);
+
 int dispatch_dir(char *out, size_t size);
 
 int dispatch_socket_path(long pid, char *out, size_t size);

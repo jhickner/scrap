@@ -12,6 +12,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "dispatch.h"
 #include "api.h"
 #include "im.h"
 #include "parent.h"

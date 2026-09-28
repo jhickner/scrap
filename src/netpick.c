@@ -4,20 +4,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "netd.h"
 #include "ask.h"
-#include "hub.h"
+#include "cmd.h"
+#include "tailnet.h"
 #include "intercom.h"
 #include "keyhelp.h"
+#include "newsession.h"
 #include "pick.h"
 #include "session.h"
 #include "text.h"
 #include "ui.h"
+#include "workspace.h"
 
 #define MAX_ROWS 256
 #define KEY_SEND 's'
+#define SURVEY_SETTLE_MS 150
 
 static const struct keyhelp_row NET_KEYS[] = {
-    {"GO", "enter/s", "send a message"},
+    {"GO", "enter/\xe2\x86\x92", "open in a tab"},
+    {"GO", "s", "send a message"},
     {"GO", "tab/esc", "close the list"},
     {"LIST", "up/down", "move"},
     {"LIST", "/", "search"},
@@ -26,7 +32,11 @@ static const struct keyhelp_row NET_KEYS[] = {
 struct row {
     char label[128];
     char detail[1200];
-    char target[HUB_HOST_MAX + INTERCOM_NAME_MAX + 2];
+    char target[TAILNET_HOST_MAX + INTERCOM_NAME_MAX + 2];
+    char id[128];
+    char machine[TAILNET_HOST_MAX];
+    int  spawn;
+    int  self;
 };
 
 static const char *jstr(const cJSON *o, const char *key)
@@ -71,8 +81,17 @@ static int build(cJSON *machines, struct row *rows, unsigned char *heading, unsi
             roles[n - 1] = UI_ERROR;
             snprintf(r->detail, sizeof r->detail, "%s  %s", where,
                      *jstr(o, "title") ? jstr(o, "title") : "untitled");
+            snprintf(r->id, sizeof r->id, "%s", self ? jstr(o, "id") : "");
             snprintf(r->target, sizeof r->target, "%s%s@%s", self ? "" : machine,
                      self ? "" : ":", name);
+        }
+        if (!*error && n < MAX_ROWS) {
+            struct row *r = &rows[n];
+            heading[n++] = 0;
+            snprintf(r->label, sizeof r->label, "+ new session");
+            snprintf(r->machine, sizeof r->machine, "%s", machine);
+            r->spawn = 1;
+            r->self = self;
         }
     }
     return n;
@@ -95,51 +114,128 @@ static void send_to(struct session *s, const char *target)
     free(text);
 }
 
+static void spawn_on(const struct row *r)
+{
+    if (r->self) {
+        newsession_run();
+        return;
+    }
+    char title[300];
+    snprintf(title, sizeof title, "folder on %s", r->machine);
+    char *cwd = ask_run(title, "~");
+    if (!cwd)
+        return;
+    char target[sizeof r->target], msg[1200];
+    ui_note("starting a session on %s\xe2\x80\xa6", r->machine);
+    ui_flush();
+    if (tailnet_spawn(r->machine, cwd, target, sizeof target, msg, sizeof msg))
+        cmd_attach(target);
+    else {
+        ui_error("%s", msg);
+        ui_put("\n");
+        ui_flush();
+    }
+    free(cwd);
+}
+
+struct watch {
+    struct tailnet_survey *survey;
+    int                    version;
+};
+
+static int survey_tick(void *ud)
+{
+    struct watch *w = ud;
+    return tailnet_survey_version(w->survey) != w->version ? PICK_TICK_REOPEN : 0;
+}
+
+static int find_row(const struct row *rows, int n, const struct row *want)
+{
+    for (int i = 0; i < n; i++)
+        if (!strcmp(rows[i].label, want->label) && !strcmp(rows[i].target, want->target) &&
+            !strcmp(rows[i].machine, want->machine))
+            return i;
+    return -1;
+}
+
 void netpick_run(struct session *s)
 {
-    cJSON *machines = hub_survey();
-    if (!machines) {
+    netd_ensure();
+    struct watch w = {.survey = tailnet_survey_start()};
+    if (!w.survey) {
         ui_error("tailscale status is unavailable");
         ui_put("\n");
         ui_flush();
         return;
     }
+    tailnet_survey_wait(w.survey, SURVEY_SETTLE_MS);
     struct row       *rows = calloc(MAX_ROWS, sizeof *rows);
     unsigned char    *heading = calloc(MAX_ROWS, 1);
     struct pick_item *items = calloc(MAX_ROWS, sizeof *items);
     unsigned char    *spin = calloc(MAX_ROWS, 1), *roles = calloc(MAX_ROWS, 1);
     const char      **marks = calloc(MAX_ROWS, sizeof *marks);
-    int               n = rows && heading && items && spin && roles && marks
-                              ? build(machines, rows, heading, spin, marks, roles)
-                              : 0;
-    cJSON_Delete(machines);
+    struct row        was = {0};
+    int               n = 0, picked = -1, pressed = 0, cursor = -1, pending = 0;
+    for (;;) {
+        cJSON *machines = tailnet_survey_result(w.survey, &w.version, &pending);
+        memset(rows, 0, MAX_ROWS * sizeof *rows);
+        memset(heading, 0, MAX_ROWS);
+        memset(spin, 0, MAX_ROWS);
+        n = rows && heading && items && spin && roles && marks
+                ? build(machines, rows, heading, spin, marks, roles)
+                : 0;
+        cJSON_Delete(machines);
 
-    int initial = 0;
-    while (initial < n && heading[initial])
-        initial++;
-    for (int i = 0; i < n; i++) {
-        items[i].label = rows[i].label;
-        items[i].detail = rows[i].detail;
-    }
+        int initial = cursor >= 0 ? find_row(rows, n, &was) : -1;
+        for (int i = 0; initial < 0 && i < n; i++)
+            if (!heading[i])
+                initial = i;
+        for (int i = 0; i < n; i++) {
+            items[i].label = rows[i].label;
+            items[i].detail = rows[i].detail;
+        }
 
-    char             shortcuts[] = {KEY_SEND, PICK_KEY_RIGHT, '\t', 0};
-    int              pressed = 0;
-    struct pick_live shown = {.heading = heading, .spin = spin, .mark = marks,
-                              .mark_role = roles, .align = 1, .keys = NET_KEYS,
-                              .nkeys = (int)(sizeof NET_KEYS / sizeof *NET_KEYS)};
-    int picked = n ? pick_run_live("net", items, n, initial < n ? initial : 0, &shown,
+        char             shortcuts[] = {KEY_SEND, PICK_KEY_RIGHT, '\t', 0};
+        struct pick_live shown = {.heading = heading, .spin = spin, .mark = marks,
+                                  .mark_role = roles, .align = 1, .keys = NET_KEYS,
+                                  .nkeys = (int)(sizeof NET_KEYS / sizeof *NET_KEYS),
+                                  .tick = pending ? survey_tick : NULL, .ud = &w,
+                                  .cursor = &cursor};
+        picked = n ? pick_run_live("net", items, n, initial < 0 ? 0 : initial, &shown,
                                    PICK_SEARCH_SLASH, shortcuts, &pressed)
                    : -1;
+        if (picked != PICK_REOPEN)
+            break;
+        if (cursor >= 0 && cursor < n)
+            was = rows[cursor];
+    }
+    tailnet_survey_end(w.survey);
 
-    char target[sizeof rows->target] = "";
-    if (picked >= 0 && !heading[picked])
+    char target[sizeof rows->target] = "", id[128] = "";
+    struct row spawn = {0};
+    if (picked >= 0 && !heading[picked]) {
         snprintf(target, sizeof target, "%s", rows[picked].target);
+        snprintf(id, sizeof id, "%s", rows[picked].id);
+        if (rows[picked].spawn)
+            spawn = rows[picked];
+    }
     free(items);
     free(rows);
     free(heading);
     free(spin);
     free(roles);
     free(marks);
-    if (target[0])
+    int here = id[0] ? workspace_find_id(id) : -1;
+    if (spawn.spawn) {
+        spawn_on(&spawn);
+        return;
+    }
+    if (!target[0])
+        return;
+    if (pressed == KEY_SEND)
         send_to(s, target);
+    else if (here >= 0)
+        workspace_show(here);
+    else
+        cmd_attach(target);
 }
