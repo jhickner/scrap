@@ -209,6 +209,20 @@ static int is_phone(const cJSON *node)
     return !strcasecmp(os, "iOS") || !strcasecmp(os, "android") || !strcasecmp(os, "tvOS");
 }
 
+static int surveyed(const char *machine)
+{
+    const char *list = cfg_get("machines", NULL);
+    if (!list)
+        return 1;
+    size_t n = strlen(machine);
+    for (const char *p = list; *p; p += strcspn(p, ", ")) {
+        p += strspn(p, ", ");
+        if (strcspn(p, ", ") == n && !strncasecmp(p, machine, n))
+            return 1;
+    }
+    return 0;
+}
+
 static const char *node_ip(const cJSON *node)
 {
     const char *ip = cJSON_GetStringValue(
@@ -500,10 +514,12 @@ struct tailnet_survey *tailnet_survey_start(void)
     s->refs = 1;
     cJSON *self = cJSON_GetObjectItem(st, "Self");
     for (cJSON *it = next_node(st, NULL); it; it = next_node(st, it)) {
-        if (is_phone(it) || !*node_ip(it))
+        char machine[sizeof s->probes->machine];
+        label(jstr(it, "DNSName"), machine, sizeof machine);
+        if (is_phone(it) || !*node_ip(it) || (it != self && !surveyed(machine)))
             continue;
         struct probe *p = &s->probes[s->n++];
-        label(jstr(it, "DNSName"), p->machine, sizeof p->machine);
+        snprintf(p->machine, sizeof p->machine, "%s", machine);
         snprintf(p->ip, sizeof p->ip, "%s", node_ip(it));
         p->result = cJSON_CreateObject();
         cJSON_AddStringToObject(p->result, "machine", p->machine);
