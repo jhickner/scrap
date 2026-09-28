@@ -416,24 +416,63 @@ int tailnet_spawn(const char *host, const char *cwd, char *target, size_t tsize,
 }
 
 struct probe {
-    char      machine[256];
-    char      ip[64];
-    cJSON    *result;
-    pthread_t thread;
-    int       started;
+    char   machine[256];
+    char   ip[64];
+    cJSON *result;
+    int    pending;
 };
+
+struct tailnet_survey {
+    pthread_mutex_t lock;
+    pthread_cond_t  changed;
+    int             refs, left, version, n;
+    struct probe   *probes;
+};
+
+struct job {
+    struct tailnet_survey *s;
+    int                    i;
+};
+
+static void release(struct tailnet_survey *s)
+{
+    pthread_mutex_lock(&s->lock);
+    int last = --s->refs == 0;
+    pthread_mutex_unlock(&s->lock);
+    if (!last)
+        return;
+    for (int i = 0; i < s->n; i++)
+        cJSON_Delete(s->probes[i].result);
+    free(s->probes);
+    pthread_mutex_destroy(&s->lock);
+    pthread_cond_destroy(&s->changed);
+    free(s);
+}
 
 static void *probe_run(void *ud)
 {
-    struct probe *p = ud;
-    char          err[256] = "";
-    cJSON        *dir = directory(p->ip, err, sizeof err);
-    cJSON        *list = cJSON_DetachItemFromObject(dir, "sessions");
-    if (list)
-        cJSON_AddItemToObject(p->result, "sessions", list);
-    else
-        cJSON_AddStringToObject(p->result, "error", err[0] ? err : "bad reply");
+    struct job            *j = ud;
+    struct tailnet_survey *s = j->s;
+    struct probe          *p = &s->probes[j->i];
+    free(j);
+    char   err[256] = "";
+    cJSON *dir = directory(p->ip, err, sizeof err);
+    cJSON *list = cJSON_DetachItemFromObject(dir, "sessions");
+    cJSON *r = cJSON_CreateObject();
     cJSON_Delete(dir);
+    cJSON_AddStringToObject(r, "machine", p->machine);
+    if (list)
+        cJSON_AddItemToObject(r, "sessions", list);
+    else
+        cJSON_AddStringToObject(r, "error", err[0] ? err : "bad reply");
+    pthread_mutex_lock(&s->lock);
+    cJSON_Delete(p->result);
+    p->result = r;
+    s->left--;
+    s->version++;
+    pthread_cond_broadcast(&s->changed);
+    pthread_mutex_unlock(&s->lock);
+    release(s);
     return NULL;
 }
 
@@ -442,18 +481,28 @@ static int by_machine(const void *a, const void *b)
     return strcasecmp(((const struct probe *)a)->machine, ((const struct probe *)b)->machine);
 }
 
-cJSON *tailnet_survey(void)
+struct tailnet_survey *tailnet_survey_start(void)
 {
     cJSON *st = tailscale("status", NULL);
     if (!st)
         return NULL;
-    int           cap = cJSON_GetArraySize(cJSON_GetObjectItem(st, "Peer")) + 1, n = 0;
-    struct probe *probes = calloc((size_t)cap, sizeof *probes);
-    cJSON        *self = cJSON_GetObjectItem(st, "Self");
-    for (cJSON *it = next_node(st, NULL); it && probes; it = next_node(st, it)) {
+    struct tailnet_survey *s = calloc(1, sizeof *s);
+    int cap = cJSON_GetArraySize(cJSON_GetObjectItem(st, "Peer")) + 1;
+    if (s)
+        s->probes = calloc((size_t)cap, sizeof *s->probes);
+    if (!s || !s->probes) {
+        free(s);
+        cJSON_Delete(st);
+        return NULL;
+    }
+    pthread_mutex_init(&s->lock, NULL);
+    pthread_cond_init(&s->changed, NULL);
+    s->refs = 1;
+    cJSON *self = cJSON_GetObjectItem(st, "Self");
+    for (cJSON *it = next_node(st, NULL); it; it = next_node(st, it)) {
         if (is_phone(it) || !*node_ip(it))
             continue;
-        struct probe *p = &probes[n++];
+        struct probe *p = &s->probes[s->n++];
         label(jstr(it, "DNSName"), p->machine, sizeof p->machine);
         snprintf(p->ip, sizeof p->ip, "%s", node_ip(it));
         p->result = cJSON_CreateObject();
@@ -463,19 +512,93 @@ cJSON *tailnet_survey(void)
             cJSON_AddItemToObject(p->result, "sessions", intercom_live_json());
         } else if (!cJSON_IsTrue(cJSON_GetObjectItem(it, "Online")))
             cJSON_AddStringToObject(p->result, "error", "offline");
-        else
-            p->started = pthread_create(&p->thread, NULL, probe_run, p) == 0;
+        else {
+            cJSON_AddStringToObject(p->result, "error", "checking");
+            p->pending = 1;
+            s->left++;
+        }
     }
-    cJSON *out = cJSON_CreateArray();
-    for (int i = 0; i < n; i++)
-        if (probes[i].started)
-            pthread_join(probes[i].thread, NULL);
-    if (n > 1)
-        qsort(probes + 1, (size_t)n - 1, sizeof *probes, by_machine);
-    for (int i = 0; i < n; i++)
-        cJSON_AddItemToArray(out, probes[i].result);
-    free(probes);
     cJSON_Delete(st);
+    if (s->n > 1)
+        qsort(s->probes + 1, (size_t)s->n - 1, sizeof *s->probes, by_machine);
+    for (int i = 0; i < s->n; i++) {
+        if (s->probes[i].pending) {
+            struct job *j = malloc(sizeof *j);
+            pthread_t   t;
+            if (j) {
+                *j = (struct job){.s = s, .i = i};
+                s->refs++;
+            }
+            if (j && pthread_create(&t, NULL, probe_run, j) == 0)
+                pthread_detach(t);
+            else {
+                if (j) {
+                    s->refs--;
+                    free(j);
+                }
+                cJSON_ReplaceItemInObject(s->probes[i].result, "error",
+                                          cJSON_CreateString("could not probe"));
+                s->left--;
+            }
+        }
+    }
+    return s;
+}
+
+void tailnet_survey_wait(struct tailnet_survey *s, int ms)
+{
+    struct timespec until;
+    clock_gettime(CLOCK_REALTIME, &until);
+    until.tv_sec += ms / 1000;
+    until.tv_nsec += (long)(ms % 1000) * 1000000;
+    if (until.tv_nsec >= 1000000000) {
+        until.tv_sec++;
+        until.tv_nsec -= 1000000000;
+    }
+    pthread_mutex_lock(&s->lock);
+    while (s->left > 0 &&
+           (ms < 0 ? pthread_cond_wait(&s->changed, &s->lock)
+                   : pthread_cond_timedwait(&s->changed, &s->lock, &until)) == 0)
+        ;
+    pthread_mutex_unlock(&s->lock);
+}
+
+cJSON *tailnet_survey_result(struct tailnet_survey *s, int *version, int *pending)
+{
+    cJSON *out = cJSON_CreateArray();
+    pthread_mutex_lock(&s->lock);
+    for (int i = 0; i < s->n; i++)
+        cJSON_AddItemToArray(out, cJSON_Duplicate(s->probes[i].result, 1));
+    if (version)
+        *version = s->version;
+    if (pending)
+        *pending = s->left;
+    pthread_mutex_unlock(&s->lock);
+    return out;
+}
+
+int tailnet_survey_version(struct tailnet_survey *s)
+{
+    pthread_mutex_lock(&s->lock);
+    int v = s->version;
+    pthread_mutex_unlock(&s->lock);
+    return v;
+}
+
+void tailnet_survey_end(struct tailnet_survey *s)
+{
+    if (s)
+        release(s);
+}
+
+cJSON *tailnet_survey(void)
+{
+    struct tailnet_survey *s = tailnet_survey_start();
+    if (!s)
+        return NULL;
+    tailnet_survey_wait(s, -1);
+    cJSON *out = tailnet_survey_result(s, NULL, NULL);
+    tailnet_survey_end(s);
     return out;
 }
 

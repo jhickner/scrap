@@ -34,6 +34,18 @@ char *tailnet_read(const char *host, const char *target, long turns, long bytes,
 int tailnet_spawn(const char *host, const char *cwd, char *target, size_t tsize, char *msg,
                   size_t size);
 
+struct tailnet_survey;
+
+struct tailnet_survey *tailnet_survey_start(void);
+
+void tailnet_survey_wait(struct tailnet_survey *s, int ms);
+
+cJSON *tailnet_survey_result(struct tailnet_survey *s, int *version, int *pending);
+
+int tailnet_survey_version(struct tailnet_survey *s);
+
+void tailnet_survey_end(struct tailnet_survey *s);
+
 cJSON *tailnet_survey(void);
 
 #endif
