@@ -2184,6 +2184,11 @@ const char *session_remote(const struct session *s)
     return s ? s->remote : NULL;
 }
 
+int session_remote_connected(const struct session *s)
+{
+    return s && s->remote && remote_connected(s->agent);
+}
+
 const char *session_title(const struct session *s)
 {
     return s && s->title[0] ? s->title : NULL;
@@ -2418,6 +2423,20 @@ struct vncinset *session_inset(struct session *s, int create)
 
 int session_argv(const struct session *s, char **out, int max, unsigned what)
 {
+    if (s && s->remote) {
+        int n = 0;
+        if ((what & SESSION_ARGV_CWD) && s->cwd && n + 2 <= max) {
+            out[n++] = (char *)"-C";
+            out[n++] = s->cwd;
+        }
+        if (n + 2 <= max) {
+            out[n++] = (char *)"--attach";
+            out[n++] = s->remote;
+        }
+        if (n < max)
+            out[n] = NULL;
+        return n;
+    }
     const char *id = session_id(s);
     int resume = (what & SESSION_ARGV_RESUME) && id && session_can_resume(s);
     return scrap_argv(out, max, resume ? what : (what & ~SESSION_ARGV_RESUME),

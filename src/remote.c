@@ -185,15 +185,15 @@ static char *turn(struct remote *r, const char *mine, backend_result *meta)
     }
 }
 
+static int connect_remote(struct remote *r);
+
 static char *ask_ex(Backend *b, const char *user, backend_result *meta)
 {
     struct remote *r = R(b);
     if (meta)
         memset(meta, 0, sizeof *meta);
-    if (r->closed) {
-        snprintf(r->err, sizeof r->err, "%s is not connected", r->target);
+    if (r->closed && !connect_remote(r))
         return NULL;
-    }
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "prompt", user ? user : "");
     if (!put(r, o)) {
@@ -255,12 +255,13 @@ static int take_continuation(Backend *b)
     return was;
 }
 
-static int start(Backend *b, const char *resume)
+static int connect_remote(struct remote *r)
 {
-    (void)resume;
-    struct remote *r = R(b);
     if (r->fd >= 0)
-        return 1;
+        close(r->fd);
+    r->len = 0;
+    r->pending = 0;
+    r->closed = 1;
     r->fd = intercom_attach(r->target, r->err, sizeof r->err);
     if (r->fd < 0)
         return 0;
@@ -278,6 +279,7 @@ static int start(Backend *b, const char *resume)
         cJSON_Delete(o);
         close(r->fd);
         r->fd = -1;
+        r->closed = 1;
         return 0;
     }
     cJSON_Delete(r->history);
@@ -288,6 +290,16 @@ static int start(Backend *b, const char *resume)
         r->pending = 1;
     }
     cJSON_Delete(o);
+    r->err[0] = '\0';
+    return 1;
+}
+
+static int start(Backend *b, const char *resume)
+{
+    (void)resume;
+    struct remote *r = R(b);
+    if (r->fd < 0 || r->closed)
+        connect_remote(r);
     return 1;
 }
 
@@ -416,6 +428,11 @@ Backend *remote_open(const char *target)
 const cJSON *remote_history(Backend *b)
 {
     return b ? R(b)->history : NULL;
+}
+
+int remote_connected(Backend *b)
+{
+    return b && !R(b)->closed;
 }
 
 const char *remote_prompt(Backend *b)

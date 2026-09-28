@@ -23,6 +23,10 @@ static void replay_tab(struct session *s, void *ud)
         hud_refresh(s);
         return;
     }
+    if (session_remote(s)) {
+        session_replay(s);
+        return;
+    }
     hud_print(s);
     sessionload_into(s);
 }
@@ -47,7 +51,7 @@ void tabs_prepare(const char *path)
         char       *rest = line;
         const char *screen = strsep(&rest, "\t");
         const char *backend = NULL, *cwd = NULL, *model = NULL, *effort = NULL;
-        const char *id = NULL;
+        const char *id = NULL, *remote = NULL;
         for (char *arg; (arg = strsep(&rest, "\t"));) {
             if (arg[0] != '-' || !strcmp(arg, "-s"))
                 continue;
@@ -64,11 +68,18 @@ void tabs_prepare(const char *path)
                 effort = value;
             else if (!strcmp(arg, "--session"))
                 id = value;
+            else if (!strcmp(arg, "--attach"))
+                remote = value;
         }
-        if (!backend || !*backend || !id || !*id)
+        if (!remote && (!backend || !*backend || !id || !*id))
             continue;
 
-        struct session *s = workspace_prepare(backend, model, effort, cwd, id);
+        struct session *s = remote ? workspace_prepare("claude", NULL, NULL, cwd, NULL)
+                                   : workspace_prepare(backend, model, effort, cwd, id);
+        if (s && remote && !session_set_remote(s, remote)) {
+            session_free(s);
+            s = NULL;
+        }
         if (!s)
             continue;
         tabs_queue(s, screen);

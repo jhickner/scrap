@@ -57,8 +57,9 @@ int workspace_spawn_remote(const char *target, char *why, size_t size)
                             ? workspace_prepare("claude", NULL, NULL,
                                                 getcwd(here, sizeof here) ? here : NULL, NULL)
                             : NULL;
-    if (!s || !session_set_remote(s, target) || !session_start(s)) {
-        const char *err = session_start_error();
+    if (!s || !session_set_remote(s, target) || !session_start(s) ||
+        !session_remote_connected(s)) {
+        const char *err = s ? session_last_error(s) : NULL;
         snprintf(why, size, "%s", err && *err ? err : "could not open that session");
         session_free(s);
         return -1;

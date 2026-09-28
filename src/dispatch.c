@@ -478,6 +478,11 @@ void dispatch_net(const struct dispatch_net *config)
     net = *config;
 }
 
+int dispatch_serving(void)
+{
+    return net.bind != NULL;
+}
+
 int dispatch_net_port(void)
 {
     return net_fd >= 0 ? net_port : 0;

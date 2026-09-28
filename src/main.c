@@ -31,6 +31,7 @@
 #include "sessionprefs.h"
 #include "sessionfork.h"
 #include "sessionload.h"
+#include "sessionpresent.h"
 #include "sessionswitch.h"
 #include "sessionview.h"
 #include "settings.h"
@@ -158,6 +159,7 @@ static void usage(void)
             "  --fork     with --session: branch off it instead of writing back to it\n"
             "  --restore f  take over the screen from a restarting scrap (used by /restart)\n"
             "  --tabs f   reopen the sessions a restarting scrap was holding (used by /restart)\n"
+            "  --attach machine:@name   open a live session from another window or machine\n"
             "  -h         this help\n"
             "  -V, --version  print the version and exit\n"
             "\n"
@@ -617,6 +619,7 @@ int main(int argc, char **argv)
         {"fork",    no_argument,       NULL, 'F'},
         {"restore", required_argument, NULL, 'R'},
         {"tabs",    required_argument, NULL, 'B'},
+        {"attach",  required_argument, NULL, 'Y'},
         {"telegram", no_argument,      NULL, 'T'},
         {"relay",    no_argument,      NULL, 'W'},
         {"imessage", no_argument,      NULL, 'I'},
@@ -635,6 +638,7 @@ int main(int argc, char **argv)
     const char *session_arg = NULL;
     const char *restore_arg = NULL;
     const char *tabs_arg = NULL;
+    const char *attach_arg = NULL;
     const char *state_arg = NULL;
     int telegram = 0;
     int relay = 0;
@@ -658,6 +662,7 @@ int main(int argc, char **argv)
         case 'F': fork_session = 1; break;
         case 'R': restore_arg = optarg; break;
         case 'B': tabs_arg = optarg; break;
+        case 'Y': attach_arg = optarg; break;
         case 'T': telegram = 1; break;
         case 'W': relay = 1; break;
         case 'I': imessage = 1; break;
@@ -793,6 +798,8 @@ int main(int argc, char **argv)
                                                      session_permission_default())));
 
         session_adopt_id(session, session_arg);
+        if (attach_arg)
+            session_set_remote(session, attach_arg);
     }
 
     if (telegram && session && !tg_start(session))
@@ -948,6 +955,8 @@ int main(int argc, char **argv)
 
     if (!resume && !restore_arg && (session_arg || grokbottail_applies(session)))
         sessionload_into(session);
+    if (attach_arg && !restore_arg)
+        sessionpresent_replay(session_transcript(session));
 
     if (api_on && interactive) {
         viewport_item_begin(VIEWPORT_ROWS(1, 1));

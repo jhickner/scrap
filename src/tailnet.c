@@ -7,11 +7,13 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
+#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -19,6 +21,8 @@
 #include "settings.h"
 #include "text.h"
 #include "vendor/wsd.h"
+
+extern char **environ;
 
 #define PORT_DEFAULT   8792
 #define CLI_MAX        (4 * 1024 * 1024)
@@ -73,16 +77,37 @@ static const char *cli(void)
     return "tailscale";
 }
 
-static cJSON *tailscale(const char *args)
+static cJSON *tailscale(const char *verb, const char *arg)
 {
-    char cmd[4400];
-    snprintf(cmd, sizeof cmd, "'%s' %s 2>/dev/null", cli(), args);
-    FILE *p = popen(cmd, "r");
-    if (!p)
+    int fds[2];
+    if (pipe(fds) != 0)
         return NULL;
-    char  *buf = malloc(CLI_MAX + 1);
-    size_t got = buf ? fread(buf, 1, CLI_MAX, p) : 0;
-    pclose(p);
+    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+    posix_spawn_file_actions_t acts;
+    posix_spawn_file_actions_init(&acts);
+    posix_spawn_file_actions_adddup2(&acts, fds[1], STDOUT_FILENO);
+    posix_spawn_file_actions_addopen(&acts, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    posix_spawn_file_actions_addopen(&acts, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    char *argv[] = {(char *)cli(), (char *)verb, (char *)"--json", (char *)arg, NULL};
+    pid_t pid;
+    int   ok = posix_spawnp(&pid, argv[0], &acts, NULL, argv, environ) == 0;
+    posix_spawn_file_actions_destroy(&acts);
+    close(fds[1]);
+    char  *buf = ok ? malloc(CLI_MAX + 1) : NULL;
+    size_t got = 0;
+    while (buf && got < CLI_MAX) {
+        ssize_t n = read(fds[0], buf + got, CLI_MAX - got);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            break;
+        got += (size_t)n;
+    }
+    close(fds[0]);
+    if (ok)
+        while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
+            ;
     if (!buf)
         return NULL;
     buf[got] = '\0';
@@ -104,12 +129,10 @@ static void label(const char *dns, char *out, size_t size)
 
 static int whois(const char *ip, char *login, size_t lsize, char *host, size_t hsize)
 {
-    char args[128];
     for (const char *p = ip; *p; p++)
         if (!isxdigit((unsigned char)*p) && *p != '.' && *p != ':')
             return 0;
-    snprintf(args, sizeof args, "whois --json %s", ip);
-    cJSON *o = tailscale(args);
+    cJSON *o = tailscale("whois", ip);
     snprintf(login, lsize, "%s", jstr(cJSON_GetObjectItem(o, "UserProfile"), "LoginName"));
     label(jstr(cJSON_GetObjectItem(o, "Node"), "Name"), host, hsize);
     cJSON_Delete(o);
@@ -123,25 +146,33 @@ static struct {
     time_t at;
 } seen[WHOIS_SLOTS];
 
+static pthread_mutex_t seen_lock = PTHREAD_MUTEX_INITIALIZER;
+
 static int whois_cached(const char *ip, char *login, size_t lsize, char *host, size_t hsize)
 {
+    pthread_mutex_lock(&seen_lock);
+    int found = 0;
     time_t now = time(NULL);
     int    slot = 0;
-    for (int i = 0; i < WHOIS_SLOTS; i++) {
+    for (int i = 0; i < WHOIS_SLOTS && !found; i++) {
         if (!strcmp(seen[i].ip, ip) && now - seen[i].at < WHOIS_TTL) {
             snprintf(login, lsize, "%s", seen[i].login);
             snprintf(host, hsize, "%s", seen[i].host);
-            return 1;
-        }
-        if (seen[i].at < seen[slot].at)
+            found = 1;
+        } else if (seen[i].at < seen[slot].at)
             slot = i;
     }
+    pthread_mutex_unlock(&seen_lock);
+    if (found)
+        return 1;
     if (!whois(ip, login, lsize, host, hsize))
         return 0;
+    pthread_mutex_lock(&seen_lock);
     snprintf(seen[slot].ip, sizeof seen[slot].ip, "%s", ip);
     snprintf(seen[slot].login, sizeof seen[slot].login, "%s", login);
     snprintf(seen[slot].host, sizeof seen[slot].host, "%s", host);
     seen[slot].at = now;
+    pthread_mutex_unlock(&seen_lock);
     return 1;
 }
 
@@ -195,7 +226,7 @@ static cJSON *next_node(cJSON *st, cJSON *it)
 void tailnet_resolve(const char *host, char *ip, size_t size)
 {
     snprintf(ip, size, "%s", host);
-    cJSON *st = tailscale("status --json");
+    cJSON *st = tailscale("status", NULL);
     for (cJSON *it = next_node(st, NULL); it; it = next_node(st, it)) {
         char name[256];
         label(jstr(it, "DNSName"), name, sizeof name);
@@ -450,7 +481,7 @@ static int by_machine(const void *a, const void *b)
 
 cJSON *tailnet_survey(void)
 {
-    cJSON *st = tailscale("status --json");
+    cJSON *st = tailscale("status", NULL);
     if (!st)
         return NULL;
     int           cap = cJSON_GetArraySize(cJSON_GetObjectItem(st, "Peer")) + 1, n = 0;

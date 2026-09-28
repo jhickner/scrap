@@ -10,4 +10,6 @@ const cJSON *remote_history(Backend *b);
 
 const char *remote_prompt(Backend *b);
 
+int remote_connected(Backend *b);
+
 #endif

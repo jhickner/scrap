@@ -132,6 +132,7 @@ void session_adopt_id(struct session *s, const char *id);
 const char *session_title(const struct session *s);
 int         session_set_remote(struct session *s, const char *target);
 const char *session_remote(const struct session *s);
+int         session_remote_connected(const struct session *s);
 
 const char *session_name(const struct session *s);
 

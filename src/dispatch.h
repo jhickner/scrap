@@ -20,6 +20,8 @@ void dispatch_net(const struct dispatch_net *config);
 
 int dispatch_net_port(void);
 
+int dispatch_serving(void);
+
 int dispatch_dir(char *out, size_t size);
 
 int dispatch_socket_path(long pid, char *out, size_t size);

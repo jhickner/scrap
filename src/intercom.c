@@ -69,7 +69,7 @@ static const char *route(const char *target, char *host, size_t size, const char
 {
     const char *name = tailnet_split(target, host, size);
     *local = target;
-    if (name && dispatch_net_port() && tailnet_is_self(host)) {
+    if (name && dispatch_serving() && tailnet_is_self(host)) {
         *local = name;
         return NULL;
     }
