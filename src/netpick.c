@@ -35,7 +35,8 @@ static const char *jstr(const cJSON *o, const char *key)
     return s ? s : "";
 }
 
-static int build(cJSON *machines, struct row *rows, unsigned char *heading)
+static int build(cJSON *machines, struct row *rows, unsigned char *heading, unsigned char *spin,
+                 const char **marks, unsigned char *roles)
 {
     int    n = 0;
     cJSON *m;
@@ -65,7 +66,10 @@ static int build(cJSON *machines, struct row *rows, unsigned char *heading)
             struct row *r = &rows[n];
             heading[n++] = 0;
             snprintf(r->label, sizeof r->label, "@%s", name);
-            snprintf(r->detail, sizeof r->detail, "%-8s %s  %s", jstr(o, "status"), where,
+            spin[n - 1] = !strcmp(jstr(o, "status"), "working");
+            marks[n - 1] = !strcmp(jstr(o, "status"), "errored") ? "e" : "";
+            roles[n - 1] = UI_ERROR;
+            snprintf(r->detail, sizeof r->detail, "%s  %s", where,
                      *jstr(o, "title") ? jstr(o, "title") : "untitled");
             snprintf(r->target, sizeof r->target, "%s%s@%s", self ? "" : machine,
                      self ? "" : ":", name);
@@ -103,7 +107,11 @@ void netpick_run(struct session *s)
     struct row       *rows = calloc(MAX_ROWS, sizeof *rows);
     unsigned char    *heading = calloc(MAX_ROWS, 1);
     struct pick_item *items = calloc(MAX_ROWS, sizeof *items);
-    int               n = rows && heading && items ? build(machines, rows, heading) : 0;
+    unsigned char    *spin = calloc(MAX_ROWS, 1), *roles = calloc(MAX_ROWS, 1);
+    const char      **marks = calloc(MAX_ROWS, sizeof *marks);
+    int               n = rows && heading && items && spin && roles && marks
+                              ? build(machines, rows, heading, spin, marks, roles)
+                              : 0;
     cJSON_Delete(machines);
 
     int initial = 0;
@@ -116,7 +124,8 @@ void netpick_run(struct session *s)
 
     char             shortcuts[] = {KEY_SEND, PICK_KEY_RIGHT, '\t', 0};
     int              pressed = 0;
-    struct pick_live shown = {.heading = heading, .align = 1, .keys = NET_KEYS,
+    struct pick_live shown = {.heading = heading, .spin = spin, .mark = marks,
+                              .mark_role = roles, .align = 1, .keys = NET_KEYS,
                               .nkeys = (int)(sizeof NET_KEYS / sizeof *NET_KEYS)};
     int picked = n ? pick_run_live("net", items, n, initial < n ? initial : 0, &shown,
                                    PICK_SEARCH_SLASH, shortcuts, &pressed)
@@ -128,6 +137,9 @@ void netpick_run(struct session *s)
     free(items);
     free(rows);
     free(heading);
+    free(spin);
+    free(roles);
+    free(marks);
     if (target[0])
         send_to(s, target);
 }
