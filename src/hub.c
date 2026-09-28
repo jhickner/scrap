@@ -6,6 +6,7 @@
 #include <limits.h>
 #include <microhttpd.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -558,9 +559,16 @@ static int uninstall(void)
 #endif
 }
 
+static void reload(int sig)
+{
+    (void)sig;
+    _exit(0);
+}
+
 static int serve(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
+    signal(SIGURG, reload);
     const char *bind = cfg_get("bind", NULL);
     while (!bind && !(bind = wsd_tailscale_ip())) {
         fprintf(stderr, APP_NAME " hub: no tailscale address; retrying\n");
