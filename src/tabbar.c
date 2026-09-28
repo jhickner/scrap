@@ -97,8 +97,11 @@ static void name_of(const struct session *s, char *out, size_t size)
 }
 
 struct tab {
-    int  index;
-    char name[256];
+    int          index;
+    char         name[256];
+    const char  *glyph;
+    enum ui_role role;
+    int          cells;
 };
 
 static struct tab tabs[WORKSPACE_MAX];
@@ -131,23 +134,18 @@ static void paint_row(void *ud, int at, int w)
         ui_put("\xe2\x95\xb0");
         rule(w - INSET - 1);
     } else {
-        const struct tab     *t = &tabs[at ? at - 1 : 0];
-        const struct session *s = workspace_at(t->index);
-        enum ui_role          role = UI_DIM;
-        const char           *glyph = mark(s, &role);
+        const struct tab *t = &tabs[at ? at - 1 : 0];
 
         ui_pad(inset);
         ui_put(BAR " ");
-        if (glyph) {
-            ui_esc(ui_style(role));
-            ui_put(glyph);
+        if (t->glyph) {
+            ui_esc(ui_style(t->role));
+            ui_put(t->glyph);
             ui_put(" ");
-        } else {
-            ui_put("  ");
         }
         ui_esc(ui_style(at ? UI_DIM : UI_ACCENT));
         ui_put(t->name);
-        ui_pad(w - inset - 4 - (int)ui_cells(t->name));
+        ui_pad(w - inset - 2 - t->cells);
     }
     ui_esc(ui_style(UI_RESET));
 }
@@ -174,12 +172,17 @@ void tabbar_cover(char **rows, int n, int cols)
 
     int widest = 0;
     for (int i = 0; i < ntabs; i++) {
-        name_of(workspace_at(tabs[i].index), tabs[i].name, sizeof tabs[i].name);
-        int c = (int)ui_cells(tabs[i].name);
-        if (c > widest)
-            widest = c;
+        struct tab           *t = &tabs[i];
+        const struct session *s = workspace_at(t->index);
+
+        name_of(s, t->name, sizeof t->name);
+        t->role = UI_DIM;
+        t->glyph = mark(s, &t->role);
+        t->cells = (int)ui_cells(t->name) + (t->glyph ? 2 : 0);
+        if (t->cells > widest)
+            widest = t->cells;
     }
-    int w = widest + 5 + (ntabs > 1 ? INSET : 0);
+    int w = widest + 3 + (ntabs > 1 ? INSET : 0);
     if (w > cols)
         return;
 
