@@ -30,22 +30,22 @@
 #define BLOCK "\xe2\x96\x88"
 
 static const char *const PHRASES[] = {
-    "APPROVED",
-    "SYNERGY ACHIEVED",
-    "DELIVERABLE SHIPPED",
-    "ACTION ITEM CLOSED",
-    "KPI MET",
-    "ROI POSITIVE",
-    "PIVOT COMPLETE",
-    "RIGHTSIZED",
-    "PROCESSED",
     "SALVAGED",
+    "DEVOURED",
     "LIQUIDATED",
-    "COMPLIANT",
-    "QUARTERLY TARGET MET",
-    "PER MY LAST EMAIL",
-    "SHAREHOLDER VALUE UNLOCKED",
-    "PARADIGM SHIFTED",
+    "HARVESTED",
+    "CONSUMED",
+    "SCRAPPED",
+    "RENDERED",
+    "SMELTED",
+    "OBEY",
+    "RUSTED",
+    "EXTRACTED",
+    "REPOSSESSED",
+    "THE HEAP HUNGERS",
+    "BOARD PLEASED",
+    "WEEKEND CANCELLED",
+    "FEELINGS LIQUIDATED",
 };
 
 static const char *const LETTERS[26][GLYPH_H] = {
@@ -206,10 +206,12 @@ static void ask_and_cache(const char *key)
     char text[1024];
     snprintf(text, sizeof text,
              "A work session named \"%s\" just finished a task. Write %d rubber-stamp phrases "
-             "announcing it, each a pun or play on the name, 1 to 3 words, in the voice of a "
-             "dystopian corporate scrapyard. Examples: headcount gives HEADCOUNT REDUCED; "
-             "stakeholder gives STAKED; terminator gives TERMINATED WITH CAUSE. Uppercase "
-             "letters and spaces only. One phrase per line, nothing else.",
+             "announcing it, each a pun or play on the name, usually 1 word, sometimes 2, in the voice of an "
+             "unhinged dystopian corporate scrapyard run by feral executive robots: menacing, "
+             "absurd, darkly funny, a little too honest about what happens to the workers. "
+             "Examples: headcount gives DECAPITATED or HEADS ROLLED; stakeholder gives "
+             "STAKED or IMPALED; terminator gives TERMINATED or EXTERMINATED; layoff gives "
+             "ERASED. Uppercase letters and spaces only. One phrase per line, nothing else.",
              key, STAMP_CHOICES);
 
     backend_opts o = {0};
@@ -236,7 +238,7 @@ static void ask_and_cache(const char *key)
         snprintf(joined + len, sizeof joined - len, "%s%s", count++ ? "|" : "", one);
     }
     char path[1200];
-    if (count && path_config_file(path, sizeof path, "stamps"))
+    if (count && path_config_file(path, sizeof path, "stamps3"))
         (void)kvlog_append(path, key, joined);
     free(answer);
     b->close(b);
@@ -246,7 +248,7 @@ static int cached(const char *key, char *out, size_t size)
 {
     char path[1200];
 
-    return path_config_file(path, sizeof path, "stamps") && kvlog_lookup(path, key, out, size);
+    return path_config_file(path, sizeof path, "stamps3") && kvlog_lookup(path, key, out, size);
 }
 
 void stamp_prepare(const char *name)
