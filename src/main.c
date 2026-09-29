@@ -413,19 +413,10 @@ static void cycle_session(void *ud, int delta)
 static void another(void *ud)
 {
     (void)ud;
-    int n = workspace_count();
-    for (int i = 1; i < n; i++) {
-        int at = (workspace_index() + i) % n;
-        if (session_turn_running(workspace_at(at)) || workspace_queued(at))
-            continue;
-        workspace_show(at);
-        return;
-    }
-
     struct session *here = workspace_current();
     if (!here)
         return;
-    if (n >= WORKSPACE_MAX) {
+    if (workspace_count() >= WORKSPACE_MAX) {
         viewport_item_begin(VIEWPORT_ROWS(1, 1));
         ui_note("this window is already holding as many sessions as it can");
         viewport_item_end();

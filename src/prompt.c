@@ -651,8 +651,8 @@ static const struct prompt_key SHORTCUTS[] = {
      "step back / forward through recently active sessions", PROMPT_KEY_ALWAYS},
     {"SESSIONS", "ctrl-tab", "next tab, +shift previous",
      "cycle to the next / previous session", PROMPT_KEY_ALWAYS},
-    {"SESSIONS", "ctrl-b", "another session",
-     "open another session like this one, or reuse the idle one", PROMPT_KEY_ALWAYS},
+    {"SESSIONS", "ctrl-n", "new session",
+     "open a new session with this one's backend, model, effort, and directory", PROMPT_KEY_ALWAYS},
     {"SESSIONS", "ctrl-t", "shell split",
      "open a shell split in this directory", PROMPT_KEY_ALWAYS},
     {"SESSIONS", "ctrl-d", "close (empty line)",
@@ -829,10 +829,15 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             return KEY_OK;
         }
 
-        if (ev->cp == KEY_CTRL('B')) {
-            if (!live && p->another) {
+        if (ev->cp == KEY_CTRL('N')) {
+            if (p->another) {
+                if (live)
+                    status_pause();
+                viewport_defer();
                 chrome_clear();
                 p->another(p->another_ud);
+                if (live)
+                    status_resume();
             }
             return KEY_OK;
         }
