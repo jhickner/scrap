@@ -564,7 +564,7 @@ static int pump(int hold, int screen)
             tabs[i].finished = 1;
             if (i != cur)
                 session_set_unseen(s, 1);
-            else if (screen)
+            else if (screen && !tty_focused())
                 stamp_show(session_name(s));
         }
         settle_finished(i, hold);

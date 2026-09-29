@@ -20,7 +20,8 @@
 #define LINE_H    (GLYPH_H + 1)
 #define WORD_GAP  3
 #define LINES_MAX 8
-#define PAD       3
+#define MARGIN_COLS 2
+#define MARGIN_ROWS 1
 
 #define STAMP_MODEL   "claude-haiku-4-5-20251001"
 #define STAMP_CHOICES 6
@@ -28,6 +29,7 @@
 #define REQUESTED_MAX 64
 
 #define BLOCK "\xe2\x96\x88"
+#define SHADE "\xe2\x96\x91"
 
 static const char *const PHRASES[] = {
     "SALVAGED",
@@ -79,14 +81,19 @@ static const char *const LETTERS[26][GLYPH_H] = {
 
 static const char *const BLANK[GLYPH_H] = {"...", "...", "...", "...", "..."};
 
+static const char *const CHECK[GLYPH_H] = {
+    "......##", ".....##.", "##..##..", ".####...", "..##....",
+};
+
 static const char *phrase;
 static char        lines[LINES_MAX][64];
 static int         nlines;
 static int         text_w;
-static int         big;
 
 static const char *const *glyph(char c)
 {
+    if (c == '*')
+        return CHECK;
     return c >= 'A' && c <= 'Z' ? LETTERS[c - 'A'] : BLANK;
 }
 
@@ -130,49 +137,39 @@ next:
     return 1;
 }
 
-static void big_row(const char *line, int gr)
+static int ink(int t, int x)
 {
-    for (const char *c = line; *c; c++) {
-        const char *row = *c == ' ' ? "." : glyph(*c)[gr];
-        for (const char *d = row; *d; d++)
-            ui_put(*d == '#' ? BLOCK : " ");
-        if (c[1])
-            ui_put(" ");
+    if (t < 0 || t >= nlines * LINE_H || t % LINE_H == GLYPH_H || x < 0)
+        return 0;
+
+    const char *line = lines[t / LINE_H];
+    int         at = x - (text_w - span(line, strlen(line))) / 2;
+    for (const char *c = line; *c && at >= 0; c++) {
+        const char *row = *c == ' ' ? "." : glyph(*c)[t % LINE_H];
+        int         w = (int)strlen(row);
+        if (at < w)
+            return row[at] == '#';
+        at -= w + 1;
     }
+    return 0;
 }
 
 static void paint_row(void *ud, int line, int w)
 {
-    int r = *(int *)ud + line;
-    int h = big ? nlines * LINE_H - 1 : 1;
-    int inner = w - 2;
+    int t = *(int *)ud + line - MARGIN_ROWS;
 
-    ui_esc(ui_style(UI_ERROR));
-    if (r == 0 || r == h + 3) {
-        ui_put(r ? "\xe2\x95\x9a" : "\xe2\x95\x94");
-        for (int i = 0; i < inner; i++)
-            ui_put("\xe2\x95\x90");
-        ui_put(r ? "\xe2\x95\x9d" : "\xe2\x95\x97");
-        ui_esc(ui_style(UI_RESET));
-        return;
+    for (int c = 0; c < w; c++) {
+        int x = c - MARGIN_COLS - 1;
+        if (ink(t, x)) {
+            ui_esc(ui_style(UI_ERROR));
+            ui_put(BLOCK);
+        } else if (ink(t - 1, x + 1)) {
+            ui_esc(ui_style(UI_DIM));
+            ui_put(SHADE);
+        } else {
+            ui_put(" ");
+        }
     }
-    ui_put("\xe2\x95\x91");
-    int t = r - 2;
-    if (t < 0 || t >= h || (big && t % LINE_H == GLYPH_H)) {
-        ui_pad(inner);
-    } else {
-        const char *text = big ? lines[t / LINE_H] : phrase;
-        int         tw = big ? span(text, strlen(text)) : (int)strlen(text);
-        int         left = (inner - tw) / 2;
-
-        ui_pad(left);
-        if (big)
-            big_row(text, t % LINE_H);
-        else
-            ui_put(text);
-        ui_pad(inner - left - tw);
-    }
-    ui_put("\xe2\x95\x91");
     ui_esc(ui_style(UI_RESET));
 }
 
@@ -338,13 +335,15 @@ void stamp_cover(char **rows, int n, int cols)
     if (!phrase)
         return;
 
-    int limit = cols - 2 * PAD - 2;
-    big = wrap(limit) && nlines * LINE_H - 1 + 4 <= n;
-    if (!big)
-        text_w = (int)strlen(phrase);
+    int limit = cols - 2 * MARGIN_COLS - 1;
+    if (!wrap(limit) || nlines * LINE_H + 2 * MARGIN_ROWS > n) {
+        nlines = 1;
+        snprintf(lines[0], sizeof lines[0], "*");
+        text_w = span(lines[0], 1);
+    }
 
-    int h = (big ? nlines * LINE_H - 1 : 1) + 4;
-    int w = text_w + 2 * PAD + 2;
+    int h = nlines * LINE_H + 2 * MARGIN_ROWS;
+    int w = text_w + 1 + 2 * MARGIN_COLS;
     if (w > cols || h > n)
         return;
 
