@@ -1,14 +1,15 @@
 /*
  * core.h — native agent loop: OpenAI-compatible chat completions over
- * libcurl, four tools (read, write, edit, bash), JSONL sessions, compaction,
- * context files, skills, and hooks.
+ * libcurl, four tools (read, write, edit, bash), MCP tools from running
+ * Streamable HTTP servers, JSONL sessions, compaction, context files, skills,
+ * and hooks.
  *
  * The declarations need nothing else. backend.h instantiates the
  * implementation (CORE_AGENT_IMPLEMENTATION) after its adapter scaffolding.
  *
  * Config and state live under $SCRAP_CONFIG_DIR/agent, else
- * ~/.config/scrap/agent: providers.json, models/<provider>.json (cached
- * GET /models), sessions/<encoded cwd>/<id>.jsonl.
+ * ~/.config/scrap/agent: providers.json, mcp.json, models/<provider>.json
+ * (cached GET /models), sessions/<encoded cwd>/<id>.jsonl.
  */
 #ifndef SCRAP_AGENT_H
 #define SCRAP_AGENT_H
@@ -44,6 +45,7 @@ Backend *core_agent_open(const backend_opts *o);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -493,6 +495,9 @@ typedef struct {
     long ctx_tokens, window;
     double cost;
     char err[1024];
+    struct sa_mcp *mcp;
+    int nmcp;
+    long mcp_seq;
 } sa_agent;
 
 static void sa_warn(sa_agent *x, const char *text) {
@@ -1131,6 +1136,325 @@ static void sa_session_start(sa_agent *x, const char *source) {
     sa_build_system(x);
 }
 
+/* ---------- mcp ---------- */
+
+#define SA_MCP_VERSION "2025-06-18"
+
+typedef struct sa_mcp { char *name, *url, *session, *version; cJSON *headers, *tools; } sa_mcp;
+
+typedef struct { sa_buf body; char session[256], type[128]; } sa_mcp_resp;
+
+static void sa_mcp_hdr_value(const char *p, size_t n, char *out, size_t size) {
+    while (n && (*p == ' ' || *p == '\t')) { p++; n--; }
+    while (n && (p[n - 1] == '\r' || p[n - 1] == '\n' || p[n - 1] == ' ')) n--;
+    snprintf(out, size, "%.*s", (int)n, p);
+}
+
+static size_t sa_mcp_on_header(char *p, size_t sz, size_t nm, void *ud) {
+    sa_mcp_resp *r = ud;
+    size_t n = sz * nm;
+    if (n > 15 && !strncasecmp(p, "Mcp-Session-Id:", 15))
+        sa_mcp_hdr_value(p + 15, n - 15, r->session, sizeof r->session);
+    else if (n > 13 && !strncasecmp(p, "Content-Type:", 13))
+        sa_mcp_hdr_value(p + 13, n - 13, r->type, sizeof r->type);
+    return n;
+}
+
+/* Finds the JSON-RPC message with the given id in an SSE body. */
+static cJSON *sa_mcp_sse_find(const char *body, long id) {
+    sa_buf data = {0};
+    cJSON *found = NULL;
+    const char *p = body;
+    while (*p && !found) {
+        const char *eol = strchr(p, '\n');
+        if (!eol) break;
+        size_t n = (size_t)(eol - p);
+        if (n && p[n - 1] == '\r') n--;
+        if (!n) {
+            cJSON *j = data.n ? cJSON_Parse(sa_str(&data)) : NULL;
+            const cJSON *jid = cJSON_GetObjectItem(j, "id");
+            if (cJSON_IsNumber(jid) && (long)jid->valuedouble == id) found = j;
+            else cJSON_Delete(j);
+            sa_clear(&data);
+        } else if (n >= 5 && !strncmp(p, "data:", 5)) {
+            const char *v = p + 5;
+            if (*v == ' ') v++;
+            if (data.n) sa_put(&data, "\n", 1);
+            sa_put(&data, v, (size_t)(p + n - v));
+        }
+        p = eol + 1;
+    }
+    sa_free(&data);
+    return found;
+}
+
+/* POSTs one JSON-RPC message. id 0 is a notification. Returns the HTTP status, 0 on failure. */
+static long sa_mcp_post(sa_agent *x, sa_mcp *s, cJSON *msg, long id, cJSON **reply, char *err,
+                        size_t errsize, int *interrupted) {
+    *reply = NULL;
+    CURL *c = curl_easy_init();
+    if (!c) { snprintf(err, errsize, "curl init failed"); return 0; }
+    struct curl_slist *h = NULL;
+    char buf[2048];
+    h = curl_slist_append(h, "Content-Type: application/json");
+    h = curl_slist_append(h, "Accept: application/json, text/event-stream");
+    if (s->session) {
+        snprintf(buf, sizeof buf, "Mcp-Session-Id: %s", s->session);
+        h = curl_slist_append(h, buf);
+    }
+    if (s->version) {
+        snprintf(buf, sizeof buf, "MCP-Protocol-Version: %s", s->version);
+        h = curl_slist_append(h, buf);
+    }
+    const cJSON *kv;
+    cJSON_ArrayForEach(kv, s->headers) {
+        if (!cJSON_IsString(kv)) continue;
+        snprintf(buf, sizeof buf, "%s: %s", kv->string, kv->valuestring);
+        h = curl_slist_append(h, buf);
+    }
+    char *body = cJSON_PrintUnformatted(msg);
+    sa_mcp_resp r = {0};
+    curl_easy_setopt(c, CURLOPT_URL, s->url);
+    curl_easy_setopt(c, CURLOPT_HTTPHEADER, h);
+    curl_easy_setopt(c, CURLOPT_POSTFIELDS, body);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, sa_collect);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &r.body);
+    curl_easy_setopt(c, CURLOPT_HEADERFUNCTION, sa_mcp_on_header);
+    curl_easy_setopt(c, CURLOPT_HEADERDATA, &r);
+    curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 10L);
+    CURLM *m = curl_multi_init();
+    curl_multi_add_handle(m, c);
+    int running = 1, sse = 0;
+    CURLcode result = CURLE_OK;
+    while (running) {
+        curl_multi_perform(m, &running);
+        if (!sse) sse = strstr(r.type, "text/event-stream") != NULL;
+        if (sse && id && (*reply = sa_mcp_sse_find(sa_str(&r.body), id))) break;
+        if (!running) break;
+        if (sa_aborted(x)) { *interrupted = 1; break; }
+        curl_multi_poll(m, NULL, 0, 20, NULL);
+    }
+    CURLMsg *cm;
+    int left;
+    while ((cm = curl_multi_info_read(m, &left)))
+        if (cm->msg == CURLMSG_DONE) result = cm->data.result;
+    long code = 0;
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
+    if (*interrupted) {
+        code = 0;
+    } else if (!*reply && result != CURLE_OK) {
+        snprintf(err, errsize, "%s", curl_easy_strerror(result));
+        code = 0;
+    } else if (code >= 200 && code < 300 && id && !*reply) {
+        *reply = sse ? sa_mcp_sse_find(sa_str(&r.body), id) : cJSON_Parse(sa_str(&r.body));
+        if (!*reply) snprintf(err, errsize, "no response to request %ld", id);
+    } else if (code >= 300) {
+        snprintf(err, errsize, "HTTP %ld: %.200s", code, sa_str(&r.body));
+    }
+    if (r.session[0] && code) {
+        free(s->session);
+        s->session = strdup(r.session);
+    }
+    curl_multi_remove_handle(m, c);
+    curl_multi_cleanup(m);
+    curl_easy_cleanup(c);
+    curl_slist_free_all(h);
+    free(body);
+    sa_free(&r.body);
+    return code;
+}
+
+static cJSON *sa_mcp_request(sa_agent *x, sa_mcp *s, const char *method, cJSON *params, char *err,
+                             size_t errsize, int *interrupted);
+
+static int sa_mcp_init(sa_agent *x, sa_mcp *s, char *err, size_t errsize, int *interrupted) {
+    free(s->session); s->session = NULL;
+    free(s->version); s->version = NULL;
+    cJSON *params = cJSON_CreateObject(), *info = cJSON_CreateObject();
+    cJSON_AddStringToObject(params, "protocolVersion", SA_MCP_VERSION);
+    cJSON_AddItemToObject(params, "capabilities", cJSON_CreateObject());
+    cJSON_AddStringToObject(info, "name", "scrap");
+    cJSON_AddStringToObject(info, "version", "1");
+    cJSON_AddItemToObject(params, "clientInfo", info);
+    cJSON *res = sa_mcp_request(x, s, "initialize", params, err, errsize, interrupted);
+    if (!res) return 0;
+    const char *v = sa_jstr(res, "protocolVersion");
+    s->version = strdup(v ? v : SA_MCP_VERSION);
+    cJSON_Delete(res);
+    cJSON *note = cJSON_CreateObject(), *reply;
+    cJSON_AddStringToObject(note, "jsonrpc", "2.0");
+    cJSON_AddStringToObject(note, "method", "notifications/initialized");
+    char ignored[64];
+    sa_mcp_post(x, s, note, 0, &reply, ignored, sizeof ignored, interrupted);
+    cJSON_Delete(note);
+    return !*interrupted;
+}
+
+/* Sends a request and returns its result. Takes ownership of params. */
+static cJSON *sa_mcp_request(sa_agent *x, sa_mcp *s, const char *method, cJSON *params, char *err,
+                             size_t errsize, int *interrupted) {
+    cJSON *msg = cJSON_CreateObject(), *reply = NULL, *result = NULL;
+    long id = ++x->mcp_seq;
+    cJSON_AddStringToObject(msg, "jsonrpc", "2.0");
+    cJSON_AddNumberToObject(msg, "id", (double)id);
+    cJSON_AddStringToObject(msg, "method", method);
+    cJSON_AddItemToObject(msg, "params", params ? params : cJSON_CreateObject());
+    long code = sa_mcp_post(x, s, msg, id, &reply, err, errsize, interrupted);
+    if (code == 404 && s->session && strcmp(method, "initialize") &&
+        sa_mcp_init(x, s, err, errsize, interrupted)) {
+        cJSON_ReplaceItemInObject(msg, "id", cJSON_CreateNumber((double)(id = ++x->mcp_seq)));
+        code = sa_mcp_post(x, s, msg, id, &reply, err, errsize, interrupted);
+    }
+    cJSON_Delete(msg);
+    if (reply) {
+        const cJSON *e = cJSON_GetObjectItem(reply, "error");
+        if (e) snprintf(err, errsize, "%s", sa_jstr(e, "message") ? sa_jstr(e, "message") : "error");
+        else result = cJSON_DetachItemFromObject(reply, "result");
+        if (!e && !result) snprintf(err, errsize, "response has no result");
+    }
+    cJSON_Delete(reply);
+    return result;
+}
+
+static void sa_mcp_free(sa_agent *x) {
+    for (int i = 0; i < x->nmcp; i++) {
+        sa_mcp *s = &x->mcp[i];
+        free(s->name); free(s->url); free(s->session); free(s->version);
+        cJSON_Delete(s->headers);
+        cJSON_Delete(s->tools);
+    }
+    free(x->mcp);
+    x->mcp = NULL;
+    x->nmcp = 0;
+}
+
+static void sa_mcp_connect(sa_agent *x, sa_mcp *s) {
+    char err[512] = "", msg[800];
+    int interrupted = 0;
+    s->tools = cJSON_CreateArray();
+    if (!sa_mcp_init(x, s, err, sizeof err, &interrupted)) {
+        snprintf(msg, sizeof msg, "mcp server %s: %s", s->name, err);
+        sa_warn(x, msg);
+        return;
+    }
+    char *cursor = NULL;
+    do {
+        cJSON *params = cJSON_CreateObject();
+        if (cursor) cJSON_AddStringToObject(params, "cursor", cursor);
+        free(cursor);
+        cursor = NULL;
+        cJSON *res = sa_mcp_request(x, s, "tools/list", params, err, sizeof err, &interrupted);
+        if (!res) {
+            snprintf(msg, sizeof msg, "mcp server %s: tools/list: %s", s->name, err);
+            sa_warn(x, msg);
+            break;
+        }
+        cJSON *tools = cJSON_GetObjectItem(res, "tools"), *t;
+        while (cJSON_GetArraySize(tools) && (t = cJSON_DetachItemFromArray(tools, 0)))
+            cJSON_AddItemToArray(s->tools, t);
+        const char *next = sa_jstr(res, "nextCursor");
+        if (next && *next) cursor = strdup(next);
+        cJSON_Delete(res);
+    } while (cursor);
+}
+
+static void sa_mcp_load(sa_agent *x) {
+    char dir[2048], path[2200];
+    sa_mcp_free(x);
+    if (x->st.ephemeral || x->st.disable_tools || !core_agent_config_dir(dir, sizeof dir)) return;
+    snprintf(path, sizeof path, "%s/mcp.json", dir);
+    char *text = sa_slurp(path, NULL);
+    if (!text) return;
+    cJSON *c = cJSON_Parse(text), *srv;
+    free(text);
+    if (!c) {
+        char msg[2400];
+        snprintf(msg, sizeof msg, "%s is not valid JSON", path);
+        sa_warn(x, msg);
+        return;
+    }
+    cJSON *servers = cJSON_GetObjectItem(c, "servers");
+    x->mcp = calloc((size_t)cJSON_GetArraySize(servers) + 1, sizeof *x->mcp);
+    cJSON_ArrayForEach(srv, servers) {
+        const char *url = sa_jstr(srv, "url");
+        if (!x->mcp || !url) continue;
+        sa_mcp *s = &x->mcp[x->nmcp++];
+        s->name = strdup(srv->string);
+        s->url = strdup(url);
+        s->headers = cJSON_Duplicate(cJSON_GetObjectItem(srv, "headers"), 1);
+        sa_mcp_connect(x, s);
+    }
+    cJSON_Delete(c);
+}
+
+static void sa_mcp_tool_name(const sa_mcp *s, const char *tool, char *out, size_t size) {
+    snprintf(out, size, "mcp__%s__%s", s->name, tool ? tool : "");
+    for (char *p = out; *p; p++)
+        if (!isalnum((unsigned char)*p) && *p != '_' && *p != '-') *p = '_';
+    if (strlen(out) > 64) out[64] = '\0';
+}
+
+static const cJSON *sa_mcp_find(sa_agent *x, const char *name, sa_mcp **server) {
+    char full[512];
+    if (strncmp(name, "mcp__", 5)) return NULL;
+    for (int i = 0; i < x->nmcp; i++) {
+        const cJSON *t;
+        cJSON_ArrayForEach(t, x->mcp[i].tools) {
+            sa_mcp_tool_name(&x->mcp[i], sa_jstr(t, "name"), full, sizeof full);
+            if (!strcmp(full, name)) { *server = &x->mcp[i]; return t; }
+        }
+    }
+    return NULL;
+}
+
+static void sa_mcp_tools(sa_agent *x, cJSON *tools) {
+    char full[512];
+    for (int i = 0; i < x->nmcp; i++) {
+        const cJSON *t;
+        cJSON_ArrayForEach(t, x->mcp[i].tools) {
+            const cJSON *schema = cJSON_GetObjectItem(t, "inputSchema");
+            cJSON *w = cJSON_CreateObject(), *fn = cJSON_CreateObject();
+            sa_mcp_tool_name(&x->mcp[i], sa_jstr(t, "name"), full, sizeof full);
+            cJSON_AddStringToObject(w, "type", "function");
+            cJSON_AddStringToObject(fn, "name", full);
+            cJSON_AddStringToObject(fn, "description", sa_jstr(t, "description") ? sa_jstr(t, "description") : "");
+            cJSON_AddItemToObject(fn, "parameters", cJSON_IsObject(schema) ? cJSON_Duplicate(schema, 1)
+                                                                            : cJSON_Parse("{\"type\":\"object\"}"));
+            cJSON_AddItemToObject(w, "function", fn);
+            cJSON_AddItemToArray(tools, w);
+        }
+    }
+}
+
+static int sa_mcp_call(sa_agent *x, sa_mcp *s, const cJSON *tool, const cJSON *input, sa_buf *out,
+                       int *interrupted) {
+    char err[512] = "";
+    cJSON *params = cJSON_CreateObject();
+    cJSON_AddStringToObject(params, "name", sa_jstr(tool, "name"));
+    cJSON_AddItemToObject(params, "arguments", cJSON_Duplicate(input, 1));
+    cJSON *res = sa_mcp_request(x, s, "tools/call", params, err, sizeof err, interrupted);
+    if (!res) {
+        if (!*interrupted) sa_printf(out, "mcp server %s: %s", s->name, err);
+        return 1;
+    }
+    const cJSON *block;
+    cJSON_ArrayForEach(block, cJSON_GetObjectItem(res, "content")) {
+        const char *kind = sa_jstr(block, "type");
+        if (out->n) sa_puts(out, "\n");
+        if (kind && !strcmp(kind, "text")) sa_puts(out, sa_jstr(block, "text"));
+        else sa_printf(out, "[%s omitted]", kind ? kind : "block");
+    }
+    if (out->n > SA_OUT_BYTES) {
+        out->n = SA_OUT_BYTES;
+        out->p[out->n] = '\0';
+        sa_puts(out, "\n[output truncated]");
+    }
+    int failed = cJSON_IsTrue(cJSON_GetObjectItem(res, "isError"));
+    cJSON_Delete(res);
+    return failed;
+}
+
 /* ---------- request ---------- */
 
 static cJSON *sa_wire(const cJSON *line) {
@@ -1217,7 +1541,9 @@ static char *sa_body(sa_agent *x, int upto, const char *extra_user, int tools) {
     }
     cJSON_AddItemToObject(root, "messages", msgs);
     if (!x->st.disable_tools) {
-        cJSON_AddItemToObject(root, "tools", cJSON_Parse(SA_TOOLS));
+        cJSON *defs = cJSON_Parse(SA_TOOLS);
+        sa_mcp_tools(x, defs);
+        cJSON_AddItemToObject(root, "tools", defs);
         if (!tools) cJSON_AddStringToObject(root, "tool_choice", "none");
     }
     sa_effort(x, root);
@@ -1732,6 +2058,8 @@ static void sa_run_call(sa_agent *x, sa_call *call, int *interrupted) {
 
     sa_buf out = {0}, reason = {0}, ctx = {0};
     int failed = 1;
+    sa_mcp *server = NULL;
+    const cJSON *tool;
     if (bad) {
         sa_printf(&out, "arguments are not a JSON object: %s", sa_str(&call->args));
     } else {
@@ -1748,8 +2076,18 @@ static void sa_run_call(sa_agent *x, sa_call *call, int *interrupted) {
             failed = sa_tool_edit(x, input, &out);
         } else if (!strcmp(name, "bash")) {
             failed = sa_tool_bash(x, input, &out, interrupted);
+        } else if ((tool = sa_mcp_find(x, name, &server))) {
+            failed = sa_mcp_call(x, server, tool, input, &out, interrupted);
         } else {
             sa_printf(&out, "unknown tool '%s'; the tools are read, write, edit, bash", name);
+            for (int i = 0; i < x->nmcp; i++) {
+                char full[512];
+                const cJSON *t;
+                cJSON_ArrayForEach(t, x->mcp[i].tools) {
+                    sa_mcp_tool_name(&x->mcp[i], sa_jstr(t, "name"), full, sizeof full);
+                    sa_printf(&out, ", %s", full);
+                }
+            }
         }
         if (!*interrupted && !reason.n) {
             p = sa_payload();
@@ -1969,6 +2307,7 @@ static int sa_start(Backend *b, const char *resume) {
     x->hooks = (x->st.ephemeral || x->st.disable_tools) ? NULL : sa_hooks_load();
     sa_route_free(&x->route);
     if (!sa_route_resolve(x)) return 0;
+    sa_mcp_load(x);
     if (resume && *resume) {
         if (!sa_load(x, resume, x->st.fork_session)) return 0;
     } else {
@@ -2031,6 +2370,7 @@ static void sa_close(Backend *b) {
     cJSON_Delete(x->msgs);
     cJSON_Delete(x->config);
     cJSON_Delete(x->hooks);
+    sa_mcp_free(x);
     sa_route_free(&x->route);
     sa_free(&x->hook_context);
     free(x->system);

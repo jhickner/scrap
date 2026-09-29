@@ -99,6 +99,100 @@ static void split_args(const char *rest, const char *const *keys, int n, char *o
     cJSON_Delete(o);
 }
 
+static int mcp_epoch(void)
+{
+    char path[512];
+    snprintf(path, sizeof path, "%s/mcp-epoch", dir);
+    FILE *f = fopen(path, "r");
+    int n = 1;
+    if (f) {
+        if (fscanf(f, "%d", &n) != 1)
+            n = 1;
+        fclose(f);
+    }
+    return n;
+}
+
+static void mcp_tool(cJSON *list, const char *name)
+{
+    cJSON *t = cJSON_CreateObject(), *schema = cJSON_AddObjectToObject(t, "inputSchema");
+    cJSON_AddStringToObject(t, "name", name);
+    cJSON_AddStringToObject(t, "description", "test tool");
+    cJSON_AddStringToObject(schema, "type", "object");
+    cJSON_AddItemToArray(list, t);
+}
+
+static void serve_mcp(int fd, const char *req, const char *body_text)
+{
+    cJSON *body = cJSON_Parse(body_text);
+    const char *method = cJSON_GetStringValue(cJSON_GetObjectItem(body, "method"));
+    cJSON *id = cJSON_GetObjectItem(body, "id"), *params = cJSON_GetObjectItem(body, "params");
+    char session[64], hdr[256];
+    snprintf(session, sizeof session, "s%d", mcp_epoch());
+    snprintf(hdr, sizeof hdr, "Mcp-Session-Id: %s", session);
+    if (!method)
+        method = "";
+    if (strcmp(method, "initialize") && !strstr(req, hdr)) {
+        send_all(fd, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        cJSON_Delete(body);
+        return;
+    }
+    if (!id) {
+        send_all(fd, "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        cJSON_Delete(body);
+        return;
+    }
+    cJSON *reply = cJSON_CreateObject(), *result = cJSON_CreateObject();
+    cJSON_AddStringToObject(reply, "jsonrpc", "2.0");
+    cJSON_AddItemToObject(reply, "id", cJSON_Duplicate(id, 1));
+    int sse = 0;
+    if (!strcmp(method, "initialize")) {
+        cJSON_AddStringToObject(result, "protocolVersion", "2025-06-18");
+    } else if (!strcmp(method, "tools/list")) {
+        cJSON *list = cJSON_AddArrayToObject(result, "tools");
+        if (!cJSON_GetObjectItem(params, "cursor")) {
+            mcp_tool(list, "echo");
+            cJSON_AddStringToObject(result, "nextCursor", "p2");
+        } else {
+            mcp_tool(list, "sse");
+            mcp_tool(list, "fail");
+        }
+    } else if (!strcmp(method, "tools/call")) {
+        const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(params, "name"));
+        const char *text = cJSON_GetStringValue(
+            cJSON_GetObjectItem(cJSON_GetObjectItem(params, "arguments"), "text"));
+        char out[512];
+        snprintf(out, sizeof out, "%s %s", name ? name : "?", text ? text : "?");
+        cJSON *content = cJSON_AddArrayToObject(result, "content"), *b = cJSON_CreateObject();
+        cJSON_AddStringToObject(b, "type", "text");
+        cJSON_AddStringToObject(b, "text", out);
+        cJSON_AddItemToArray(content, b);
+        if (name && !strcmp(name, "fail"))
+            cJSON_AddTrueToObject(result, "isError");
+        sse = name && !strcmp(name, "sse");
+    }
+    cJSON_AddItemToObject(reply, "result", result);
+    char *s = cJSON_PrintUnformatted(reply);
+    char head[512];
+    if (sse) {
+        snprintf(head, sizeof head, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n%s\r\n"
+                                    "Connection: close\r\n\r\n", hdr);
+        send_all(fd, head);
+        send_all(fd, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n");
+        send_all(fd, "event: message\ndata: ");
+        send_all(fd, s);
+        send_all(fd, "\n\n");
+    } else {
+        snprintf(head, sizeof head, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n%s\r\n"
+                                    "Content-Length: %zu\r\nConnection: close\r\n\r\n", hdr, strlen(s));
+        send_all(fd, head);
+        send_all(fd, s);
+    }
+    free(s);
+    cJSON_Delete(reply);
+    cJSON_Delete(body);
+}
+
 static void serve_one(int fd)
 {
     char *req = NULL;
@@ -128,6 +222,11 @@ static void serve_one(int fd)
             break;
     }
     if (body_at < 0) {
+        free(req);
+        return;
+    }
+    if (!strncmp(req, "POST /mcp ", 10)) {
+        serve_mcp(fd, req, req + body_at);
         free(req);
         return;
     }
@@ -170,6 +269,13 @@ static void serve_one(int fd)
     } else if (!strncmp(content, "write: ", 7)) {
         split_args(content + 7, WRITE, 2, args, sizeof args);
         tool_call(fd, "write", args);
+    } else if (!strncmp(content, "mcp: ", 5)) {
+        char name[128];
+        const char *bar = strchr(content, '|');
+        snprintf(name, sizeof name, "mcp__fake__%.*s", bar ? (int)(bar - content - 5) : 0, content + 5);
+        static const char *const ONE_TEXT[] = {"text"};
+        split_args(bar ? bar + 1 : "", ONE_TEXT, 1, args, sizeof args);
+        tool_call(fd, name, args);
     } else if (!strncmp(content, "Summarize the conversation", 26)) {
         delta(fd, "content", "SUMMARY");
     } else if (!strcmp(content, "slow")) {
@@ -405,6 +511,38 @@ int main(void)
 
     b = open_agent(NULL, 0);
     CHECK(b->reset(b));
+    b->close(b);
+
+    snprintf(config, sizeof config,
+             "{\"servers\":{\"fake\":{\"url\":\"http://127.0.0.1:%d/mcp\"},"
+             "\"down\":{\"url\":\"http://127.0.0.1:1/mcp\"}}}",
+             port);
+    put_file("agent/mcp.json", config);
+    warnings_seen = 0;
+    b = open_agent(NULL, 0);
+    CHECK(warnings_seen == 1);
+    reply = ask(b, "tools", &meta);
+    req = get_file("last-request.json");
+    CHECK(strstr(req, "\"mcp__fake__echo\"") && strstr(req, "\"mcp__fake__sse\"") &&
+          strstr(req, "\"mcp__fake__fail\""));
+    free(reply);
+    reply = ask(b, "mcp: echo|hi", &meta);
+    CHECK(!strcmp(last_tool, "mcp__fake__echo") && !last_failed && !strcmp(last_result, "echo hi"));
+    CHECK(reply && !strcmp(reply, "tool said: echo hi"));
+    free(reply);
+    reply = ask(b, "mcp: sse|there", &meta);
+    CHECK(!last_failed && !strcmp(last_result, "sse there"));
+    free(reply);
+    reply = ask(b, "mcp: fail|x", &meta);
+    CHECK(last_failed && !strcmp(last_result, "fail x"));
+    free(reply);
+    put_file("mcp-epoch", "2");
+    reply = ask(b, "mcp: echo|again", &meta);
+    CHECK(!last_failed && !strcmp(last_result, "echo again"));
+    free(reply);
+    reply = ask(b, "mcp: nope|x", &meta);
+    CHECK(last_failed && strstr(last_result, "mcp__fake__fail"));
+    free(reply);
     b->close(b);
 
     kill(server, SIGKILL);
