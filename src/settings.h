@@ -26,6 +26,10 @@
 
 #define SETTING_BACKEND      "backend"
 
+#define SETTING_JOB_BACKEND  "job_backend"
+#define SETTING_JOB_MODEL    "job_model"
+#define SETTING_JOB_EFFORT   "job_effort"
+
 #define SETTING_FOLDER_SORT  "folder_sort"
 
 #define SETTING_SESSIONS_REMOTE "sessions_remote"

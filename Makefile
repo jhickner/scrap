@@ -33,7 +33,7 @@ CHECKS := kittywraptest overlaytest viewporttest imagerowtest chrometest imagefi
           sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
           dispatchtest voicetabtest grokbottailtest vncinsettest grokvnctest \
           settingstest jevtest
-CHECKS += agentsynctest sessionaddrtest apitest apihttptest activelogtest proxyprototest coreagenttest
+CHECKS += agentsynctest sessionaddrtest apitest apihttptest activelogtest proxyprototest coreagenttest scheduletest
 MANUAL_TOOLS := imagetest keydump pastetest spintest vncprobe
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,
@@ -250,6 +250,8 @@ $(BUILD)/workspacetest: tests/workspacetest.c tests/stubs/tabbar.c tests/stubs/k
 $(BUILD)/sessionaddrtest: tests/sessionaddrtest.c $(BUILD)/sessionaddr.o $(BUILD)/text.o | $(BUILD)
 
 $(BUILD)/proxyprototest: tests/proxyprototest.c $(BUILD)/proxyproto.o | $(BUILD)
+
+$(BUILD)/scheduletest: tests/scheduletest.c $(BUILD)/schedule.o | $(BUILD)
 
 $(BUILD)/dispatchtest: tests/dispatchtest.c $(BUILD)/dispatch.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 

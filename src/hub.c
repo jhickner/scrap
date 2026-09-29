@@ -1,4 +1,4 @@
-#include "netd.h"
+#include "hub.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #ifdef __APPLE__
@@ -25,6 +26,7 @@
 #include "dispatch.h"
 #include "handoff.h"
 #include "intercom.h"
+#include "job.h"
 #include "livelist.h"
 #include "proxyproto.h"
 #include "tailnet.h"
@@ -59,11 +61,11 @@ static int self_path(char *out, size_t size)
     return realpath(raw, real) && (size_t)snprintf(out, size, "%s", real) < size;
 }
 
-void netd_ensure(void)
+void hub_ensure(void)
 {
     char lock[4400], log[4400], exe[PATH_MAX];
-    if (!tailnet_broker() || !file_in_dispatch("net.lock", lock, sizeof lock) ||
-        !file_in_dispatch("net.log", log, sizeof log) || !self_path(exe, sizeof exe))
+    if (!file_in_dispatch("hub.lock", lock, sizeof lock) ||
+        !file_in_dispatch("hub.log", log, sizeof log) || !self_path(exe, sizeof exe))
         return;
     int fd = open(lock, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
     if (fd < 0)
@@ -83,7 +85,7 @@ void netd_ensure(void)
         dup2(out >= 0 ? out : in, 2);
         for (int i = 3; i < 1024; i++)
             close(i);
-        execl(exe, exe, "net", (char *)NULL);
+        execl(exe, exe, "hub", (char *)NULL);
         _exit(127);
     }
     if (pid > 0)
@@ -279,10 +281,10 @@ static void on_reload(int sig)
     reload = 1;
 }
 
-int netd_main(int argc, char **argv)
+int hub_main(int argc, char **argv)
 {
     char lock[4400], exe[PATH_MAX];
-    if (!file_in_dispatch("net.lock", lock, sizeof lock) || !self_path(exe, sizeof exe))
+    if (!file_in_dispatch("hub.lock", lock, sizeof lock) || !self_path(exe, sizeof exe))
         return 1;
     int lfd = -1, lock_fd;
     if (argc == 3 && !strcmp(argv[1], "--lock"))
@@ -292,7 +294,7 @@ int netd_main(int argc, char **argv)
         if (lock_fd < 0 || flock(lock_fd, LOCK_EX | LOCK_NB) != 0)
             return 0;
     } else {
-        fprintf(stderr, "usage: scrap net\n");
+        fprintf(stderr, "usage: scrap hub\n");
         return 2;
     }
     struct stat held, now;
@@ -306,19 +308,20 @@ int netd_main(int argc, char **argv)
     char bound[64] = "";
     tailnet_self_name();
     for (;;) {
+        job_tick(exe, time(NULL));
         if (reload) {
             char fdarg[16];
             snprintf(fdarg, sizeof fdarg, "%d", lock_fd);
             if (lfd >= 0)
                 close(lfd);
-            execl(exe, exe, "net", "--lock", fdarg, (char *)NULL);
+            execl(exe, exe, "hub", "--lock", fdarg, (char *)NULL);
             return 1;
         }
         if (stat(lock, &now) != 0 || now.st_ino != held.st_ino || now.st_dev != held.st_dev)
             return 0;
-        const char *ip = tailnet_serve() ? "127.0.0.1" : tailnet_bind_ip();
+        const char *ip = !tailnet_broker() ? NULL : tailnet_serve() ? "127.0.0.1" : tailnet_bind_ip();
         if (lfd >= 0 && (!ip || strcmp(ip, bound))) {
-            printf("scrap net: %s went away\n", bound);
+            printf("scrap hub: %s went away\n", bound);
             close(lfd);
             lfd = -1;
         }
@@ -326,11 +329,11 @@ int netd_main(int argc, char **argv)
             lfd = listen_on(ip, port);
             if (lfd >= 0) {
                 snprintf(bound, sizeof bound, "%s", ip);
-                printf("scrap net: %s on %s:%d\n", tailnet_self_name(), bound, port);
+                printf("scrap hub: %s on %s:%d\n", tailnet_self_name(), bound, port);
                 if (tailnet_serve() && !tailnet_serve_forward(port))
-                    printf("scrap net: tailscale serve --tcp %d failed\n", port);
+                    printf("scrap hub: tailscale serve --tcp %d failed\n", port);
             } else
-                printf("scrap net: cannot listen on %s:%d: %s\n", ip, port, strerror(errno));
+                printf("scrap hub: cannot listen on %s:%d: %s\n", ip, port, strerror(errno));
         }
         if (lfd < 0) {
             sleep(CHECK_S);

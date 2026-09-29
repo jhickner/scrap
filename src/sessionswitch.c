@@ -20,7 +20,7 @@
 #include "keyhelp.h"
 #include "livelist.h"
 #include "models.h"
-#include "netd.h"
+#include "hub.h"
 #include "newsession.h"
 #include "parent.h"
 #include "pick.h"
@@ -355,7 +355,7 @@ static int remote_on(void)
 
 static void survey_begin(void)
 {
-    netd_ensure();
+    hub_ensure();
     survey = tailnet_survey_start();
     survey_version = -1;
 }

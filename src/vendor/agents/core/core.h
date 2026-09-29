@@ -1007,7 +1007,7 @@ static void sa_context_files(sa_agent *x, sa_buf *out) {
     char path[4200], cwd[4096], dir[4096];
     int any = 0;
     if (home) {
-        snprintf(path, sizeof path, "%s/.claude/CLAUDE.md", home);
+        snprintf(path, sizeof path, "%s/.agents/AGENTS.md", home);
         sa_add_file(out, path, &any);
     }
     if (!x->st.cwd || !realpath(x->st.cwd, cwd)) return;
@@ -1016,12 +1016,15 @@ static void sa_context_files(sa_agent *x, sa_buf *out) {
         if (i < len && cwd[i] != '/') continue;
         if (i == len && len == 1) continue;
         snprintf(dir, sizeof dir, "%.*s", (int)i, cwd);
-        struct stat st;
+        struct stat a, c;
         snprintf(path, sizeof path, "%s/AGENTS.md", dir);
-        if (stat(path, &st) != 0) snprintf(path, sizeof path, "%s/CLAUDE.md", dir);
+        int have = stat(path, &a) == 0;
         sa_add_file(out, path, &any);
+        snprintf(path, sizeof path, "%s/CLAUDE.md", dir);
+        if (!have || stat(path, &c) != 0 || a.st_ino != c.st_ino || a.st_dev != c.st_dev)
+            sa_add_file(out, path, &any);
         if (home && !strcmp(dir, home)) continue;
-        snprintf(path, sizeof path, "%s/.claude/CLAUDE.md", dir);
+        snprintf(path, sizeof path, "%s/.agents/AGENTS.md", dir);
         sa_add_file(out, path, &any);
     }
 }
@@ -1092,15 +1095,15 @@ static void sa_build_system(sa_agent *x) {
         if (!x->st.ephemeral) {
             sa_context_files(x, &b);
             int any = 0;
-            char dir[4200];
+            char dir[4200], home_real[PATH_MAX] = "", real[PATH_MAX];
             const char *home = getenv("HOME");
             if (home) {
-                snprintf(dir, sizeof dir, "%s/.claude/skills", home);
-                sa_skills_in(dir, &b, &any);
+                snprintf(dir, sizeof dir, "%s/.agents/skills", home);
+                if (realpath(dir, home_real)) sa_skills_in(home_real, &b, &any);
             }
             if (x->st.cwd) {
-                snprintf(dir, sizeof dir, "%s/.claude/skills", x->st.cwd);
-                sa_skills_in(dir, &b, &any);
+                snprintf(dir, sizeof dir, "%s/.agents/skills", x->st.cwd);
+                if (realpath(dir, real) && strcmp(real, home_real)) sa_skills_in(real, &b, &any);
             }
         }
         if (x->hook_context.n) {

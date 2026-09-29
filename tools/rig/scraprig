@@ -12,7 +12,7 @@ usage: scraprig <command> ...
          [--scrap path] [-- scrap args]
          start scrap; prints the instance name. --share dir: instances started
          with the same dir share live sessions, dispatch, session names, and
-         net config. --net: the instance's scrap net broker listens on the
+         net config. --net: the instance's scrap hub broker listens on the
          tailscale address at port N (default random; with --share, the first
          instance picks it); without it no broker runs
   send   name keys...        tmux send-keys names: Enter Escape C-c Tab Up
@@ -25,7 +25,8 @@ usage: scraprig <command> ...
   stream-wait name id regex [secs]   until the stream output matches (default 10s)
   stream-cat  name id        print the stream output
   net    name                print the instance's tailscale ip and port
-  broker name                print the pid of the instance's scrap net broker
+  broker name                print the pid of the instance's scrap hub broker
+  joblog name job regex [secs]   until the job's log matches (default 20s)
   machine                    print this machine's tailnet name
   wait   name regex [secs]   until the screen matches (default 10s)
   idle   name [ms] [secs]    until the screen is unchanged for ms (default 500)
@@ -209,6 +210,17 @@ cmd_broker() {
         || die "no broker on $ip:$port"
 }
 
+cmd_joblog() {
+    local f="$ROOT/$1/state/config/jobs/log/$2.log" re="$3" secs="${4:-20}" i
+    for ((i = 0; i < secs * 10; i++)); do
+        grep -qE -- "$re" "$f" 2>/dev/null && return 0
+        sleep 0.1
+    done
+    echo "scraprig: timed out after ${secs}s waiting for /$re/ in job log '$2'" >&2
+    cat "$f" >&2 2>/dev/null || true
+    exit 1
+}
+
 cmd_stop() {
     local name="$1" pid i
     pid="$(tm "$name" display -p -t rig '#{pane_pid}' 2>/dev/null || true)"
@@ -247,6 +259,7 @@ stream-cat)
     inst "${1:-}"; [ $# -eq 2 ] || usage
     cat "$ROOT/$1/streams/$2.out" 2>/dev/null || die "no stream '$2'" ;;
 broker) inst "${1:-}"; cmd_broker "$1" ;;
+joblog) inst "${1:-}"; [ $# -ge 3 ] || usage; cmd_joblog "$@" ;;
 net)
     inst "${1:-}"
     f="$ROOT/$1/state/config/net"

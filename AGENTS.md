@@ -33,7 +33,7 @@ tools/rig/scraprig stop $n
 - `--share dir` gives instances started with the same dir one set of live
   sessions, dispatch requests, and session names, so they can reach each
   other with `scrap send`.
-- `--net` gives an instance a `scrap net` broker on the tailscale address at
+- `--net` gives an instance a `scrap hub` broker on the tailscale address at
   a random port (or `--port N`); instances sharing a dir share one broker, so
   `machine:@name` targets reach them, not the installed scrap. Without
   `--net` no broker runs. A broker exits once its instance or share dir is
@@ -41,7 +41,8 @@ tools/rig/scraprig stop $n
   tailnet name, `net name` the ip and port, and `cli name ls --net` (or
   `read`, `send`, `attach`) runs the scrap CLI with an instance's config.
   `say name text [regex]` types a line, sends Enter, and waits for regex.
-  `broker name` prints the broker pid.
+  `broker name` prints the broker pid. `joblog name job regex` waits for a
+  scheduled job's log to match.
 - `stream name id target` runs `scrap attach target` in the instance's tmux
   server; `stream-put` feeds its stdin, `stream-wait` waits on its output and
   prints it on failure, `stop` ends it. `tools/rig/netpair.bash` sets up two

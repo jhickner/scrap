@@ -33,7 +33,8 @@
 #include "sessionprefs.h"
 #include "sessionfork.h"
 #include "sessionload.h"
-#include "netd.h"
+#include "hub.h"
+#include "job.h"
 #include "sessionpresent.h"
 #include "sessionswitch.h"
 #include "sessionview.h"
@@ -173,6 +174,8 @@ static void usage(void)
             "  " APP_NAME " send TARGET TEXT   message a live session\n"
             "  " APP_NAME " open TARGET   resume a past session in a new tab\n"
             "  " APP_NAME " attach TARGET   stream a live session as JSON lines; stdin lines are prompts\n"
+            "  " APP_NAME " job ls|check NAME   scheduled jobs; " APP_NAME " job prints the file format\n"
+            "  " APP_NAME " hub   the per-machine process for the network broker and jobs (started on demand)\n"
             "\n"
             "With a prompt on the command line, answer it and exit.\n",
             choices);
@@ -609,8 +612,10 @@ int main(int argc, char **argv)
                      !strcmp(argv[1], "send") || !strcmp(argv[1], "open") ||
                      !strcmp(argv[1], "attach")))
         return intercom_main(argc - 1, argv + 1);
-    if (argc > 1 && !strcmp(argv[1], "net"))
-        return netd_main(argc - 1, argv + 1);
+    if (argc > 1 && !strcmp(argv[1], "hub"))
+        return hub_main(argc - 1, argv + 1);
+    if (argc > 1 && !strcmp(argv[1], "job"))
+        return job_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "version")) {
         printf(APP_NAME " %s\n", SCRAP_VERSION);
         return 0;
@@ -896,7 +901,7 @@ int main(int argc, char **argv)
     prompt_set_name_completer(intercom_complete);
     dispatch_serve_with(serve_extra);
     intercom_set_window();
-    netd_ensure();
+    hub_ensure();
     session_add_listener(stream_event, NULL);
     prompt_file_completion(prompt, cwd);
     if (have_config) {
