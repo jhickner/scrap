@@ -1,7 +1,7 @@
 *.o
 *.o.tmp
 *.d
-scrap
+/scrap
 build/
 TODO.md
 .codex/

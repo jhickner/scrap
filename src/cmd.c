@@ -70,6 +70,15 @@ static const struct pick_item GROK_EFFORTS[] = {
     {"high", "more thorough reasoning"},
     {"xhigh", "extra-high reasoning, grok-4.6 only"},
 };
+static const struct pick_item SCRAP_EFFORTS[] = {
+    {"default", "the model's default reasoning effort"},
+    {"none", "no reasoning"},
+    {"minimal", "minimal reasoning"},
+    {"low", "faster, lighter reasoning"},
+    {"medium", "balanced reasoning"},
+    {"high", "more thorough reasoning"},
+    {"xhigh", "extra-high reasoning, when the model supports it"},
+};
 static const struct pick_item DEFAULT_EFFORT[] = {
     {"default", "whatever the CLI is configured to use"},
 };
@@ -174,6 +183,10 @@ const struct pick_item *cmd_effort_choices(const char *backend, int *count)
     if (!strcmp(backend, "pi")) {
         *count = COUNT(PI_EFFORTS);
         return PI_EFFORTS;
+    }
+    if (!strcmp(backend, "scrap")) {
+        *count = COUNT(SCRAP_EFFORTS);
+        return SCRAP_EFFORTS;
     }
     *count = COUNT(DEFAULT_EFFORT);
     return DEFAULT_EFFORT;
@@ -395,7 +408,7 @@ static void do_effort(struct session *s, const char *arg)
 static void do_backend(struct session *s, const char *arg)
 {
     if (!arg || !*arg) {
-        reply_note("/backend <claude|codex|grok|pi|grokbot>");
+        reply_note("/backend <claude|codex|grok|pi|grokbot|scrap>");
         return;
     }
     if (!known_backend(arg)) {
