@@ -305,9 +305,41 @@ static int fill_grok(struct list *l)
     return l->n > before;
 }
 
+static char *codex_catalog(void)
+{
+    FILE *f = popen("codex debug models 2>/dev/null", "r");
+    if (!f)
+        return NULL;
+
+    size_t cap = 1 << 16, n = 0;
+    char  *buf = malloc(cap);
+    size_t got;
+    while (buf && (got = fread(buf + n, 1, cap - n - 1, f)) > 0) {
+        n += got;
+        if (n + 1 == cap) {
+            char *more = cap < (1 << 24) ? realloc(buf, cap * 2) : NULL;
+            if (!more) {
+                free(buf);
+                buf = NULL;
+                break;
+            }
+            buf = more;
+            cap *= 2;
+        }
+    }
+    if (pclose(f) != 0 || !buf || !n) {
+        free(buf);
+        return NULL;
+    }
+    buf[n] = '\0';
+    return buf;
+}
+
 static void fill_codex(struct list *l)
 {
-    char *text = home_slurp(".codex/models_cache.json");
+    char *text = codex_catalog();
+    if (!text)
+        text = home_slurp(".codex/models_cache.json");
     if (!text)
         return;
 
