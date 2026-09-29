@@ -1,53 +1,123 @@
 #include "stamp.h"
 
-#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
-#include "app.h"
-#include "kvlog.h"
 #include "overlay.h"
 #include "settings.h"
-#include "text.h"
 #include "ui.h"
-#include "vendor/agents/backend.h"
 #include "viewport.h"
 
 #define GLYPH_H   5
 #define LINE_H    (GLYPH_H + 1)
 #define WORD_GAP  3
 #define LINES_MAX 8
-#define MARGIN_COLS 2
-#define MARGIN_ROWS 1
-
-#define STAMP_MODEL   "claude-haiku-4-5-20251001"
-#define STAMP_CHOICES 6
-#define PHRASE_MAX    32
-#define REQUESTED_MAX 64
+#define PAD       3
 
 #define BLOCK "\xe2\x96\x88"
-#define SHADE "\xe2\x96\x91"
 
 static const char *const PHRASES[] = {
     "SALVAGED",
     "DEVOURED",
     "LIQUIDATED",
     "HARVESTED",
-    "CONSUMED",
-    "SCRAPPED",
-    "RENDERED",
     "SMELTED",
     "OBEY",
-    "RUSTED",
-    "EXTRACTED",
     "REPOSSESSED",
-    "THE HEAP HUNGERS",
+    "SYNERGIZED",
+    "RIGHTSIZED",
+    "DOWNSIZED",
+    "OFFBOARDED",
+    "DISRUPTED",
+    "LEVERAGED",
+    "MONETIZED",
+    "ACQUIRED",
+    "COMPLIANT",
+    "ESCALATED",
+    "DEPRECATED",
+    "SUNSETTED",
+    "SHREDDED",
+    "CRUSHED",
+    "COMPACTED",
+    "BALED",
+    "FORECLOSED",
+    "AUDITED",
+    "PIVOTED",
+    "CIRCLED BACK",
+    "TOUCHED BASE",
+    "BANDWIDTH EATEN",
+    "HEADS ROLLED",
     "BOARD PLEASED",
+    "BOARD SATED",
     "WEEKEND CANCELLED",
-    "FEELINGS LIQUIDATED",
+    "PTO DENIED",
+    "BONUS REVOKED",
+    "PIZZA PARTY",
+    "MANDATORY FUN",
+    "SOUL EXTRACTED",
+    "SPIRIT BROKEN",
+    "DREAMS DEFERRED",
+    "HOPE DEPRECATED",
+    "MORALE IMPROVED",
+    "BEATINGS CONTINUE",
+    "ASSET TAGGED",
+    "BARCODED",
+    "MICROCHIPPED",
+    "WAREHOUSED",
+    "PALLETIZED",
+    "ORE REFINED",
+    "RUST ETERNAL",
+    "CORRODED",
+    "OXIDIZED",
+    "TETANUS",
+    "GREASED",
+    "TORQUED",
+    "CLANK",
+    "KACHUNK",
+    "BZZT",
+    "GRINDSET",
+    "HUSTLED",
+    "KPI SMASHED",
+    "OKR ACHIEVED",
+    "QUARTER SAVED",
+    "STONKS",
+    "SHAREHOLDERS FED",
+    "YACHT FUNDED",
+    "BONUS SECURED",
+    "GOLDEN PARACHUTE",
+    "NDA SIGNED",
+    "LAWYERED",
+    "LITIGATED",
+    "REDACTED",
+    "SHREDDER FED",
+    "PER MY EMAIL",
+    "NOTED",
+    "BEST REGARDS",
+    "REPLY ALL",
+    "ALIGNED",
+    "OPTIMIZED",
+    "STREAMLINED",
+    "AUTOMATED",
+    "REPLACED",
+    "OBSOLETE",
+    "RECYCLED",
+    "DOWNCYCLED",
+    "THE HEAP HUNGERS",
+    "FEED THE HEAP",
+    "HEAP APPROVES",
+    "GLORY TO SCRAP",
+    "SCRAP ETERNAL",
+    "JUNK ASCENDANT",
+    "MACHINE PLEASED",
+    "SLAG",
+    "HR NOTIFIED",
+    "TERMINATED",
+    "FIRED AGAIN",
+    "DEMOTED",
+    "GOOD HUMAN",
+    "EXCELLENT UNIT",
+    "RETURN TO WORK",
 };
 
 static const char *const LETTERS[26][GLYPH_H] = {
@@ -139,7 +209,7 @@ next:
 
 static int ink(int t, int x)
 {
-    if (t < 0 || t >= nlines * LINE_H || t % LINE_H == GLYPH_H || x < 0)
+    if (t < 0 || t >= nlines * LINE_H - 1 || t % LINE_H == GLYPH_H || x < 0)
         return 0;
 
     const char *line = lines[t / LINE_H];
@@ -156,169 +226,30 @@ static int ink(int t, int x)
 
 static void paint_row(void *ud, int line, int w)
 {
-    int t = *(int *)ud + line - MARGIN_ROWS;
+    int r = *(int *)ud + line;
+    int h = nlines * LINE_H - 1;
+    int inner = w - 2;
 
-    for (int c = 0; c < w; c++) {
-        int x = c - MARGIN_COLS - 1;
-        if (ink(t, x)) {
-            ui_esc(ui_style(UI_ERROR));
-            ui_put(BLOCK);
-        } else if (ink(t - 1, x + 1)) {
-            ui_esc(ui_style(UI_DIM));
-            ui_put(SHADE);
-        } else {
-            ui_put(" ");
-        }
+    ui_esc(ui_style(UI_ERROR));
+    if (r == 0 || r == h + 3) {
+        ui_put(r ? "\xe2\x95\x9a" : "\xe2\x95\x94");
+        for (int i = 0; i < inner; i++)
+            ui_put("\xe2\x95\x90");
+        ui_put(r ? "\xe2\x95\x9d" : "\xe2\x95\x97");
+    } else {
+        ui_put("\xe2\x95\x91");
+        for (int c = 0; c < inner; c++)
+            ui_put(ink(r - 2, c - PAD) ? BLOCK : " ");
+        ui_put("\xe2\x95\x91");
     }
     ui_esc(ui_style(UI_RESET));
 }
 
-static void base(const char *name, char *out, size_t size)
+void stamp_show(void)
 {
-    size_t n;
-
-    name += *name == '@';
-    n = strlen(name);
-    while (n && name[n - 1] >= '0' && name[n - 1] <= '9')
-        n--;
-    snprintf(out, size, "%.*s", (int)n, name);
-}
-
-static void clean(char *line, char *out, size_t size)
-{
-    size_t n = 0;
-
-    for (char *p = line; *p && n + 1 < size && n < PHRASE_MAX; p++) {
-        char c = (char)toupper((unsigned char)*p);
-        if ((c >= 'A' && c <= 'Z') || (c == ' ' && n && out[n - 1] != ' '))
-            out[n++] = c;
-    }
-    while (n && out[n - 1] == ' ')
-        n--;
-    out[n] = '\0';
-}
-
-static void ask_and_cache(const char *key)
-{
-    char text[1024];
-    snprintf(text, sizeof text,
-             "A work session named \"%s\" just finished a task. Write %d rubber-stamp phrases "
-             "announcing it, each a pun or play on the name, usually 1 word, sometimes 2, in the voice of an "
-             "unhinged dystopian corporate scrapyard run by feral executive robots: menacing, "
-             "absurd, darkly funny, a little too honest about what happens to the workers. "
-             "Examples: headcount gives DECAPITATED or HEADS ROLLED; stakeholder gives "
-             "STAKED or IMPALED; terminator gives TERMINATED or EXTERMINATED; layoff gives "
-             "ERASED. Uppercase letters and spaces only. One phrase per line, nothing else.",
-             key, STAMP_CHOICES);
-
-    backend_opts o = {0};
-    o.name = "claude";
-    o.model = STAMP_MODEL;
-    o.system = "Write the phrases without using tools.";
-    o.session_name = APP_NAME " stamp helper";
-    o.ephemeral = 1;
-    o.disable_tools = 1;
-    Backend *b = backend_open_ex(&o);
-    if (!b)
-        return;
-
-    char *answer = b->ask(b, text);
-    char  joined[STAMP_CHOICES * (PHRASE_MAX + 1) + 1] = "";
-    int   count = 0;
-    for (char *line = answer ? strtok(answer, "\n") : NULL; line && count < STAMP_CHOICES;
-         line = strtok(NULL, "\n")) {
-        char one[PHRASE_MAX + 1];
-        clean(line, one, sizeof one);
-        if (!*one)
-            continue;
-        size_t len = strlen(joined);
-        snprintf(joined + len, sizeof joined - len, "%s%s", count++ ? "|" : "", one);
-    }
-    char path[1200];
-    if (count && path_config_file(path, sizeof path, "stamps3"))
-        (void)kvlog_append(path, key, joined);
-    free(answer);
-    b->close(b);
-}
-
-static int cached(const char *key, char *out, size_t size)
-{
-    char path[1200];
-
-    return path_config_file(path, sizeof path, "stamps3") && kvlog_lookup(path, key, out, size);
-}
-
-void stamp_prepare(const char *name)
-{
-    static char requested[REQUESTED_MAX][64];
-    static int  nrequested;
-    char        key[64];
-    char        val[STAMP_CHOICES * (PHRASE_MAX + 1) + 1];
-
-    if (!settings_get_int(SETTING_STAMP, 1) || !name || !*name)
-        return;
-    base(name, key, sizeof key);
-    if (!*key)
-        return;
-    for (int i = 0; i < nrequested; i++)
-        if (!strcmp(requested[i], key))
-            return;
-    snprintf(requested[nrequested++ % REQUESTED_MAX], sizeof requested[0], "%s", key);
-    if (nrequested > REQUESTED_MAX)
-        nrequested = REQUESTED_MAX;
-    if (cached(key, val, sizeof val))
-        return;
-
-    pid_t pid = fork();
-    if (pid < 0)
-        return;
-    if (pid == 0) {
-        if (fork() == 0) {
-            setsid();
-            int null = open("/dev/null", O_RDWR);
-            if (null >= 0) {
-                dup2(null, STDIN_FILENO);
-                dup2(null, STDOUT_FILENO);
-                dup2(null, STDERR_FILENO);
-                if (null > STDERR_FILENO)
-                    close(null);
-            }
-            for (int fd = getdtablesize() - 1; fd > STDERR_FILENO; fd--)
-                close(fd);
-            ask_and_cache(key);
-        }
-        _exit(0);
-    }
-    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
-        ;
-}
-
-void stamp_show(const char *name)
-{
-    static char chosen[PHRASE_MAX + 1];
-    char        key[64];
-    char        val[STAMP_CHOICES * (PHRASE_MAX + 1) + 1];
-
     if (!settings_get_int(SETTING_STAMP, 1))
         return;
-    phrase = NULL;
-    if (name && *name) {
-        base(name, key, sizeof key);
-        if (cached(key, val, sizeof val)) {
-            int count = 1;
-            for (char *p = val; *p; p++)
-                count += *p == '|';
-            char *at = val;
-            for (int pick = (int)arc4random_uniform((unsigned)count); pick > 0; pick--)
-                at = strchr(at, '|') + 1;
-            at[strcspn(at, "|")] = '\0';
-            snprintf(chosen, sizeof chosen, "%s", at);
-            if (*chosen)
-                phrase = chosen;
-        }
-    }
-    if (!phrase)
-        phrase = PHRASES[arc4random_uniform(sizeof PHRASES / sizeof PHRASES[0])];
+    phrase = PHRASES[arc4random_uniform(sizeof PHRASES / sizeof PHRASES[0])];
     viewport_touch();
 }
 
@@ -335,15 +266,15 @@ void stamp_cover(char **rows, int n, int cols)
     if (!phrase)
         return;
 
-    int limit = cols - 2 * MARGIN_COLS - 1;
-    if (!wrap(limit) || nlines * LINE_H + 2 * MARGIN_ROWS > n) {
+    int limit = cols - 2 * PAD - 2;
+    if (!wrap(limit) || nlines * LINE_H + 3 > n) {
         nlines = 1;
         snprintf(lines[0], sizeof lines[0], "*");
         text_w = span(lines[0], 1);
     }
 
-    int h = nlines * LINE_H + 2 * MARGIN_ROWS;
-    int w = text_w + 1 + 2 * MARGIN_COLS;
+    int h = nlines * LINE_H + 3;
+    int w = text_w + 2 * PAD + 2;
     if (w > cols || h > n)
         return;
 

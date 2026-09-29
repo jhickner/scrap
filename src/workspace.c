@@ -550,10 +550,9 @@ static int pump(int hold, int screen)
         int running = session_turn_running(s);
 
         enter_held(i, hold);
-        if (running) {
-            stamp_prepare(session_name(s));
+        if (running)
             busy |= session_turn_pump(s);
-        } else
+        else
             busy |= session_idle_pump(s) ? 1 : 0;
         leave();
 
@@ -565,7 +564,7 @@ static int pump(int hold, int screen)
             if (i != cur)
                 session_set_unseen(s, 1);
             else if (screen && !tty_focused())
-                stamp_show(session_name(s));
+                stamp_show();
         }
         settle_finished(i, hold);
     }
