@@ -871,7 +871,7 @@ int main(int argc, char **argv)
             at += n;
         }
         text[at] = '\0';
-        session_set_quiet(session, !isatty(STDOUT_FILENO));
+        session_set_quiet(session, 1);
         session_set_naming(session, 0);
         int ok = session_turn(session, text);
         free(text);

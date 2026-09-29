@@ -1319,6 +1319,7 @@ static void sa_chunk(sa_resp *r, const cJSON *j) {
     const cJSON *details = cJSON_GetObjectItem(delta, "reasoning_details");
     if (cJSON_GetArraySize(details)) sa_details_merge(r, details);
     const char *content = sa_jstr(delta, "content");
+    if (content && !r->text.n) content += strspn(content, " \t\r\n");
     if (content && *content) {
         sa_puts(&r->text, content);
         if (r->emit) backend_delta(&r->x->st, BACKEND_EV_ASSISTANT, content);
