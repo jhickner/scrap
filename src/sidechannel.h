@@ -13,6 +13,9 @@ int  sidechannel_status(const struct session *s, const char *prev,
                         sidechannel_done done, void *ud);
 void sidechannel_forget(const struct session *s);
 
+void sidechannel_show(const struct session *owner, const char *question,
+                      const char *answer, int failed);
+
 int sidechannel_fds(int *out, int max);
 
 void sidechannel_poll(void);

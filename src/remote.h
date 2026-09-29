@@ -12,4 +12,8 @@ const char *remote_prompt(Backend *b);
 
 int remote_connected(Backend *b);
 
+cJSON *remote_side_take(Backend *b);
+
+int remote_btw(Backend *b, const char *prompt);
+
 #endif

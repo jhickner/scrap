@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <poll.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,8 @@ struct remote {
     size_t len;
     int    closed;
     cJSON *history;
+    cJSON *side;
+    pthread_mutex_t side_lock;
     char  *model;
     char  *pending_prompt;
     int    pending;
@@ -31,6 +34,16 @@ struct remote {
     void *event_ud;
     int (*abort)(void);
 };
+
+static void side_keep(struct remote *r, cJSON *o)
+{
+    cJSON *n = cJSON_DetachItemFromObject(o, "side");
+    if (!n)
+        return;
+    pthread_mutex_lock(&r->side_lock);
+    cJSON_AddItemToArray(r->side, n);
+    pthread_mutex_unlock(&r->side_lock);
+}
 
 static struct remote *R(Backend *b)
 {
@@ -168,6 +181,8 @@ static char *turn(struct remote *r, const char *mine, backend_result *meta)
         cJSON      *e = cJSON_GetObjectItem(o, "ev");
         if (e)
             forward(r, e);
+        else if (cJSON_GetObjectItem(o, "side"))
+            side_keep(r, o);
         else if (t && !strcmp(t, "begin") && !ours && jstr(o, "prompt") &&
                  !strcmp(jstr(o, "prompt"), mine))
             ours = 1;
@@ -236,6 +251,8 @@ static int idle_pump(Backend *b)
         free(line);
         if (e)
             forward(r, e);
+        else if (cJSON_GetObjectItem(o, "side"))
+            side_keep(r, o);
         else if (t && !strcmp(t, "begin")) {
             replace(&r->pending_prompt, jstr(o, "prompt"));
             r->pending = 1;
@@ -310,6 +327,8 @@ static void close_remote(Backend *b)
     if (r->fd >= 0)
         close(r->fd);
     cJSON_Delete(r->history);
+    cJSON_Delete(r->side);
+    pthread_mutex_destroy(&r->side_lock);
     free(r->target);
     free(r->buf);
     free(r->model);
@@ -396,11 +415,14 @@ Backend *remote_open(const char *target)
 {
     Backend       *b = calloc(1, sizeof *b);
     struct remote *r = calloc(1, sizeof *r);
-    if (!b || !r || !(r->target = strdup(target))) {
+    if (!b || !r || !(r->target = strdup(target)) || !(r->side = cJSON_CreateArray())) {
+        if (r)
+            free(r->target);
         free(b);
         free(r);
         return NULL;
     }
+    pthread_mutex_init(&r->side_lock, NULL);
     r->fd = -1;
     *b = (Backend){
         .ask = ask,
@@ -443,4 +465,25 @@ int remote_connected(Backend *b)
 const char *remote_prompt(Backend *b)
 {
     return b ? R(b)->pending_prompt : NULL;
+}
+
+cJSON *remote_side_take(Backend *b)
+{
+    if (!b)
+        return NULL;
+    struct remote *r = R(b);
+    pthread_mutex_lock(&r->side_lock);
+    cJSON *n = cJSON_DetachItemFromArray(r->side, 0);
+    pthread_mutex_unlock(&r->side_lock);
+    return n;
+}
+
+int remote_btw(Backend *b, const char *prompt)
+{
+    struct remote *r = R(b);
+    if (r->closed && !connect_remote(r))
+        return 0;
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "btw", prompt);
+    return put(r, o);
 }

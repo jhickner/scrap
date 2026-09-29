@@ -35,6 +35,7 @@
 #include "settings.h"
 #include "voicetrace.h"
 #include "sidechannel.h"
+#include "stream.h"
 #include "status.h"
 #include "tasks.h"
 #include "title.h"
@@ -377,6 +378,7 @@ static void tab_busy(struct session *s, int busy)
 
 static void name_poll(struct session *s);
 static void status_update_tick(struct session *s);
+static void side_drain(struct session *s);
 
 int session_work_count(const struct session *s)
 {
@@ -466,8 +468,8 @@ int session_idle_pump(struct session *s)
     session_set_drawing(was);
 
     stall_watch(s, busy || s->spoke != before);
-    if (s == live)
-        status_update_tick(s);
+    side_drain(s);
+    status_update_tick(s);
     tab_busy(s, busy);
     if (continuation && session_turn_continue_begin(s))
         return 1;
@@ -692,9 +694,20 @@ static void status_update_done(void *ud, const char *answer)
         replace(&s->status_last, answer);
 }
 
+static void side_drain(struct session *s)
+{
+    cJSON *n;
+    while (s->remote && (n = remote_side_take(s->agent))) {
+        sidechannel_show(s, cJSON_GetStringValue(cJSON_GetObjectItem(n, "question")),
+                         cJSON_GetStringValue(cJSON_GetObjectItem(n, "answer")),
+                         cJSON_IsTrue(cJSON_GetObjectItem(n, "failed")));
+        cJSON_Delete(n);
+    }
+}
+
 static void status_update_tick(struct session *s)
 {
-    if (!s || s->status_open)
+    if (!s || s->remote || s->status_open || (s != live && !stream_watched(s)))
         return;
     double since = s->status_at;
     if (!s->running) {
@@ -2180,8 +2193,8 @@ int session_turn_pump(struct session *s)
     usage_poll(s);
 
     if (!s->finished) {
-        if (s == live)
-            status_update_tick(s);
+        side_drain(s);
+        status_update_tick(s);
         return 1;
     }
 
@@ -2231,6 +2244,11 @@ const char *session_remote_field(const struct session *s, const char *key)
         return NULL;
     const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(remote_history(s->agent), key));
     return v && *v ? v : NULL;
+}
+
+int session_remote_btw(struct session *s, const char *prompt)
+{
+    return s && s->remote && agent(s) && remote_btw(s->agent, prompt);
 }
 
 int session_remote_connected(const struct session *s)

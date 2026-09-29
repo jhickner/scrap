@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -10,6 +11,7 @@
 #include "cmd.h"
 #include "dispatch.h"
 #include "session.h"
+#include "sidechannel.h"
 #include "transcript.h"
 #include "workspace.h"
 
@@ -175,8 +177,14 @@ static void command(struct sub *u, const char *line)
 {
     cJSON      *o = cJSON_Parse(line);
     const char *prompt = cJSON_GetStringValue(cJSON_GetObjectItem(o, "prompt"));
+    const char *btw = cJSON_GetStringValue(cJSON_GetObjectItem(o, "btw"));
     if (prompt && *prompt)
         dispatch_send(workspace_index_of(u->s), prompt);
+    else if (btw && *btw) {
+        char label[4096];
+        snprintf(label, sizeof label, "/btw %s", btw);
+        sidechannel_start(u->s, btw, label);
+    }
     else if (cJSON_IsTrue(cJSON_GetObjectItem(o, "interrupt")))
         session_interrupt(u->s);
     else if (cJSON_IsTrue(cJSON_GetObjectItem(o, "clear")) && !session_turn_running(u->s))
@@ -229,7 +237,7 @@ static void begun(struct sub *u)
     put(u, o);
 }
 
-static void each(struct session *s, cJSON *o)
+static void each(const struct session *s, cJSON *o)
 {
     for (int i = 0; i < SUB_MAX; i++)
         if (subs[i].fd >= 0 && subs[i].s == s) {
@@ -303,5 +311,26 @@ void stream_turn_done(struct session *s)
         cJSON_AddBoolToObject(m, "interrupted", 1);
     add_str(m, "subtype", r->subtype);
     add_str(o, "status", workspace_status(s));
+    each(s, o);
+}
+
+int stream_watched(const struct session *s)
+{
+    for (int i = 0; i < SUB_MAX; i++)
+        if (subs[i].fd >= 0 && subs[i].s == s)
+            return 1;
+    return 0;
+}
+
+void stream_side(const struct session *s, const char *question, const char *answer,
+                 int failed)
+{
+    cJSON *n = cJSON_CreateObject();
+    add_str(n, "question", question);
+    add_str(n, "answer", answer);
+    if (failed)
+        cJSON_AddBoolToObject(n, "failed", 1);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddItemToObject(o, "side", n);
     each(s, o);
 }

@@ -521,6 +521,12 @@ static void do_btw(struct session *s, const char *arg)
         return;
     }
 
+    if (session_remote(s)) {
+        if (!session_remote_btw(s, arg))
+            reply_error("could not reach %s", session_remote(s));
+        return;
+    }
+
     char label[4096];
     snprintf(label, sizeof label, "/btw %s", arg);
     sidechannel_start(s, arg, label);

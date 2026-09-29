@@ -16,6 +16,7 @@
 #include "sidechannelcmd.h"
 #include "sidechannelview.h"
 #include "status.h"
+#include "stream.h"
 #include "ui.h"
 #include "viewport.h"
 #include "workspace.h"
@@ -449,11 +450,18 @@ static void emit(struct side *c, int status)
     if (c->done)
         c->done(c->ud, failed ? NULL : answer);
 
+    stream_side(c->owner, c->question, answer, failed);
+    sidechannel_show(c->owner, c->question, answer, failed);
+}
+
+void sidechannel_show(const struct session *owner, const char *question,
+                      const char *answer, int failed)
+{
     struct btw *b = calloc(1, sizeof *b);
     if (!b)
         return;
-    b->question = strdup(c->question ? c->question : "");
-    b->answer = strdup(answer);
+    b->question = strdup(question ? question : "");
+    b->answer = strdup(answer ? answer : "");
     b->failed = failed;
     b->gap = 1;
     if (!b->question || !b->answer) {
@@ -461,8 +469,8 @@ static void emit(struct side *c, int status)
         return;
     }
 
-    int tab = c->owner ? workspace_index_of(c->owner) : -1;
-    if (tab >= 0 && c->owner != workspace_current())
+    int tab = owner ? workspace_index_of(owner) : -1;
+    if (tab >= 0 && owner != workspace_current())
         workspace_render(tab, btw_place, b);
     else
         btw_place(NULL, b);
