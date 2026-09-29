@@ -15,7 +15,7 @@
 #define NAME_CELLS 14
 #define BUTTON_W   4
 
-#define DOT "\xe2\x97\x8f"
+#define CHECK "\xe2\x9c\x93"
 #define BAR "\xe2\x94\x82"
 #define RULE "\xe2\x94\x80"
 
@@ -70,8 +70,8 @@ static const char *mark(const struct session *s, enum ui_role *role)
         return "e";
     }
     if (session_unseen(s)) {
-        *role = UI_ACCENT;
-        return DOT;
+        *role = UI_OK;
+        return CHECK;
     }
     return NULL;
 }

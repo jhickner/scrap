@@ -82,6 +82,8 @@
 
 #define SETTING_NAME_BADGE "name_badge"
 
+#define SETTING_STAMP "stamp"
+
 #define MAX_SETTING_KEY    64
 #define MAX_SETTING_VALUE  256
 #define MAX_SETTINGS       512

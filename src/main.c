@@ -17,6 +17,7 @@
 #include "confirm.h"
 #include "gitinfo.h"
 #include "hud.h"
+#include "stamp.h"
 #include "tabbar.h"
 #include "image.h"
 #include "docview.h"
@@ -343,6 +344,7 @@ static void inset_cover(char **rows, int n, int cols)
 {
     vncinset_cover(inset_live(), rows, n, cols);
     tabbar_cover(rows, n, cols);
+    stamp_cover(rows, n, cols);
 }
 
 static int side_busy(void *ud)
@@ -397,8 +399,10 @@ static void switcher(void *ud)
 static void focus_changed(int on)
 {
     voice_arm(on);
-    if (on)
+    if (on) {
         workspace_log_active();
+        stamp_clear();
+    }
 }
 
 static void step(void *ud, int dir)

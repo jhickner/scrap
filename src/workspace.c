@@ -15,6 +15,7 @@
 #include "settings.h"
 #include "voicetrace.h"
 #include "status.h"
+#include "stamp.h"
 #include "tabbar.h"
 #include "text.h"
 #include "tty.h"
@@ -297,6 +298,7 @@ void workspace_show(int index)
 
     block_forget();
     session_set_unseen(tabs[cur].s, 0);
+    stamp_clear();
     status_sticky_prompt(tabs[cur].sticky);
     status_sticky_busy(session_busy(tabs[cur].s));
     draft_load(cur);
@@ -548,9 +550,10 @@ static int pump(int hold, int screen)
         int running = session_turn_running(s);
 
         enter_held(i, hold);
-        if (running)
+        if (running) {
+            stamp_prepare(session_name(s));
             busy |= session_turn_pump(s);
-        else
+        } else
             busy |= session_idle_pump(s) ? 1 : 0;
         leave();
 
@@ -561,6 +564,8 @@ static int pump(int hold, int screen)
             tabs[i].finished = 1;
             if (i != cur)
                 session_set_unseen(s, 1);
+            else if (screen)
+                stamp_show(session_name(s));
         }
         settle_finished(i, hold);
     }
