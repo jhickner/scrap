@@ -151,7 +151,7 @@ static void check_turn_state(void)
     present.view.after_collapse = 1;
 
     sessionpresent_turn_begin(&present);
-    if (sessionpresent_streamed(&present) || present.call_open ||
+    if (present.streamed || present.call_open ||
         present.view.after_collapse) {
         fprintf(stderr, "FAIL a new turn resets presentation-only state\n");
         failures++;

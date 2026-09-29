@@ -33,7 +33,7 @@ CHECKS := kittywraptest overlaytest viewporttest imagerowtest chrometest imagefi
           sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
           dispatchtest voicetabtest grokbottailtest vncinsettest grokvnctest \
           settingstest jevtest
-CHECKS += agentsynctest sessionaddrtest apitest apihttptest activelogtest proxyprototest scrapagenttest
+CHECKS += agentsynctest sessionaddrtest apitest apihttptest activelogtest proxyprototest coreagenttest
 MANUAL_TOOLS := imagetest keydump pastetest spintest vncprobe
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,
@@ -187,11 +187,11 @@ $(BUILD)/sidechannelcmdtest: tests/sidechannelcmdtest.c $(BUILD)/sidechannelcmd.
 
 $(BUILD)/toolstyletest: tests/toolstyletest.c $(BUILD)/toolstyle.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/sessionlisttest: tests/sessionlisttest.c $(BUILD)/sessionlist.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
+$(BUILD)/sessionlisttest: tests/sessionlisttest.c $(BUILD)/sessionlist.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
 $(BUILD)/codextest: tests/codextest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/modelstest: tests/modelstest.c $(BUILD)/models.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/modelstest: tests/modelstest.c $(BUILD)/models.o $(BUILD)/vendor/impl.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/groktest: tests/groktest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
@@ -207,7 +207,7 @@ $(BUILD)/claudetest: tests/claudetest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/c
 
 $(BUILD)/pitest: tests/pitest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/scrapagenttest: tests/scrapagenttest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/coreagenttest: tests/coreagenttest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/agenttabstest: tests/agenttabstest.c $(BUILD)/agenttabs.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 

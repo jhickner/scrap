@@ -1,10 +1,10 @@
 /*
- * scrap.h — native agent loop: OpenAI-compatible chat completions over
+ * core.h — native agent loop: OpenAI-compatible chat completions over
  * libcurl, four tools (read, write, edit, bash), JSONL sessions, compaction,
  * context files, skills, and hooks.
  *
  * The declarations need nothing else. backend.h instantiates the
- * implementation (SCRAP_AGENT_IMPLEMENTATION) after its adapter scaffolding.
+ * implementation (CORE_AGENT_IMPLEMENTATION) after its adapter scaffolding.
  *
  * Config and state live under $SCRAP_CONFIG_DIR/agent, else
  * ~/.config/scrap/agent: providers.json, models/<provider>.json (cached
@@ -15,21 +15,21 @@
 
 #include <stddef.h>
 
-int  scrap_agent_config_dir(char *out, size_t size);
-int  scrap_agent_session_dir(const char *cwd, char *out, size_t size);
-long scrap_agent_models_stamp(void);
-void scrap_agent_models(void (*fn)(void *ud, const char *id, const char *name, long context),
+int  core_agent_config_dir(char *out, size_t size);
+int  core_agent_session_dir(const char *cwd, char *out, size_t size);
+long core_agent_models_stamp(void);
+void core_agent_models(void (*fn)(void *ud, const char *id, const char *name, long context),
                         void *ud);
 
 #ifdef BACKEND_H
-Backend *scrap_agent_open(const backend_opts *o);
+Backend *core_agent_open(const backend_opts *o);
 #endif
 
 #endif /* SCRAP_AGENT_H */
 
-#ifdef SCRAP_AGENT_IMPLEMENTATION
+#ifdef CORE_AGENT_IMPLEMENTATION
 #ifndef BACKEND_H
-#error "Include backend.h before defining SCRAP_AGENT_IMPLEMENTATION."
+#error "Include backend.h before defining CORE_AGENT_IMPLEMENTATION."
 #endif
 
 #include <ctype.h>
@@ -242,7 +242,7 @@ static void sa_new_id(char *out, size_t size) {
 
 /* ---------- config ---------- */
 
-int scrap_agent_config_dir(char *out, size_t size) {
+int core_agent_config_dir(char *out, size_t size) {
     const char *env = getenv("SCRAP_CONFIG_DIR"), *home = getenv("HOME");
     int n;
     if (env && *env) n = snprintf(out, size, "%s/agent", env);
@@ -262,10 +262,10 @@ static int sa_app_config_file(const char *leaf, char *out, size_t size) {
     return n > 0 && (size_t)n < size;
 }
 
-int scrap_agent_session_dir(const char *cwd, char *out, size_t size) {
+int core_agent_session_dir(const char *cwd, char *out, size_t size) {
     char base[2048], enc[2048];
     size_t o = 0;
-    if (!cwd || !scrap_agent_config_dir(base, sizeof base)) return 0;
+    if (!cwd || !core_agent_config_dir(base, sizeof base)) return 0;
     for (const char *p = cwd; *p && o + 1 < sizeof enc; p++)
         enc[o++] = (isalnum((unsigned char)*p) || *p == '-') ? *p : '-';
     enc[o] = '\0';
@@ -277,7 +277,7 @@ int scrap_agent_session_dir(const char *cwd, char *out, size_t size) {
 
 static cJSON *sa_config_load(char *err, size_t errsize) {
     char dir[2048], path[2200];
-    if (!scrap_agent_config_dir(dir, sizeof dir)) {
+    if (!core_agent_config_dir(dir, sizeof dir)) {
         snprintf(err, errsize, "no config directory (HOME unset)");
         return NULL;
     }
@@ -333,7 +333,7 @@ static int sa_provider_key(const cJSON *prov, const char **key) {
 
 static int sa_models_path(const char *provider, char *out, size_t size) {
     char dir[2048];
-    if (!scrap_agent_config_dir(dir, sizeof dir)) return 0;
+    if (!core_agent_config_dir(dir, sizeof dir)) return 0;
     int n = snprintf(out, size, "%s/models", dir);
     if (n < 0 || (size_t)n >= size) return 0;
     sa_mkdirs(out, 0700);
@@ -431,11 +431,11 @@ static long sa_model_context(const cJSON *m) {
     return v;
 }
 
-long scrap_agent_models_stamp(void) {
+long core_agent_models_stamp(void) {
     char dir[2048], path[2200];
     struct stat st;
     long t = 0;
-    if (!scrap_agent_config_dir(dir, sizeof dir)) return 0;
+    if (!core_agent_config_dir(dir, sizeof dir)) return 0;
     snprintf(path, sizeof path, "%s/providers.json", dir);
     if (stat(path, &st) == 0) t += (long)st.st_mtime;
     snprintf(path, sizeof path, "%s/models", dir);
@@ -443,7 +443,7 @@ long scrap_agent_models_stamp(void) {
     return t;
 }
 
-void scrap_agent_models(void (*fn)(void *ud, const char *id, const char *name, long context),
+void core_agent_models(void (*fn)(void *ud, const char *id, const char *name, long context),
                         void *ud) {
     char err[256];
     cJSON *config = sa_config_load(err, sizeof err);
@@ -724,7 +724,7 @@ static void sa_write_line(sa_agent *x, const cJSON *line) {
     if (x->st.ephemeral) return;
     if (!x->fp) {
         char dir[4096];
-        if (!scrap_agent_session_dir(x->st.cwd ? x->st.cwd : ".", dir, sizeof dir)) return;
+        if (!core_agent_session_dir(x->st.cwd ? x->st.cwd : ".", dir, sizeof dir)) return;
         snprintf(x->path, sizeof x->path, "%s/%s.jsonl", dir, x->id);
         struct stat st;
         int fresh = stat(x->path, &st) != 0;
@@ -816,11 +816,11 @@ static cJSON *sa_summary_line(const char *summary) {
 
 static int sa_load(sa_agent *x, const char *id, int fork) {
     char dir[4096], path[4200];
-    if (!scrap_agent_session_dir(x->st.cwd ? x->st.cwd : ".", dir, sizeof dir)) return 0;
+    if (!core_agent_session_dir(x->st.cwd ? x->st.cwd : ".", dir, sizeof dir)) return 0;
     snprintf(path, sizeof path, "%s/%s.jsonl", dir, id);
     FILE *f = fopen(path, "r");
     if (!f) {
-        snprintf(x->err, sizeof x->err, "no scrap session %s in %s", id, dir);
+        snprintf(x->err, sizeof x->err, "no core session %s in %s", id, dir);
         return 0;
     }
     char *line = NULL;
@@ -2035,7 +2035,7 @@ static void sa_close(Backend *b) {
     free(b);
 }
 
-Backend *scrap_agent_open(const backend_opts *o) {
+Backend *core_agent_open(const backend_opts *o) {
     sa_agent *x = calloc(1, sizeof *x);
     Backend *b = calloc(1, sizeof *b);
     if (!x || !b) { free(x); free(b); return NULL; }
@@ -2062,4 +2062,4 @@ Backend *scrap_agent_open(const backend_opts *o) {
     return b;
 }
 
-#endif /* SCRAP_AGENT_IMPLEMENTATION */
+#endif /* CORE_AGENT_IMPLEMENTATION */

@@ -123,8 +123,10 @@ void session_turn_wait(struct session *s) { (void)s; }
 int session_idle_pump(struct session *s) { (void)s; return 0; }
 int session_wake_fd(const struct session *s) { (void)s; return -1; }
 int session_idle_fd(const struct session *s) { (void)s; return -1; }
-int session_stall_armed(const struct session *s) { (void)s; return 0; }
 int session_stalled(struct session *s) { (void)s; return 0; }
+const char *session_last_error(const struct session *s) { (void)s; return NULL; }
+int session_set_remote(struct session *s, const char *target) { (void)s; (void)target; return 0; }
+int session_remote_connected(const struct session *s) { (void)s; return 0; }
 double session_turn_elapsed(const struct session *s) { (void)s; return 0; }
 void session_spin_word(const struct session *s)
 {

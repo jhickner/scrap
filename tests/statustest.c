@@ -190,11 +190,11 @@ static void check_sticky(void)
     else if (strstr(fresh, "summarize notes.txt"))
         fail("floating prompt drawn while its echo is still on screen");
     free(fresh);
-    if (status_sticky_offscreen())
+    if (status_sticky_measure())
         fail("floating prompt retained while its echo is still on screen");
 
     free(capture(fill_screen));
-    if (!status_sticky_offscreen())
+    if (!status_sticky_measure())
         fail("floating prompt dropped once its echo scrolled away");
     char *on = capture(turn_with_prompt);
     if (!on)
@@ -210,7 +210,7 @@ static void check_sticky(void)
     else if (strstr(off, "summarize notes.txt"))
         fail("floating prompt drawn while off");
     free(off);
-    if (status_sticky_offscreen())
+    if (status_sticky_measure())
         fail("floating prompt retained while off");
     status_sticky_set(1);
 
@@ -219,7 +219,7 @@ static void check_sticky(void)
     char *fits = capture(turn_with_prompt);
     if (!fits)
         fail("capture a three-line floating prompt");
-    else if (status_sticky_rows() != STICKY_LINES)
+    else if (status_sticky_measure() != STICKY_LINES)
         fail("a three-line prompt is not drawn in full");
     else if (strstr(fits, "…"))
         fail("a three-line prompt is clipped");
@@ -230,7 +230,7 @@ static void check_sticky(void)
     char *over = capture(turn_with_prompt);
     if (!over)
         fail("capture a four-line floating prompt");
-    else if (status_sticky_rows() != STICKY_LINES)
+    else if (status_sticky_measure() != STICKY_LINES)
         fail("a four-line prompt is not clipped to three rows");
     else if (!strstr(over, "…"))
         fail("a clipped prompt has no ellipsis");
@@ -246,7 +246,7 @@ static void check_sticky(void)
     char *clipped = capture(turn_with_prompt);
     if (!clipped)
         fail("capture a wrapped floating prompt");
-    else if (status_sticky_rows() != STICKY_LINES)
+    else if (status_sticky_measure() != STICKY_LINES)
         fail("a wrapping prompt is not clipped to three rows");
     else if (!strstr(clipped, "…"))
         fail("a wrapping prompt has no ellipsis");

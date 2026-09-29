@@ -339,7 +339,7 @@ static const char *tabs_provider(const struct session *s)
     static char buf[32];
     const char *model = NULL;
 
-    if (!s || !s->backend || (strcmp(s->backend, "pi") && strcmp(s->backend, "scrap")))
+    if (!s || !s->backend || (strcmp(s->backend, "pi") && strcmp(s->backend, "core")))
         return NULL;
     if (s->resolved && *s->resolved)
         model = s->resolved;
@@ -2374,7 +2374,7 @@ static void remember_model(const struct session *s)
     const char *id = s->resolved && *s->resolved ? s->resolved : backend_model(s);
     prefs_remember_resolved_model(s->backend, s->model, id);
 
-    if ((!strcmp(s->backend, "pi") || !strcmp(s->backend, "scrap")) &&
+    if ((!strcmp(s->backend, "pi") || !strcmp(s->backend, "core")) &&
         (!s->model || !*s->model) && id && *id)
         prefs_remember_choice("model", s->backend, id);
 }

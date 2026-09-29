@@ -8,7 +8,7 @@
 
 #include "title.h"
 #include "text.h"
-#include "vendor/agents/scrap/scrap.h"
+#include "vendor/agents/core/core.h"
 #include "vendor/cJSON.h"
 
 #define MAX_SESSIONS 40
@@ -469,10 +469,10 @@ static int load_pi(const char *cwd, const char *skip_id, struct past_session **o
     return scan_dir(dir, skip_id, pi_fill, &pi, out);
 }
 
-static int load_scrap(const char *cwd, const char *skip_id, struct past_session **out)
+static int load_core(const char *cwd, const char *skip_id, struct past_session **out)
 {
     char dir[2048];
-    if (!scrap_agent_session_dir(cwd, dir, sizeof dir))
+    if (!core_agent_session_dir(cwd, dir, sizeof dir))
         return 0;
     return scan_dir(dir, skip_id, claude_fill, NULL, out);
 }
@@ -626,8 +626,8 @@ int sessionlist_dir(const char *backend, const char *cwd, char *out, size_t size
         int filter_cwd = 0;
         return pi_session_dir(cwd, out, size, &filter_cwd);
     }
-    if (!strcmp(backend, "scrap"))
-        return scrap_agent_session_dir(cwd, out, size);
+    if (!strcmp(backend, "core"))
+        return core_agent_session_dir(cwd, out, size);
     return 0;
 }
 
@@ -635,7 +635,7 @@ int sessionlist_available(const char *backend)
 {
     return backend && (!strcmp(backend, "claude") || !strcmp(backend, "codex") ||
                        !strcmp(backend, "grok") || !strcmp(backend, "pi") ||
-                       !strcmp(backend, "scrap"));
+                       !strcmp(backend, "core"));
 }
 
 int sessionlist_load(const char *backend, const char *cwd, const char *skip_id,
@@ -650,7 +650,7 @@ int sessionlist_load(const char *backend, const char *cwd, const char *skip_id,
         return load_grok(cwd, skip_id, out);
     if (!strcmp(backend, "pi"))
         return load_pi(cwd, skip_id, out);
-    if (!strcmp(backend, "scrap"))
-        return load_scrap(cwd, skip_id, out);
+    if (!strcmp(backend, "core"))
+        return load_core(cwd, skip_id, out);
     return 0;
 }

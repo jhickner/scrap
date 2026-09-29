@@ -25,7 +25,7 @@ typedef struct Backend Backend;
 
 /* Nothing here is retained: a backend copies what it needs. */
 typedef struct {
-    const char *name;           /* "claude" | "codex" | "grok" | "pi" | "grokbot" | "scrap";
+    const char *name;           /* "claude" | "codex" | "grok" | "pi" | "grokbot" | "core";
                                    NULL -> claude                                    */
     const char *model;          /* driver/CLI model identifier; NULL -> its default   */
     const char *effort;         /* reasoning/thinking effort; NULL -> its default     */
@@ -364,8 +364,8 @@ static const char *backend_none(Backend *b) { (void)b; return NULL; }
 #include "pi/pi.h"
 #define GROKBOT_IMPLEMENTATION
 #include "grokbot/grokbot.h"
-#define SCRAP_AGENT_IMPLEMENTATION
-#include "scrap/scrap.h"
+#define CORE_AGENT_IMPLEMENTATION
+#include "core/core.h"
 
 #include <stdio.h>
 #include <time.h>
@@ -1493,7 +1493,7 @@ static Backend *backend_grokbot_open(const backend_opts *o) {
 
 /* ---------- dispatch ---------- */
 
-static const char *const BACKEND_NAMES[] = { "claude", "codex", "grok", "pi", "grokbot", "scrap", NULL };
+static const char *const BACKEND_NAMES[] = { "claude", "codex", "grok", "pi", "grokbot", "core", NULL };
 
 const char *const *backend_names(void) { return BACKEND_NAMES; }
 
@@ -1504,7 +1504,7 @@ Backend *backend_open_ex(const backend_opts *opts) {
     if (!strcmp(o.name, "grok"))              return backend_grok_open(&o);
     if (!strcmp(o.name, "pi"))                return pi_backend_open(&o);
     if (!strcmp(o.name, "grokbot"))           return backend_grokbot_open(&o);
-    if (!strcmp(o.name, "scrap"))             return scrap_agent_open(&o);
+    if (!strcmp(o.name, "core"))              return core_agent_open(&o);
     return NULL;
 }
 

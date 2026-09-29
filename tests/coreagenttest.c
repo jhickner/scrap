@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 #include "vendor/agents/backend.h"
-#include "vendor/agents/scrap/scrap.h"
+#include "vendor/agents/core/core.h"
 #include "vendor/cJSON.h"
 
 static char dir[256];
@@ -283,7 +283,7 @@ static int should_abort(void)
 
 static Backend *open_agent(const char *resume, int fork_session)
 {
-    backend_opts o = {.name = "scrap", .model = "fake/echo", .cwd = dir,
+    backend_opts o = {.name = "core", .model = "fake/echo", .cwd = dir,
                       .fork_session = fork_session};
     Backend *b = backend_open_ex(&o);
     b->set_event_cb(b, on_event, NULL);
@@ -303,7 +303,7 @@ static char *ask(Backend *b, const char *text, backend_result *meta)
 
 int main(void)
 {
-    snprintf(dir, sizeof dir, "/tmp/scrapagenttest.%d", (int)getpid());
+    snprintf(dir, sizeof dir, "/tmp/coreagenttest.%d", (int)getpid());
     mkdir(dir, 0700);
     setenv("SCRAP_CONFIG_DIR", dir, 1);
     int port;
@@ -336,7 +336,7 @@ int main(void)
     char id[128];
     snprintf(id, sizeof id, "%s", b->session_id(b));
     char sessdir[1024], sessfile[1200];
-    scrap_agent_session_dir(dir, sessdir, sizeof sessdir);
+    core_agent_session_dir(dir, sessdir, sizeof sessdir);
     snprintf(sessfile, sizeof sessfile, "%s/%s.jsonl", sessdir, id);
     struct stat st;
     CHECK(stat(sessfile, &st) == 0);
@@ -414,8 +414,8 @@ int main(void)
     if (!failures)
         (void)!system(cmd);
     if (failures)
-        fprintf(stderr, "scrapagenttest: %d failures (state in %s)\n", failures, dir);
+        fprintf(stderr, "coreagenttest: %d failures (state in %s)\n", failures, dir);
     else
-        printf("scrapagenttest: ok\n");
+        printf("coreagenttest: ok\n");
     return failures != 0;
 }

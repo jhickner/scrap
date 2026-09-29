@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 #include "pick.h"
-#include "vendor/agents/scrap/scrap.h"
+#include "vendor/agents/core/core.h"
 #include "text.h"
 #include "vendor/cJSON.h"
 
@@ -163,8 +163,8 @@ static time_t backend_stamp(const char *backend)
         return home_stamp(".grok/models_cache.json");
     if (!strcmp(backend, "claude"))
         return claude_stamp();
-    if (!strcmp(backend, "scrap"))
-        return (time_t)scrap_agent_models_stamp();
+    if (!strcmp(backend, "core"))
+        return (time_t)core_agent_models_stamp();
     return 0;
 }
 
@@ -680,7 +680,7 @@ static void fill_pi_native(struct list *l)
     free(text);
 }
 
-static void push_scrap(void *ud, const char *id, const char *name, long context)
+static void push_core(void *ud, const char *id, const char *name, long context)
 {
     push_pi_model(ud, NULL, id, name, (double)context);
 }
@@ -718,7 +718,7 @@ int models_for(const char *backend, const struct pick_item **out)
     l->stamp = stamp;
 
     char detail[DETAIL_BYTES];
-    if (!strcmp(backend, "scrap"))
+    if (!strcmp(backend, "core"))
         snprintf(detail, sizeof detail, "the default in providers.json");
     else
         snprintf(detail, sizeof detail, "whatever the %s CLI is configured to use", backend);
@@ -731,8 +731,8 @@ int models_for(const char *backend, const struct pick_item **out)
         fill_codex(l);
     } else if (!strcmp(backend, "pi")) {
         fill_pi(l);
-    } else if (!strcmp(backend, "scrap")) {
-        scrap_agent_models(push_scrap, l);
+    } else if (!strcmp(backend, "core")) {
+        core_agent_models(push_core, l);
     } else if (!strcmp(backend, "grok")) {
         if (!fill_grok(l))
             fill_static(l, GROK, (int)(sizeof GROK / sizeof *GROK));

@@ -945,7 +945,7 @@ int main(void)
     focused_window = 1;
     focus_when_ready = -1;
     resumed = 0;
-    voice_set_wake(1);
+    voice_set_mode(VOICE_MODE_WAKE);
     if (!start_voice())
         return 1;
     voice_on_heard(box_heard, NULL);
@@ -1053,7 +1053,7 @@ int main(void)
         return 1;
     if (!voice_wake())
         fail("wake mode survives voice restart");
-    voice_set_wake(0);
+    voice_set_mode(VOICE_MODE_AUTO);
     fire("final", "ordinary voice again");
     line = voice_take_line();
     eq_str("turning wake mode off restores ordinary voice", line, "ordinary voice again");
