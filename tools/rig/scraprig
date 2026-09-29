@@ -19,7 +19,13 @@ usage: scraprig <command> ...
   type   name text           literal text
   say    name text [regex]   type text, Enter, then wait for regex
   cli    name args...        run scrap args (ls, read, send, attach) with the instance's config
+  stream name id target      run scrap attach target in the background; stdin is
+                             fed by stream-put, output kept under <dir>/streams/id
+  stream-put  name id line   send a line to the stream's stdin
+  stream-wait name id regex [secs]   until the stream output matches (default 10s)
+  stream-cat  name id        print the stream output
   net    name                print the instance's tailscale ip and port
+  broker name                print the pid of the instance's scrap net broker
   machine                    print this machine's tailnet name
   wait   name regex [secs]   until the screen matches (default 10s)
   idle   name [ms] [secs]    until the screen is unchanged for ms (default 500)
@@ -159,6 +165,50 @@ cmd_expect() {
     snap "$name" | diff -u "$golden" - >&2 || fail_snap "$name" "screen differs from $golden"
 }
 
+cli_env() {
+    local d="$ROOT/$1/state"
+    printf '%q ' env "SCRAP_CONFIG_DIR=$d/config" "AGENT_TABS_STATE_DIR=$d/tabs" "TMPDIR=$d/tmp" \
+        "$(cat "$ROOT/$1/scrap")"
+}
+
+cmd_stream() {
+    local name="$1" id="$2" target="$3" d="$ROOT/$1/streams"
+    mkdir -p "$d"
+    [ ! -e "$d/$id.out" ] || die "stream '$id' exists"
+    : > "$d/$id.in"
+    : > "$d/$id.out"
+    local cmd
+    cmd="tail -f $(printf %q "$d/$id.in") | $(cli_env "$name")attach $(printf %q "$target") \
+>$(printf %q "$d/$id.out") 2>&1; echo \$? > $(printf %q "$d/$id.exit")"
+    tm "$name" new-window -d -n "stream-$id" "$cmd"
+}
+
+cmd_stream_wait() {
+    local name="$1" id="$2" re="$3" secs="${4:-10}" d="$ROOT/$1/streams"
+    [ -e "$d/$id.out" ] || die "no stream '$id'"
+    local end=$((SECONDS + secs))
+    while [ $SECONDS -le $end ]; do
+        grep -Eq -- "$re" "$d/$id.out" && return 0
+        if [ -e "$d/$id.exit" ]; then
+            grep -Eq -- "$re" "$d/$id.out" && return 0
+            echo "scraprig: stream '$id' exited ($(cat "$d/$id.exit")) before /$re/" >&2
+            cat "$d/$id.out" >&2
+            exit 1
+        fi
+        sleep 0.1
+    done
+    echo "scraprig: timed out after ${secs}s waiting for /$re/ on stream '$id'" >&2
+    cat "$d/$id.out" >&2
+    exit 1
+}
+
+cmd_broker() {
+    local ip port
+    read -r ip port < <("$0" net "$1")
+    lsof -nP -iTCP@"$ip":"$port" -sTCP:LISTEN -Fp 2>/dev/null | sed -n 's/^p//p' | head -1 | grep . \
+        || die "no broker on $ip:$port"
+}
+
 cmd_stop() {
     local name="$1" pid i
     pid="$(tm "$name" display -p -t rig '#{pane_pid}' 2>/dev/null || true)"
@@ -187,6 +237,16 @@ cli)
     d="$ROOT/$1/state"
     env "SCRAP_CONFIG_DIR=$d/config" "AGENT_TABS_STATE_DIR=$d/tabs" "TMPDIR=$d/tmp" \
         "$(cat "$ROOT/$1/scrap")" "${@:2}" ;;
+stream) inst "${1:-}"; [ $# -eq 3 ] || usage; cmd_stream "$@" ;;
+stream-put)
+    inst "${1:-}"; [ $# -eq 3 ] || usage
+    [ -e "$ROOT/$1/streams/$2.in" ] || die "no stream '$2'"
+    printf '%s\n' "$3" >> "$ROOT/$1/streams/$2.in" ;;
+stream-wait) inst "${1:-}"; [ $# -ge 3 ] || usage; cmd_stream_wait "$@" ;;
+stream-cat)
+    inst "${1:-}"; [ $# -eq 2 ] || usage
+    cat "$ROOT/$1/streams/$2.out" 2>/dev/null || die "no stream '$2'" ;;
+broker) inst "${1:-}"; cmd_broker "$1" ;;
 net)
     inst "${1:-}"
     f="$ROOT/$1/state/config/net"

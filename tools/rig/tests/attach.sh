@@ -12,25 +12,23 @@ $R wait $b '❯'
 $R say $b hello 'echo: hello'
 $R say $b '/name bee' 'now @bee'
 
-(printf 'from the stream\n'; sleep 5) | timeout 6 $R cli $b attach @bee > "$share/local" 2>&1 &
-sleep 2
+$R stream $b local @bee
+$R stream-wait $b local '"history":\{"turns":\[\{"user":"hello"'
+$R stream-put $b local 'from the stream'
 $R wait $b 'echo: from the stream'
+$R stream-wait $b local '"turn":"begin","prompt":"from the stream"'
 $R say $b 'typed on b' 'echo: typed on b'
-wait
-out="$share/local"
-grep -q '"history":{"turns":\[{"user":"hello"' "$out" || fail "no history: $(cat "$out")"
-grep -q '"turn":"begin","prompt":"from the stream"' "$out" || fail "stream prompt did not run: $(cat "$out")"
-grep -q '"kind":"assistant","text":"echo: typed on b"' "$out" || fail "no event for a prompt typed on b: $(cat "$out")"
-grep -q '"turn":"begin","prompt":"typed on b"' "$out" || fail "turn begin carries the wrong prompt: $(cat "$out")"
-grep -q '"turn":"done"' "$out" || fail "no turn done: $(cat "$out")"
+$R stream-wait $b local '"kind":"assistant","text":"echo: typed on b"'
+$R stream-wait $b local '"turn":"begin","prompt":"typed on b"'
+$R stream-wait $b local '"turn":"done"'
 
-timeout 3 $R cli $b attach "$me:@bee" > "$share/remote" 2>&1 < /dev/null || true
-grep -q '"user":"typed on b"' "$share/remote" || fail "remote attach history: $(cat "$share/remote")"
+$R stream $b remote "$me:@bee"
+$R stream-wait $b remote '"user":"typed on b"'
 read -r ip port < <($R net $b)
 reply=$(printf '{"cwd":"~","prompt":"first words"}\n' | nc -w 40 "$ip" "$port")
 name=$(echo "$reply" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("name",""))')
 [ -n "$name" ] || fail "spawn reply has no name: $reply"
-timeout 3 $R cli $b attach "$me:@$name" > "$share/spawned" 2>&1 < /dev/null || true
-grep -q '"user":"first words"' "$share/spawned" || fail "spawned session history: $(cat "$share/spawned")"
-grep -q "\"cwd\":\"$HOME\"" "$share/spawned" || fail "spawn did not expand ~: $(cat "$share/spawned")"
+$R stream $b spawned "$me:@$name"
+$R stream-wait $b spawned '"user":"first words"'
+$R stream-wait $b spawned "\"cwd\":\"$HOME\""
 echo "attach: ok"

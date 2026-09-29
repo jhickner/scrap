@@ -41,6 +41,13 @@ tools/rig/scraprig stop $n
   tailnet name, `net name` the ip and port, and `cli name ls --net` (or
   `read`, `send`, `attach`) runs the scrap CLI with an instance's config.
   `say name text [regex]` types a line, sends Enter, and waits for regex.
+  `broker name` prints the broker pid.
+- `stream name id target` runs `scrap attach target` in the instance's tmux
+  server; `stream-put` feeds its stdin, `stream-wait` waits on its output and
+  prints it on failure, `stop` ends it. `tools/rig/netpair.bash` sets up two
+  named, networked instances for the `net*` tests.
+- Golden tests start scrap with `-- --name rig` so the session name, and the
+  tab box sized to it, is the same on every run.
 - Without `--fake` the real CLI runs, costs tokens, and writes its transcript
   to `~/.claude`.
 - `wait`, `idle`, and `expect` exit non-zero and print the screen on failure.
@@ -48,6 +55,12 @@ tools/rig/scraprig stop $n
   reach scrap as one escape sequence.
 - `make rigtest` runs `tools/rig/tests/*.sh`. `expect name golden --update`
   (or `tests/x.sh --update`) rewrites a golden in `tools/rig/golden/`.
+- When a test needs something the rig does not do (a background stream, a
+  new process to observe, a new kind of wait), add it to `scraprig` as a
+  subcommand that waits and prints what it saw on failure. Do not hand-roll
+  it in the test with background jobs, sleeps, and grep on temp files.
+- Keep each rig test to one behavior. A long script that checks several
+  features in sequence stops at the first failure and hides the rest.
 
 
 ## Rules
