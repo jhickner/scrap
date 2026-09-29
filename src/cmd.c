@@ -1142,6 +1142,50 @@ static void do_new(struct session *s, const char *arg)
     ui_flush();
 }
 
+static int zoxide_query(const char *arg, char *out, size_t size)
+{
+    char cmd[4096] = "zoxide query --";
+    char word[1024], quoted[2048];
+    for (const char *p = arg; *p;) {
+        while (*p == ' ')
+            p++;
+        size_t n = strcspn(p, " ");
+        if (!n)
+            break;
+        if (n >= sizeof word)
+            return 0;
+        memcpy(word, p, n);
+        word[n] = '\0';
+        p += n;
+        if (!text_shell_quote(word, quoted, sizeof quoted) ||
+            strlen(cmd) + strlen(quoted) + 2 >= sizeof cmd)
+            return 0;
+        strcat(cmd, " ");
+        strcat(cmd, quoted);
+    }
+    strcat(cmd, " 2>/dev/null");
+    FILE *f = popen(cmd, "r");
+    if (!f)
+        return 0;
+    int ok = fgets(out, (int)size, f) != NULL;
+    pclose(f);
+    if (!ok)
+        return 0;
+    out[strcspn(out, "\n")] = '\0';
+    return out[0] != '\0';
+}
+
+static void zoxide_add(const char *path)
+{
+    char quoted[8192], cmd[8300];
+    if (!text_shell_quote(path, quoted, sizeof quoted))
+        return;
+    snprintf(cmd, sizeof cmd, "zoxide add -- %s >/dev/null 2>&1", quoted);
+    FILE *f = popen(cmd, "r");
+    if (f)
+        pclose(f);
+}
+
 static void do_cd(struct session *s, const char *arg)
 {
     char shown[4096];
@@ -1154,15 +1198,16 @@ static void do_cd(struct session *s, const char *arg)
     char *expanded = path_expand_home(arg);
     char  resolved[4096];
     const char *want = expanded ? expanded : arg;
-    int ok = realpath(want, resolved) != NULL;
+    struct stat st;
+    int ok = realpath(want, resolved) != NULL && stat(resolved, &st) == 0 &&
+             S_ISDIR(st.st_mode);
     free(expanded);
     if (!ok) {
-        reply_error("no such directory: %s", arg);
-        return;
+        char hit[4096];
+        ok = zoxide_query(arg, hit, sizeof hit) && realpath(hit, resolved) != NULL;
     }
-    struct stat st;
-    if (stat(resolved, &st) != 0 || !S_ISDIR(st.st_mode)) {
-        reply_error("not a directory: %s", arg);
+    if (!ok) {
+        reply_error("no such directory: %s", arg);
         return;
     }
     if (!strcmp(resolved, session_cwd(s))) {
@@ -1178,11 +1223,12 @@ static void do_cd(struct session *s, const char *arg)
     if (chdir(resolved) != 0)
         reply_error("the agent moved, but scrap could not follow");
     prompt_rehome(resolved);
+    zoxide_add(resolved);
 
     status_sticky_prompt(NULL);
     path_home_relative(resolved, shown, sizeof shown);
     viewport_item_begin(VIEWPORT_ROWS(1, 1));
-    ui_bar(ui_style(UI_DIM), "new conversation in %s", shown);
+    ui_bar(ui_style(UI_DIM), "moved to %s", shown);
     viewport_item_end();
     ui_flush();
 }
@@ -1478,7 +1524,7 @@ static const struct cmd COMMANDS[] = {
     {"/effort", "set reasoning/thinking effort", "[level]", 0, do_effort},
     {"/backend", "continue with another backend", "<name>", 0, do_backend},
     {"/default", "set the default backend", "[name]", CMD_LIVE, do_default},
-    {"/cd", "work in another directory, starting fresh there", "<path>", 0, do_cd},
+    {"/cd", "move the conversation to another directory", "<path or zoxide query>", 0, do_cd},
     {"/btw", "answer this on the side, without waiting", "<prompt>",
      CMD_SELF_ECHOES | CMD_LIVE, do_btw},
     {"/thinking", "show or hide the model's reasoning", "[on|off]", CMD_LIVE,

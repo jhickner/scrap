@@ -1006,6 +1006,17 @@ const char *session_start_error(void)
     return start_error[0] ? start_error : NULL;
 }
 
+static char *carried_handoff(const struct session *s)
+{
+    struct transcript disk = {0};
+    const struct transcript *src = &s->transcript;
+    if (s->id[0] && sessionload_fill(&disk, s->backend, s->cwd, s->id))
+        src = &disk;
+    char *handoff = transcript_handoff(src, 128 * 1024, s->id[0] ? s->id : NULL);
+    transcript_free(&disk);
+    return handoff;
+}
+
 int session_switch_backend(struct session *s, const char *backend)
 {
     if (!s || !backend || !*backend || s->running)
@@ -1013,12 +1024,7 @@ int session_switch_backend(struct session *s, const char *backend)
     if (strcmp(s->backend, backend) == 0)
         return 1;
 
-    struct transcript disk = {0};
-    const struct transcript *src = &s->transcript;
-    if (s->id[0] && sessionload_fill(&disk, s->backend, s->cwd, s->id))
-        src = &disk;
-    char *handoff = transcript_handoff(src, 128 * 1024, s->id[0] ? s->id : NULL);
-    transcript_free(&disk);
+    char *handoff = carried_handoff(s);
     char *joined = session_system(s, handoff);
     backend_opts o = {0};
     o.name = backend;
@@ -1580,6 +1586,19 @@ int session_resume(struct session *s, const char *id)
     return 1;
 }
 
+static void moved_over(struct session *s)
+{
+    replace(&s->workdir, NULL);
+    if (s->title[0] && !s->held_title[0])
+        snprintf(s->held_title, sizeof s->held_title, "%s", s->title);
+    s->id[0] = '\0';
+    const char *id = s->agent->session_id(s->agent);
+    if (id)
+        set_id(s, id);
+    s->context_tokens = 0;
+    gitinfo_forget();
+}
+
 static void started_over(struct session *s)
 {
     reset_turns(s, RESET_BLOCK | RESET_WORKDIR);
@@ -1605,7 +1624,15 @@ int session_set_cwd(struct session *s, const char *path)
     if (s->cwd && strcmp(s->cwd, path) == 0)
         return 1;
 
-    return session_retarget(s, s->model, s->effort, path);
+    char *was = s->handoff;
+    s->handoff = carried_handoff(s);
+    if (!session_retarget(s, s->model, s->effort, path)) {
+        free(s->handoff);
+        s->handoff = was;
+        return 0;
+    }
+    free(was);
+    return 1;
 }
 
 static int session_retarget(struct session *s, const char *model, const char *effort,
@@ -1657,8 +1684,10 @@ static int session_retarget(struct session *s, const char *model, const char *ef
     free(was_cwd);
 
     replace(&s->resolved, NULL);
-    if (moved)
+    if (moved && !s->handoff)
         started_over(s);
+    else if (moved)
+        moved_over(s);
     publish(s, s->idle_busy ? "working" : "finished");
     return 1;
 }
@@ -1821,7 +1850,7 @@ static int session_reground(struct session *s)
         if (ground_target(gone, next, sizeof next)) {
             shorten(next, moved, sizeof moved);
             if (session_set_cwd(s, next)) {
-                session_warn(s, "%s is gone — restarted in %s with a fresh context",
+                session_warn(s, "%s is gone — restarted in %s",
                              shown, moved);
                 return GROUND_MOVED;
             }
