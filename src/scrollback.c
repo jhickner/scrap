@@ -9,6 +9,7 @@
 #include "image.h"
 #include "md.h"
 #include "prompt.h"
+#include "sessionload.h"
 #include "sessionview.h"
 #include "sidechannel.h"
 #include "viewport.h"
@@ -25,6 +26,7 @@ static const struct {
     {BASH_RAN_KIND,       bash_ran_load},
     {SIDECHANNEL_BTW_KIND, sidechannel_btw_load},
     {IMAGE_PLACED_KIND,   image_placed_load},
+    {SESSIONLOAD_DIVIDER_KIND, sessionload_divider_load},
 };
 
 static void load_rows(const cJSON *rows)

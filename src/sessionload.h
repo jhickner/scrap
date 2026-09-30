@@ -11,6 +11,12 @@ int sessionload_replay(const char *backend, const char *cwd, const char *id,
 
 struct session;
 int sessionload_into(const struct session *s);
+int sessionload_earlier(const struct session *s);
+
+#define SESSIONLOAD_DIVIDER_KIND "divider"
+void sessionload_divider(const char *id);
+struct cJSON;
+void sessionload_divider_load(const struct cJSON *st);
 
 struct transcript;
 int sessionload_fill(struct transcript *t, const char *backend, const char *cwd,

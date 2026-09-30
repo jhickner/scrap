@@ -11,7 +11,7 @@ usage: scraprig <command> ...
   start  [-n name] [-s COLSxROWS] [--fake] [--fixture file] [--share dir] [--net [--port N]]
          [--scrap path] [-- scrap args]
          start scrap; prints the instance name. --share dir: instances started
-         with the same dir share live sessions, dispatch, session names, and
+         with the same dir share live sessions, dispatch, chains, and
          net config. --net: the instance's scrap hub broker listens on the
          tailscale address at port N (default random; with --share, the first
          instance picks it); without it no broker runs
@@ -99,8 +99,8 @@ cmd_start() {
     local conf="$dir/state/config"
     if [ -n "$share" ]; then
         mkdir -p "$share/live" "$share/dispatch" "$share/handoff" "$share/instances"
-        touch "$share/names"
-        for leaf in live dispatch names net handoff instances; do ln -s "$share/$leaf" "$conf/$leaf"; done
+        touch "$share/chains"
+        for leaf in live dispatch chains net handoff instances; do ln -s "$share/$leaf" "$conf/$leaf"; done
     fi
     if [ "$net" = 1 ] && { [ -n "$port" ] || [ ! -s "$conf/net" ]; }; then
         local ip

@@ -20,6 +20,9 @@ struct session *session_new(const char *backend, const char *cwd, const char *mo
 void            session_free(struct session *s);
 
 void            session_replay(struct session *s);
+int             session_clear_history(struct session *s);
+const char     *session_chain(const struct session *s);
+int             session_history_file(const struct session *s, char *out, size_t size);
 
 void session_set_quiet(struct session *s, int quiet);
 

@@ -112,4 +112,8 @@ void viewport_scroll(int delta);
 void viewport_scroll_end(void);
 int  viewport_scrolled(void);
 
+void viewport_on_top(void (*fn)(void));
+void viewport_prepend_begin(void);
+void viewport_prepend_end(void);
+
 #endif

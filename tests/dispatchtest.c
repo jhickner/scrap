@@ -129,6 +129,13 @@ const char *session_name(const struct session *s)
     (void)s;
     return "";
 }
+void session_replay(struct session *s) { (void)s; }
+int session_set_name(struct session *s, const char *name)
+{
+    (void)s;
+    (void)name;
+    return 1;
+}
 const char *session_addr(const struct session *s)
 {
     return s == &spawned ? "/tmp/scrap-addr-fixture" : NULL;

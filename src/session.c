@@ -15,6 +15,7 @@
 #include "agenttabs.h"
 #include "apicore.h"
 #include "block.h"
+#include "chain.h"
 #include "app.h"
 #include "gitinfo.h"
 #include "grokbottail.h"
@@ -62,6 +63,8 @@ struct session {
     char    *resolved;
     char     id[128];
     char     name[INTERCOM_NAME_MAX];
+    char     chain[CHAIN_ID_MAX];
+    char     fork_from[128];
     char    *addr;
     char   **env;
     backend_result last_result;
@@ -102,6 +105,7 @@ struct session {
     int      no_browser_login;
     int      fork_session;
     int      fork_named;
+    int      forked;
     char    *permission;
     char    *error_note;
     int      idle_busy;
@@ -782,6 +786,7 @@ struct session *session_new(const char *backend, const char *cwd, const char *mo
     s->effort = effort ? strdup(effort) : NULL;
     s->thinking = 1;
     intercom_name_new(s->name, sizeof s->name);
+    chain_new(s->chain, sizeof s->chain);
     char addr[4300];
     if (sessionaddr_alloc(addr, sizeof addr))
         s->addr = strdup(addr);
@@ -1164,8 +1169,53 @@ static void claim_name(struct session *s)
     char fresh[INTERCOM_NAME_MAX];
     intercom_name_next(s->name, fresh, sizeof fresh);
     snprintf(s->name, sizeof s->name, "%s", fresh);
-    if (s->id[0] && strcmp(other, s->id))
-        intercom_register(s->id, s->name, s->backend, s->cwd);
+}
+
+static int history_file(const char *key, char *out, size_t size)
+{
+    char dir[4096];
+    return key && *key && path_config_subdir(dir, sizeof dir, "history") &&
+           (size_t)snprintf(out, size, "%s/%s", dir, key) < size;
+}
+
+static void copy_history(const char *from, const char *to)
+{
+    char   src[4200], dst[4200];
+    size_t n = 0;
+    char  *data = history_file(from, src, sizeof src) && history_file(to, dst, sizeof dst)
+                      ? text_slurp(src, 1 << 20, &n)
+                      : NULL;
+    FILE  *f = data ? fopen(dst, "w") : NULL;
+    if (f) {
+        fwrite(data, 1, n, f);
+        fclose(f);
+    }
+    free(data);
+}
+
+static void fork_chain(struct session *s, const char *parent_id)
+{
+    char parent[CHAIN_ID_MAX];
+    snprintf(s->fork_from, sizeof s->fork_from, "%s", parent_id);
+    chain_new(s->chain, sizeof s->chain);
+    if (chain_find(parent_id, parent, sizeof parent)) {
+        chain_copy(parent, parent_id, s->chain, s->name);
+        copy_history(parent, s->chain);
+    }
+}
+
+static void track_chain(struct session *s)
+{
+    char have[CHAIN_ID_MAX], name[INTERCOM_NAME_MAX];
+    if (!strcmp(s->id, s->fork_from))
+        return;
+    s->fork_from[0] = '\0';
+    if (intercom_name_of(s->id, name, sizeof name) && chain_find(s->id, have, sizeof have)) {
+        snprintf(s->chain, sizeof s->chain, "%s", have);
+        snprintf(s->name, sizeof s->name, "%s", name);
+        return;
+    }
+    chain_add(s->chain, s->name, s->backend, s->cwd, s->id);
 }
 
 static void set_id(struct session *s, const char *id)
@@ -1174,8 +1224,7 @@ static void set_id(struct session *s, const char *id)
     snprintf(s->id, sizeof s->id, "%s", id);
     sessionaddr_write(s->addr, s->id);
     if (changed && !s->remote) {
-        if (!intercom_name_of(s->id, s->name, sizeof s->name))
-            intercom_register(s->id, s->name, s->backend, s->cwd);
+        track_chain(s);
         claim_name(s);
     }
     if (changed) {
@@ -1272,6 +1321,10 @@ static int restart(struct session *s, const char *resume_id)
     s->stall_seen = s->stall_told = 0;
     s->stall_at = 0;
 
+    if (resume_id && s->fork_session && !s->forked && !s->remote) {
+        s->forked = 1;
+        fork_chain(s, resume_id);
+    }
     if (resume_id && resume_id != s->id)
         set_id(s, resume_id);
 
@@ -1738,6 +1791,29 @@ int session_clear(struct session *s)
         set_id(s, id);
     else
         s->id[0] = '\0';
+    return 1;
+}
+
+int session_clear_history(struct session *s)
+{
+    if (!session_clear(s))
+        return 0;
+    chain_cut(s->chain, s->id[0] ? s->id : NULL);
+    return 1;
+}
+
+const char *session_chain(const struct session *s)
+{
+    return s ? s->chain : "";
+}
+
+int session_history_file(const struct session *s, char *out, size_t size)
+{
+    char legacy[4200];
+    if (!history_file(s->chain, out, size))
+        return 0;
+    if (access(out, F_OK) != 0 && history_file(s->name, legacy, sizeof legacy))
+        rename(legacy, out);
     return 1;
 }
 
@@ -2276,15 +2352,10 @@ const char *session_name(const struct session *s)
 
 int session_set_name(struct session *s, const char *name)
 {
-    if (!intercom_name_valid(name) || intercom_name_taken(name, s->id[0] ? s->id : NULL))
+    if (!intercom_name_valid(name) || intercom_name_taken(name, s->chain))
         return 0;
-    char dir[4096], from[4200], to[4200];
-    if (s->name[0] && path_config_subdir(dir, sizeof dir, "history") &&
-        (size_t)snprintf(from, sizeof from, "%s/%s", dir, s->name) < sizeof from &&
-        (size_t)snprintf(to, sizeof to, "%s/%s", dir, name) < sizeof to)
-        rename(from, to);
     snprintf(s->name, sizeof s->name, "%s", name);
-    intercom_register(s->id, s->name, s->backend, s->cwd);
+    chain_set_name(s->chain, s->name);
     publish(s, s->idle_busy ? "working" : "finished");
     return 1;
 }

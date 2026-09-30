@@ -35,7 +35,13 @@ struct item {
 
 static struct item *items;
 static int    nitems, items_cap;
-static unsigned next_id = 1;
+#define ID_BASE (1u << 30)
+
+static unsigned next_id = ID_BASE;
+static unsigned low_id = ID_BASE - 1;
+static int      prepend_from = -1;
+static int      prepend_tail;
+static void   (*on_top)(void);
 
 static char  *open_buf;
 static size_t open_len, open_cap;
@@ -415,6 +421,17 @@ static void rows_set(struct item *it, const char *body, int cols)
     it->nrows = n;
 }
 
+static void trim(void)
+{
+    if (nitems <= ITEMS_KEEP)
+        return;
+    int drop = nitems - ITEMS_KEEP;
+    for (int i = 0; i < drop; i++)
+        item_free(&items[i]);
+    memmove(items, items + drop, (size_t)(nitems - drop) * sizeof *items);
+    nitems -= drop;
+}
+
 static struct item *items_push(void)
 {
     if (in_render)
@@ -431,12 +448,8 @@ static struct item *items_push(void)
     memset(it, 0, sizeof *it);
     it->id = next_id++;
 
-    if (nitems > ITEMS_KEEP) {
-        int drop = nitems - ITEMS_KEEP;
-        for (int i = 0; i < drop; i++)
-            item_free(&items[i]);
-        memmove(items, items + drop, (size_t)(nitems - drop) * sizeof *items);
-        nitems -= drop;
+    if (prepend_from < 0) {
+        trim();
         it = &items[nitems - 1];
     }
     layout_changed();
@@ -1383,7 +1396,7 @@ static void put_row(const char *row, int W)
 
 void viewport_paint(void)
 {
-    if (!active || suspended || held || in_render || deferred || painting)
+    if (!active || suspended || held || in_render || deferred || painting || prepend_from >= 0)
         return;
 
     int H = tty_rows(), W = tty_screen_columns();
@@ -1620,6 +1633,45 @@ void viewport_scroll(int delta)
     dirty = 1;
     layout_changed();
     viewport_paint();
+    if (delta > 0 && on_top && geom_valid && geom_cache.first == 0)
+        on_top();
+}
+
+void viewport_on_top(void (*fn)(void))
+{
+    on_top = fn;
+}
+
+void viewport_prepend_begin(void)
+{
+    if (open_len)
+        open_close(0);
+    prepend_from = nitems;
+    prepend_tail = tail_pad;
+    tail_pad = 0;
+}
+
+void viewport_prepend_end(void)
+{
+    if (prepend_from < 0)
+        return;
+    if (open_len)
+        open_close(0);
+    int from = prepend_from, k = nitems - from;
+    prepend_from = -1;
+    tail_pad = prepend_tail;
+    struct item *moved = k > 0 ? malloc((size_t)k * sizeof *moved) : NULL;
+    if (moved) {
+        memcpy(moved, items + from, (size_t)k * sizeof *moved);
+        memmove(items + k, items, (size_t)from * sizeof *items);
+        memcpy(items, moved, (size_t)k * sizeof *moved);
+        free(moved);
+        for (int i = k - 1; i >= 0; i--)
+            items[i].id = low_id--;
+    }
+    trim();
+    dirty = 1;
+    layout_changed();
 }
 
 int viewport_scrolled(void)

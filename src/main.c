@@ -372,6 +372,7 @@ static void side_tick(void *ud)
 
 static int idle_poll(void *ud)   { (void)ud; return 1; }
 static void replay(void *ud)      { (void)ud; session_replay(workspace_current()); }
+static void load_earlier(void)    { sessionload_earlier(workspace_current()); }
 static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
 static int clicked(void *ud, int row, int col)
 {
@@ -1021,6 +1022,7 @@ int main(int argc, char **argv)
 
     workspace_on_turn(turn_begin);
     prompt_set_replay(prompt, replay, NULL);
+    viewport_on_top(load_earlier);
     prompt_set_blank(prompt, blank_line, NULL);
     vncinset_set_opener(vncsource_open);
     prompt_set_animate(prompt, side_busy, side_tick, NULL);

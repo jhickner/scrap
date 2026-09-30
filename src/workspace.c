@@ -275,17 +275,13 @@ void workspace_history_follow(void)
     static char loaded[64];
     if (!ntabs)
         return;
-    const char *name = session_name(tabs[cur].s);
-    if (!strcmp(name, loaded))
+    const char *chain = session_chain(tabs[cur].s);
+    if (!strcmp(chain, loaded))
         return;
-    snprintf(loaded, sizeof loaded, "%s", name);
+    snprintf(loaded, sizeof loaded, "%s", chain);
 
-    char dir[4096], path[4200];
-    if (*name && path_config_subdir(dir, sizeof dir, "history") &&
-        (size_t)snprintf(path, sizeof path, "%s/%s", dir, name) < sizeof path)
-        prompt_history_open(path);
-    else
-        prompt_history_open(NULL);
+    char path[4200];
+    prompt_history_open(session_history_file(tabs[cur].s, path, sizeof path) ? path : NULL);
 }
 
 static void draft_load(int index)
@@ -297,7 +293,7 @@ void workspace_log_active(void)
 {
     char path[4400];
     if (ntabs && tty_focused() && path_config_file(path, sizeof path, "active"))
-        activelog_add(path, session_name(tabs[cur].s), 0);
+        activelog_add(path, session_chain(tabs[cur].s), 0);
 }
 
 void workspace_show(int index)

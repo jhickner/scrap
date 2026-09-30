@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "chain.h"
 #include "chrome.h"
 #include "hud.h"
 #include "scrollback.h"
@@ -64,7 +65,18 @@ int tabs_parse(char *line, struct tab_args *t)
         else if (!strcmp(arg, "--attach"))
             t->remote = value;
     }
-    return t->remote || (t->backend && *t->backend && t->id && *t->id);
+    if (t->remote || !t->backend || !*t->backend || !t->id || !*t->id)
+        return t->remote != NULL;
+    char                chain[CHAIN_ID_MAX];
+    struct chain_record r;
+    if (chain_find(t->id, chain, sizeof chain) && chain_read(chain, &r)) {
+        if (r.n && !strcmp(r.seg[r.n - 1].backend, t->backend)) {
+            snprintf(t->latest, sizeof t->latest, "%s", r.seg[r.n - 1].id);
+            t->id = t->latest;
+        }
+        chain_free(&r);
+    }
+    return 1;
 }
 
 void tabs_write(FILE *f, const struct session *s, const char *screen)

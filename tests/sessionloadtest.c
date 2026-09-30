@@ -120,6 +120,21 @@ unsigned viewport_item_begin(const struct viewport_entry *entry)
     return 0;
 }
 void viewport_item_end(void) {}
+void viewport_item_persist(unsigned mark, const char *kind, viewport_encode_fn encode)
+{
+    (void)mark;
+    (void)kind;
+    (void)encode;
+}
+void viewport_paint(void) {}
+void viewport_prepend_begin(void) {}
+void viewport_prepend_end(void) {}
+void viewport_scan(unsigned from, viewport_scan_fn fn, void *ctx)
+{
+    (void)from;
+    (void)fn;
+    (void)ctx;
+}
 
 int main(void)
 {

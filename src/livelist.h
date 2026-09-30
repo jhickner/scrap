@@ -13,6 +13,7 @@ struct live_session {
     char cwd[4096];
     char id[128];
     char name[40];
+    char chain[40];
     char parent[128];
     char title[200];
     char status[16];

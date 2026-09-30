@@ -13,6 +13,7 @@
 #include "restart.h"
 #include "session.h"
 #include "sessionview.h"
+#include "stamp.h"
 #include "sidechannel.h"
 #include "status.h"
 #include "relay.h"
@@ -94,6 +95,10 @@ int session_busy(const struct session *s) { return s && (s->busy || s->running);
 int session_compact(const struct session *s) { (void)s; return 0; }
 const char *session_title(const struct session *s) { (void)s; return "tab"; }
 const char *session_name(const struct session *s) { (void)s; return NULL; }
+const char *session_chain(const struct session *s) { (void)s; return ""; }
+int session_history_file(const struct session *s, char *out, size_t size) { (void)s; (void)out; (void)size; return 0; }
+void stamp_show(void) {}
+void stamp_clear(void) {}
 void session_republish(const struct session *s) { (void)s; }
 void activelog_add(const char *path, const char *id, int back) { (void)path; (void)id; (void)back; }
 const char *session_cwd(const struct session *s) { return s && s->cwd ? s->cwd : "."; }

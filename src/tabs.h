@@ -7,6 +7,7 @@ struct session;
 
 struct tab_args {
     const char *screen, *backend, *cwd, *model, *effort, *id, *remote;
+    char        latest[128];
 };
 
 int tabs_parse(char *line, struct tab_args *t);

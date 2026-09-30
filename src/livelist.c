@@ -14,6 +14,7 @@
 
 #include "dispatch.h"
 #include "api.h"
+#include "chain.h"
 #include "im.h"
 #include "parent.h"
 #include "relay.h"
@@ -203,6 +204,7 @@ void livelist_publish(const struct session *s, const char *status)
     cJSON_AddStringToObject(rec, "cwd", session_cwd(s) ? session_cwd(s) : "");
     cJSON_AddStringToObject(rec, "id", id ? id : "");
     cJSON_AddStringToObject(rec, "name", session_name(s));
+    cJSON_AddStringToObject(rec, "chain", session_chain(s));
     char up[128] = "";
     if (id)
         parent_of(id, up, sizeof up);
@@ -336,6 +338,9 @@ static int load_dir(const char *where, int live, struct live_session **out)
         copy_str(v->cwd, sizeof v->cwd, rec, "cwd");
         copy_str(v->id, sizeof v->id, rec, "id");
         copy_str(v->name, sizeof v->name, rec, "name");
+        copy_str(v->chain, sizeof v->chain, rec, "chain");
+        if (!v->chain[0] && v->id[0])
+            chain_find(v->id, v->chain, sizeof v->chain);
         copy_str(v->parent, sizeof v->parent, rec, "parent");
         copy_str(v->title, sizeof v->title, rec, "title");
         copy_str(v->status, sizeof v->status, rec, "status");

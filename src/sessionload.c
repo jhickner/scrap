@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "chain.h"
 #include "grokbottail.h"
 #include "md.h"
 #include "prompt.h"
@@ -383,17 +384,6 @@ static int count_turns(FILE *f, long *from)
     return turns;
 }
 
-int sessionload_into(const struct session *s)
-{
-    if (grokbottail_applies(s))
-        return grokbottail_show((struct session *)s, GROKBOTTAIL_DEFAULT, 0) > 0;
-    const char *id = s ? session_id(s) : NULL;
-    if (!id)
-        return 0;
-    return sessionload_replay(session_backend(s), session_cwd(s), id,
-                              session_thinking(s));
-}
-
 int sessionload_replay(const char *backend, const char *cwd, const char *id,
                        int thinking)
 {
@@ -442,6 +432,82 @@ int sessionload_replay(const char *backend, const char *cwd, const char *id,
     free(line);
     fclose(f);
     ui_flush();
+    return drawn;
+}
+
+static char *divider_encode(void *ud)
+{
+    cJSON *o = cJSON_CreateObject();
+    if (!o)
+        return NULL;
+    cJSON_AddStringToObject(o, "id", ud ? ud : "");
+    char *out = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    return out;
+}
+
+void sessionload_divider(const char *id)
+{
+    char    *copy = strdup(id ? id : "");
+    unsigned mark = viewport_item_begin(&(struct viewport_entry){
+        .ud = copy, .free_ud = free, .pad_before = 1, .pad_after = 1});
+    ui_bar(ui_style(UI_DIM), "new conversation");
+    viewport_item_end();
+    if (copy)
+        viewport_item_persist(mark, SESSIONLOAD_DIVIDER_KIND, divider_encode);
+}
+
+void sessionload_divider_load(const cJSON *st)
+{
+    const char *id = cJSON_GetStringValue(cJSON_GetObjectItem((cJSON *)st, "id"));
+    sessionload_divider(id);
+}
+
+static void top_divider(unsigned mark, const char *kind, void *ud, void *ctx)
+{
+    (void)mark;
+    const char **top = ctx;
+    if (!*top && kind && !strcmp(kind, SESSIONLOAD_DIVIDER_KIND) && ud && *(char *)ud)
+        *top = ud;
+}
+
+int sessionload_earlier(const struct session *s)
+{
+    if (!s || grokbottail_applies(s))
+        return 0;
+    const char *id = session_id(s);
+    char        chain[CHAIN_ID_MAX];
+    const char *top = NULL;
+    viewport_scan(0, top_divider, &top);
+    const char *anchor = top ? top : id;
+
+    struct chain_segment *seg = NULL;
+    int n = anchor && chain_find(anchor, chain, sizeof chain)
+                ? chain_before(chain, anchor, &seg)
+                : 0;
+    int drawn = 0;
+    if (n > 0) {
+        const struct chain_segment *prev = &seg[n - 1];
+        viewport_prepend_begin();
+        drawn = sessionload_replay(prev->backend, prev->cwd, prev->id, session_thinking(s));
+        sessionload_divider(prev->id);
+        viewport_prepend_end();
+        viewport_paint();
+    }
+    free(seg);
+    return drawn;
+}
+
+int sessionload_into(const struct session *s)
+{
+    if (grokbottail_applies(s))
+        return grokbottail_show((struct session *)s, GROKBOTTAIL_DEFAULT, 0) > 0;
+    const char *id = s ? session_id(s) : NULL;
+    int drawn = id ? sessionload_replay(session_backend(s), session_cwd(s), id,
+                                        session_thinking(s))
+                   : 0;
+    if (!drawn)
+        drawn = sessionload_earlier(s);
     return drawn;
 }
 

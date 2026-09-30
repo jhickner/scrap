@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, subprocess, sys
+import json, os, subprocess, sys, uuid
 
 SESSION = "fake-%d" % os.getpid()
 MODEL = "fake"
@@ -9,6 +9,18 @@ def emit(ev):
     ev.setdefault("session_id", SESSION)
     sys.stdout.write(json.dumps(ev) + "\n")
     sys.stdout.flush()
+
+
+def record(role, text):
+    if not os.environ.get("SCRAPRIG_TRANSCRIPTS"):
+        return
+    cwd = os.path.realpath(os.getcwd())
+    folder = "".join(c if c.isalnum() else "-" for c in cwd)
+    root = os.path.join(os.environ["HOME"], ".claude", "projects", folder)
+    os.makedirs(root, exist_ok=True)
+    with open(os.path.join(root, SESSION + ".jsonl"), "a") as f:
+        f.write(json.dumps({"type": role, "sessionId": SESSION,
+                            "message": {"role": role, "content": text}}) + "\n")
 
 
 def load_turns():
@@ -36,6 +48,7 @@ def prompt_text(msg):
 
 
 def main():
+    global SESSION
     turns = load_turns()
     for line in sys.stdin:
         try:
@@ -48,9 +61,16 @@ def main():
                 "subtype": "success", "request_id": msg.get("request_id"),
                 "response": {}}})
         elif kind == "user":
+            text = prompt_text(msg)
             emit({"type": "system", "subtype": "init", "model": MODEL,
                   "cwd": os.getcwd(), "apiKeySource": "none"})
-            text = prompt_text(msg)
+            if text == "/clear":
+                SESSION = "fake-%s" % uuid.uuid4().hex[:8]
+                emit({"type": "result", "subtype": "success", "is_error": False,
+                      "duration_ms": 1, "num_turns": 0, "total_cost_usd": 0,
+                      "usage": {"input_tokens": 0, "output_tokens": 0}})
+                continue
+            record("user", text)
             if text.startswith("run: "):
                 ran = subprocess.run(text[5:], shell=True, capture_output=True, text=True)
                 text = "ran: " + (ran.stdout + ran.stderr).strip()
@@ -62,6 +82,7 @@ def main():
                     {"type": "text", "text": text}]}}]
             for ev in events:
                 emit(ev)
+            record("assistant", text)
             emit({"type": "result", "subtype": "success", "is_error": False,
                   "duration_ms": 1, "num_turns": 1, "total_cost_usd": 0,
                   "usage": {"input_tokens": 1, "output_tokens": 1}})

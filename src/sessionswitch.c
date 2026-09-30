@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "activelog.h"
+#include "chain.h"
 #include "ask.h"
 #include "cmd.h"
 #include "handoff.h"
@@ -109,10 +110,10 @@ static void row_status(struct row *r, const char *status)
     r->role = errored ? UI_ERROR : UI_OK;
 }
 
-static long last_active(const char *name)
+static long last_active(const char *chain)
 {
     char path[4400];
-    return path_config_file(path, sizeof path, "active") ? activelog_last(path, name) : 0;
+    return path_config_file(path, sizeof path, "active") ? activelog_last(path, chain) : 0;
 }
 
 static void tab_rows(struct row *rows, int *n)
@@ -126,7 +127,7 @@ static void tab_rows(struct row *rows, int *n)
         r->at = i;
 
         path_home_relative(session_cwd(s), r->cwd, sizeof r->cwd);
-        r->ts = last_active(session_name(s));
+        r->ts = last_active(session_chain(s));
         snprintf(r->label, sizeof r->label, "%s %s",
                  i == workspace_index() ? "\xe2\x96\xb8" : "\xe2\xa7\x89",
                  title && *title ? title : "untitled");
@@ -174,7 +175,7 @@ static void live_rows(struct row *rows, int *n, const struct live_session *live,
         snprintf(r->id, sizeof r->id, "%s", v->id);
         snprintf(r->parent, sizeof r->parent, "%s", v->parent);
         path_home_relative(v->cwd, r->cwd, sizeof r->cwd);
-        r->ts = last_active(v->name);
+        r->ts = last_active(v->chain);
         snprintf(r->target, sizeof r->target, "%s%s", v->name[0] ? "@" : "",
                  v->name[0] ? v->name : v->id);
         fill_live(r, v);
@@ -518,16 +519,16 @@ static void remote_change(const struct row *r, int closing)
     survey_begin();
 }
 
-static void here_name(char *out, size_t size)
+static void here_chain(char *out, size_t size)
 {
     struct session *s = workspace_current();
-    snprintf(out, size, "%s", s ? session_name(s) : "");
+    snprintf(out, size, "%s", s ? session_chain(s) : "");
 }
 
-static int tab_named(const char *name)
+static int tab_of_chain(const char *chain)
 {
     for (int i = 0; i < workspace_count(); i++)
-        if (!strcmp(session_name(workspace_at(i)), name))
+        if (!strcmp(session_chain(workspace_at(i)), chain))
             return i;
     return -1;
 }
@@ -549,17 +550,17 @@ struct others {
     int                  n;
 };
 
-static const struct live_session *other(const struct others *o, const char *name)
+static const struct live_session *other(const struct others *o, const char *chain)
 {
     for (int i = 0; i < o->n; i++)
-        if (!o->live[i].mine && !strcmp(o->live[i].name, name))
+        if (!o->live[i].mine && !strcmp(o->live[i].chain, chain))
             return &o->live[i];
     return NULL;
 }
 
-static int open_somewhere(const char *name, void *ud)
+static int open_somewhere(const char *chain, void *ud)
 {
-    return tab_named(name) >= 0 || other(ud, name);
+    return tab_of_chain(chain) >= 0 || other(ud, chain);
 }
 
 int sessionswitch_show_open(const char *id)
@@ -582,7 +583,7 @@ int sessionswitch_show_open(const char *id)
 void sessionswitch_step(int dir)
 {
     char path[4400], here[128], id[128];
-    here_name(here, sizeof here);
+    here_chain(here, sizeof here);
     struct others o = {NULL, 0};
     o.n = livelist_load(&o.live);
 
@@ -590,7 +591,7 @@ void sessionswitch_step(int dir)
         activelog_step(path, here, dir,
                        settings_get_int(SETTING_JUMP_LENGTH, JUMP_LENGTH_DEFAULT),
                        open_somewhere, &o, id, sizeof id)) {
-        int at = tab_named(id);
+        int at = tab_of_chain(id);
         if (at >= 0)
             workspace_show(at);
         else

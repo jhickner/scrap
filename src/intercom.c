@@ -13,6 +13,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "chain.h"
 #include "dispatch.h"
 #include "hub.h"
 #include "tailnet.h"
@@ -98,25 +99,52 @@ int intercom_name_valid(const char *name)
     return 1;
 }
 
-int intercom_name_taken(const char *name, const char *id)
+static void migrate(void)
 {
-    char path[4200];
-    if (registry_path(path, sizeof path)) {
-        struct kvlog_map *m = kvlog_fresh(path);
-        for (int i = 0; i < m->n; i++) {
-            char have[INTERCOM_NAME_MAX];
-            field_at(m->ents[i].val, 0, have, sizeof have);
-            if (!strcmp(have, name) && (!id || strcmp(m->ents[i].key, id)))
-                return 1;
-        }
+    char        path[4200], old[4300];
+    struct stat st;
+    if (!registry_path(path, sizeof path) || stat(path, &st) != 0)
+        return;
+    struct kvlog_map *m = kvlog_fresh(path);
+    for (int i = 0; i < m->n; i++) {
+        char name[INTERCOM_NAME_MAX], backend[32], cwd[1024], chain[CHAIN_ID_MAX];
+        if (chain_find(m->ents[i].key, chain, sizeof chain))
+            continue;
+        field_at(m->ents[i].val, 0, name, sizeof name);
+        field_at(m->ents[i].val, 1, backend, sizeof backend);
+        field_at(m->ents[i].val, 2, cwd, sizeof cwd);
+        if (!chain_named(name, chain, sizeof chain))
+            chain_new(chain, sizeof chain);
+        chain_add(chain, name, backend, cwd, m->ents[i].key);
     }
+    snprintf(old, sizeof old, "%s.old", path);
+    rename(path, old);
+}
+
+struct taken {
+    const char *name;
+    const char *chain;
+    int         hit;
+};
+
+static void taken_scan(const char *chain, const struct chain_record *r, void *ctx)
+{
+    struct taken *t = ctx;
+    if (!strcmp(r->name, t->name) && (!t->chain || strcmp(chain, t->chain)))
+        t->hit = 1;
+}
+
+int intercom_name_taken(const char *name, const char *chain)
+{
+    migrate();
+    struct taken t = {name, chain, 0};
+    chain_scan(taken_scan, &t);
     struct live_session *live = NULL;
     int                  n = livelist_load(&live);
-    int                  taken = 0;
-    for (int i = 0; i < n && !taken; i++)
-        taken = !strcmp(live[i].name, name) && (!id || strcmp(live[i].id, id));
+    for (int i = 0; i < n && !t.hit; i++)
+        t.hit = !strcmp(live[i].name, name) && (!chain || strcmp(live[i].chain, chain));
     free(live);
-    return taken;
+    return t.hit;
 }
 
 void intercom_name_new(char *out, size_t size)
@@ -146,23 +174,31 @@ static int suffix_of(const char *name, const char *base, int n)
     return atoi(p);
 }
 
+struct suffix {
+    const char *base;
+    int         n;
+    int         top;
+};
+
+static void suffix_scan(const char *chain, const struct chain_record *r, void *ctx)
+{
+    (void)chain;
+    struct suffix *t = ctx;
+    int            k = suffix_of(r->name, t->base, t->n);
+    if (k > t->top)
+        t->top = k;
+}
+
 void intercom_name_next(const char *base, char *out, size_t size)
 {
     int n = (int)strlen(base);
     while (n > 0 && isdigit((unsigned char)base[n - 1]))
         n--;
 
-    int  top = 1;
-    char path[4200], have[INTERCOM_NAME_MAX];
-    if (registry_path(path, sizeof path)) {
-        struct kvlog_map *m = kvlog_fresh(path);
-        for (int i = 0; i < m->n; i++) {
-            field_at(m->ents[i].val, 0, have, sizeof have);
-            int k = suffix_of(have, base, n);
-            if (k > top)
-                top = k;
-        }
-    }
+    struct suffix t = {base, n, 1};
+    migrate();
+    chain_scan(suffix_scan, &t);
+    int top = t.top;
     struct live_session *live = NULL;
     int                  count = livelist_load(&live);
     for (int i = 0; i < count; i++) {
@@ -182,25 +218,14 @@ void intercom_name_next(const char *base, char *out, size_t size)
 
 int intercom_name_of(const char *id, char *out, size_t size)
 {
-    char path[4200], row[8400];
-    if (!id || !*id || !registry_path(path, sizeof path) ||
-        !kvlog_lookup(path, id, row, sizeof row))
+    char                chain[CHAIN_ID_MAX];
+    struct chain_record r;
+    migrate();
+    if (!chain_find(id, chain, sizeof chain) || !chain_read(chain, &r))
         return 0;
-    field_at(row, 0, out, size);
+    chain_free(&r);
+    snprintf(out, size, "%s", r.name);
     return out[0] != '\0';
-}
-
-void intercom_register(const char *id, const char *name, const char *backend,
-                       const char *cwd)
-{
-    char path[4200], row[8400];
-    if (!id || !*id || !intercom_name_valid(name) || !registry_path(path, sizeof path))
-        return;
-    snprintf(row, sizeof row, "%s\t%s\t%s", name, backend ? backend : "", cwd ? cwd : "");
-    char have[8400];
-    if (kvlog_lookup(path, id, have, sizeof have) && !strcmp(have, row))
-        return;
-    kvlog_append(path, id, row);
 }
 
 char *intercom_note(const char *name)
@@ -334,6 +359,34 @@ static int newest(const void *a, const void *b)
     return x->ts < y->ts ? 1 : x->ts > y->ts ? -1 : 0;
 }
 
+static void add_chain(const char *chain, const struct chain_record *r, void *ctx)
+{
+    (void)chain;
+    if (!r->n)
+        return;
+    const struct chain_segment *last = &r->seg[r->n - 1];
+    struct entry                e = {0};
+    snprintf(e.id, sizeof e.id, "%s", last->id);
+    snprintf(e.name, sizeof e.name, "%s", r->name);
+    snprintf(e.backend, sizeof e.backend, "%s", last->backend);
+    snprintf(e.cwd, sizeof e.cwd, "%s", last->cwd);
+    snprintf(e.status, sizeof e.status, "closed");
+    e.ts = transcript_time(&e);
+    add(ctx, &e);
+}
+
+static int folded(const char *id)
+{
+    char                  chain[CHAIN_ID_MAX];
+    struct chain_segment *seg = NULL;
+    int n = chain_find(id, chain, sizeof chain) ? chain_before(chain, NULL, &seg) : 0;
+    int hit = 0;
+    for (int k = 0; k + 1 < n && !hit; k++)
+        hit = !strcmp(seg[k].id, id);
+    free(seg);
+    return hit;
+}
+
 static void add_past(struct entries *l, const char *cwd)
 {
     for (const char *const *b = backend_names(); *b; b++) {
@@ -342,6 +395,8 @@ static void add_past(struct entries *l, const char *cwd)
         struct past_session *past = NULL;
         int                  count = sessionlist_load(*b, cwd, NULL, &past);
         for (int i = 0; i < count; i++) {
+            if (folded(past[i].id))
+                continue;
             struct entry e = {0};
             snprintf(e.id, sizeof e.id, "%s", past[i].id);
             snprintf(e.backend, sizeof e.backend, "%s", *b);
@@ -368,20 +423,8 @@ static void collect(struct entries *l, const char *cwd, int live_only, int up)
     add_records(l, v, n, 0);
     free(v);
 
-    char path[4200];
-    if (registry_path(path, sizeof path)) {
-        struct kvlog_map *m = kvlog_fresh(path);
-        for (int i = m->n - 1; i >= 0; i--) {
-            struct entry e = {0};
-            snprintf(e.id, sizeof e.id, "%s", m->ents[i].key);
-            field_at(m->ents[i].val, 0, e.name, sizeof e.name);
-            field_at(m->ents[i].val, 1, e.backend, sizeof e.backend);
-            field_at(m->ents[i].val, 2, e.cwd, sizeof e.cwd);
-            snprintf(e.status, sizeof e.status, "closed");
-            e.ts = transcript_time(&e);
-            add(l, &e);
-        }
-    }
+    migrate();
+    chain_scan(add_chain, l);
 
     char dir[4096];
     snprintf(dir, sizeof dir, "%s", cwd ? cwd : "");
@@ -408,10 +451,10 @@ static int contains(const char *hay, const char *needle)
     return !n;
 }
 
-static int transcript_has(const struct entry *e, const char *query)
+static int file_has(const char *backend, const char *cwd, const char *id, const char *query)
 {
     char path[4096];
-    if (!e->id[0] || !sessionload_path(e->backend, e->cwd, e->id, path, sizeof path))
+    if (!id[0] || !sessionload_path(backend, cwd, id, path, sizeof path))
         return 0;
     FILE *f = fopen(path, "rb");
     if (!f)
@@ -424,6 +467,18 @@ static int transcript_has(const struct entry *e, const char *query)
     buf[got] = '\0';
     int found = contains(buf, query);
     free(buf);
+    return found;
+}
+
+static int transcript_has(const struct entry *e, const char *query)
+{
+    char                  chain[CHAIN_ID_MAX];
+    struct chain_segment *seg = NULL;
+    int n = chain_find(e->id, chain, sizeof chain) ? chain_before(chain, e->id, &seg) : 0;
+    int found = file_has(e->backend, e->cwd, e->id, query);
+    for (int k = 0; k < n && !found; k++)
+        found = file_has(seg[k].backend, seg[k].cwd, seg[k].id, query);
+    free(seg);
     return found;
 }
 
@@ -579,6 +634,17 @@ static int cmd_ls(int argc, char **argv)
     return 0;
 }
 
+static void fill_chain(struct transcript *t, const struct entry *e)
+{
+    char                  chain[CHAIN_ID_MAX];
+    struct chain_segment *seg = NULL;
+    int n = chain_find(e->id, chain, sizeof chain) ? chain_before(chain, e->id, &seg) : 0;
+    for (int k = 0; k < n; k++)
+        sessionload_fill(t, seg[k].backend, seg[k].cwd, seg[k].id);
+    free(seg);
+    sessionload_fill(t, e->backend, e->cwd, e->id);
+}
+
 char *intercom_read(const char *target, long turns, long bytes, char *msg, size_t size)
 {
     struct entries l = {0};
@@ -590,7 +656,7 @@ char *intercom_read(const char *target, long turns, long bytes, char *msg, size_
     size_t              len = 0;
     if (!e)
         snprintf(msg, size, "no session matches %s", target);
-    else if (!sessionload_fill(&t, e->backend, e->cwd, e->id) || !t.count)
+    else if (fill_chain(&t, e), !t.count)
         snprintf(msg, size, "no transcript for %s", target);
     else {
         size_t            first = t.count > (size_t)turns ? t.count - (size_t)turns : 0;

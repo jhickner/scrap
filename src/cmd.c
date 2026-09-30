@@ -28,6 +28,7 @@
 #include "sessionlist.h"
 #include "gitinfo.h"
 #include "grokbottail.h"
+#include "block.h"
 #include "sessionload.h"
 #include "sessionview.h"
 #include "viewport.h"
@@ -1122,19 +1123,34 @@ static void do_vnc(struct session *s, const char *arg)
     viewport_touch();
 }
 
-static void do_clear(struct session *s, const char *arg)
+static void clear(struct session *s, int history)
 {
-    (void)arg;
-    if (!session_clear(s)) {
+    char was[128];
+    snprintf(was, sizeof was, "%s", !history && session_id(s) ? session_id(s) : "");
+    if (!(history ? session_clear_history(s) : session_clear(s))) {
         reply_error("could not clear the conversation");
         return;
     }
 
     status_sticky_prompt(NULL);
-    viewport_item_begin(VIEWPORT_ROWS(1, 1));
-    ui_bar(ui_style(UI_DIM), "new conversation");
-    viewport_item_end();
+    if (history) {
+        block_cleared();
+        hud_print(s);
+    }
+    sessionload_divider(was);
     ui_flush();
+}
+
+static void do_clear(struct session *s, const char *arg)
+{
+    (void)arg;
+    clear(s, 0);
+}
+
+static void do_clear_history(struct session *s, const char *arg)
+{
+    (void)arg;
+    clear(s, 1);
 }
 
 static void do_new(struct session *s, const char *arg)
@@ -1579,7 +1595,9 @@ static void do_fork(struct session *s, const char *arg)
 static const struct cmd COMMANDS[] = {
     {"/new", "open a new session, or a new tab running the prompt",
      "[prompt]", CMD_SELF_ECHOES | CMD_LIVE_ARG, do_new},
-    {"/clear", "start a fresh conversation", NULL, 0, do_clear},
+    {"/clear", "start a fresh conversation, keeping the scrollback", NULL, 0, do_clear},
+    {"/clear-history", "start a fresh conversation and clear the scrollback", NULL, 0,
+     do_clear_history},
     {"/model", "switch model", "[name]", 0, do_model},
     {"/effort", "set reasoning/thinking effort", "[level]", 0, do_effort},
     {"/backend", "continue with another backend", "<name>", 0, do_backend},
