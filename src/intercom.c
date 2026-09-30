@@ -579,16 +579,6 @@ static int cmd_ls(int argc, char **argv)
     return 0;
 }
 
-static const struct entry *lookup(struct entries *l, const char *target)
-{
-    char cwd[4096];
-    collect(l, here(cwd, sizeof cwd) ? cwd : NULL, 0, 1);
-    const struct entry *e = resolve(l, target);
-    if (!e)
-        fprintf(stderr, "scrap: no session matches %s\n", target);
-    return e;
-}
-
 char *intercom_read(const char *target, long turns, long bytes, char *msg, size_t size)
 {
     struct entries l = {0};
@@ -873,20 +863,41 @@ static int cmd_open(int argc, char **argv)
     long        pid = owner ? atol(owner) : 0;
     int         inside = pid > 0 && livelist_alive(pid);
 
-    struct entries      l = {0};
-    const struct entry *e = lookup(&l, argv[1]);
+    struct entries l = {0};
+    char           cwd[4096];
+    collect(&l, here(cwd, sizeof cwd) ? cwd : NULL, 0, 1);
+    const struct entry *e = resolve(&l, argv[1]);
+    const char         *name = argv[1] + (argv[1][0] == '@');
     int                 rc = 1;
     char                exe[PATH_MAX];
-    if (e && e->live)
+    if (!e && !intercom_name_valid(name))
+        fprintf(stderr, "scrap: no session matches %s\n", argv[1]);
+    else if (!e && !inside) {
+        if (!hub_self_path(exe, sizeof exe))
+            fprintf(stderr, "scrap: cannot locate the scrap executable\n");
+        else {
+            execl(exe, exe, "--name", name, (char *)NULL);
+            perror("scrap: exec");
+        }
+    } else if (!e) {
+        char   reply[1024] = "";
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "cwd", cwd);
+        cJSON_AddStringToObject(o, "name", name);
+        char done[200];
+        snprintf(done, sizeof done, "created %s in a new tab", argv[1]);
+        rc = request(pid, o, reply, sizeof reply) ? answered(reply, done) : 1;
+        cJSON_Delete(o);
+    } else if (e->live)
         fprintf(stderr, "scrap: %s is already live\n", argv[1]);
-    else if (e && !inside) {
+    else if (!inside) {
         if (!hub_self_path(exe, sizeof exe))
             fprintf(stderr, "scrap: cannot locate the scrap executable\n");
         else {
             execl(exe, exe, "-b", e->backend, "-C", e->cwd, "--session", e->id, (char *)NULL);
             perror("scrap: exec");
         }
-    } else if (e) {
+    } else {
         char   reply[1024] = "";
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "backend", e->backend);

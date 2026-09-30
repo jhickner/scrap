@@ -841,8 +841,12 @@ int main(int argc, char **argv)
     }
 
     if (name && intercom_name_taken(name, NULL)) {
-        fprintf(stderr, APP_NAME ": the name '%s' is taken\n", name);
-        return 1;
+        if (optind < argc || dir || instance_arg || attach_arg) {
+            fprintf(stderr, APP_NAME ": the name '%s' is taken\n", name);
+            return 1;
+        }
+        char *open_argv[] = { "open", (char *)name, NULL };
+        return intercom_main(2, open_argv);
     }
 
     if (!pin_backend)

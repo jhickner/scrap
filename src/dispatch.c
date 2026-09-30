@@ -403,6 +403,8 @@ static void serve(int fd, const char *text)
         cJSON_Delete(o);
         return;
     }
+    if (field(o, "name"))
+        session_set_name(workspace_at(at), field(o, "name"));
 
     if (session_id(workspace_at(at)))
         reply_spawn(fd, workspace_at(at));
