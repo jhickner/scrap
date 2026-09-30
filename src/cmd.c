@@ -40,6 +40,7 @@
 #include "text.h"
 #include "tg.h"
 #include "status.h"
+#include "instance.h"
 #include "ui.h"
 #include "vendor/agents/backend.h"
 #include "vncinset.h"
@@ -1460,6 +1461,46 @@ static void do_restart(struct session *s, const char *arg)
     restart_request();
 }
 
+static void list_instances(void)
+{
+    char names[2048];
+    if (instance_names(names, sizeof names))
+        reply_note("saved instances: %s", names);
+    else
+        reply_note("no saved instances");
+}
+
+static void do_save(struct session *s, const char *arg)
+{
+    (void)s;
+    if (!arg || !*arg) {
+        list_instances();
+        return;
+    }
+    if (!intercom_name_valid(arg)) {
+        reply_error("an instance name is letters, digits, - and _");
+        return;
+    }
+    int n = instance_save(arg);
+    if (n > 0)
+        reply_note("saved %d tab%s as %s", n, n == 1 ? "" : "s", arg);
+    else if (n == 0)
+        reply_error("no tab has a conversation to save yet");
+    else
+        reply_error("could not write instance %s", arg);
+}
+
+static void do_load(struct session *s, const char *arg)
+{
+    (void)s;
+    if (!arg || !*arg) {
+        list_instances();
+        return;
+    }
+    if (sessionfork_instance(arg))
+        reply_note("opening %s in a new window", arg);
+}
+
 static void do_fork_h(struct session *s, const char *arg)
 {
     (void)arg;
@@ -1579,6 +1620,9 @@ static const struct cmd COMMANDS[] = {
     {"/vnc", "show the bot's desktop in an inset", "[left|right|off|test|size <percent>]",
      CMD_LIVE, do_vnc},
     {"/copy", "copy last response to clipboard", NULL, CMD_LIVE, do_copy},
+    {"/save", "save this window's tabs as a named instance, or list saved ones", "[name]",
+     CMD_LIVE, do_save},
+    {"/load", "open a saved instance in a new tmux window", "[name]", CMD_LIVE, do_load},
     {"/restart", "reload the scrap binary, keeping this conversation", NULL, 0,
      do_restart},
     {"/help", "show this help", NULL, CMD_LIVE, do_help},

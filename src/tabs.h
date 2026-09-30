@@ -1,7 +1,17 @@
 #ifndef TABS_H
 #define TABS_H
 
+#include <stdio.h>
+
 struct session;
+
+struct tab_args {
+    const char *screen, *backend, *cwd, *model, *effort, *id, *remote;
+};
+
+int tabs_parse(char *line, struct tab_args *t);
+
+void tabs_write(FILE *f, const struct session *s, const char *screen);
 
 void tabs_prepare(const char *path);
 

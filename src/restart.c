@@ -12,6 +12,7 @@
 #include "hud.h"
 #include "session.h"
 #include "sessionfork.h"
+#include "tabs.h"
 #include "tty.h"
 #include "ui.h"
 #include "viewport.h"
@@ -167,13 +168,7 @@ static int tabs_dump(const struct session *front, const char *path)
         if (!tmp_path(screen, sizeof screen, "tab", i) || !workspace_dump(i, screen))
             screen[0] = '\0';
 
-        char *args[SESSION_ARGV_MAX];
-        int   n = session_argv(s, args, COUNT(args),
-                               SESSION_ARGV_CWD | SESSION_ARGV_RESUME);
-        fputs(screen, f);
-        for (int a = 0; a < n; a++)
-            fprintf(f, "\t%s", args[a]);
-        fputc('\n', f);
+        tabs_write(f, s, screen);
         wrote = 1;
     }
     if (f && fclose(f) != 0)

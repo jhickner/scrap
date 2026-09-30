@@ -39,6 +39,44 @@ struct pending_tab {
 static struct pending_tab pending_tabs[WORKSPACE_MAX];
 static int               npending_tabs;
 
+int tabs_parse(char *line, struct tab_args *t)
+{
+    memset(t, 0, sizeof *t);
+    line[strcspn(line, "\n")] = '\0';
+    char *rest = line;
+    t->screen = strsep(&rest, "\t");
+    for (char *arg; (arg = strsep(&rest, "\t"));) {
+        if (arg[0] != '-' || !strcmp(arg, "-s"))
+            continue;
+        char *value = strsep(&rest, "\t");
+        if (!value)
+            break;
+        if (!strcmp(arg, "-b"))
+            t->backend = value;
+        else if (!strcmp(arg, "-C"))
+            t->cwd = value;
+        else if (!strcmp(arg, "-m"))
+            t->model = value;
+        else if (!strcmp(arg, "-e"))
+            t->effort = value;
+        else if (!strcmp(arg, "--session"))
+            t->id = value;
+        else if (!strcmp(arg, "--attach"))
+            t->remote = value;
+    }
+    return t->remote || (t->backend && *t->backend && t->id && *t->id);
+}
+
+void tabs_write(FILE *f, const struct session *s, const char *screen)
+{
+    char *args[SESSION_ARGV_MAX];
+    int   n = session_argv(s, args, SESSION_ARGV_MAX, SESSION_ARGV_CWD | SESSION_ARGV_RESUME);
+    fputs(screen, f);
+    for (int a = 0; a < n; a++)
+        fprintf(f, "\t%s", args[a]);
+    fputc('\n', f);
+}
+
 void tabs_prepare(const char *path)
 {
     FILE *f = fopen(path, "r");
@@ -47,42 +85,19 @@ void tabs_prepare(const char *path)
 
     char line[6144];
     while (npending_tabs < WORKSPACE_MAX - 1 && fgets(line, sizeof line, f)) {
-        line[strcspn(line, "\n")] = '\0';
-        char       *rest = line;
-        const char *screen = strsep(&rest, "\t");
-        const char *backend = NULL, *cwd = NULL, *model = NULL, *effort = NULL;
-        const char *id = NULL, *remote = NULL;
-        for (char *arg; (arg = strsep(&rest, "\t"));) {
-            if (arg[0] != '-' || !strcmp(arg, "-s"))
-                continue;
-            char *value = strsep(&rest, "\t");
-            if (!value)
-                break;
-            if (!strcmp(arg, "-b"))
-                backend = value;
-            else if (!strcmp(arg, "-C"))
-                cwd = value;
-            else if (!strcmp(arg, "-m"))
-                model = value;
-            else if (!strcmp(arg, "-e"))
-                effort = value;
-            else if (!strcmp(arg, "--session"))
-                id = value;
-            else if (!strcmp(arg, "--attach"))
-                remote = value;
-        }
-        if (!remote && (!backend || !*backend || !id || !*id))
+        struct tab_args t;
+        if (!tabs_parse(line, &t))
             continue;
 
-        struct session *s = remote ? workspace_prepare("claude", NULL, NULL, cwd, NULL)
-                                   : workspace_prepare(backend, model, effort, cwd, id);
-        if (s && remote && !session_set_remote(s, remote)) {
+        struct session *s = t.remote ? workspace_prepare("claude", NULL, NULL, t.cwd, NULL)
+                                     : workspace_prepare(t.backend, t.model, t.effort, t.cwd, t.id);
+        if (s && t.remote && !session_set_remote(s, t.remote)) {
             session_free(s);
             s = NULL;
         }
         if (!s)
             continue;
-        tabs_queue(s, screen);
+        tabs_queue(s, t.screen);
     }
     fclose(f);
 }

@@ -16,6 +16,8 @@ enum fork_where {
 
 int sessionfork_run(const struct session *s, enum fork_where where);
 
+int sessionfork_instance(const char *name);
+
 int sessionfork_shell(const struct session *s, enum fork_where where, int quiet);
 
 char *sessionfork_exit_note(const struct session *s);

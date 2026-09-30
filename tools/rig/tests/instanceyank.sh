@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+R=./scraprig
+share=$(mktemp -d /tmp/scraprig-share.XXXXXX)
+a=$($R start --fake --share "$share")
+b=""
+trap '$R stop $a; [ -z "$b" ] || $R stop $b; rm -rf "$share"' EXIT
+$R wait $a '❯'
+$R say $a 'first tab' 'echo: first tab'
+$R say $a '/new second tab' 'echo: second tab'
+names=$($R snap $a | head -4 | grep -Eo '@[a-z]+(-[0-9]+)?')
+$R say $a '/save work' 'saved 2 tabs as work'
+b=$($R start --fake --share "$share" -- --instance work)
+for name in $names; do $R wait $b "$name"; done
+[ "$($R tab $b)" = "$(head -1 <<<"$names")" ]
+live=$($R cli $b ls --live)
+for name in $names; do
+    [ "$(grep -c "$name" <<<"$live")" = 1 ] || { echo "instanceyank: $name open more than once" >&2; echo "$live" >&2; exit 1; }
+done

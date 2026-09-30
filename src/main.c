@@ -35,6 +35,7 @@
 #include "sessionfork.h"
 #include "sessionload.h"
 #include "hub.h"
+#include "instance.h"
 #include "job.h"
 #include "sessionpresent.h"
 #include "sessionswitch.h"
@@ -165,6 +166,7 @@ static void usage(void)
             "  --fork     with --session: branch off it instead of writing back to it\n"
             "  --restore f  take over the screen from a restarting scrap (used by /restart)\n"
             "  --tabs f   reopen the sessions a restarting scrap was holding (used by /restart)\n"
+            "  --instance x  reopen the tabs saved with /save x\n"
             "  --attach machine:@name   open a live session from another window or machine\n"
             "  -h         this help\n"
             "  -V, --version  print the version and exit\n"
@@ -399,10 +401,8 @@ static void switcher(void *ud)
 static void focus_changed(int on)
 {
     voice_arm(on);
-    if (on) {
+    if (on)
         workspace_log_active();
-        stamp_clear();
-    }
 }
 
 static void step(void *ud, int dir)
@@ -638,6 +638,7 @@ int main(int argc, char **argv)
         {"fork",    no_argument,       NULL, 'F'},
         {"restore", required_argument, NULL, 'R'},
         {"tabs",    required_argument, NULL, 'B'},
+        {"instance", required_argument, NULL, 'O'},
         {"attach",  required_argument, NULL, 'Y'},
         {"telegram", no_argument,      NULL, 'T'},
         {"relay",    no_argument,      NULL, 'W'},
@@ -658,6 +659,7 @@ int main(int argc, char **argv)
     const char *session_arg = NULL;
     const char *restore_arg = NULL;
     const char *tabs_arg = NULL;
+    const char *instance_arg = NULL;
     const char *attach_arg = NULL;
     const char *state_arg = NULL;
     int telegram = 0;
@@ -683,6 +685,7 @@ int main(int argc, char **argv)
         case 'F': fork_session = 1; break;
         case 'R': restore_arg = optarg; break;
         case 'B': tabs_arg = optarg; break;
+        case 'O': instance_arg = optarg; break;
         case 'Y': attach_arg = optarg; break;
         case 'T': telegram = 1; break;
         case 'W': relay = 1; break;
@@ -712,6 +715,38 @@ int main(int argc, char **argv)
         }
         if (!state_enter(state_arg))
             return 1;
+    }
+
+    char instance_front[6144], instance_tabs[4200], instance_held[1024];
+    const char *front_screen = NULL;
+    if (instance_arg) {
+        if (session_arg || resume || name || tabs_arg || restore_arg || attach_arg ||
+            optind < argc) {
+            fprintf(stderr, APP_NAME ": --instance takes no prompt and does not combine with "
+                            "--session, --resume, --name, --attach\n");
+            return 2;
+        }
+        struct tab_args t;
+        if (!instance_open(instance_arg, instance_front, sizeof instance_front, &t,
+                           instance_tabs, sizeof instance_tabs, instance_held,
+                           sizeof instance_held)) {
+            fprintf(stderr, APP_NAME ": no saved instance '%s'%s%s\n", instance_arg,
+                    instance_held[0] ? "; held by another window: " : "", instance_held);
+            return 1;
+        }
+        if (t.remote) {
+            attach_arg = t.remote;
+        } else {
+            backend = t.backend;
+            pin_backend = 1;
+            model = t.model;
+            effort = t.effort;
+            session_arg = t.id;
+        }
+        dir = t.cwd;
+        front_screen = t.screen && *t.screen ? t.screen : NULL;
+        if (instance_tabs[0])
+            tabs_arg = instance_tabs;
     }
 
     if (!backend_known(backend)) {
@@ -981,15 +1016,29 @@ int main(int argc, char **argv)
     if (restore_arg)
         hud_refresh(session);
 
-    if (!resume || !cmd_resume(session))
+    if (front_screen) {
+        int shown = scrollback_restore(front_screen);
+        unlink(front_screen);
+        if (!shown)
+            front_screen = NULL;
+    }
+    if (front_screen)
+        hud_refresh(session);
+    else if (!resume || !cmd_resume(session))
         hud_print_launch(session);
+
+    if (instance_arg && instance_held[0]) {
+        char alert[1100];
+        snprintf(alert, sizeof alert, "held by another window, not reopened: %s", instance_held);
+        status_set_alert(alert);
+    }
 
     if (tabs_arg) {
         unlink(tabs_arg);
         tabs_admit(0);
     }
 
-    if (!resume && !restore_arg && (session_arg || grokbottail_applies(session)))
+    if (!resume && !restore_arg && !front_screen && (session_arg || grokbottail_applies(session)))
         sessionload_into(session);
     if (attach_arg && !restore_arg)
         sessionpresent_replay(session_transcript(session));

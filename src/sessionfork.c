@@ -117,6 +117,24 @@ int sessionfork_run(const struct session *s, enum fork_where where)
     return 1;
 }
 
+int sessionfork_instance(const char *name)
+{
+    if (!getenv("TMUX")) {
+        ui_error("opening an instance needs tmux");
+        ui_put("\n");
+        ui_flush();
+        return 0;
+    }
+    char *tmux[] = {"tmux", "new-window", program, "--instance", (char *)name, NULL};
+    if (run(tmux, NULL) != 0) {
+        ui_error("tmux would not open the window");
+        ui_put("\n");
+        ui_flush();
+        return 0;
+    }
+    return 1;
+}
+
 int sessionfork_shell(const struct session *s, enum fork_where where, int quiet)
 {
     if (!getenv("TMUX")) {
