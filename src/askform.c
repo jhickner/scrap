@@ -60,12 +60,38 @@ static const char *item_title(const struct form *f, int i)
     return i < f->b->n ? f->b->q[i].text : "reply instead";
 }
 
+static char *option_text(const struct askq *q, int j, size_t *split)
+{
+    const char *label = q->label[j];
+    const char *detail = q->detail[j] ? q->detail[j] : "";
+    size_t      n = strlen(label) + strlen(detail) + 3;
+    char       *s = malloc(n);
+    if (s)
+        snprintf(s, n, *detail ? "%s  %s" : "%s", label, detail);
+    *split = strlen(label);
+    return s;
+}
+
+static size_t option_budget(void) { return (size_t)body_width() - 2; }
+
+static int option_rows(const struct form *f, int i)
+{
+    int rows = 0;
+    for (int j = 0; j < nopt(f, i); j++) {
+        size_t split;
+        char  *s = option_text(&f->b->q[i], j, &split);
+        rows += s ? wrapped_rows(s, option_budget()) : 1;
+        free(s);
+    }
+    return rows;
+}
+
 static int item_rows(struct form *f, int i)
 {
     if (i > f->b->n)
         return 1;
     replbox_width(&f->box[i], body_width());
-    return wrapped_rows(item_title(f, i), (size_t)body_width()) + nopt(f, i) +
+    return wrapped_rows(item_title(f, i), (size_t)body_width()) + option_rows(f, i) +
            replbox_wants(&f->box[i]);
 }
 
@@ -125,27 +151,40 @@ static void paint_title(struct form *f, int i)
 static void paint_options(struct form *f, int i)
 {
     const struct askq *q = &f->b->q[i];
-    size_t             budget = (size_t)body_width() - 2;
 
-    for (int j = 0; j < q->nopt && row(f); j++) {
-        int on = f->choice[i] == j;
-        int here = f->focus == i && f->opt == j;
-        cursor(here);
-        ui_esc(ui_style(on ? UI_ACCENT : UI_DIM));
-        ui_put(on ? "\xe2\x97\x8f " : "\xe2\x97\x8b ");
-        ui_esc(ui_style(on || here ? UI_ACCENT : UI_TEXT));
-        size_t fit = ui_fit_visible(q->label[j], strlen(q->label[j]), budget - 2);
-        ui_putn(q->label[j], fit);
-        ui_esc(ui_style(UI_RESET));
-        size_t used = ui_cells_n(q->label[j], fit) + 2;
-        if (q->detail[j] && used + 4 < budget) {
+    for (int j = 0; j < q->nopt && f->left > 0; j++) {
+        int    on = f->choice[i] == j;
+        int    here = f->focus == i && f->opt == j;
+        size_t split;
+        char  *text = option_text(q, j, &split);
+        if (!text)
+            return;
+        size_t n = strlen(text), off = 0;
+        int    first = 1;
+
+        while ((off < n || first) && row(f)) {
+            size_t skip = 0;
+            size_t cut = ui_wrap_row(text + off, n - off, option_budget(), &skip, NULL);
+            if (first) {
+                cursor(here);
+                ui_esc(ui_style(on ? UI_ACCENT : UI_DIM));
+                ui_put(on ? "\xe2\x97\x8f " : "\xe2\x97\x8b ");
+            } else {
+                ui_pad(FORM_BODY + 2);
+            }
+            size_t head = off < split ? (split - off < cut ? split - off : cut) : 0;
+            ui_esc(ui_style(on || here ? UI_ACCENT : UI_TEXT));
+            ui_putn(text + off, head);
             ui_esc(ui_style(UI_DIM));
-            ui_put("  ");
-            ui_putn(q->detail[j],
-                    ui_fit_visible(q->detail[j], strlen(q->detail[j]), budget - used - 2));
+            ui_putn(text + off + head, cut - head);
             ui_esc(ui_style(UI_RESET));
+            end_row();
+            if (!cut && !skip)
+                break;
+            off += cut + skip < n - off ? cut + skip : n - off;
+            first = 0;
         }
-        end_row();
+        free(text);
     }
 }
 
