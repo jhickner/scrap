@@ -44,7 +44,7 @@ static int file_in_dispatch(const char *leaf, char *out, size_t size)
     return dispatch_dir(dir, sizeof dir) && (size_t)snprintf(out, size, "%s/%s", dir, leaf) < size;
 }
 
-static int self_path(char *out, size_t size)
+int hub_self_path(char *out, size_t size)
 {
     char raw[PATH_MAX];
 #ifdef __APPLE__
@@ -65,7 +65,7 @@ void hub_ensure(void)
 {
     char lock[4400], log[4400], exe[PATH_MAX];
     if (!file_in_dispatch("hub.lock", lock, sizeof lock) ||
-        !file_in_dispatch("hub.log", log, sizeof log) || !self_path(exe, sizeof exe))
+        !file_in_dispatch("hub.log", log, sizeof log) || !hub_self_path(exe, sizeof exe))
         return;
     int fd = open(lock, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
     if (fd < 0)
@@ -284,7 +284,7 @@ static void on_reload(int sig)
 int hub_main(int argc, char **argv)
 {
     char lock[4400], exe[PATH_MAX];
-    if (!file_in_dispatch("hub.lock", lock, sizeof lock) || !self_path(exe, sizeof exe))
+    if (!file_in_dispatch("hub.lock", lock, sizeof lock) || !hub_self_path(exe, sizeof exe))
         return 1;
     int lfd = -1, lock_fd;
     if (argc == 3 && !strcmp(argv[1], "--lock"))

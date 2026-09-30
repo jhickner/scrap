@@ -1,6 +1,7 @@
 #include "intercom.h"
 
 #include <ctype.h>
+#include <limits.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +14,7 @@
 #include <unistd.h>
 
 #include "dispatch.h"
+#include "hub.h"
 #include "tailnet.h"
 #include "kvlog.h"
 #include "livelist.h"
@@ -869,17 +871,22 @@ static int cmd_open(int argc, char **argv)
     }
     const char *owner = getenv("SCRAP_PID");
     long        pid = owner ? atol(owner) : 0;
-    if (pid <= 0 || !livelist_alive(pid)) {
-        fprintf(stderr, "scrap: scrap open runs inside a scrap session\n");
-        return 1;
-    }
+    int         inside = pid > 0 && livelist_alive(pid);
 
     struct entries      l = {0};
     const struct entry *e = lookup(&l, argv[1]);
     int                 rc = 1;
+    char                exe[PATH_MAX];
     if (e && e->live)
         fprintf(stderr, "scrap: %s is already live\n", argv[1]);
-    else if (e) {
+    else if (e && !inside) {
+        if (!hub_self_path(exe, sizeof exe))
+            fprintf(stderr, "scrap: cannot locate the scrap executable\n");
+        else {
+            execl(exe, exe, "-b", e->backend, "-C", e->cwd, "--session", e->id, (char *)NULL);
+            perror("scrap: exec");
+        }
+    } else if (e) {
         char   reply[1024] = "";
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "backend", e->backend);

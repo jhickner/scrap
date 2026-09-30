@@ -177,7 +177,7 @@ static void usage(void)
             "  " APP_NAME " ls [--live] [--net] [--cwd DIR] [QUERY]   list sessions, newest first\n"
             "  " APP_NAME " read TARGET [-n TURNS] [--bytes N]   print a session's last turns\n"
             "  " APP_NAME " send TARGET TEXT   message a live session\n"
-            "  " APP_NAME " open TARGET   resume a past session in a new tab\n"
+            "  " APP_NAME " open TARGET   resume a past session in a new tab, or here outside scrap\n"
             "  " APP_NAME " attach TARGET   stream a live session as JSON lines; stdin lines are prompts\n"
             "  " APP_NAME " job ls|check NAME   scheduled jobs; " APP_NAME " job prints the file format\n"
             "  " APP_NAME " hub   the per-machine process for the network broker and jobs (started on demand)\n"
