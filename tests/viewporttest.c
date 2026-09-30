@@ -859,6 +859,26 @@ static void check_owed_pad(struct screen *s)
         fail("a padless item's own blank is hidden");
 }
 
+static void check_prepend_pad(struct screen *s)
+{
+    viewport_clear();
+    set_size(80, 24);
+
+    viewport_item_begin(&(struct viewport_entry){.pad_before = 1});
+    ui_put("LATER\n");
+    viewport_item_end();
+    viewport_prepend_begin();
+    viewport_item_begin(&(struct viewport_entry){.pad_before = 1, .pad_after = 1});
+    ui_put("EARLIER\n");
+    viewport_item_end();
+    viewport_prepend_end();
+
+    refresh(s, 80, 24);
+    int e = row_with(s, "EARLIER");
+    if (e < 0 || !row_blank(s, e + 1) || row_with(s, "LATER") != e + 2)
+        fail("a prepended item's pad_after is kept at the seam");
+}
+
 int main(void)
 {
     set_size(80, 24);
@@ -905,6 +925,7 @@ int main(void)
     check_dump();
     check_suspended_mark();
     check_owed_pad(&s);
+    check_prepend_pad(&s);
 
     fflush(stdout);
     if (failures)

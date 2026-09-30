@@ -1657,6 +1657,9 @@ void viewport_prepend_end(void)
         return;
     if (open_len)
         open_close(0);
+    if (prepend_from > 0 && nitems > prepend_from &&
+        !(items[0].nrows && row_is_blank(items[0].rows[0], strlen(items[0].rows[0]))))
+        pad_seam(0, 0);
     int from = prepend_from, k = nitems - from;
     prepend_from = -1;
     tail_pad = prepend_tail;
