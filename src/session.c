@@ -922,9 +922,17 @@ static char *session_system(const struct session *s, const char *handoff)
         "its contents. The user can open it in a full-screen pager; markdown is "
         "rendered.";
 
+    const char *ask =
+        "When you need the user to answer questions before you continue, end the "
+        "reply with an `@ask` line followed by a numbered list of questions, each "
+        "optionally followed by `- option` lines (`- option \xe2\x80\x94 description` "
+        "to explain one), with no code fence. The user fills in a form and every "
+        "question also takes a typed answer, so omit options for open questions. "
+        "Their answers arrive as the next message, numbered to match.";
+
     char       *intercom = intercom_note(s->name);
-    const char *parts[] = {note, view, intercom, s->system_extra, handoff};
-    char       *joined = join_system(parts, 5);
+    const char *parts[] = {note, view, ask, intercom, s->system_extra, handoff};
+    char       *joined = join_system(parts, 6);
     free(intercom);
     return joined;
 }
@@ -2538,6 +2546,7 @@ const char *session_last_error(const struct session *s)
     return s && s->agent ? s->agent->last_error(s->agent) : NULL;
 }
 const char *session_last_reply(const struct session *s) { return s->last_reply; }
+const char *session_last_block(const struct session *s) { return s->last_block; }
 const char *session_prompt(const struct session *s) { return s ? s->prompt : NULL; }
 double session_turn_started(const struct session *s) { return s ? s->started : 0; }
 const char *session_failed_prompt(const struct session *s)

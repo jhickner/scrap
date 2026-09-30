@@ -230,6 +230,7 @@ static inline int scrap_argv(char **out, int max, unsigned what,
 
 int session_argv(const struct session *s, char **out, int max, unsigned what);
 const char *session_last_reply(const struct session *s);
+const char *session_last_block(const struct session *s);
 
 const char *session_prompt(const struct session *s);
 double      session_turn_started(const struct session *s);

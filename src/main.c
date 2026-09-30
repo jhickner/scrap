@@ -8,6 +8,8 @@
 
 #include "agenttabs.h"
 #include "app.h"
+#include "askblock.h"
+#include "askform.h"
 #include "bash.h"
 #include "chrome.h"
 #include "newsession.h"
@@ -460,10 +462,45 @@ static void splitter(void *ud, int quiet)
     sessionfork_shell(workspace_current(), FORK_SPLIT_H, quiet);
 }
 
+static struct askblock *asked;
+static struct session  *asked_by;
+
+static void drop_asked(void)
+{
+    askblock_free(asked);
+    asked = NULL;
+    asked_by = NULL;
+}
+
+static int ask_ready(void)
+{
+    if (!asked)
+        return 0;
+    struct session *s = workspace_current();
+    if (s != asked_by || session_turn_running(s) || workspace_queued(workspace_index())) {
+        drop_asked();
+        return 0;
+    }
+    return 1;
+}
+
+static void ask_run_form(void)
+{
+    char *answer = askform_run(asked);
+    drop_asked();
+    if (answer && *answer) {
+        prompt_echo_message(answer);
+        workspace_send(workspace_index(), answer, answer);
+    }
+    free(answer);
+}
+
 static int takeover_pending(void *ud)
 {
     (void)ud;
     if (tty_quit_requested())
+        return 1;
+    if (ask_ready())
         return 1;
     return restart_wanted() && handoff_wanted();
 }
@@ -472,6 +509,10 @@ static void takeover_run(void *ud)
 {
     if (tty_quit_requested()) {
         prompt_stop(ud);
+        return;
+    }
+    if (ask_ready()) {
+        ask_run_form();
         return;
     }
     sessionswitch_serve_request();
@@ -564,6 +605,13 @@ static char *serve_extra(const cJSON *o, int fd, int *kept)
 
 static void turn_done(struct session *s)
 {
+    if (s == workspace_current()) {
+        drop_asked();
+        if (!session_last_result(s)->interrupted) {
+            asked = askblock_parse(session_last_block(s));
+            asked_by = asked ? s : NULL;
+        }
+    }
     api_turn_done(s);
     stream_turn_done(s);
     voice_turn_done(s);
