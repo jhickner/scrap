@@ -746,8 +746,8 @@ static void decode_csi(tty_event *ev, const int *params, int nparams, int final,
     int ctrl_or_alt = bits & (2 | 4 | 8);
 
     switch (final) {
-    case 'A': emit(ev, TK_UP); return;
-    case 'B': emit(ev, TK_DOWN); return;
+    case 'A': emit(ev, bits == 1 ? TK_PREV_TAB : TK_UP); return;
+    case 'B': emit(ev, bits == 1 ? TK_NEXT_TAB : TK_DOWN); return;
     case 'C': emit(ev, ctrl_or_alt ? TK_WORD_RIGHT : TK_RIGHT); return;
     case 'D': emit(ev, ctrl_or_alt ? TK_WORD_LEFT : TK_LEFT); return;
     case 'H': emit(ev, TK_HOME); return;

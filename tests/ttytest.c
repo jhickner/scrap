@@ -223,6 +223,9 @@ static void modified_keys(int w)
     KEY("\x1b[13;65u", TK_ENTER);
     KEY("\x1b[9;2u", TK_PREV_TAB);
     KEY("\x1b[27;2;9~", TK_PREV_TAB);
+    KEY("\x1b[1;2A", TK_PREV_TAB);
+    KEY("\x1b[1;2B", TK_NEXT_TAB);
+    KEY("\x1b[1;5A", TK_UP);
     KEY("\x1b[98;3u", TK_WORD_LEFT);
     KEY("\x1b[27;3;102~", TK_WORD_RIGHT);
     KEY("\x1b[1;70D", TK_WORD_LEFT);
