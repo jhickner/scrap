@@ -780,7 +780,7 @@ static enum key_result edit_key(struct prompt *p, tty_event *ev)
 
 static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
 {
-    if (ev->key != TK_RESIZE && ev->key != TK_FOCUS_OUT)
+    if (ev->key != TK_RESIZE && ev->key != TK_FOCUS_OUT && ev->key != TK_FOCUS_IN)
         stamp_clear();
     switch (ev->key) {
     case TK_EOF:
