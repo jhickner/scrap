@@ -180,7 +180,7 @@ static void job_run(const char *exe, const struct job *j, time_t now)
     }
     argv[n++] = "-C";
     argv[n++] = dir;
-    argv[n++] = "--";
+    argv[n++] = "-p";
     argv[n++] = j->prompt;
     argv[n] = NULL;
     stamp(now, when, sizeof when);

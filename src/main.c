@@ -149,12 +149,13 @@ static void usage(void)
     char choices[128];
     backend_choices(choices, sizeof choices);
     fprintf(stderr,
-            "usage: " APP_NAME " [-b backend] [-m model] [-e effort] [-C dir] [-s] [-r] [prompt...]\n"
+            "usage: " APP_NAME " [-b backend] [-m model] [-e effort] [-C dir] [-s] [-r] [-p prompt]\n"
             "\n"
             "  -b name    agent CLI to drive: %s (default: the last /default pick, else claude)\n"
             "  -m model   model to run (default: the last /model pick, else the CLI's own)\n"
             "  -e effort  reasoning/thinking effort (default: the last /effort pick, else the CLI's own)\n"
             "  -C dir     working directory for the agent's tools\n"
+            "  -p text    --prompt: answer text and exit\n"
             "  -s         safe mode: skip skills, CLAUDE.md, MCP servers, hooks\n"
             "  --name x   session name (default: a generated one)\n"
             "  --telegram also answer over Telegram, in the same session\n"
@@ -181,8 +182,7 @@ static void usage(void)
             "  " APP_NAME " attach TARGET   stream a live session as JSON lines; stdin lines are prompts\n"
             "  " APP_NAME " job ls|check NAME   scheduled jobs; " APP_NAME " job prints the file format\n"
             "  " APP_NAME " hub   the per-machine process for the network broker and jobs (started on demand)\n"
-            "\n"
-            "With a prompt on the command line, answer it and exit.\n",
+            ,
             choices);
 }
 
@@ -695,6 +695,7 @@ int main(int argc, char **argv)
         {"api",      no_argument,      NULL, 'A'},
         {"connect", required_argument, NULL, 'N'},
         {"state",   required_argument, NULL, 'X'},
+        {"prompt",  required_argument, NULL, 'p'},
         {"help",    no_argument,       NULL, 'h'},
         {"version", no_argument,       NULL, 'V'},
         {NULL,      0,                 NULL, 0},
@@ -711,6 +712,7 @@ int main(int argc, char **argv)
     const char *instance_arg = NULL;
     const char *attach_arg = NULL;
     const char *state_arg = NULL;
+    const char *prompt_arg = NULL;
     int telegram = 0;
     int relay = 0;
     int imessage = 0;
@@ -721,12 +723,13 @@ int main(int argc, char **argv)
     int resume = 0;
     int opt;
 
-    while ((opt = getopt_long(argc, argv, "b:m:e:C:srhV", LONG_OPTS, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "b:m:e:C:p:srhV", LONG_OPTS, NULL)) != -1) {
         switch (opt) {
         case 'b': backend = optarg; pin_backend = 1; break;
         case 'm': model = optarg; break;
         case 'e': effort = optarg; break;
         case 'C': dir = optarg; break;
+        case 'p': prompt_arg = optarg; break;
         case 'n': name = optarg + (optarg[0] == '@'); break;
         case 's': safe_mode = 1; break;
         case 'r': resume = 1; break;
@@ -756,6 +759,10 @@ int main(int argc, char **argv)
         default:  usage(); return opt == 'h' ? 0 : 2;
         }
     }
+    if (optind < argc) {
+        fprintf(stderr, APP_NAME ": unknown command '%s'\n", argv[optind]);
+        return 2;
+    }
 
     if (state_arg) {
         if (telegram || relay || imessage || api_on) {
@@ -770,7 +777,7 @@ int main(int argc, char **argv)
     const char *front_screen = NULL;
     if (instance_arg) {
         if (session_arg || resume || name || tabs_arg || restore_arg || attach_arg ||
-            optind < argc) {
+            prompt_arg) {
             fprintf(stderr, APP_NAME ": --instance takes no prompt and does not combine with "
                             "--session, --resume, --name, --attach\n");
             return 2;
@@ -817,7 +824,7 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    if (resume && optind < argc) {
+    if (resume && prompt_arg) {
         fprintf(stderr, APP_NAME ": --resume takes no prompt\n");
         return 2;
     }
@@ -842,7 +849,7 @@ int main(int argc, char **argv)
     }
 
     if (name && intercom_name_taken(name, NULL)) {
-        if (optind < argc || dir || instance_arg || attach_arg) {
+        if (prompt_arg || dir || instance_arg || attach_arg) {
             fprintf(stderr, APP_NAME ": the name '%s' is taken\n", name);
             return 1;
         }
@@ -867,7 +874,7 @@ int main(int argc, char **argv)
     image_init();
     image_set_rows(settings_get_int(SETTING_IMAGE_ROWS, IMAGE_ROWS_DEFAULT));
 
-    int interactive = optind >= argc;
+    int interactive = !prompt_arg;
 
     if ((telegram || relay || imessage || api_on) && !interactive) {
         fprintf(stderr, APP_NAME ": --%s takes no prompt\n",
@@ -951,27 +958,9 @@ int main(int argc, char **argv)
             session_free(session);
             return 1;
         }
-        size_t need = 1;
-        for (int i = optind; i < argc; i++)
-            need += strlen(argv[i]) + 1;
-        char *text = calloc(need, 1);
-        if (!text) {
-            session_free(session);
-            return 1;
-        }
-        size_t at = 0;
-        for (int i = optind; i < argc; i++) {
-            if (i > optind)
-                text[at++] = ' ';
-            size_t n = strlen(argv[i]);
-            memcpy(text + at, argv[i], n);
-            at += n;
-        }
-        text[at] = '\0';
         session_set_quiet(session, 1);
         session_set_naming(session, 0);
-        int ok = session_turn(session, text);
-        free(text);
+        int ok = session_turn(session, prompt_arg);
         session_free(session);
         return ok ? 0 : 1;
     }
