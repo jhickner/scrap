@@ -991,11 +991,6 @@ int main(int argc, char **argv)
     hub_ensure();
     session_add_listener(stream_event, NULL);
     prompt_file_completion(prompt, cwd);
-    if (have_config) {
-        char history[4200];
-        snprintf(history, sizeof history, "%s/history", config);
-        prompt_history_open(prompt, history);
-    }
 
     session_set_typeahead(prompt_live_key, prompt);
     chrome_bind(prompt);
@@ -1013,6 +1008,7 @@ int main(int argc, char **argv)
     prompt_set_step(prompt, step, NULL);
     prompt_set_busy(prompt, turn_running, NULL);
     prompt_set_cycle(prompt, cycle_session, NULL);
+    prompt_set_history_follow(prompt, workspace_history_follow);
     prompt_set_collapse(prompt, collapse_tools, NULL);
     view_collapse(session_compact(session));
     prompt_set_cancel(prompt, cancel_turn, NULL);

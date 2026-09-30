@@ -84,6 +84,7 @@ struct prompt {
     void        *busy_ud;
     void       (*cycle)(void *ud, int delta);
     void        *cycle_ud;
+    void       (*history_follow)(void);
     void       (*collapse)(void *ud);
     void        *collapse_ud;
     int        (*cancel)(void *ud);
@@ -101,6 +102,15 @@ struct prompt {
 static int prompt_echoes(struct prompt *p, const char *line);
 static void preview_forget(struct prompt *p);
 
+static struct prompt *active;
+
+static void history_put(FILE *f, const char *line)
+{
+    for (const char *q = line; *q; q++)
+        fputc(*q == '\n' ? ' ' : *q, f);
+    fputc('\n', f);
+}
+
 static void history_append(struct prompt *p, const char *line)
 {
     if (!p->history_path || !*line)
@@ -108,17 +118,39 @@ static void history_append(struct prompt *p, const char *line)
     FILE *f = fopen(p->history_path, "a");
     if (!f)
         return;
-
-    for (const char *q = line; *q; q++)
-        fputc(*q == '\n' ? ' ' : *q, f);
-    fputc('\n', f);
+    history_put(f, line);
     fclose(f);
 }
 
-void prompt_history_open(struct prompt *p, const char *path)
+static void history_rewrite(struct prompt *p)
 {
+    char tmp[4200];
+    if ((size_t)snprintf(tmp, sizeof tmp, "%s.tmp", p->history_path) >= sizeof tmp)
+        return;
+    FILE *f = fopen(tmp, "w");
+    if (!f)
+        return;
+    for (int i = 0; i < p->repl.hist_count; i++)
+        history_put(f, p->repl.history[i]);
+    if (fclose(f) != 0 || rename(tmp, p->history_path) != 0)
+        unlink(tmp);
+}
+
+void prompt_history_open(const char *path)
+{
+    struct prompt *p = active;
+    if (!p)
+        return;
+
+    Repl *r = &p->repl;
+    for (int i = 0; i < r->hist_count; i++)
+        free(r->history[i]);
+    r->hist_count = 0;
+    r->hist_pos = -1;
+    r->searching = false;
+    r->search_idx = -1;
     free(p->history_path);
-    p->history_path = strdup(path);
+    p->history_path = path ? strdup(path) : NULL;
     if (!p->history_path)
         return;
 
@@ -128,14 +160,18 @@ void prompt_history_open(struct prompt *p, const char *path)
     char *line = NULL;
     size_t cap = 0;
     ssize_t n;
+    int lines = 0;
     while ((n = getline(&line, &cap, f)) > 0) {
         if (line[n - 1] == '\n')
             line[n - 1] = '\0';
         if (*line)
-            repl_history_add(&p->repl, line);
+            repl_history_add(r, line);
+        lines++;
     }
     free(line);
     fclose(f);
+    if (lines > REPL_HISTORY_MAX)
+        history_rewrite(p);
 }
 
 static void put_codepoint(uint32_t cp)
@@ -436,7 +472,6 @@ void prompt_echo_load(const cJSON *st)
     viewport_item_persist(mark, PROMPT_ECHO_KIND, echo_encode);
 }
 
-static struct prompt *active;
 static struct prompt *completion_owner;
 static ReplCompleter  name_completer;
 
@@ -779,6 +814,8 @@ static enum key_result edit_key(struct prompt *p, tty_event *ev)
 
 static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
 {
+    if (p->history_follow)
+        p->history_follow();
     switch (ev->key) {
     case TK_EOF:
         return KEY_EOF;
@@ -1108,6 +1145,11 @@ void prompt_set_busy(struct prompt *p, int (*fn)(void *ud), void *ud)
 {
     p->busy = fn;
     p->busy_ud = ud;
+}
+
+void prompt_set_history_follow(struct prompt *p, void (*fn)(void))
+{
+    p->history_follow = fn;
 }
 
 void prompt_set_cycle(struct prompt *p, void (*fn)(void *ud, int delta), void *ud)

@@ -270,6 +270,24 @@ static void draft_save(int index)
     prompt_stash_draft(&tabs[index].draft, &tabs[index].draft_cursor);
 }
 
+void workspace_history_follow(void)
+{
+    static char loaded[64];
+    if (!ntabs)
+        return;
+    const char *name = session_name(tabs[cur].s);
+    if (!strcmp(name, loaded))
+        return;
+    snprintf(loaded, sizeof loaded, "%s", name);
+
+    char dir[4096], path[4200];
+    if (*name && path_config_subdir(dir, sizeof dir, "history") &&
+        (size_t)snprintf(path, sizeof path, "%s/%s", dir, name) < sizeof path)
+        prompt_history_open(path);
+    else
+        prompt_history_open(NULL);
+}
+
 static void draft_load(int index)
 {
     prompt_adopt_draft(tabs[index].draft, tabs[index].draft_cursor);

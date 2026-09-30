@@ -2278,6 +2278,11 @@ int session_set_name(struct session *s, const char *name)
 {
     if (!intercom_name_valid(name) || intercom_name_taken(name, s->id[0] ? s->id : NULL))
         return 0;
+    char dir[4096], from[4200], to[4200];
+    if (s->name[0] && path_config_subdir(dir, sizeof dir, "history") &&
+        (size_t)snprintf(from, sizeof from, "%s/%s", dir, s->name) < sizeof from &&
+        (size_t)snprintf(to, sizeof to, "%s/%s", dir, name) < sizeof to)
+        rename(from, to);
     snprintf(s->name, sizeof s->name, "%s", name);
     intercom_register(s->id, s->name, s->backend, s->cwd);
     publish(s, s->idle_busy ? "working" : "finished");

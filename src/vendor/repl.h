@@ -27,7 +27,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define REPL_HISTORY_MAX  200
+#define REPL_HISTORY_MAX  100
 #define REPL_MAX_COMMANDS 64
 #define REPL_MAX_VISIBLE  6     // max dropdown rows shown at once
 #define REPL_UNDO_MAX     64    // bounded undo snapshot stack

@@ -31,6 +31,7 @@ int  workspace_open(struct session *s);
 
 void workspace_show(int index);
 void workspace_log_active(void);
+void workspace_history_follow(void);
 
 void workspace_cycle(int delta);
 

@@ -11,7 +11,7 @@ struct prompt;
 struct prompt *prompt_new(const ReplCommand *commands, int command_count);
 void           prompt_free(struct prompt *p);
 
-void prompt_history_open(struct prompt *p, const char *path);
+void prompt_history_open(const char *path);
 
 void prompt_set_name_completer(ReplCompleter fn);
 
@@ -75,6 +75,7 @@ void prompt_set_step(struct prompt *p, void (*fn)(void *ud, int dir), void *ud);
 
 void prompt_set_busy(struct prompt *p, int (*fn)(void *ud), void *ud);
 
+void prompt_set_history_follow(struct prompt *p, void (*fn)(void));
 void prompt_set_cycle(struct prompt *p, void (*fn)(void *ud, int delta), void *ud);
 
 void prompt_set_collapse(struct prompt *p, void (*fn)(void *ud), void *ud);
