@@ -11,7 +11,7 @@
 #include "ui.h"
 
 #define FORM_INDENT 2
-#define FORM_BODY   7
+#define FORM_BODY   5
 #define FORM_GUTTER 2
 
 #define KEY_CTRL(c) ((c) - 'A' + 1)
@@ -21,6 +21,7 @@ struct form {
     int                   *choice;
     struct replbox        *box;
     int                    focus;
+    int                    opt;
     int                    left;
 };
 
@@ -28,6 +29,11 @@ static int body_width(void)
 {
     int w = ui_columns() - FORM_BODY - 1;
     return w < 8 ? 8 : w;
+}
+
+static int nopt(const struct form *f, int i)
+{
+    return i < f->b->n ? f->b->q[i].nopt : 0;
 }
 
 static int wrapped_rows(const char *s, size_t budget)
@@ -54,9 +60,10 @@ static const char *item_title(const struct form *f, int i)
 
 static int item_rows(struct form *f, int i)
 {
-    int opts = i < f->b->n ? f->b->q[i].nopt : 0;
-    replbox_width(&f->box[i], body_width() + FORM_GUTTER);
-    return wrapped_rows(item_title(f, i), (size_t)body_width()) + opts +
+    if (i > f->b->n)
+        return 1;
+    replbox_width(&f->box[i], body_width());
+    return wrapped_rows(item_title(f, i), (size_t)body_width()) + nopt(f, i) +
            replbox_wants(&f->box[i]);
 }
 
@@ -69,6 +76,14 @@ static int row(struct form *f)
 }
 
 static void end_row(void) { ui_put("\n"); }
+
+static void cursor(int on)
+{
+    ui_pad(FORM_BODY - 2);
+    ui_esc(ui_style(UI_ACCENT));
+    ui_put(on ? "\xe2\x80\xba " : "  ");
+    ui_esc(ui_style(UI_RESET));
+}
 
 static void paint_title(struct form *f, int i)
 {
@@ -83,22 +98,15 @@ static void paint_title(struct form *f, int i)
         size_t cut = ui_wrap_row(s, n, budget, &skip, NULL);
         ui_pad(FORM_INDENT);
         if (first) {
-            ui_esc(ui_style(focused ? UI_ACCENT : UI_DIM));
-            ui_put(focused ? "\xe2\x80\xba " : "  ");
-            ui_esc(ui_style(UI_RESET));
-            if (i < f->b->n) {
-                char num[16];
+            char num[16];
+            if (i < f->b->n)
                 snprintf(num, sizeof num, "%d.", i + 1);
-                ui_esc(ui_style(UI_DIM));
-                ui_put(num);
-                ui_esc(ui_style(UI_RESET));
-                ui_pad(FORM_BODY - FORM_INDENT - 2 - (int)strlen(num));
-            } else {
-                ui_esc(ui_style(UI_DIM));
-                ui_put("\xe2\x86\xb3");
-                ui_esc(ui_style(UI_RESET));
-                ui_pad(FORM_BODY - FORM_INDENT - 3);
-            }
+            else
+                snprintf(num, sizeof num, "\xe2\x86\xb3");
+            ui_esc(ui_style(UI_DIM));
+            ui_put(num);
+            ui_esc(ui_style(UI_RESET));
+            ui_pad(FORM_BODY - FORM_INDENT - (int)ui_cells(num));
         } else {
             ui_pad(FORM_BODY - FORM_INDENT);
         }
@@ -115,14 +123,15 @@ static void paint_title(struct form *f, int i)
 static void paint_options(struct form *f, int i)
 {
     const struct askq *q = &f->b->q[i];
-    size_t             budget = (size_t)body_width();
+    size_t             budget = (size_t)body_width() - 2;
 
     for (int j = 0; j < q->nopt && row(f); j++) {
         int on = f->choice[i] == j;
-        ui_pad(FORM_BODY);
+        int here = f->focus == i && f->opt == j;
+        cursor(here);
         ui_esc(ui_style(on ? UI_ACCENT : UI_DIM));
         ui_put(on ? "\xe2\x97\x8f " : "\xe2\x97\x8b ");
-        ui_esc(ui_style(on ? UI_ACCENT : UI_TEXT));
+        ui_esc(ui_style(on || here ? UI_ACCENT : UI_TEXT));
         size_t fit = ui_fit_visible(q->label[j], strlen(q->label[j]), budget - 2);
         ui_putn(q->label[j], fit);
         ui_esc(ui_style(UI_RESET));
@@ -141,13 +150,13 @@ static void paint_options(struct form *f, int i)
 static void paint_field(struct form *f, int i)
 {
     struct replbox *box = &f->box[i];
-    int             focused = i == f->focus;
+    int             focused = i == f->focus && f->opt < 0;
     int             rows = replbox_wants(box);
 
     if (!replbox_render(box, rows))
         return;
     for (int y = 0; y < rows && row(f); y++) {
-        ui_pad(FORM_BODY);
+        cursor(focused && !y);
         ui_esc(ui_style(UI_DIM));
         ui_put(y ? "  " : "\xe2\x9c\x8e ");
         ui_esc(ui_style(UI_RESET));
@@ -162,10 +171,26 @@ static void paint_field(struct form *f, int i)
     }
 }
 
+static void paint_submit(struct form *f)
+{
+    if (!row(f))
+        return;
+    int here = f->focus == f->b->n + 1;
+    ui_pad(FORM_INDENT);
+    ui_esc(ui_style(UI_DIM));
+    ui_put("\xe2\x8f\x8e");
+    ui_esc(ui_style(UI_RESET));
+    ui_pad(FORM_BODY - FORM_INDENT - 1);
+    ui_esc(ui_style(here ? UI_ACCENT : UI_TEXT));
+    ui_put("submit");
+    ui_esc(ui_style(UI_RESET));
+    end_row();
+}
+
 static void paint(void *ud)
 {
     struct form *f = ud;
-    int          items = f->b->n + 1;
+    int          items = f->b->n + 2;
     int          room = chrome_modal_rows() - 2;
     if (room < 1)
         room = 1;
@@ -186,6 +211,10 @@ static void paint(void *ud)
 
     f->left = room;
     for (int i = start; i < items && f->left > 0; i++) {
+        if (i > f->b->n) {
+            paint_submit(f);
+            continue;
+        }
         paint_title(f, i);
         if (i < f->b->n)
             paint_options(f, i);
@@ -194,8 +223,8 @@ static void paint(void *ud)
 
     ui_esc(ui_style(UI_DIM));
     ui_pad(FORM_INDENT);
-    ui_put("\xe2\x86\x91\xe2\x86\x93 question  \xc2\xb7  \xe2\x86\x90\xe2\x86\x92 option  "
-           "\xc2\xb7  type to answer  \xc2\xb7  enter next/send  \xc2\xb7  esc dismiss");
+    ui_put("\xe2\x86\x91\xe2\x86\x93 move  \xc2\xb7  space choose  \xc2\xb7  type to answer  "
+           "\xc2\xb7  enter next  \xc2\xb7  esc dismiss");
     ui_esc(ui_style(UI_RESET));
 }
 
@@ -219,11 +248,37 @@ static char *finish(struct form *f, int send)
     return out;
 }
 
-static void cycle(struct form *f, int dir)
+static void enter_item(struct form *f, int i)
 {
-    int n = f->b->q[f->focus].nopt;
-    int c = f->choice[f->focus] + 1 + dir;
-    f->choice[f->focus] = (c + n + 1) % (n + 1) - 1;
+    f->focus = i;
+    f->opt = nopt(f, i) ? 0 : -1;
+}
+
+static void down(struct form *f)
+{
+    if (f->opt >= 0 && f->opt + 1 < nopt(f, f->focus))
+        f->opt++;
+    else if (f->opt >= 0)
+        f->opt = -1;
+    else if (f->focus <= f->b->n)
+        enter_item(f, f->focus + 1);
+}
+
+static void up(struct form *f)
+{
+    if (f->opt > 0)
+        f->opt--;
+    else if (f->opt < 0 && nopt(f, f->focus))
+        f->opt = nopt(f, f->focus) - 1;
+    else if (f->focus > 0) {
+        f->focus--;
+        f->opt = -1;
+    }
+}
+
+static int typing(const tty_event *ev)
+{
+    return ev->key == TK_TEXT || (ev->key == TK_CHAR && ev->cp >= ' ');
 }
 
 char *askform_run(const struct askblock *b)
@@ -243,6 +298,7 @@ char *askform_run(const struct askblock *b)
         f.choice[i] = -1;
     for (int i = 0; i <= b->n; i++)
         replbox_init(&f.box[i], NULL, 0);
+    enter_item(&f, 0);
 
     chrome_modal(paint, &f);
     for (;;) {
@@ -253,46 +309,43 @@ char *askform_run(const struct askblock *b)
             return finish(&f, 0);
         }
 
-        struct replbox *box = &f.box[f.focus];
-        int             asking = f.focus < b->n;
-        int             empty = !*replbox_line(box);
+        int asking = f.focus < b->n;
+        int on_option = asking && f.opt >= 0;
+        int on_field = f.focus <= b->n && f.opt < 0;
 
-        switch (ev.key) {
-        case TK_ESCAPE:
-        case TK_EOF:
+        if (ev.key == TK_ESCAPE || ev.key == TK_EOF ||
+            (ev.key == TK_CHAR && (ev.cp == KEY_CTRL('C') || ev.cp == KEY_CTRL('D'))))
             return finish(&f, 0);
 
+        switch (ev.key) {
         case TK_ENTER:
-            if (!asking)
+            if (on_option)
+                f.choice[f.focus] = f.opt;
+            if (!asking || f.focus == b->n - 1)
                 return finish(&f, 1);
-            f.focus++;
+            enter_item(&f, f.focus + 1);
             break;
 
         case TK_UP:
         case TK_PREV_TAB:
-            if (f.focus > 0)
-                f.focus--;
+            up(&f);
             break;
 
         case TK_DOWN:
         case TK_TAB:
         case TK_NEXT_TAB:
-            if (f.focus < b->n)
-                f.focus++;
-            break;
-
-        case TK_LEFT:
-        case TK_RIGHT:
-            if (asking && empty && b->q[f.focus].nopt)
-                cycle(&f, ev.key == TK_LEFT ? -1 : 1);
-            else
-                replbox_key(box, &ev);
+            down(&f);
             break;
 
         default:
-            if (ev.key == TK_CHAR && (ev.cp == KEY_CTRL('C') || ev.cp == KEY_CTRL('D')))
-                return finish(&f, 0);
-            replbox_key(box, &ev);
+            if (on_option && ev.key == TK_CHAR && ev.cp == ' ') {
+                f.choice[f.focus] = f.choice[f.focus] == f.opt ? -1 : f.opt;
+            } else if (on_option && typing(&ev)) {
+                f.opt = -1;
+                replbox_key(&f.box[f.focus], &ev);
+            } else if (on_field) {
+                replbox_key(&f.box[f.focus], &ev);
+            }
             free(ev.text);
             break;
         }

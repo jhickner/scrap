@@ -881,6 +881,7 @@ void md_render(const char *text, int indent)
     int wrote_any = 0;
     char *mermaid = NULL;
     size_t mermaid_len = 0;
+    int ask_indent = -1;
 
     while (*text) {
         char *line = take_line(&text);
@@ -942,6 +943,15 @@ void md_render(const char *text, int indent)
             blank_pending = 0;
         }
 
+        if (!strcmp(body, "@ask"))
+            ask_indent = 0;
+        else if (ask_indent >= 0) {
+            const char *after;
+            size_t      width;
+            if (!is_bullet(body, &after) && !is_ordered(body, &width))
+                ask_indent = -1;
+        }
+
         char *doc = view_line(body);
         if (doc) {
             render_view(doc, indent);
@@ -1000,6 +1010,8 @@ void md_render(const char *text, int indent)
             size_t marker = 0;
             int item_indent = indent + lead;
             if (is_bullet(body, &rest)) {
+                if (ask_indent > 0 && !lead)
+                    item_indent += ask_indent;
                 ui_pad(item_indent);
                 ui_esc(ui_style(UI_CHROME));
                 ui_put("\xe2\x80\xa2 ");
@@ -1012,6 +1024,8 @@ void md_render(const char *text, int indent)
                 ui_esc(ui_style(UI_RESET));
                 ui_put(" ");
                 int after = item_indent + (int)marker;
+                if (ask_indent >= 0)
+                    ask_indent = (int)marker;
                 render_paragraph(body + marker, after, 0, after);
             } else {
                 render_paragraph(body, 0, item_indent, item_indent);
