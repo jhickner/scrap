@@ -1033,6 +1033,7 @@ int main(int argc, char **argv)
     voice_on_release(voice_release, prompt);
     voice_on_claim(voice_claim, prompt);
     tty_on_focus(focus_changed);
+    tty_on_key(stamp_clear);
 
     voice_set_speak(settings_get_int(SETTING_VOICE_SPEAK, 1));
     if (settings_get_int(SETTING_VOICE, 0)) {

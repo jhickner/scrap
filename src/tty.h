@@ -61,6 +61,7 @@ void tty_keyboard_off(void);
 int  tty_focused(void);
 
 void tty_on_focus(void (*fn)(int on));
+void tty_on_key(void (*fn)(void));
 
 int  tty_read(tty_event *ev, int timeout_ms);
 

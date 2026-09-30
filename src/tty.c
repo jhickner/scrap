@@ -922,7 +922,14 @@ static uint32_t decode_utf8(int lead)
     return cp;
 }
 
-int tty_read(tty_event *ev, int timeout_ms)
+static void (*key_fn)(void);
+
+void tty_on_key(void (*fn)(void))
+{
+    key_fn = fn;
+}
+
+static int read_event(tty_event *ev, int timeout_ms)
 {
     if (got_winch) {
         got_winch = 0;
@@ -969,5 +976,14 @@ int tty_read(tty_event *ev, int timeout_ms)
         ev->cp = decode_utf8(b);
         seq_depth--;
     }
+    return 1;
+}
+
+int tty_read(tty_event *ev, int timeout_ms)
+{
+    if (!read_event(ev, timeout_ms))
+        return 0;
+    if (key_fn && ev->key != TK_RESIZE && ev->key != TK_FOCUS_IN && ev->key != TK_FOCUS_OUT)
+        key_fn();
     return 1;
 }
