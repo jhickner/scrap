@@ -4,11 +4,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "block.h"
 #include "chrome.h"
 #include "frontend.h"
 #include "replbox.h"
 #include "tty.h"
 #include "ui.h"
+#include "viewport.h"
 
 #define FORM_INDENT 2
 #define FORM_BODY   5
@@ -224,13 +226,14 @@ static void paint(void *ud)
     ui_esc(ui_style(UI_DIM));
     ui_pad(FORM_INDENT);
     ui_put("\xe2\x86\x91\xe2\x86\x93 move  \xc2\xb7  space choose  \xc2\xb7  type to answer  "
-           "\xc2\xb7  enter next  \xc2\xb7  esc dismiss");
+           "\xc2\xb7  enter next  \xc2\xb7  pgup scroll  \xc2\xb7  esc dismiss");
     ui_esc(ui_style(UI_RESET));
 }
 
 static char *finish(struct form *f, int send)
 {
     chrome_modal(NULL, NULL);
+    viewport_scroll_end();
     char *out = NULL;
     if (send) {
         const char **text = calloc((size_t)f->b->n + 1, sizeof *text);
@@ -301,6 +304,7 @@ char *askform_run(const struct askblock *b)
     enter_item(&f, 0);
 
     chrome_modal(paint, &f);
+    block_pin(0); /* the transcript stays scrollable for context while answering */
     for (;;) {
         tty_event ev;
         if (!tty_read(&ev, -1)) {
@@ -316,6 +320,11 @@ char *askform_run(const struct askblock *b)
         if (ev.key == TK_ESCAPE || ev.key == TK_EOF ||
             (ev.key == TK_CHAR && (ev.cp == KEY_CTRL('C') || ev.cp == KEY_CTRL('D'))))
             return finish(&f, 0);
+
+        int scroll = ev.key == TK_PAGE_UP || ev.key == TK_PAGE_DOWN ||
+                     ev.key == TK_SCROLL_UP || ev.key == TK_SCROLL_DOWN;
+        if (!scroll && viewport_scrolled())
+            viewport_scroll_end();
 
         switch (ev.key) {
         case TK_ENTER:
@@ -335,6 +344,22 @@ char *askform_run(const struct askblock *b)
         case TK_TAB:
         case TK_NEXT_TAB:
             down(&f);
+            break;
+
+        case TK_PAGE_UP:
+            viewport_scroll(tty_rows() / 2);
+            break;
+
+        case TK_PAGE_DOWN:
+            viewport_scroll(-(tty_rows() / 2));
+            break;
+
+        case TK_SCROLL_UP:
+            viewport_scroll(3);
+            break;
+
+        case TK_SCROLL_DOWN:
+            viewport_scroll(-3);
             break;
 
         default:

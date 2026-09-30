@@ -110,5 +110,6 @@ void viewport_adopt(struct viewport_state *st);
 
 void viewport_scroll(int delta);
 void viewport_scroll_end(void);
+int  viewport_scrolled(void);
 
 #endif

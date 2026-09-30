@@ -1622,6 +1622,11 @@ void viewport_scroll(int delta)
     viewport_paint();
 }
 
+int viewport_scrolled(void)
+{
+    return scrolled > 0;
+}
+
 void viewport_scroll_end(void)
 {
     pin_scrolled = 0;
