@@ -305,7 +305,7 @@ static void raw_end(const char *restore)
 
 void tty_raw_end(void)
 {
-    raw_end(CRASH_RESTORE);
+    raw_end(MODE_RESTORE);
 }
 
 void tty_raw_handoff(void)

@@ -885,7 +885,7 @@ int main(int argc, char **argv)
     if (interactive) {
         restart_arm();
         if (tty_raw_begin() != 0) {
-            fprintf(stderr, APP_NAME ": not a terminal — pass a prompt as arguments instead\n");
+            fprintf(stderr, APP_NAME ": not a terminal — pass a prompt with -p\n");
             return 1;
         }
         atexit(restore_terminal);

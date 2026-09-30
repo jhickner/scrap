@@ -1707,6 +1707,7 @@ static void home_mark(void)
         setenv("SCRAP_HOME_CURSOR", env, 1);
     } else {
         home_row = home_col = 0;
+        unsetenv("SCRAP_HOME_CURSOR");
     }
 }
 
