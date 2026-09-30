@@ -299,6 +299,8 @@ int dispatch_spawn(const char *backend, const char *model, const char *effort, c
         if (session_rename(s, name) == SESSION_RENAME_OK)
             session_set_naming(s, 0);
     }
+    if (resume)
+        session_replay(workspace_at(at));
 
     workspace_show(workspace_index_of(was));
     at = workspace_index_of(workspace_at(at));
