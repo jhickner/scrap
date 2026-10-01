@@ -72,8 +72,6 @@ struct prompt {
     char      *(*command)(void *ud, int nth);
     void        *command_ud;
     int          command_nth;
-    void       (*send_held)(void *ud, const char *text);
-    void        *send_held_ud;
     void       (*split)(void *ud, int quiet);
     void        *split_ud;
     void       (*another)(void *ud);
@@ -718,9 +716,9 @@ static const struct prompt_key SHORTCUTS[] = {
     {"INPUT", "enter", "status bar (empty line)",
      "on an empty line, reprint the status bar", PROMPT_KEY_IDLE},
     {"INPUT", "!cmd", "run in $SHELL",
-     "run cmd in $SHELL; its output is kept until ctrl-x sends it", PROMPT_KEY_ALWAYS},
-    {"INPUT", "ctrl-x", "send last !cmd output",
-     "send the last !cmd output to the agent, after the prompt text", PROMPT_KEY_ALWAYS},
+     "run cmd in $SHELL; ctrl-x pastes it and its output until the next turn", PROMPT_KEY_ALWAYS},
+    {"INPUT", "ctrl-x", "paste last !cmd output",
+     "paste the last !cmd and its output into the prompt", PROMPT_KEY_ALWAYS},
     {"INPUT", "ctrl-]", "command from last reply",
      "put the last command in the last reply on the line, again for earlier ones",
      PROMPT_KEY_ALWAYS},
@@ -802,22 +800,20 @@ static enum key_result edit_key(struct prompt *p, tty_event *ev)
     return KEY_OK;
 }
 
-static char *take_line(struct prompt *p);
-
-static void send_held(struct prompt *p, int live)
+static void paste_held(struct prompt *p)
 {
-    char *text = take_line(p);
-    if (live)
-        status_pause();
-    viewport_defer();
-    chrome_clear();
-    if (text && !live)
-        prompt_echo_message(text);
-    p->send_held(p->send_held_ud, text);
-    if (live)
-        status_resume();
-    viewport_flush();
+    char *text = bash_take_held();
+    if (!text)
+        return;
+    if (p->repl.cursor > 0 && p->repl.buf[p->repl.cursor - 1] != '\n')
+        repl_insert_text(&p->repl, "\n");
+    repl_insert_text(&p->repl, text);
+    repl_insert_text(&p->repl, "\n");
     free(text);
+    p->frame_ok = 0;
+    chrome_clear();
+    if (!chrome_modal_active())
+        repaint(p);
 }
 
 static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
@@ -862,8 +858,7 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             return KEY_OK;
         }
         if (ev->cp == KEY_CTRL('X')) {
-            if (p->send_held && bash_held_command())
-                send_held(p, live);
+            paste_held(p);
             return KEY_OK;
         }
         if (ev->cp == KEY_CTRL(']')) {
@@ -1304,12 +1299,6 @@ void prompt_set_command(struct prompt *p, char *(*fn)(void *ud, int nth), void *
 {
     p->command = fn;
     p->command_ud = ud;
-}
-
-void prompt_set_send_held(struct prompt *p, void (*fn)(void *ud, const char *text), void *ud)
-{
-    p->send_held = fn;
-    p->send_held_ud = ud;
 }
 
 void prompt_set_line(struct prompt *p, const char *text)

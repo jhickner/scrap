@@ -186,11 +186,14 @@ static char *elide(char *text)
 static struct buf ctx;
 static char       held_command[128];
 static int        held_lines;
+static char      *held_text;
 
-static void bash_context_clear(void)
+void bash_drop_held(void)
 {
     free(ctx.data);
     memset(&ctx, 0, sizeof ctx);
+    free(held_text);
+    held_text = NULL;
     held_command[0] = '\0';
     held_lines = 0;
 }
@@ -198,13 +201,16 @@ static void bash_context_clear(void)
 char *bash_take_context(void)
 {
     char *out = ctx.len ? strdup(ctx.data) : NULL;
-    bash_context_clear();
+    bash_drop_held();
     return out;
 }
 
-const char *bash_held_command(void)
+char *bash_take_held(void)
 {
-    return ctx.len ? held_command : NULL;
+    char *out = held_text;
+    held_text = NULL;
+    bash_drop_held();
+    return out;
 }
 
 const char *bash_held_label(void)
@@ -212,13 +218,23 @@ const char *bash_held_label(void)
     static char label[192];
     if (!ctx.len)
         return NULL;
-    snprintf(label, sizeof label, "%s \xc2\xb7 %d line%s \xc2\xb7 ctrl-x send", held_command,
+    snprintf(label, sizeof label, "%s \xc2\xb7 %d line%s \xc2\xb7 ctrl-x paste", held_command,
              held_lines, held_lines == 1 ? "" : "s");
     return label;
 }
 
-static void held_note(const char *cmd, const char *out)
+static void held_note(const char *cmd, const char *out, int status)
 {
+    char tail[48] = "";
+    if (WIFSIGNALED(status))
+        snprintf(tail, sizeof tail, "\n[signal %d]", WTERMSIG(status));
+    else if (!WIFEXITED(status) || WEXITSTATUS(status))
+        snprintf(tail, sizeof tail, "\n[exit %d]", WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+    size_t olen = strlen(out);
+    while (olen && out[olen - 1] == '\n')
+        olen--;
+    if (asprintf(&held_text, "$ %s\n%.*s%s", cmd, (int)olen, out, tail) < 0)
+        held_text = NULL;
     size_t first = strcspn(cmd, "\n");
     snprintf(held_command, sizeof held_command, "!%.*s%s", (int)first, cmd,
              cmd[first] ? " \xe2\x80\xa6" : "");
@@ -243,7 +259,7 @@ static void context_add(const char *cmd, const char *out, int status)
     int  ok = 1;
     const char *lead = "The user ran a shell command in the terminal. Respond to it and its "
                        "output; they can see the output already, so do not repeat it back.\n\n";
-    bash_context_clear();
+    bash_drop_held();
     ok = buf_add(&ctx, lead, strlen(lead), CTX_TOTAL);
     n = snprintf(head, sizeof head, "<bash-input>%.400s</bash-input>\n", cmd);
     ok = add_formatted(&ctx, head, n) && ok;
@@ -258,9 +274,9 @@ static void context_add(const char *cmd, const char *out, int status)
     ok = buf_add(&ctx, "\n</bash-output>\n\n", 17, CTX_TOTAL) && ok;
 
     if (!ok)
-        bash_context_clear();
+        bash_drop_held();
     else
-        held_note(cmd, out);
+        held_note(cmd, out, status);
 }
 
 struct ran {

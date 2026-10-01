@@ -346,31 +346,6 @@ static char *reply_command(void *ud, int nth)
     return md_command_nth(reply ? reply : session_last_block(s), nth);
 }
 
-static void send_held(void *ud, const char *text)
-{
-    (void)ud;
-    char *shown = strdup(text && *text ? text : bash_held_command());
-    char *held = bash_take_context();
-    if (!held || !shown) {
-        free(held);
-        free(shown);
-        return;
-    }
-    char *full = held;
-    if (text && *text) {
-        size_t n = strlen(text) + strlen(held) + 3;
-        full = malloc(n);
-        if (full)
-            snprintf(full, n, "%s\n\n%s", text, held);
-    }
-    if (full)
-        workspace_send(workspace_index(), full, shown);
-    if (full != held)
-        free(full);
-    free(held);
-    free(shown);
-}
-
 static void switcher(void *ud)
 {
     sessionswitch_run();
@@ -593,6 +568,7 @@ static void turn_begin(struct session *s)
     api_turn_begin(s);
     stream_turn_begin(s);
     voice_turn_begin(s);
+    bash_drop_held();
 }
 
 static int tab_queued(void *ud)
@@ -966,7 +942,6 @@ int main(int argc, char **argv)
     prompt_set_switcher(prompt, switcher, prompt);
     prompt_set_click(prompt, clicked, prompt);
     prompt_set_command(prompt, reply_command, NULL);
-    prompt_set_send_held(prompt, send_held, NULL);
     prompt_set_split(prompt, splitter, NULL);
     prompt_set_another(prompt, another, NULL);
     prompt_set_step(prompt, step, NULL);

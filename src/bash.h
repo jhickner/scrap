@@ -10,7 +10,8 @@ void bash_run(const char *line);
 
 char *bash_take_context(void);
 
-const char *bash_held_command(void);
+char *bash_take_held(void);
+void bash_drop_held(void);
 const char *bash_held_label(void);
 
 #define BASH_RAN_KIND "bash"

@@ -99,7 +99,6 @@ void prompt_set_external(struct prompt *p, char *(*fn)(void *ud), void *ud);
 
 void prompt_set_line(struct prompt *p, const char *text);
 void prompt_set_command(struct prompt *p, char *(*fn)(void *ud, int nth), void *ud);
-void prompt_set_send_held(struct prompt *p, void (*fn)(void *ud, const char *text), void *ud);
 
 void prompt_stash_draft(char **text, int *cursor);
 void prompt_adopt_draft(const char *text, int cursor);
