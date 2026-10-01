@@ -39,44 +39,15 @@
 #define SETTING_SHUNT        "shunt"
 
 #define SETTING_VOICE          "voice"
-#define SETTING_VOICE_SPEAK    "voice_speak"
-
-#define SETTING_VOICE_MODE     "voice_mode"
-#define SETTING_VOICE_WAKE     "voice_wake"
-#define SETTING_VOICE_VOLUME   "voice_volume"
-#define SETTING_VOICE_HELPER   "voice_helper"
 #define SETTING_VOICE_NAME     "voice_name"
 #define SETTING_VOICE_RATE     "voice_rate"
-#define SETTING_VOICE_SILENCE  "voice_silence"
-#define SETTING_VOICE_TRACE    "voice_trace"
-#define SETTING_VOICE_INPUT    "voice_input"
+#define SETTING_VOICE_VOLUME   "voice_volume"
+#define SETTING_VOICE_COMPLETE "voice_complete"
 
 #define VOICE_VOLUME_DEFAULT 100
 #define VOICE_RATE_DEFAULT   100
-
-#define VOICE_SILENCE_DEFAULT 2.0
-#define VOICE_SILENCE_MIN     0.4
-#define VOICE_SILENCE_MAX     10.0
-
 #define VOICE_RATE_MIN        20
 #define VOICE_RATE_MAX       200
-
-#define SETTING_VOICE_JEV_BACKEND   "voice_jev_backend"
-#define SETTING_VOICE_JEV_THRESHOLD "voice_jev_threshold"
-#define SETTING_VOICE_JEV_HOLD      "voice_jev_hold_threshold"
-#define SETTING_VOICE_JEV_DELAY     "voice_jev_delay"
-#define SETTING_VOICE_JEV_SILENCE   "voice_jev_silence"
-
-#define VOICE_JEV_BACKEND_DEFAULT   "typesafe"
-#define VOICE_JEV_THRESHOLD_DEFAULT 0.8
-#define VOICE_JEV_HOLD_DEFAULT      0.5
-#define VOICE_JEV_CANCEL            0.8
-#define VOICE_JEV_DELAY_DEFAULT     100
-#define VOICE_JEV_DELAY_MAX         2000
-#define VOICE_JEV_SILENCE_DEFAULT   400
-#define VOICE_JEV_SILENCE_MAX       3000
-
-#define SETTING_VOICE_COMPLETE "voice_complete"
 
 #define SETTING_THEME "theme"
 

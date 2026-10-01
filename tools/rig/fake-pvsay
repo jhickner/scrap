@@ -1,0 +1,3 @@
+#!/bin/sh
+{ echo "argv: $*"; cat; echo; } >> "$(dirname "$0")/../pvsay.log"
+exec sleep 30

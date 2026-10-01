@@ -15,7 +15,6 @@
 #include "files.h"
 #include "scrollback.h"
 #include "settings.h"
-#include "voicetrace.h"
 #include "sidechannel.h"
 #include "status.h"
 #include "tty.h"
@@ -49,8 +48,6 @@ struct prompt {
     char      *(*external)(void *ud);
     void        *external_ud;
     int          external_taken;
-    int        (*listen)(void *ud);
-    void        *listen_ud;
     int        (*idle_fds)(void *ud, int *out, int max);
     int        (*idle_render)(void *ud);
     int        (*idle_poll)(void *ud);
@@ -72,8 +69,11 @@ struct prompt {
     void        *switcher_ud;
     int        (*click)(void *ud, int row, int col);
     void        *click_ud;
-    void       (*mic)(void *ud);
-    void        *mic_ud;
+    char      *(*command)(void *ud, int nth);
+    void        *command_ud;
+    int          command_nth;
+    void       (*send_held)(void *ud, const char *text);
+    void        *send_held_ud;
     void       (*split)(void *ud, int quiet);
     void        *split_ud;
     void       (*another)(void *ud);
@@ -89,18 +89,11 @@ struct prompt {
     void        *collapse_ud;
     int        (*cancel)(void *ud);
     void        *cancel_ud;
-    int        (*discard)(void *ud);
-    void        *discard_ud;
     int          stopped;
     int          frame_ok;
-
-    char         preview[8704];
-    int          preview_at;
-    int          preview_taken;
 };
 
 static int prompt_echoes(struct prompt *p, const char *line);
-static void preview_forget(struct prompt *p);
 
 static struct prompt *active;
 
@@ -326,11 +319,6 @@ int prompt_input_rows(struct prompt *p, int cols)
 {
     if (!p)
         return 1;
-    int gutter = p->listen && p->listen(p->listen_ud) ? 4 : 2;
-    if (p->repl.gutter != gutter) {
-        p->repl.gutter = gutter;
-        p->frame_ok = 0;
-    }
     if (p->frame_ok && cols == p->painted_cols && p->frame.cells && p->frame.rows > 0)
         return p->frame.rows;
 
@@ -652,7 +640,6 @@ static void edit_in_editor(struct prompt *p, int live)
         if (text) {
             p->frame_ok = 0;
             repl_reset(&p->repl);
-            preview_forget(p);
             if (*text)
                 repl_insert_text(&p->repl, text);
             free(text);
@@ -730,18 +717,21 @@ static const struct prompt_key SHORTCUTS[] = {
      "submit the prompt", PROMPT_KEY_IDLE},
     {"INPUT", "enter", "status bar (empty line)",
      "on an empty line, reprint the status bar", PROMPT_KEY_IDLE},
-    {"INPUT", "space", "microphone (empty line)",
-     "on an empty line, turn the microphone on or off", PROMPT_KEY_ALWAYS},
     {"INPUT", "!cmd", "run in $SHELL",
-     "run cmd in $SHELL instead of sending it to the agent", PROMPT_KEY_ALWAYS},
-    {"INPUT", "esc", "close / drop voice",
-     "close the completion, else drop voice input", PROMPT_KEY_IDLE},
+     "run cmd in $SHELL; its output is kept until ctrl-x sends it", PROMPT_KEY_ALWAYS},
+    {"INPUT", "ctrl-x", "send last !cmd output",
+     "send the last !cmd output to the agent, after the prompt text", PROMPT_KEY_ALWAYS},
+    {"INPUT", "ctrl-]", "command from last reply",
+     "put the last command in the last reply on the line, again for earlier ones",
+     PROMPT_KEY_ALWAYS},
+    {"INPUT", "esc", "close / stop speech",
+     "close the completion, else stop the reply being read aloud", PROMPT_KEY_IDLE},
     {"INPUT", "ctrl-c", "clear the line",
-     "clear the prompt line and its dictation", PROMPT_KEY_IDLE},
+     "clear the prompt line", PROMPT_KEY_IDLE},
     {"TURN", "enter", "queue the line",
      "queue the prompt until the running turn ends", PROMPT_KEY_TURN},
     {"TURN", "esc", "interrupt",
-     "close the completion, else drop voice input, else interrupt the model", PROMPT_KEY_TURN},
+     "close the completion, else stop the reply being read aloud, else interrupt the model", PROMPT_KEY_TURN},
     {"TURN", "ctrl-c", "clear, else interrupt",
      "clear the prompt line, else interrupt the running turn", PROMPT_KEY_TURN},
 };
@@ -812,10 +802,30 @@ static enum key_result edit_key(struct prompt *p, tty_event *ev)
     return KEY_OK;
 }
 
+static char *take_line(struct prompt *p);
+
+static void send_held(struct prompt *p, int live)
+{
+    char *text = take_line(p);
+    if (live)
+        status_pause();
+    viewport_defer();
+    chrome_clear();
+    if (text && !live)
+        prompt_echo_message(text);
+    p->send_held(p->send_held_ud, text);
+    if (live)
+        status_resume();
+    viewport_flush();
+    free(text);
+}
+
 static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
 {
     if (p->history_follow)
         p->history_follow();
+    if (ev->key != TK_CHAR || ev->cp != KEY_CTRL(']'))
+        p->command_nth = 0;
     switch (ev->key) {
     case TK_EOF:
         return KEY_EOF;
@@ -834,8 +844,6 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             return KEY_OK;
         }
         if (ev->cp == KEY_CTRL('C') && p->repl.len && !overlay_open(p)) {
-            if (p->discard)
-                p->discard(p->discard_ud);
             return edit_key(p, ev);
         }
         if (ev->cp == KEY_CTRL('C') && p->repl.len == 0 && !overlay_open(p)) {
@@ -845,16 +853,30 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             if (p->cancel && p->cancel(p->cancel_ud))
                 return KEY_OK;
         }
-        if (ev->cp == ' ' && p->mic && p->repl.len == 0 && !overlay_open(p)) {
-            p->mic(p->mic_ud);
-            return KEY_OK;
-        }
         if (ev->cp == KEY_CTRL('V')) {
             paste_clipboard(p, live);
             return KEY_OK;
         }
         if (ev->cp == KEY_CTRL('G')) {
             edit_in_editor(p, live);
+            return KEY_OK;
+        }
+        if (ev->cp == KEY_CTRL('X')) {
+            if (p->send_held && bash_held_command())
+                send_held(p, live);
+            return KEY_OK;
+        }
+        if (ev->cp == KEY_CTRL(']')) {
+            char *cmd = p->command ? p->command(p->command_ud, p->command_nth) : NULL;
+            if (!cmd && p->command_nth) {
+                p->command_nth = 0;
+                cmd = p->command(p->command_ud, 0);
+            }
+            if (cmd) {
+                prompt_set_line(p, cmd);
+                p->command_nth++;
+                free(cmd);
+            }
             return KEY_OK;
         }
 
@@ -954,8 +976,6 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
 
     case TK_ESCAPE:
 
-        if (!overlay_open(p) && p->repl.len && p->discard && p->discard(p->discard_ud))
-            return KEY_OK;
         if (!overlay_open(p) && p->repl.len == 0 && p->cancel && p->cancel(p->cancel_ud))
             return KEY_OK;
         if (live && !overlay_open(p))
@@ -1042,9 +1062,7 @@ static char *take_line(struct prompt *p)
     p->frame_ok = 0;
     if (out)
         record_line(p, out);
-    p->preview_taken = out && p->preview[0];
     repl_reset(&p->repl);
-    preview_forget(p);
     return out;
 }
 
@@ -1105,12 +1123,6 @@ void prompt_set_cancel(struct prompt *p, int (*fn)(void *ud), void *ud)
     p->cancel_ud = ud;
 }
 
-void prompt_set_discard(struct prompt *p, int (*fn)(void *ud), void *ud)
-{
-    p->discard = fn;
-    p->discard_ud = ud;
-}
-
 void prompt_set_click(struct prompt *p, int (*fn)(void *ud, int row, int col),
                       void *ud)
 {
@@ -1122,12 +1134,6 @@ void prompt_set_switcher(struct prompt *p, void (*fn)(void *ud), void *ud)
 {
     p->switcher = fn;
     p->switcher_ud = ud;
-}
-
-void prompt_set_mic(struct prompt *p, void (*fn)(void *ud), void *ud)
-{
-    p->mic = fn;
-    p->mic_ud = ud;
 }
 
 void prompt_set_another(struct prompt *p, void (*fn)(void *ud), void *ud)
@@ -1294,164 +1300,26 @@ char *prompt_read(struct prompt *p)
     return out;
 }
 
-static const char *nearest(const char *line, const char *words, int was)
+void prompt_set_command(struct prompt *p, char *(*fn)(void *ud, int nth), void *ud)
 {
-    const char *best = NULL;
-    int gap = 0;
-    for (const char *at = strstr(line, words); at; at = strstr(at + 1, words)) {
-        int d = (int)(at - line) - was;
-        if (d < 0)
-            d = -d;
-        if (!best || d < gap) {
-            best = at;
-            gap = d;
-        }
-    }
-    return best;
+    p->command = fn;
+    p->command_ud = ud;
 }
 
-static void trace_prompt(struct prompt *p, const char *event)
+void prompt_set_send_held(struct prompt *p, void (*fn)(void *ud, const char *text), void *ud)
 {
-    voice_trace(event, "prompt=%p cursor=%d span=%d+%zu line=%s",
-                (void *)p, p->repl.cursor, p->preview_at, strlen(p->preview), repl_line(&p->repl));
+    p->send_held = fn;
+    p->send_held_ud = ud;
 }
 
-void prompt_set_preview(struct prompt *p, const char *text)
-{
-    if (!p)
-        return;
-    trace_prompt(p, "prompt.preview.before");
-    const char *line = repl_line(&p->repl);
-    int len = (int)strlen(p->preview);
-    int at = p->preview_at;
-    if (len) {
-        if (at < 0 || at + len > (int)strlen(line) ||
-            memcmp(line + at, p->preview, (size_t)len)) {
-            const char *found = nearest(line, p->preview, at);
-
-            if (!found && p->preview[0] == ' ' && p->preview[1]) {
-                found = nearest(line, p->preview + 1, at);
-                if (found)
-                    len--;
-            }
-            if (found) {
-                at = (int)(found - line);
-            } else {
-
-                at = 0;
-                len = (int)strlen(line);
-            }
-        }
-    } else {
-        at = p->repl.cursor;
-    }
-
-    char next[sizeof p->preview];
-    next[0] = '\0';
-    if (text && *text) {
-        int sep = at > 0 && line[at - 1] != ' ' && line[at - 1] != '\n';
-        snprintf(next, sizeof next, "%s%s", sep ? " " : "", text);
-    }
-    if (!len && !next[0])
-        return;
-
-    const char *same = (int)strlen(next) == len ? next
-                     : next[0] == ' ' && (int)strlen(next + 1) == len ? next + 1
-                                                                      : NULL;
-    if (len && same && !strncmp(line + at, same, (size_t)len)) {
-        snprintf(p->preview, sizeof p->preview, "%s", same);
-        p->preview_at = at;
-        return;
-    }
-
-    int cursor = p->repl.cursor;
-    repl_replace_range(&p->repl, at, at + len, next);
-
-    if (len && cursor < at)
-        p->repl.cursor = cursor;
-    else if (len && cursor > at + len)
-        p->repl.cursor = cursor + (int)strlen(next) - len;
-    snprintf(p->preview, sizeof p->preview, "%s", next);
-    p->preview_at = next[0] ? at : 0;
-    trace_prompt(p, "prompt.preview.after");
-    p->frame_ok = 0;
-    if (!chrome_modal_active())
-        repaint(p);
-}
-
-static void preview_forget(struct prompt *p)
-{
-    p->preview[0] = '\0';
-    p->preview_at = 0;
-}
-
-void prompt_release_preview(struct prompt *p)
-{
-    if (p)
-        preview_forget(p);
-}
-
-int prompt_claim_preview(struct prompt *p, const char *text)
+void prompt_set_line(struct prompt *p, const char *text)
 {
     if (!p || !text)
-        return 0;
-    preview_forget(p);
-    if (!*text)
-        return 1;
-    const char *line = repl_line(&p->repl);
-    const char *found = NULL;
-    for (const char *at = line ? strstr(line, text) : NULL; at; at = strstr(at + 1, text))
-        found = at;
-    if (!found)
-        return 0;
-
-    int sep = found > line && found[-1] == ' ';
-    size_t len = strlen(text) + (size_t)sep;
-    if (len >= sizeof p->preview)
-        return 0;
-    found -= sep;
-    memcpy(p->preview, found, len);
-    p->preview[len] = '\0';
-    p->preview_at = (int)(found - line);
-    trace_prompt(p, "prompt.claim");
-    return 1;
-}
-
-void prompt_insert(struct prompt *p, const char *text)
-{
-    if (!p || !text || !*text)
         return;
-    int cursor = p->repl.cursor;
-    int len = (int)strlen(p->preview);
-
-    int at = len ? p->preview_at : cursor;
-    p->repl.cursor = at;
-    if (at > 0) {
-        unsigned char prev = (unsigned char)p->repl.buf[at - 1];
-        if (prev != ' ' && prev != '\n' && text[0] != ' ')
-            repl_insert_text(&p->repl, " ");
-    }
-    repl_insert_text(&p->repl, text);
-    if (len) {
-        if (p->preview[0] != ' ')
-            repl_insert_text(&p->repl, " ");
-        int grew = p->repl.cursor - at;
-        p->preview_at += grew;
-        p->repl.cursor = cursor < at ? cursor : cursor + grew;
-    }
+    repl_replace_range(&p->repl, 0, p->repl.len, text);
     p->frame_ok = 0;
     if (!chrome_modal_active())
         repaint(p);
-}
-
-const char *prompt_line(struct prompt *p)
-{
-    return p ? repl_line(&p->repl) : NULL;
-}
-
-int prompt_cursor(const struct prompt *p)
-{
-    return p ? p->repl.cursor : 0;
 }
 
 static int clamp_cursor(const Repl *r, int cursor)
@@ -1483,8 +1351,6 @@ void prompt_stash_draft(char **text, int *cursor)
     }
     if (cursor)
         *cursor = active->repl.cursor;
-    trace_prompt(active, "draft.save");
-    preview_forget(active);
 }
 
 void prompt_adopt_draft(const char *text, int cursor)
@@ -1494,17 +1360,9 @@ void prompt_adopt_draft(const char *text, int cursor)
 
     active->frame_ok = 0;
     repl_reset(&active->repl);
-    preview_forget(active);
     if (text && *text)
         repl_insert_text(&active->repl, text);
     active->repl.cursor = clamp_cursor(&active->repl, cursor);
-    trace_prompt(active, "draft.restore");
-}
-
-void prompt_set_listen(struct prompt *p, int (*fn)(void *ud), void *ud)
-{
-    p->listen = fn;
-    p->listen_ud = ud;
 }
 
 void prompt_set_external(struct prompt *p, char *(*fn)(void *ud), void *ud)
@@ -1516,11 +1374,6 @@ void prompt_set_external(struct prompt *p, char *(*fn)(void *ud), void *ud)
 int prompt_line_was_external(struct prompt *p)
 {
     return p && p->external_taken;
-}
-
-int prompt_line_had_preview(struct prompt *p)
-{
-    return p && p->preview_taken;
 }
 
 static void queue_push(struct prompt *p, char *line)
@@ -1543,7 +1396,6 @@ static void queue_push(struct prompt *p, char *line)
 
 char *prompt_take_queued(struct prompt *p)
 {
-    p->preview_taken = 0;
     if (p->queued_count == 0)
         return NULL;
     char *line = p->queued[0];
@@ -1565,7 +1417,6 @@ static int recall_queued(struct prompt *p)
         return 0;
     p->frame_ok = 0;
     repl_reset(&p->repl);
-    preview_forget(p);
     repl_insert_text(&p->repl, line);
     free(line);
     return 1;

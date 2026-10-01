@@ -184,11 +184,15 @@ static char *elide(char *text)
 }
 
 static struct buf ctx;
+static char       held_command[128];
+static int        held_lines;
 
 static void bash_context_clear(void)
 {
     free(ctx.data);
     memset(&ctx, 0, sizeof ctx);
+    held_command[0] = '\0';
+    held_lines = 0;
 }
 
 char *bash_take_context(void)
@@ -196,6 +200,32 @@ char *bash_take_context(void)
     char *out = ctx.len ? strdup(ctx.data) : NULL;
     bash_context_clear();
     return out;
+}
+
+const char *bash_held_command(void)
+{
+    return ctx.len ? held_command : NULL;
+}
+
+const char *bash_held_label(void)
+{
+    static char label[192];
+    if (!ctx.len)
+        return NULL;
+    snprintf(label, sizeof label, "%s \xc2\xb7 %d line%s \xc2\xb7 ctrl-x send", held_command,
+             held_lines, held_lines == 1 ? "" : "s");
+    return label;
+}
+
+static void held_note(const char *cmd, const char *out)
+{
+    size_t first = strcspn(cmd, "\n");
+    snprintf(held_command, sizeof held_command, "!%.*s%s", (int)first, cmd,
+             cmd[first] ? " \xe2\x80\xa6" : "");
+    for (const char *c = out; *c; c++)
+        held_lines += *c == '\n';
+    if (*out && out[strlen(out) - 1] != '\n')
+        held_lines++;
 }
 
 static int add_formatted(struct buf *b, const char *text, int n)
@@ -211,11 +241,10 @@ static void context_add(const char *cmd, const char *out, int status)
     char head[512];
     int  n;
     int  ok = 1;
-    if (!ctx.len) {
-        const char *lead = "The user ran a shell command in the terminal. Respond to it and its "
-                           "output; they can see the output already, so do not repeat it back.\n\n";
-        ok = buf_add(&ctx, lead, strlen(lead), CTX_TOTAL);
-    }
+    const char *lead = "The user ran a shell command in the terminal. Respond to it and its "
+                       "output; they can see the output already, so do not repeat it back.\n\n";
+    bash_context_clear();
+    ok = buf_add(&ctx, lead, strlen(lead), CTX_TOTAL);
     n = snprintf(head, sizeof head, "<bash-input>%.400s</bash-input>\n", cmd);
     ok = add_formatted(&ctx, head, n) && ok;
 
@@ -230,6 +259,8 @@ static void context_add(const char *cmd, const char *out, int status)
 
     if (!ok)
         bash_context_clear();
+    else
+        held_note(cmd, out);
 }
 
 struct ran {

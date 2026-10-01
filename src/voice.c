@@ -1,2020 +1,265 @@
 #include "voice.h"
 
-#include <ctype.h>
-#include <pthread.h>
-#include <stdatomic.h>
-#include <stddef.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "app.h"
-#include "chrome.h"
-#include "jev.h"
-#include "prompt.h"
 #include "session.h"
 #include "settings.h"
-#include "voicetrace.h"
 #include "status.h"
 #include "text.h"
 #include "tty.h"
 #include "vendor/agents/backend.h"
-#include "vendor/macos_voice.h"
 #include "workspace.h"
 
-#ifndef VOICE_HELPER_PATH
-#define VOICE_HELPER_PATH "VoiceHelper.app"
-#endif
+#define PVSAY       "pvsay"
+#define QUEUE_MAX   32
+#define WPM_DEFAULT 175
+#define KILL_WAIT_MS 300
 
-#define READY_WAIT_MS 30000
-#define JOIN_WAIT_MS  8000
-#define LINE_MAX_QUEUE 16
+static int   on;
+static int   muted;
+static int   armed = 1;
+static pid_t child;
+static char *queue[QUEUE_MAX];
+static int   nqueue;
 
-#define LISTEN_MAX 8192
-#define DROP_HOLD_MS 700
-
-#define SENT_HOLD_MS 200
-
-#define AV_RATE_DEFAULT 0.5
-
-#define SPOKEN_BREVITY                                                         \
-    "Reply in one or two short sentences of plain prose. Answer only what "    \
-    "was asked: no background, caveats, alternatives, or offers of further "   \
-    "help. No lists or paths unless they are asked for. Any command or "     \
-    "code you give must be verbatim in a fenced code block, never spelled "  \
-    "out or paraphrased for speech.\n\n"
-#define SPOKEN_PREAMBLE                                                        \
-    "The message below was spoken aloud, and your reply will be read back "    \
-    "aloud. " SPOKEN_BREVITY
-
-#define QUEUED_PREAMBLE                                                        \
-    "The message below was spoken aloud while an earlier reply was running, "  \
-    "and your reply will be read back aloud. Open with a few words restating " \
-    "what it asks. " SPOKEN_BREVITY
-
-static macos_voice *voice;
-static int          ready;
-static int          speaking;
-static int          speak = 1;
-static int          armed = 1;
-static int          mic = 1;
-static int          dropping;
-static long         drop_until;
-static int          hearing;
-
-static char         stale[LISTEN_MAX];
-static int          stale_hit;
-static char         draft[LISTEN_MAX];
-
-static int          listen_mode;
-static char         listen_buf[LISTEN_MAX];
-
-static struct {
-    const struct session *s;
-    char                 *text;
-} held[WORKSPACE_MAX];
-static int          nheld;
-
-static char         utter[LISTEN_MAX];
-static char         carry[LISTEN_MAX];
-
-static int          paused;
-
-static int          command_early;
-
-static int          mic_off_pending;
-static char         failure[256];
-static char        *queue[LINE_MAX_QUEUE];
-static int          nqueue;
-static char         label[64];
-static void       (*heard_fn)(void *ud, const char *text);
-static void        *heard_ud;
-static const char *(*draft_fn)(void *ud);
-static void        *draft_ud;
-static void       (*release_fn)(void *ud);
-static void        *release_ud;
-static int        (*claim_fn)(void *ud, const char *text);
-static void        *claim_ud;
-
-static int          erased;
-
-static char         shown[LISTEN_MAX];
-
-static void listen_append(const char *text);
-static void listen_clear(void);
-
-static void show(const char *text)
+static int reaped(int options)
 {
-    snprintf(shown, sizeof shown, "%s", text ? text : "");
-    heard_fn(heard_ud, text);
-}
-
-static const char *box_edit(void)
-{
-    if (!draft_fn || !shown[0])
-        return NULL;
-    const char *cur = draft_fn(draft_ud);
-    if (!cur)
-        return NULL;
-    const char *found = strstr(cur, shown);
-
-    if (found && !(listen_mode && found[strlen(shown)]))
-        return NULL;
-    return cur;
-}
-
-static int box_has_typed(void)
-{
-    const char *cur = draft_fn ? draft_fn(draft_ud) : NULL;
-    if (!cur || !*cur)
+    if (child <= 0)
+        return 1;
+    if (waitpid(child, NULL, options) == 0)
         return 0;
-    if (!shown[0])
-        return 1;
-    const char *found = strstr(cur, shown);
-    if (!found)
-        return 1;
-    if (found > cur && !(found == cur + 1 && (cur[0] == ' ' || cur[0] == '\n')))
-        return 1;
-    return found[strlen(shown)] != '\0';
-}
-
-static int take_edit(char *out, size_t n)
-{
-    const char *cur = box_edit();
-    if (!cur)
-        return 0;
-    snprintf(out, n, "%s", cur);
-
-    erased = draft[0] != 0;
-    if (listen_mode) {
-
-        snprintf(listen_buf, sizeof listen_buf, "%s", out);
-        if (claim_fn)
-            claim_fn(claim_ud, out);
-    } else if (release_fn) {
-
-        release_fn(release_ud);
-    }
-    shown[0] = '\0';
+    child = 0;
+    status_touch();
     return 1;
 }
 
-static void heard(const char *text)
-{
-    char edit[LISTEN_MAX];
-    if (heard_fn)
-        take_edit(edit, sizeof edit);
-    if (text && *text)
-        snprintf(draft, sizeof draft, "%s", text);
-    else
-        draft[0] = '\0';
-    if (!heard_fn)
-        return;
-    if (erased && !listen_mode)
-        return;
-    const char *tail = erased ? "" : draft;
-    if (listen_mode && (listen_buf[0] || erased)) {
-        size_t n = strlen(listen_buf);
-        int gap = tail[0] && n && listen_buf[n - 1] != ' ' && listen_buf[n - 1] != '\n';
-        char *joined = text_dsprintf("%s%s%s", listen_buf, gap ? " " : "", tail);
-        show(joined ? joined : listen_buf);
-        free(joined);
-        return;
-    }
-    show(text);
-}
-
-static void enqueue(const char *text)
-{
-    if (nqueue >= LINE_MAX_QUEUE)
-        return;
-    voice_trace("voice.queue", "text=%s", text);
-    queue[nqueue++] = strdup(text);
-}
-
-static void clear_queue(void)
+static void silence(void)
 {
     for (int i = 0; i < nqueue; i++)
         free(queue[i]);
     nqueue = 0;
-}
-
-static long now_ms(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
-}
-
-static void hold_drop_for(int ms)
-{
-    dropping = 1;
-    drop_until = now_ms() + ms;
-}
-
-static void hold_drop(void)
-{
-    hold_drop_for(DROP_HOLD_MS);
-}
-
-static int still_dropping(void)
-{
-    if (!dropping)
-        return 0;
-    if (now_ms() < drop_until)
-        return 1;
-    dropping = 0;
-    return 0;
-}
-
-static void remember_stale(const char *text)
-{
-    if (text && *text)
-        snprintf(stale, sizeof stale, "%s", text);
-}
-
-static void forget_stale(void)
-{
-    stale[0] = '\0';
-    stale_hit = 0;
-}
-
-static int same_draft(const char *a, const char *b)
-{
-    if (!a || !b || !*a || !*b)
-        return 0;
-    size_t na = strlen(a), nb = strlen(b);
-    if (na <= nb)
-        return strncmp(a, b, na) == 0;
-    return strncmp(b, a, nb) == 0;
-}
-
-static int is_stale(const char *text)
-{
-    if (!same_draft(stale, text))
-        return 0;
-    stale_hit = 1;
-    return 1;
-}
-
-static int is_command(const char *text, const char *const *list, int count)
-{
-    char words[256];
-    size_t n = 0;
-    int gap = 1;
-
-    if (!text)
-        return 0;
-    for (const unsigned char *p = (const unsigned char *)text; *p && n + 1 < sizeof words; p++) {
-        unsigned char c = *p;
-        if (c >= 'A' && c <= 'Z')
-            c = (unsigned char)(c - 'A' + 'a');
-        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
-            if (gap && n)
-                words[n++] = ' ';
-            if (n + 1 >= sizeof words)
-                break;
-            words[n++] = (char)c;
-            gap = 0;
-        } else if (c != '\'') {
-            gap = 1;
-        }
-    }
-    words[n] = '\0';
-    if (!n)
-        return 0;
-
-    static const char *pad[] = {
-        "okay", "ok", "please", "now", "hey", "um", "uh", "just",
-    };
-    char *start = words;
-    for (;;) {
-        int matched = 0;
-        for (int i = 0; i < (int)(sizeof pad / sizeof pad[0]); i++) {
-            size_t len = strlen(pad[i]);
-            if (!strncmp(start, pad[i], len) && (start[len] == ' ' || !start[len])) {
-                start += len;
-                if (*start == ' ')
-                    start++;
-                matched = 1;
-                break;
-            }
-        }
-        if (!matched)
-            break;
-    }
-    char *end = start + strlen(start);
-    for (;;) {
-        int matched = 0;
-        while (end > start && end[-1] == ' ')
-            *--end = '\0';
-        for (int i = 0; i < (int)(sizeof pad / sizeof pad[0]); i++) {
-            size_t len = strlen(pad[i]);
-            if (end - start >= (ptrdiff_t)len && !memcmp(end - len, pad[i], len) &&
-                (end - start == (ptrdiff_t)len || end[-len - 1] == ' ')) {
-                end -= len;
-                *end = '\0';
-                matched = 1;
-                break;
-            }
-        }
-        if (!matched)
-            break;
-    }
-    if (!*start)
-        return 0;
-
-    for (int i = 0; i < count; i++) {
-        size_t len = strlen(list[i]);
-        const char *p = start;
-        while (!strncmp(p, list[i], len) && (p[len] == ' ' || !p[len])) {
-            p += len;
-            if (!*p)
-                return 1;
-            p++;
-        }
-    }
-    return 0;
-}
-
-static int is_stop_command(const char *text)
-{
-    static const char *const stops[] = {
-        "stop", "wait", "quiet", "be quiet", "shush", "shh", "hush", "stop talking",
-        "stop it", "enough", "thats enough", "shut up", "silence", "hold on",
-        "one second",
-    };
-    return is_command(text, stops, (int)(sizeof stops / sizeof stops[0]));
-}
-
-static int is_pause_command(const char *text)
-{
-    static const char *const words[] = { "pause", "pause listening" };
-    return is_command(text, words, (int)(sizeof words / sizeof words[0]));
-}
-
-static int is_resume_command(const char *text)
-{
-    static const char *const words[] = { "resume", "resume listening" };
-    return is_command(text, words, (int)(sizeof words / sizeof words[0]));
-}
-
-static int is_early_pause_command(const char *text)
-{
-    static const char *const words[] = { "pause listening" };
-    return is_command(text, words, 1);
-}
-
-static int is_early_resume_command(const char *text)
-{
-    static const char *const words[] = { "resume listening" };
-    return is_command(text, words, 1);
-}
-
-static int listening(void) { return armed && mic; }
-
-const char *voice_mode_name(int mode)
-{
-    return mode == VOICE_MODE_JEV ? "jev" : mode == VOICE_MODE_WAKE ? "wake" : "auto";
-}
-
-int voice_mode_of(const char *name)
-{
-    if (!name)
-        return -1;
-    for (int i = VOICE_MODE_AUTO; i <= VOICE_MODE_JEV; i++)
-        if (!strcmp(name, voice_mode_name(i)))
-            return i;
-    return -1;
-}
-
-int voice_mode(void)
-{
-    int mode = voice_mode_of(settings_get_str(SETTING_VOICE_MODE, NULL));
-    if (mode >= 0)
-        return mode;
-    return settings_get_int(SETTING_VOICE_WAKE, 0) ? VOICE_MODE_WAKE : VOICE_MODE_AUTO;
-}
-
-int voice_wake(void) { return voice_mode() == VOICE_MODE_WAKE; }
-
-static void jev_clear(void);
-static const char *jev_judged(void);
-static const char *jev_row(void);
-
-static double helper_silence(void)
-{
-    return voice_mode() == VOICE_MODE_JEV ? VOICE_SILENCE_MAX : voice_silence();
-}
-
-void voice_set_mode(int mode)
-{
-    if (mode < VOICE_MODE_AUTO || mode > VOICE_MODE_JEV)
+    if (child <= 0)
         return;
-    settings_set_str(SETTING_VOICE_MODE, voice_mode_name(mode));
-    settings_set_int(SETTING_VOICE_WAKE, mode == VOICE_MODE_WAKE);
-    jev_clear();
-    listen_clear();
-    if (voice)
-        macos_voice_silence(voice, helper_silence());
-    status_touch();
+    kill(child, SIGTERM);
+    struct timespec tick = {0, 10 * 1000 * 1000};
+    for (int ms = 0; ms < KILL_WAIT_MS && !reaped(WNOHANG); ms += 10)
+        nanosleep(&tick, NULL);
+    if (child > 0) {
+        kill(child, SIGKILL);
+        reaped(0);
+    }
 }
 
-static void chime(const char *name)
+static void write_all(int fd, const char *text, size_t len)
 {
-    if (voice && listening())
-        macos_voice_chime(voice, name);
-}
-
-static void set_paused(int on)
-{
-    paused = on;
-    hearing = 0;
-    heard("");
-    chime(on ? "interrupted" : "listening");
-    status_touch();
-}
-
-static const char *listen_wake(const char *text)
-{
-    for (const char *p = text; *p; p++) {
-        if (p != text && isalnum((unsigned char)p[-1]))
+    while (len) {
+        ssize_t n = write(fd, text, len);
+        if (n < 0 && errno == EINTR)
             continue;
-        if (strncasecmp(p, "listen", 6) || isalnum((unsigned char)p[6]))
-            continue;
-        return p;
+        if (n <= 0)
+            return;
+        text += n;
+        len -= (size_t)n;
     }
-    return NULL;
 }
 
-static ptrdiff_t word_ends_at(const char *text, size_t end, const char *word)
+static void spawn(const char *text)
 {
-    size_t len = strlen(word);
-    if (end < len)
-        return -1;
-    size_t start = end - len;
-    if (strncasecmp(text + start, word, len))
-        return -1;
-    if (start && isalnum((unsigned char)text[start - 1]))
-        return -1;
-    return (ptrdiff_t)start;
-}
+    int fd[2];
+    if (pipe(fd) != 0)
+        return;
+    fcntl(fd[0], F_SETFD, FD_CLOEXEC);
+    fcntl(fd[1], F_SETFD, FD_CLOEXEC);
 
-static int listen_end(char *text)
-{
-    size_t n = strlen(text);
-    while (n && !isalnum((unsigned char)text[n - 1]))
-        n--;
-    ptrdiff_t done = word_ends_at(text, n, "done");
-    if (done < 0)
-        return 0;
-    size_t e = (size_t)done;
-    while (e && !isalnum((unsigned char)text[e - 1]))
-        e--;
-    ptrdiff_t start = word_ends_at(text, e, "ok");
-    if (start < 0)
-        start = word_ends_at(text, e, "okay");
-    if (start < 0)
-        return 0;
-    voice_trace("voice.end-match", "offset=%td text=%s", start, text);
-    text[start] = '\0';
-    return 1;
-}
-
-static int listen_cancel(char *text)
-{
-    size_t n = strlen(text);
-    while (n && !isalnum((unsigned char)text[n - 1]))
-        n--;
-    ptrdiff_t start = word_ends_at(text, n, "this");
-    if (start < 0)
-        start = word_ends_at(text, n, "that");
-    if (start >= 0) {
-        size_t e = (size_t)start;
-        while (e && !isalnum((unsigned char)text[e - 1]))
-            e--;
-        start = word_ends_at(text, e, "cancel");
-    } else {
-        start = word_ends_at(text, n, "cancel");
+    char rate[16], volume[16];
+    snprintf(rate, sizeof rate, "%d", voice_rate() * WPM_DEFAULT / 100);
+    snprintf(volume, sizeof volume, "%.2f", voice_volume() / 100.0);
+    const char *name = settings_get_str(SETTING_VOICE_NAME, NULL);
+    const char *argv[10];
+    int n = 0;
+    argv[n++] = PVSAY;
+    argv[n++] = "--markdown";
+    if (name && *name) {
+        argv[n++] = "-v";
+        argv[n++] = name;
     }
-    if (start < 0)
-        return 0;
-    voice_trace("voice.cancel-match", "offset=%td text=%s", start, text);
-    text[start] = '\0';
-    return 1;
-}
+    argv[n++] = "-r";
+    argv[n++] = rate;
+    argv[n++] = "--volume";
+    argv[n++] = volume;
+    argv[n] = NULL;
 
-static void listen_append(const char *text)
-{
-    while (*text == ' ')
-        text++;
-    size_t len = strlen(text);
-    while (len && (text[len - 1] == ' ' || text[len - 1] == '\n'))
-        len--;
-    if (!len)
-        return;
-    size_t n = strlen(listen_buf);
-    if (n + len + 2 > sizeof listen_buf)
-        return;
-    int gap = n && listen_buf[n - 1] != ' ' && listen_buf[n - 1] != '\n';
-    snprintf(listen_buf + n, sizeof listen_buf - n, "%s%.*s", gap ? " " : "", (int)len, text);
-}
-
-static void listen_clear(void)
-{
-    listen_mode = 0;
-    listen_buf[0] = '\0';
-}
-
-static char jev_held[LISTEN_MAX];
-static char jev_utter[LISTEN_MAX];
-
-static char jev_raw[LISTEN_MAX];
-static char jev_sent[LISTEN_MAX];
-
-static char jev_text[LISTEN_MAX];
-static char jev_asked[LISTEN_MAX];
-
-static char jev_line[LISTEN_MAX];
-static char jev_verdict[48];
-static long jev_changed;
-static long jev_fired;
-static int  jev_dirty;
-
-static double jev_threshold(void)
-{
-    double n = atof(settings_get_str(SETTING_VOICE_JEV_THRESHOLD, ""));
-    return n > 0 ? n : VOICE_JEV_THRESHOLD_DEFAULT;
-}
-
-static double jev_hold_threshold(void)
-{
-    double n = atof(settings_get_str(SETTING_VOICE_JEV_HOLD, ""));
-    return n > 0 ? n : VOICE_JEV_HOLD_DEFAULT;
-}
-
-static long jev_delay(void)
-{
-    int n = settings_get_int(SETTING_VOICE_JEV_DELAY, VOICE_JEV_DELAY_DEFAULT);
-    if (n < 0)
-        n = 0;
-    return n > VOICE_JEV_DELAY_MAX ? VOICE_JEV_DELAY_MAX : n;
-}
-
-static long jev_silence(void)
-{
-    int n = settings_get_int(SETTING_VOICE_JEV_SILENCE, VOICE_JEV_SILENCE_DEFAULT);
-    if (n < 0)
-        n = 0;
-    return n > VOICE_JEV_SILENCE_MAX ? VOICE_JEV_SILENCE_MAX : n;
-}
-
-static void jev_clear(void)
-{
-    jev_held[0] = jev_utter[0] = jev_raw[0] = jev_sent[0] = '\0';
-    jev_text[0] = jev_asked[0] = jev_verdict[0] = '\0';
-    jev_dirty = 0;
-    jev_reset();
-}
-
-static void jev_compose(void)
-{
-    if (jev_held[0] && jev_utter[0])
-        snprintf(jev_text, sizeof jev_text, "%s %s", jev_held, jev_utter);
-    else
-        snprintf(jev_text, sizeof jev_text, "%s", jev_held[0] ? jev_held : jev_utter);
-}
-
-static void jev_append(const char *text)
-{
-    while (*text == ' ')
-        text++;
-    size_t len = strlen(text);
-    while (len && (text[len - 1] == ' ' || text[len - 1] == '\n'))
-        len--;
-    if (!len)
-        return;
-    size_t n = strlen(jev_held);
-    if (n + len + 2 > sizeof jev_held)
-        return;
-    int gap = n && jev_held[n - 1] != ' ';
-    snprintf(jev_held + n, sizeof jev_held - n, "%s%.*s", gap ? " " : "", (int)len, text);
-}
-
-static void jev_turns(char *out, size_t n)
-{
-    const struct session *s = workspace_current();
-    const char           *reply = s ? session_last_reply(s) : NULL;
-    out[0] = '\0';
-    if (jev_line[0])
-        snprintf(out, n, "user: %s\n", jev_line);
-    size_t at = strlen(out);
-    if (reply && *reply && at < n)
-        snprintf(out + at, n - at, "assistant: %s", reply);
-}
-
-static void jev_fire(void)
-{
-    char turns[LISTEN_MAX];
-    jev_turns(turns, sizeof turns);
-    const char *text = jev_judged();
-    if (!jev_ask(text, turns, now_ms() - jev_changed))
-        return;
-    jev_fired = now_ms();
-    jev_dirty = 0;
-    snprintf(jev_asked, sizeof jev_asked, "%s", text);
-    voice_trace("jev.ask", "text=%s", text);
-}
-
-static void jev_forget(void)
-{
-    snprintf(jev_sent, sizeof jev_sent, "%s", jev_raw);
-    jev_held[0] = jev_utter[0] = jev_text[0] = jev_asked[0] = '\0';
-    jev_dirty = 0;
-    jev_reset();
-}
-
-static char *jev_end(void)
-{
-    if (heard_fn)
-        show(jev_text);
-    const char *cur = draft_fn ? draft_fn(draft_ud) : NULL;
-    char       *line = strdup(cur && *cur ? cur : jev_text);
-    if (cur && claim_fn)
-        claim_fn(claim_ud, cur);
-    if (heard_fn)
-        show("");
-    jev_forget();
-    draft[0] = '\0';
-    return line;
-}
-
-static void jev_submit(void)
-{
-    if (!jev_text[0])
-        return;
-    char *line = jev_end();
-    if (line && *line) {
-        snprintf(jev_line, sizeof jev_line, "%s", line);
-        enqueue(line);
+    pid_t pid = fork();
+    if (pid == 0) {
+        sigset_t none;
+        sigemptyset(&none);
+        sigprocmask(SIG_SETMASK, &none, NULL);
+        signal(SIGTERM, SIG_DFL);
+        signal(SIGINT, SIG_DFL);
+        signal(SIGPIPE, SIG_DFL);
+        dup2(fd[0], STDIN_FILENO);
+        int null = open("/dev/null", O_WRONLY);
+        if (null >= 0) {
+            dup2(null, STDOUT_FILENO);
+            dup2(null, STDERR_FILENO);
+        }
+        execvp(PVSAY, (char *const *)argv);
+        _exit(127);
     }
-    free(line);
-}
-
-static void jev_discard(void)
-{
-    free(jev_end());
-    chime("interrupted");
-}
-
-static void jev_answer(const struct jev_result *r)
-{
-    if (r->error) {
-        snprintf(jev_verdict, sizeof jev_verdict, "jev error %ldms", r->rtt_ms);
-        voice_trace("jev.error", "rtt=%ld text=%s", r->rtt_ms, r->text);
-        jev_dirty = jev_text[0] != '\0';
-        jev_fired = now_ms();
-        status_touch();
-        return;
+    close(fd[0]);
+    if (pid > 0) {
+        child = pid;
+        write_all(fd[1], text, strlen(text));
     }
-    int cancel = r->cancel >= VOICE_JEV_CANCEL;
-    int holding = r->hold >= jev_hold_threshold() && r->release < jev_threshold();
-    int ready = !cancel && !holding && r->ready >= jev_threshold();
-    voice_trace("jev.answer",
-                "ready=%.2f cancel=%.2f hold=%.2f release=%.2f rtt=%ld tok=%ld/%ld verdict=%s text=%s",
-                r->ready, r->cancel, r->hold, r->release, r->rtt_ms, r->in_tok, r->out_tok,
-                cancel ? "cancel" : ready ? "ready" : holding ? "hold" : "wait", r->text);
-    snprintf(jev_verdict, sizeof jev_verdict, "jev %.2f %s %ldms", r->ready,
-             cancel ? "CANCEL" : ready ? "READY" : holding ? "HOLD" : "wait", r->rtt_ms);
+    close(fd[1]);
     status_touch();
-    if (cancel) {
-        jev_discard();
-        return;
-    }
-    if (!ready)
-        return;
-    if (strcmp(jev_judged(), jev_asked)) {
-        voice_trace("jev.stale", "asked=%s now=%s", jev_asked, jev_judged());
-        jev_dirty = 1;
-        return;
-    }
-    jev_submit();
 }
 
-static void jev_tick(void)
+static void next(void)
 {
-    if (voice_mode() != VOICE_MODE_JEV)
+    if (child > 0 || !nqueue)
         return;
-    struct jev_result r;
-    if (jev_pump(&r))
-        jev_answer(&r);
-    if (!jev_dirty || jev_busy() || !jev_text[0] || !strcmp(jev_judged(), jev_asked))
-        return;
-    if (now_ms() - jev_fired < jev_delay() || now_ms() - jev_changed < jev_silence())
-        return;
-    jev_set_backend(settings_get_str(SETTING_VOICE_JEV_BACKEND, VOICE_JEV_BACKEND_DEFAULT));
-    if (!jev_key()[0]) {
-        snprintf(jev_verdict, sizeof jev_verdict, "jev: no %s key", jev_backend());
-        jev_dirty = 0;
-        status_touch();
-        return;
-    }
-    jev_fire();
+    char *text = queue[0];
+    memmove(queue, queue + 1, (size_t)--nqueue * sizeof *queue);
+    spawn(text);
+    free(text);
 }
 
-static void jev_heard(void)
+static void enqueue(const char *text)
 {
-    jev_compose();
-    hearing = jev_text[0] != '\0';
-    heard(jev_text);
-}
-
-static void jev_adopt_edit(void)
-{
-    const char *cur = box_edit();
-    if (!cur)
-        return;
-    if (!*cur) {
-        char raw[LISTEN_MAX];
-        snprintf(raw, sizeof raw, "%s", jev_raw);
-        jev_clear();
-        snprintf(jev_raw, sizeof jev_raw, "%s", raw);
-        snprintf(jev_sent, sizeof jev_sent, "%s", raw);
-        shown[0] = '\0';
-        voice_trace("jev.edit", "text=");
-        return;
-    }
-    snprintf(shown, sizeof shown, "%s", cur);
-    snprintf(jev_held, sizeof jev_held, "%s", cur);
-    size_t n = strlen(jev_held);
-    while (n && isspace((unsigned char)jev_held[n - 1]))
-        jev_held[--n] = '\0';
-    jev_utter[0] = '\0';
-    snprintf(jev_sent, sizeof jev_sent, "%s", jev_raw);
-    if (claim_fn)
-        claim_fn(claim_ud, cur);
-    jev_changed = now_ms();
-    jev_dirty = 1;
-    voice_trace("jev.edit", "text=%s", jev_held);
-}
-
-static const char *jev_judged(void)
-{
-    const char *cur = draft_fn ? draft_fn(draft_ud) : NULL;
-    if (cur && *cur && shown[0] && strstr(cur, shown))
-        return cur;
-    return jev_text;
-}
-
-static void jev_partial(const char *text)
-{
-    char was[LISTEN_MAX];
-    snprintf(was, sizeof was, "%s", jev_text);
-    jev_adopt_edit();
-    snprintf(jev_raw, sizeof jev_raw, "%s", text ? text : "");
-    const char *rest = jev_strip_prefix(jev_sent, jev_raw);
-    snprintf(jev_utter, sizeof jev_utter, "%s", rest ? rest : "");
-    jev_heard();
-    if (!jev_text[0])
-        return;
-    if (strcmp(was, jev_text))
-        jev_changed = now_ms();
-    jev_dirty = 1;
-    jev_tick();
-}
-
-static void jev_final(const char *text)
-{
-    jev_adopt_edit();
-    const char *rest = jev_strip_prefix(jev_sent, text ? text : "");
-    jev_sent[0] = jev_raw[0] = jev_utter[0] = '\0';
-    if (rest && *rest) {
-        jev_append(rest);
-        jev_changed = now_ms();
-        jev_dirty = 1;
-    }
-    jev_heard();
-    jev_tick();
-
-    if (voice && !speaking)
-        macos_voice_cancel(voice);
-}
-
-static int held_find(const struct session *s)
-{
-    for (int i = 0; i < nheld; i++)
-        if (held[i].s == s)
-            return i;
-    return -1;
-}
-
-static void held_remove(int i)
-{
-    free(held[i].text);
-    held[i] = held[--nheld];
-    held[nheld].s = NULL;
-    held[nheld].text = NULL;
-}
-
-static void held_put(const struct session *s, const char *text)
-{
-    int i = held_find(s);
-    if (i >= 0)
-        held_remove(i);
-    if (!s || nheld >= WORKSPACE_MAX)
+    if (nqueue == QUEUE_MAX)
         return;
     char *copy = strdup(text);
     if (!copy)
         return;
-    held[nheld].s = s;
-    held[nheld].text = copy;
-    nheld++;
-}
-
-static void held_clear(void)
-{
-    while (nheld)
-        held_remove(nheld - 1);
-}
-
-static void carry_clear(void)
-{
-    utter[0] = carry[0] = '\0';
-}
-
-static const char *skip_word(const char *p)
-{
-    while (*p && !isalnum((unsigned char)*p))
-        p++;
-    while (*p && !isspace((unsigned char)*p))
-        p++;
-    return p;
-}
-
-static const char *after_carry(const char *text)
-{
-    if (!carry[0] || !text)
-        return text;
-    const char *c = carry, *p = text;
-    for (;;) {
-        while (*c && !isalnum((unsigned char)*c))
-            c++;
-        while (*p && !isalnum((unsigned char)*p))
-            p++;
-        if (!*c || !*p || tolower((unsigned char)*c) != tolower((unsigned char)*p))
-            break;
-        c++;
-        p++;
-    }
-    if (*c) {
-        const char *cw = carry, *tw = text;
-        while (*cw && !isalnum((unsigned char)*cw))
-            cw++;
-        while (*tw && !isalnum((unsigned char)*tw))
-            tw++;
-        size_t n = strcspn(cw, " \t\n");
-        if (strcspn(tw, " \t\n") != n || strncasecmp(cw, tw, n))
-            return text;
-        p = text;
-        for (c = carry;;) {
-            while (*c && !isalnum((unsigned char)*c))
-                c++;
-            if (!*c)
-                break;
-            while (*c && !isspace((unsigned char)*c))
-                c++;
-            p = skip_word(p);
-        }
-    } else if (isalnum((unsigned char)*p) && p > text && isalnum((unsigned char)p[-1])) {
-
-        while (*p && !isspace((unsigned char)*p))
-            p++;
-    }
-    while (*p && (isspace((unsigned char)*p) || ispunct((unsigned char)*p)))
-        p++;
-    return p;
-}
-
-static void listen_flush(const char *tail)
-{
-    char body[sizeof draft];
-    if (tail && *tail) {
-        snprintf(body, sizeof body, "%s", tail);
-        listen_end(body);
-        listen_append(body);
-    }
-    size_t n = strlen(listen_buf);
-    while (n && isspace((unsigned char)listen_buf[n - 1]))
-        listen_buf[--n] = '\0';
-
-    if (heard_fn)
-        show(listen_buf);
-    const char *cur = draft_fn ? draft_fn(draft_ud) : NULL;
-    char *line = strdup(cur ? cur : listen_buf);
-    if (cur && claim_fn)
-        claim_fn(claim_ud, cur);
-    listen_mode = 0;
-    listen_buf[0] = '\0';
-    if (heard_fn)
-        show("");
-    if (line && *line)
-        enqueue(line);
-    free(line);
-}
-
-static void listen_discard(void)
-{
-    if (heard_fn)
-        show(listen_buf);
-    const char *cur = draft_fn ? draft_fn(draft_ud) : NULL;
-    if (cur && claim_fn)
-        claim_fn(claim_ud, cur);
-    listen_mode = 0;
-    listen_buf[0] = '\0';
-    if (heard_fn)
-        show("");
-    chime("interrupted");
-
-    if (voice && !speaking)
-        macos_voice_cancel(voice);
-}
-
-static int listen_take(const char *text, int cue)
-{
-    const char *body = text;
-
-    if (!listen_mode) {
-        body = listen_wake(text);
-        if (!body)
-            return 0;
-        listen_mode = 1;
-        listen_buf[0] = '\0';
-        if (cue)
-            chime("listening");
-    }
-
-    char rest[sizeof draft];
-    snprintf(rest, sizeof rest, "%s", body);
-    if (listen_end(rest)) {
-        listen_flush(rest);
-        return 1;
-    }
-    if (listen_cancel(rest)) {
-        listen_discard();
-        return 1;
-    }
-    listen_append(rest);
-
-    if (voice_wake() && listen_end(listen_buf))
-        listen_flush(NULL);
-    else if (voice_wake() && listen_cancel(listen_buf))
-        listen_discard();
-    return 1;
-}
-
-static int listen_hold_draft(void)
-{
-    if (!draft[0] || erased)
-        return 0;
-    char text[sizeof draft];
-    snprintf(text, sizeof text, "%s", draft);
-    draft[0] = '\0';
-    return listen_take(text, 0);
-}
-
-static void send_line(struct session *s, const char *line)
-{
-    int tab = workspace_index_of(s);
-    if (tab < 0 || !line || !*line)
-        return;
-    if (!session_turn_running(s))
-        prompt_echo_message(line);
-    char *full = voice_with_preamble(line, session_turn_running(s));
-    workspace_send(tab, full ? full : line, full ? line : NULL);
-    free(full);
-    chime("sent");
-}
-
-static void discard_speech(void)
-{
-    hearing = 0;
-    if (listening())
-        heard("");
-}
-
-static void handle_event(void *ud, const char *kind, const char *text)
-{
-    (void)ud;
-    if (!strcmp(kind, "ready")) {
-        ready = 1;
-    } else if (!strcmp(kind, "partial")) {
-        if (!listening()) {
-            remember_stale(text);
-            discard_speech();
-            return;
-        }
-        snprintf(utter, sizeof utter, "%s", text ? text : "");
-        text = after_carry(text);
-        if (voice_wake() && !listen_mode && !paused) {
-            text = text ? listen_wake(text) : NULL;
-            if (!text) {
-                hearing = 0;
-                heard("");
-                return;
-            }
-        }
-        if (paused) {
-            hearing = 0;
-            if (!command_early && is_early_resume_command(text)) {
-                command_early = 1;
-                set_paused(0);
-            }
-            return;
-        }
-        if (!command_early && is_early_pause_command(text)) {
-            command_early = 1;
-            erased = 0;
-            forget_stale();
-            set_paused(1);
-            return;
-        }
-
-        if (is_pause_command(text) || is_resume_command(text)) {
-            hearing = 1;
-            heard("");
-            return;
-        }
-        if (erased) {
-            hearing = 0;
-            return;
-        }
-        if (text && *text && (still_dropping() || is_stale(text))) {
-            discard_speech();
-            return;
-        }
-        if (voice_mode() == VOICE_MODE_JEV) {
-            forget_stale();
-            jev_partial(text);
-            return;
-        }
-        if (text && *text) {
-            forget_stale();
-            hearing = 1;
-            heard(text);
-            return;
-        }
-        hearing = 0;
-        heard("");
-        if (stale_hit)
-            forget_stale();
-    } else if (!strcmp(kind, "final")) {
-        if (!listening()) {
-            carry_clear();
-            remember_stale(text);
-            discard_speech();
-            return;
-        }
-        text = after_carry(text);
-        carry_clear();
-        if (voice_wake() && !listen_mode && !paused) {
-            text = text ? listen_wake(text) : NULL;
-            if (!text) {
-                hearing = 0;
-                heard("");
-                if (voice && !speaking)
-                    macos_voice_cancel(voice);
-                return;
-            }
-        }
-
-        if (command_early) {
-            command_early = 0;
-            if (is_pause_command(text) || is_resume_command(text)) {
-                if (voice && !speaking)
-                    macos_voice_cancel(voice);
-                return;
-            }
-        }
-        if (paused) {
-            if (voice && !speaking)
-                macos_voice_cancel(voice);
-            if (is_resume_command(text))
-                set_paused(0);
-            return;
-        }
-        if (voice_mode() == VOICE_MODE_JEV) {
-            forget_stale();
-            if (erased) {
-                erased = 0;
-                hearing = 0;
-                if (voice && !speaking)
-                    macos_voice_cancel(voice);
-                return;
-            }
-            jev_final(text);
-            return;
-        }
-        char edit[LISTEN_MAX];
-        take_edit(edit, sizeof edit);
-        hearing = 0;
-        heard("");
-        if (is_pause_command(text) || is_resume_command(text)) {
-            erased = 0;
-            forget_stale();
-            if (voice && !speaking)
-                macos_voice_cancel(voice);
-            set_paused(is_pause_command(text));
-            return;
-        }
-        if (erased) {
-            erased = 0;
-
-            if (listen_mode) {
-                char rest[sizeof draft];
-                snprintf(rest, sizeof rest, "%s", text ? text : "");
-                if (listen_end(rest))
-                    listen_flush(NULL);
-                else if (listen_cancel(rest))
-                    listen_discard();
-                heard("");
-                if (voice_wake() && listen_mode && voice && !speaking)
-                    macos_voice_cancel(voice);
-            }
-            return;
-        }
-
-        if (text && *text && !is_stale(text) &&
-            (listen_mode || listen_wake(text))) {
-            forget_stale();
-            listen_take(text, 1);
-            heard("");
-            if (voice_wake() && listen_mode && voice && !speaking)
-                macos_voice_cancel(voice);
-            return;
-        }
-        if (still_dropping() || is_stale(text)) {
-            discard_speech();
-            forget_stale();
-            return;
-        }
-        forget_stale();
-        if (text && *text && is_stop_command(text)) {
-            struct session *s = workspace_current();
-            if (s && session_turn_running(s))
-                session_interrupt(s);
-            chime("interrupted");
-            return;
-        }
-        if (text && *text)
-            enqueue(text);
-    } else if (!strcmp(kind, "interrupt")) {
-        if (!listening() || paused)
-            return;
-        clear_queue();
-        listen_clear();
-        hearing = 0;
-        heard("");
-        struct session *s = workspace_current();
-        if (s && session_turn_running(s))
-            session_interrupt(s);
-        chime("interrupted");
-        erased = 0;
-    } else if (!strcmp(kind, "dropped")) {
-
-        carry_clear();
-        if (voice_mode() == VOICE_MODE_JEV) {
-            jev_raw[0] = jev_utter[0] = jev_sent[0] = '\0';
-            jev_heard();
-            erased = 0;
-            return;
-        }
-        discard_speech();
-        erased = 0;
-    } else if (!strcmp(kind, "cancelled")) {
-
-        carry_clear();
-        erased = 0;
-        if (voice_mode() == VOICE_MODE_JEV) {
-            jev_clear();
-            discard_speech();
-            return;
-        }
-        if (listening() && listen_mode) {
-            draft[0] = '\0';
-            listen_discard();
-        }
-        discard_speech();
-    } else if (!strcmp(kind, "speaking")) {
-        speaking = text && *text == '1';
-        status_touch();
-    } else if (!strcmp(kind, "mic")) {
-        if (text && !strcmp(text, "0"))
-            mic_off_pending = 1;
-    } else if (!strcmp(kind, "notice")) {
-        if (text && *text)
-            status_set_alert(text);
-    } else if (!strcmp(kind, "error")) {
-        if (text && !strncmp(text, "unknown command:", 16))
-            return;
-        snprintf(failure, sizeof failure, "%s", text ? text : "helper failed");
-    }
-}
-
-static void on_event(void *ud, const char *kind, const char *text)
-{
-    voice_trace("helper.event", "tab=%p kind=%s text=%s listen=%d erased=%d carry=%s",
-                (void *)workspace_current(), kind, text ? text : "", listen_mode, erased, carry);
-    handle_event(ud, kind, text);
-    voice_trace("voice.state", "tab=%p listen=%d erased=%d armed=%d paused=%d queue=%d draft=%s held=%s shown=%s",
-                (void *)workspace_current(), listen_mode, erased, armed, paused, nqueue,
-                draft, listen_buf, shown);
+    queue[nqueue++] = copy;
+    next();
 }
 
 static void on_session_event(void *ud, struct session *s, const backend_event *ev)
 {
     (void)ud;
-    if (!voice || ev->kind != BACKEND_EV_ASSISTANT || !ev->text || !*ev->text)
+    if (ev->kind != BACKEND_EV_ASSISTANT || !ev->text || !*ev->text)
         return;
     if (ev->parent && *ev->parent)
         return;
-    if (s != workspace_current())
+    if (!on || !armed || muted || s != workspace_current())
         return;
-    if (!speak || !armed)
-        return;
-    macos_voice_say(voice, ev->text);
+    enqueue(ev->text);
 }
 
-static void drain(void)
+void voice_init(void)
 {
-    if (!voice)
-        return;
-    int n;
-    while ((n = macos_voice_poll(voice, 0)) > 0)
-        ;
-    if (n < 0 && !failure[0])
-        snprintf(failure, sizeof failure, "helper exited");
-    if (failure[0]) {
-        char text[300];
-        snprintf(text, sizeof text, "voice stopped: %s", failure);
-        voice_stop();
-        status_set_alert(text);
-        return;
-    }
-    if (mic_off_pending) {
-        mic_off_pending = 0;
-        voice_mic_off(0);
-    }
-    jev_tick();
-}
-
-static macos_voice_opts start_opts;
-static char             start_helper[1024], start_name[256], start_input[256];
-static pthread_t        start_thread;
-static macos_voice     *start_result;
-static atomic_int       start_done, start_cancel;
-static int              start_running, starting, start_reap, start_joined, start_held;
-static long             start_until;
-
-static int start_tick(void *ud)
-{
-    (void)ud;
-    return atomic_load(&start_cancel);
-}
-
-static void *start_main(void *ud)
-{
-    (void)ud;
-    if (start_reap)
-        macos_voice_reap(start_opts.helper_path);
-    start_result = macos_voice_start(&start_opts, on_event, NULL);
-    atomic_store(&start_done, 1);
-    return NULL;
-}
-
-static int start_launch(void)
-{
-    start_result = NULL;
-    atomic_store(&start_done, 0);
-    atomic_store(&start_cancel, 0);
-    start_running = !pthread_create(&start_thread, NULL, start_main, NULL);
-    return start_running;
-}
-
-static void start_join(void)
-{
-    if (!start_running)
-        return;
-    pthread_join(start_thread, NULL);
-    start_running = 0;
-}
-
-static void start_release(void)
-{
-    starting = 0;
-    status_work_end(start_held && !session_turn_running(workspace_current()));
-    start_held = 0;
-}
-
-static void start_abort(void)
-{
-    if (!starting)
-        return;
-    atomic_store(&start_cancel, 1);
-    start_join();
-    if (!voice && start_result)
-        macos_voice_stop(start_result);
-    start_result = NULL;
-    start_release();
-}
-
-static void start_fail(const char *why)
-{
-    if (voice)
-        macos_voice_stop(voice);
-    voice = NULL;
-    start_release();
-    char text[320];
-    snprintf(text, sizeof text, "voice: %s", why);
-    status_set_alert(text);
-}
-
-static void start_ready(void)
-{
-    start_release();
+    on = settings_get_int(SETTING_VOICE, 0) ? 1 : 0;
     armed = tty_focused();
-
-    if (!macos_voice_resumed(voice)) {
-        macos_voice_focus(voice, armed);
-        if (armed)
-            chime("listening");
-    }
-    macos_voice_volume(voice, voice_volume() / 100.0);
-    macos_voice_rate(voice, voice_rate() / 100.0 * AV_RATE_DEFAULT);
-
-    macos_voice_silence(voice, helper_silence());
     session_add_listener(on_session_event, NULL);
+}
+
+void voice_stop(void) { silence(); }
+
+int voice_on(void) { return on; }
+
+void voice_set_on(int value)
+{
+    on = value ? 1 : 0;
+    settings_set_int(SETTING_VOICE, on);
+    if (!on)
+        silence();
     status_touch();
 }
 
-int voice_starting(void) { return starting; }
-
-void voice_start_poll(void)
+static int clamp(int n, int low, int high)
 {
-    if (!starting)
-        return;
-    if (start_running) {
-        if (!atomic_load(&start_done))
-            return;
-        start_join();
-        voice = start_result;
-        start_result = NULL;
-        if (!voice) {
-            char why[1100];
-            snprintf(why, sizeof why, "could not launch %s", start_opts.helper_path);
-            start_fail(why);
-            return;
-        }
-        start_joined = !macos_voice_launched(voice) && !macos_voice_resumed(voice);
-        start_until = now_ms() + (start_joined && !start_reap ? JOIN_WAIT_MS : READY_WAIT_MS);
-    }
-    if (!ready && !failure[0] && macos_voice_poll(voice, 0) < 0)
-        snprintf(failure, sizeof failure, "helper exited");
-    while (!ready && !failure[0] && macos_voice_poll(voice, 0) > 0)
-        ;
-    if (failure[0]) {
-        start_fail(failure);
-        return;
-    }
-    if (ready) {
-        start_ready();
-        return;
-    }
-    if (now_ms() < start_until)
-        return;
-    if (start_joined && !start_reap) {
-        macos_voice_stop(voice);
-        voice = NULL;
-        start_reap = 1;
-        if (!start_launch())
-            start_fail("could not start the helper thread");
-        return;
-    }
-    start_fail("helper is still starting");
-}
-
-int voice_start(char *err, size_t size)
-{
-    if (voice || starting)
-        return 1;
-    chrome_live_label(jev_row);
-    ready = 0;
-    speaking = 0;
-
-    armed = tty_focused();
-    mic = 1;
-    dropping = 0;
-    drop_until = 0;
-    hearing = 0;
-    erased = 0;
-    paused = 0;
-    command_early = 0;
-    forget_stale();
-    listen_clear();
-    jev_clear();
-    held_clear();
-    carry_clear();
-    draft[0] = '\0';
-    failure[0] = '\0';
-
-    const char *name = settings_get_str(SETTING_VOICE_NAME, NULL);
-    const char *input = settings_get_str(SETTING_VOICE_INPUT, NULL);
-    snprintf(start_helper, sizeof start_helper, "%s",
-             settings_get_str(SETTING_VOICE_HELPER, VOICE_HELPER_PATH));
-    snprintf(start_name, sizeof start_name, "%s", name ? name : "");
-    snprintf(start_input, sizeof start_input, "%s", input ? input : "");
-    start_opts = (macos_voice_opts){
-        .helper_path = start_helper,
-        .voice       = name ? start_name : NULL,
-        .rate        = voice_rate() / 100.0 * AV_RATE_DEFAULT,
-        .silence     = helper_silence(),
-        .volume      = voice_volume() / 100.0,
-        .input       = input ? start_input : NULL,
-        .tick        = start_tick,
-    };
-
-    starting = 1;
-    start_reap = 0;
-    start_held = status_work_begin("starting voice");
-    if (!start_launch()) {
-        start_release();
-        snprintf(err, size, "could not start the helper thread");
-        return 0;
-    }
-    return 1;
-}
-
-static void teardown(int end_helper)
-{
-    start_abort();
-    chrome_live_label(NULL);
-    if (!voice)
-        return;
-    session_remove_listener(on_session_event, NULL);
-    macos_voice_focus(voice, 0);
-    if (end_helper) {
-        macos_voice_shutdown(voice);
-        macos_voice_reap(settings_get_str(SETTING_VOICE_HELPER, VOICE_HELPER_PATH));
-    } else {
-        macos_voice_stop(voice);
-    }
-    voice = NULL;
-    ready = 0;
-    speaking = 0;
-    armed = 1;
-    mic = 1;
-    dropping = 0;
-    drop_until = 0;
-    hearing = 0;
-    erased = 0;
-    paused = 0;
-    command_early = 0;
-    forget_stale();
-    listen_clear();
-    jev_clear();
-    held_clear();
-    carry_clear();
-    draft[0] = '\0';
-    mic_off_pending = 0;
-    clear_queue();
-    heard("");
-    status_touch();
-}
-
-void voice_stop(void) { teardown(0); }
-
-void voice_protect_handoff(void) { macos_voice_protect_handoff(); }
-
-void voice_handoff(void)
-{
-    if (voice && macos_voice_handoff(voice) != 0)
-        voice_stop();
-}
-
-int voice_restart(char *err, size_t size)
-{
-    int was_on = voice != NULL, was_speaking = speak;
-    teardown(1);
-    if (!was_on) {
-
-        macos_voice_reap(settings_get_str(SETTING_VOICE_HELPER, VOICE_HELPER_PATH));
-        return 1;
-    }
-    if (!voice_start(err, size))
-        return 0;
-    voice_set_speak(was_speaking);
-    return 1;
-}
-
-int voice_on(void) { return voice || starting; }
-
-void voice_set_speak(int on)
-{
-    speak = on ? 1 : 0;
-    if (voice && !speak)
-        macos_voice_mute(voice);
-    status_touch();
-}
-
-int voice_speak(void) { return speak; }
-
-static int clamp_volume(int n)
-{
-    if (n < 0)
-        return 0;
-    if (n > 100)
-        return 100;
-    return n;
+    return n < low ? low : n > high ? high : n;
 }
 
 int voice_volume(void)
 {
-    return clamp_volume(settings_get_int(SETTING_VOICE_VOLUME, VOICE_VOLUME_DEFAULT));
+    return clamp(settings_get_int(SETTING_VOICE_VOLUME, VOICE_VOLUME_DEFAULT), 0, 100);
 }
 
 void voice_set_volume(int percent)
 {
-    percent = clamp_volume(percent);
-    settings_set_int(SETTING_VOICE_VOLUME, percent);
-    if (voice)
-        macos_voice_volume(voice, percent / 100.0);
-}
-
-static int clamp_rate(int n)
-{
-    if (n < VOICE_RATE_MIN)
-        return VOICE_RATE_MIN;
-    if (n > VOICE_RATE_MAX)
-        return VOICE_RATE_MAX;
-    return n;
+    settings_set_int(SETTING_VOICE_VOLUME, clamp(percent, 0, 100));
 }
 
 int voice_rate(void)
 {
-    return clamp_rate(settings_get_int(SETTING_VOICE_RATE, VOICE_RATE_DEFAULT));
+    return clamp(settings_get_int(SETTING_VOICE_RATE, VOICE_RATE_DEFAULT),
+                 VOICE_RATE_MIN, VOICE_RATE_MAX);
 }
 
 void voice_set_rate(int percent)
 {
-    percent = clamp_rate(percent);
-    settings_set_int(SETTING_VOICE_RATE, percent);
-    if (voice)
-        macos_voice_rate(voice, percent / 100.0 * AV_RATE_DEFAULT);
+    settings_set_int(SETTING_VOICE_RATE, clamp(percent, VOICE_RATE_MIN, VOICE_RATE_MAX));
 }
 
-static double clamp_silence(double n)
+void voice_pending(void)
 {
-    if (n < VOICE_SILENCE_MIN)
-        return VOICE_SILENCE_MIN;
-    if (n > VOICE_SILENCE_MAX)
-        return VOICE_SILENCE_MAX;
-    return n;
-}
-
-double voice_silence(void)
-{
-    double n = atof(settings_get_str(SETTING_VOICE_SILENCE, ""));
-    return clamp_silence(n > 0 ? n : VOICE_SILENCE_DEFAULT);
-}
-
-void voice_set_silence(double seconds)
-{
-    seconds = clamp_silence(seconds);
-    char text[32];
-    snprintf(text, sizeof text, "%g", seconds);
-    settings_set_str(SETTING_VOICE_SILENCE, text);
-    if (voice)
-        macos_voice_silence(voice, helper_silence());
-}
-
-int voice_apply(int on, int speak_on, char *err, size_t size)
-{
-    if (!on) {
-        if (voice)
-            voice_stop();
-        settings_set_int(SETTING_VOICE, 0);
-        return 1;
-    }
-    voice_set_speak(speak_on);
-    settings_set_int(SETTING_VOICE_SPEAK, speak);
-    if (!voice && !voice_start(err, size))
-        return 0;
-    settings_set_int(SETTING_VOICE, 1);
-    return 1;
-}
-
-int voice_mic(void) { return voice && mic; }
-
-void voice_set_mic(int on)
-{
-    on = on ? 1 : 0;
-    if (on == mic)
-        return;
-    if (!on) {
-        voice_commit(workspace_current());
-
-        if (listen_mode && release_fn)
-            release_fn(release_ud);
-    }
-    mic = on;
-    if (voice)
-        macos_voice_mic(voice, on);
-    if (on)
-        chime("listening");
-    dropping = 0;
-    drop_until = 0;
-    hearing = 0;
-    erased = 0;
-    paused = 0;
-    command_early = 0;
-    listen_clear();
-    jev_clear();
-    carry_clear();
-    heard("");
-    if (voice) {
-        drain();
-        macos_voice_cancel(voice);
-    }
-    status_touch();
-}
-
-void voice_mic_off(int every)
-{
-    if (!voice_mic())
-        return;
-    voice_set_mic(0);
-    status_set_note("mic off");
-    if (every && voice)
-        macos_voice_mic_off_all(voice);
-}
-
-void voice_on_heard(void (*fn)(void *ud, const char *text), void *ud)
-{
-    heard_fn = fn;
-    heard_ud = ud;
-}
-
-void voice_on_draft(const char *(*fn)(void *ud), void *ud)
-{
-    draft_fn = fn;
-    draft_ud = ud;
-}
-
-void voice_on_release(void (*fn)(void *ud), void *ud)
-{
-    release_fn = fn;
-    release_ud = ud;
-}
-
-void voice_on_claim(int (*fn)(void *ud, const char *text), void *ud)
-{
-    claim_fn = fn;
-    claim_ud = ud;
-}
-
-static const char *jev_row(void)
-{
-    return voice && voice_mode() == VOICE_MODE_JEV ? voice_label() : NULL;
-}
-
-const char *voice_label(void)
-{
-    if (!voice && !starting)
-        return NULL;
-    if (!ready)
-        snprintf(label, sizeof label, "voice starting");
-    else if (!mic)
-        snprintf(label, sizeof label, "voice mic off");
-    else if (paused)
-        snprintf(label, sizeof label, "voice paused");
-    else if (!armed)
-        snprintf(label, sizeof label, "voice unfocused");
-    else if (listen_mode)
-        snprintf(label, sizeof label, "voice dictation");
-    else if (voice_mode() == VOICE_MODE_JEV)
-        snprintf(label, sizeof label, "%s", jev_verdict[0] ? jev_verdict : "voice jev");
-    else if (voice_wake())
-        snprintf(label, sizeof label, "voice: say listen");
-    else if (!speak)
-        snprintf(label, sizeof label, "voice listen");
-    else
-        snprintf(label, sizeof label, "voice%s", speaking ? " speaking" : "");
-    return label;
-}
-
-int voice_fds(int *out, int max)
-{
-    if (!voice || max < 1)
-        return 0;
-    int n = 0;
-    int fd = macos_voice_fd(voice);
-    if (fd >= 0)
-        out[n++] = fd;
-
-    n += jev_fds(out + n, max - n);
-    return n;
-}
-
-int voice_pending(void)
-{
-    if (!voice)
-        return 0;
-    drain();
-    still_dropping();
-    return nqueue > 0;
-}
-
-char *voice_take_line(void)
-{
-    if (!voice)
-        return NULL;
-    drain();
-    if (!nqueue)
-        return NULL;
-    char *line = queue[0];
-    for (int i = 1; i < nqueue; i++)
-        queue[i - 1] = queue[i];
-    nqueue--;
-    voice_trace("voice.take", "tab=%p typed=%d text=%s", (void *)workspace_current(), box_has_typed(), line);
-    if (!box_has_typed())
-        chime("sent");
-    return line;
+    reaped(WNOHANG);
+    next();
 }
 
 void voice_turn_begin(struct session *s)
 {
-    if (voice && s == workspace_current())
-        macos_voice_busy(voice, 1);
+    (void)s;
+    muted = 0;
 }
 
 void voice_turn_done(struct session *s)
 {
-    if (!voice)
-        return;
-    if (s == workspace_current()) {
-        macos_voice_finish(voice);
-        macos_voice_busy(voice, 0);
-    }
-    if (armed || !s || session_last_interrupted(s))
+    if (!on || armed || !s || session_last_interrupted(s))
         return;
     if (!settings_get_int(SETTING_VOICE_COMPLETE, 1))
         return;
     const char *name = session_title(s);
-    if (!name || !*name)
-        name = APP_NAME;
     char line[192];
-    snprintf(line, sizeof line, "%s complete", name);
-    macos_voice_announce(voice, line);
+    snprintf(line, sizeof line, "%s complete", name && *name ? name : APP_NAME);
+    enqueue(line);
 }
 
 void voice_turn_cancel(struct session *s)
 {
-    if (voice && s == workspace_current())
-        macos_voice_cancel(voice);
+    if (s == workspace_current())
+        silence();
 }
 
-void voice_refocus(void)
+void voice_refocus(void) { silence(); }
+
+void voice_arm(int value)
 {
-    if (!voice)
-        return;
-    macos_voice_cancel(voice);
-    struct session *s = workspace_current();
-    macos_voice_busy(voice, s && session_turn_running(s));
-    int i = s ? held_find(s) : -1;
-    if (i < 0)
-        return;
-
-    if (!claim_fn || claim_fn(claim_ud, held[i].text)) {
-        listen_mode = 1;
-        snprintf(listen_buf, sizeof listen_buf, "%s", held[i].text);
-        snprintf(shown, sizeof shown, "%s", held[i].text);
-    }
-    voice_trace("voice.resume", "tab=%p listen=%d text=%s", (void *)s, listen_mode, held[i].text);
-    held_remove(i);
-    status_touch();
+    armed = value ? 1 : 0;
+    if (!armed)
+        silence();
 }
 
-void voice_leave(struct session *s)
-{
-    if (!voice)
-        return;
-    drain();
-    char edit[LISTEN_MAX];
-    take_edit(edit, sizeof edit);
-    snprintf(carry, sizeof carry, "%s", utter);
-    if (listen_mode || listen_wake(draft))
-        listen_hold_draft();
-
-    take_edit(edit, sizeof edit);
-    draft[0] = '\0';
-    hearing = erased = command_early = 0;
-    if (heard_fn && listen_mode)
-        show(listen_buf);
-
-    if (nqueue && heard_fn) {
-        char *text = strdup("");
-        for (int i = 0; text && i < nqueue; i++) {
-            char *next = text_dsprintf("%s%s%s", text, *text ? " " : "", queue[i]);
-            free(text);
-            text = next;
-        }
-        if (text) {
-            char *next = text_dsprintf("%s%s%s", text, shown[0] ? " " : "", shown);
-            if (next) {
-                show(next);
-                free(next);
-            }
-            free(text);
-        }
-    }
-    voice_trace("voice.leave", "tab=%p listen=%d carry=%s held=%s", (void *)s, listen_mode, carry, listen_buf);
-    if (listen_mode)
-        held_put(s, listen_buf);
-    if (release_fn)
-        release_fn(release_ud);
-    clear_queue();
-    listen_clear();
-    jev_clear();
-    shown[0] = '\0';
-    status_touch();
-}
-
-void voice_forget(const struct session *s)
-{
-    int i = held_find(s);
-    if (i >= 0)
-        held_remove(i);
-}
-
-void voice_commit(struct session *s)
-{
-    if (!voice || !s)
-        return;
-    drain();
-    char edit[LISTEN_MAX];
-    take_edit(edit, sizeof edit);
-    if (erased) {
-        erased = 0;
-        if (draft[0])
-            remember_stale(draft);
-    } else if (draft[0] && !is_stale(draft)) {
-        remember_stale(draft);
-
-        if (voice_mode() == VOICE_MODE_JEV) {
-            if (jev_text[0])
-                enqueue(jev_text);
-            jev_clear();
-        } else if (listen_mode || listen_wake(draft))
-            listen_hold_draft();
-        else if (!voice_wake() && is_stop_command(draft)) {
-            if (session_turn_running(s))
-                session_interrupt(s);
-            chime("interrupted");
-        } else if (!voice_wake()) {
-            enqueue(draft);
-        }
-    }
-    hearing = 0;
-    heard("");
-
-    const char *composing = draft_fn ? draft_fn(draft_ud) : NULL;
-    if (composing && *composing)
-        return;
-    while (nqueue > 0) {
-        char *line = queue[0];
-        for (int i = 1; i < nqueue; i++)
-            queue[i - 1] = queue[i];
-        nqueue--;
-        send_line(s, line);
-        free(line);
-    }
-}
-
-void voice_draft_sent(void)
-{
-    if (!voice || !listening())
-        return;
-
-    if (draft[0])
-        remember_stale(draft);
-    erased = 0;
-    listen_clear();
-    jev_forget();
-    hold_drop_for(SENT_HOLD_MS);
-    hearing = 0;
-    heard("");
-    drain();
-    macos_voice_cancel(voice);
-}
-
-static void drop_input(void)
-{
-    int cut = draft[0] != 0;
-    hold_drop();
-    clear_queue();
-    jev_clear();
-    erased = 0;
-    listen_clear();
-    hearing = 0;
-
-    forget_stale();
-    remember_stale(draft);
-    heard("");
-
-    erased = cut;
-    drain();
-}
-
-int voice_drop(void)
-{
-    if (!voice || !listening())
-        return 0;
-
-    int had = nqueue > 0 || hearing || listen_mode;
-    drop_input();
-    macos_voice_cancel(voice);
-    return had;
-}
-
-int voice_discard(void)
-{
-    if (!voice || !listening())
-        return 0;
-    if (!listen_mode && !hearing && !draft[0] && !shown[0] && !nqueue)
-        return 0;
-    drop_input();
-    if (!speaking)
-        macos_voice_cancel(voice);
-    return 1;
-}
-
-#define HANDOFF_WAIT_MS 40
-static void await_handoff(void)
-{
-    if (!voice)
-        return;
-    if (macos_voice_poll(voice, HANDOFF_WAIT_MS) > 0)
-        drain();
-}
-
-void voice_arm(int on)
-{
-    on = on ? 1 : 0;
-    int changed = on != armed;
-
-    if (on) {
-        armed = 1;
-        if (voice)
-            macos_voice_focus(voice, 1);
-    } else {
-        if (voice)
-            macos_voice_focus(voice, 0);
-        if (changed) {
-            await_handoff();
-            voice_commit(workspace_current());
-        }
-        armed = 0;
-    }
-    if (!voice || !changed)
-        return;
-    dropping = 0;
-    drop_until = 0;
-    hearing = 0;
-    carry_clear();
-    heard("");
-    if (armed) {
-        struct session *s = workspace_current();
-        macos_voice_busy(voice, s && session_turn_running(s));
-    }
-    status_touch();
-}
-
-char *voice_with_preamble(const char *line, int queued)
-{
-    if (!voice || !speak || !line || !*line)
-        return NULL;
-    return text_dsprintf("%s%s", queued ? QUEUED_PREAMBLE : SPOKEN_PREAMBLE, line);
-}
-
-int voice_speaking(void) { return voice && speaking; }
+int voice_speaking(void) { return child > 0; }
 
 void voice_mute(void)
 {
-    if (!voice)
-        return;
-    macos_voice_mute(voice);
-    speaking = 0;
-    status_touch();
+    silence();
+    muted = 1;
+}
+
+char *voice_with_preamble(const char *line)
+{
+    if (!on || !line || !*line)
+        return NULL;
+    return text_dsprintf(VOICE_PREAMBLE "%s", line);
+}
+
+const char *voice_label(void)
+{
+    if (!on)
+        return NULL;
+    return child > 0 ? "speaking" : "voice";
 }

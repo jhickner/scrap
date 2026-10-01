@@ -9,8 +9,6 @@ void chrome_bind(struct prompt *p);
 
 void chrome_paint(void);
 
-void chrome_live_label(const char *(*fn)(void));
-
 int  chrome_paint_spin(void);
 
 

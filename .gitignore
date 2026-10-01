@@ -8,6 +8,4 @@ TODO.md
 .grok/
 .claude/worktrees
 testimages/
-.build/
-src/vendor/VoiceHelper.app/
 map/

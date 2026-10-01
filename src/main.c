@@ -28,6 +28,7 @@
 #include "intercom.h"
 #include "imageview.h"
 #include "livelist.h"
+#include "md.h"
 #include "prompt.h"
 #include "restart.h"
 #include "handoff.h"
@@ -43,7 +44,6 @@
 #include "sessionswitch.h"
 #include "sessionview.h"
 #include "settings.h"
-#include "voicetrace.h"
 #include "version.h"
 #include "dispatch.h"
 #include "sidechannel.h"
@@ -196,7 +196,6 @@ static int idle_fds(void *ud, int *out, int max)
             out[n++] = fd;
     }
     n += sidechannel_fds(out + n, max - n);
-    n += voice_fds(out + n, max - n);
     n += relay_fds(out + n, max - n);
     n += api_fds(out + n, max - n);
     n += dispatch_fds(out + n, max - n);
@@ -241,87 +240,26 @@ static int idle_render(void *ud)
     dispatch_poll();
     stream_poll();
 
-    if (tg_pending() || relay_pending() || im_pending() || voice_pending())
+    if (tg_pending() || relay_pending() || im_pending())
         tty_wake();
+    voice_pending();
     relay_poll(NULL);
     api_poll();
     struct session *drew = session_set_drawing(workspace_current());
     image_poll();
     session_set_drawing(drew);
     int busy = workspace_pump();
-    voice_start_poll();
     status_tick();
     return busy;
 }
 
-static int voice_took;
 static int relay_took;
 static int im_took;
 
-static void voice_heard(void *ud, const char *text)
-{
-    prompt_set_preview(ud, text);
-}
-
-static const char *voice_draft(void *ud)
-{
-    return prompt_line(ud);
-}
-
-static void voice_release(void *ud)
-{
-    prompt_release_preview(ud);
-}
-
-static int voice_claim(void *ud, const char *text)
-{
-    return prompt_claim_preview(ud, text);
-}
-
-static int voice_listening(void *ud)
-{
-    (void)ud;
-    return voice_mic();
-}
-
-static void toggle_mic(void *ud)
-{
-    (void)ud;
-    if (!voice_on()) {
-        char err[300];
-        if (!voice_apply(1, voice_speak(), err, sizeof err)) {
-            char text[320];
-            snprintf(text, sizeof text, "voice: %s", err);
-            status_set_alert(text);
-            return;
-        }
-        status_set_note("mic on");
-        return;
-    }
-    if (voice_mic()) {
-        voice_mic_off(1);
-        return;
-    }
-    voice_set_mic(1);
-    status_set_note("mic on");
-}
-
 static char *chat_line(void *ud)
 {
-    struct prompt *p = ud;
-    char *line = voice_take_line();
-    voice_took = line != NULL;
-    if (line) {
-        const char *cur = prompt_line(p);
-        if (cur && *cur) {
-            voice_trace("voice.merge", "cursor=%d line=%s", prompt_cursor(p), line);
-            prompt_insert(p, line);
-            free(line);
-            return NULL;
-        }
-        return line;
-    }
-    line = relay_take_line();
+    (void)ud;
+    char *line = relay_take_line();
     relay_took = line != NULL;
     if (line)
         return line;
@@ -354,7 +292,7 @@ static void inset_cover(char **rows, int n, int cols)
 static int side_busy(void *ud)
 {
     (void)ud;
-    return sidechannel_busy() || workspace_busy() || inset_live() || voice_starting();
+    return sidechannel_busy() || workspace_busy() || inset_live();
 }
 
 static void side_tick(void *ud)
@@ -364,7 +302,6 @@ static void side_tick(void *ud)
     sidechannel_tick();
     image_poll();
     workspace_pump();
-    voice_start_poll();
     status_tick();
     if (vncinset_stale(inset_live()))
         viewport_touch();
@@ -376,7 +313,6 @@ static void load_earlier(void)    { sessionload_earlier(workspace_current()); }
 static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
 static int clicked(void *ud, int row, int col)
 {
-    (void)ud;
     int tab = tabbar_hit(row, col);
     if (tab == TABBAR_NEW) {
         if (!chrome_modal_active()) {
@@ -391,7 +327,48 @@ static int clicked(void *ud, int row, int col)
             workspace_show(tab);
         return 1;
     }
-    return imageview_click(row, col) || docview_click(row, col);
+    if (imageview_click(row, col) || docview_click(row, col))
+        return 1;
+    char *cmd = md_command_at(row, col);
+    if (cmd)
+        prompt_set_line(ud, cmd);
+    free(cmd);
+    return cmd != NULL;
+}
+
+static char *reply_command(void *ud, int nth)
+{
+    (void)ud;
+    struct session *s = workspace_current();
+    if (!s)
+        return NULL;
+    const char *reply = session_last_reply(s);
+    return md_command_nth(reply ? reply : session_last_block(s), nth);
+}
+
+static void send_held(void *ud, const char *text)
+{
+    (void)ud;
+    char *shown = strdup(text && *text ? text : bash_held_command());
+    char *held = bash_take_context();
+    if (!held || !shown) {
+        free(held);
+        free(shown);
+        return;
+    }
+    char *full = held;
+    if (text && *text) {
+        size_t n = strlen(text) + strlen(held) + 3;
+        full = malloc(n);
+        if (full)
+            snprintf(full, n, "%s\n\n%s", text, held);
+    }
+    if (full)
+        workspace_send(workspace_index(), full, shown);
+    if (full != held)
+        free(full);
+    free(held);
+    free(shown);
 }
 
 static void switcher(void *ud)
@@ -571,13 +548,10 @@ static int echo_filter(void *ud, const char *line)
 static int cancel_turn(void *ud)
 {
     (void)ud;
-    voice_trace("key.cancel", "speaking=%d", voice_speaking());
     if (voice_speaking()) {
         voice_mute();
         return 1;
     }
-    if (voice_drop())
-        return 1;
     struct session *s = workspace_current();
     if (!session_turn_running(s))
         return 0;
@@ -590,12 +564,6 @@ static int turn_running(void *ud)
 {
     (void)ud;
     return session_turn_running(workspace_current());
-}
-
-static int discard_voice(void *ud)
-{
-    (void)ud;
-    return voice_discard();
 }
 
 static char *serve_extra(const cJSON *o, int fd, int *kept)
@@ -675,7 +643,6 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    voice_protect_handoff();
     static const struct option LONG_OPTS[] = {
         {"backend", required_argument, NULL, 'b'},
         {"model",   required_argument, NULL, 'm'},
@@ -997,7 +964,9 @@ int main(int argc, char **argv)
     prompt_set_restart(prompt, restart_pending, idle_restart, NULL);
     prompt_set_takeover(prompt, takeover_pending, takeover_run, prompt);
     prompt_set_switcher(prompt, switcher, prompt);
-    prompt_set_click(prompt, clicked, NULL);
+    prompt_set_click(prompt, clicked, prompt);
+    prompt_set_command(prompt, reply_command, NULL);
+    prompt_set_send_held(prompt, send_held, NULL);
     prompt_set_split(prompt, splitter, NULL);
     prompt_set_another(prompt, another, NULL);
     prompt_set_step(prompt, step, NULL);
@@ -1007,7 +976,6 @@ int main(int argc, char **argv)
     prompt_set_collapse(prompt, collapse_tools, NULL);
     view_collapse(session_compact(session));
     prompt_set_cancel(prompt, cancel_turn, NULL);
-    prompt_set_discard(prompt, discard_voice, NULL);
     workspace_on_finish(turn_done);
 
     workspace_on_turn(turn_begin);
@@ -1018,24 +986,10 @@ int main(int argc, char **argv)
     prompt_set_animate(prompt, side_busy, side_tick, NULL);
     viewport_on_cover(inset_cover);
     prompt_set_external(prompt, chat_line, prompt);
-    prompt_set_listen(prompt, voice_listening, NULL);
-    prompt_set_mic(prompt, toggle_mic, NULL);
-    voice_on_heard(voice_heard, prompt);
-    voice_on_draft(voice_draft, prompt);
-    voice_on_release(voice_release, prompt);
-    voice_on_claim(voice_claim, prompt);
     tty_on_focus(focus_changed);
     tty_on_key(stamp_clear);
 
-    voice_set_speak(settings_get_int(SETTING_VOICE_SPEAK, 1));
-    if (settings_get_int(SETTING_VOICE, 0)) {
-        char err[300];
-        if (!voice_start(err, sizeof err)) {
-            char text[320];
-            snprintf(text, sizeof text, "voice: %s", err);
-            status_set_alert(text);
-        }
-    }
+    voice_init();
 
     chrome_paint();
 
@@ -1140,9 +1094,6 @@ int main(int argc, char **argv)
         if (!line)
             break;
 
-        if (prompt_line_had_preview(prompt))
-            voice_draft_sent();
-
         session = workspace_current();
         if (!session) {
             free(line);
@@ -1154,17 +1105,12 @@ int main(int argc, char **argv)
             bash_run(line);
             tty_watch(NULL, NULL, NULL);
             gitinfo_forget();
-            char *text = bash_take_context();
-            if (text) {
-                workspace_send(workspace_index(), text, line);
-                free(text);
-            }
             free(line);
             prompt_restart_check(prompt);
             continue;
         }
 
-        if (prompt_line_was_external(prompt) && !voice_took) {
+        if (prompt_line_was_external(prompt)) {
             if (relay_took) {
                 workspace_settle(relay_session());
                 relay_run_line(line);

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "image.h"
 #include "scrollback.h"
@@ -13,6 +14,8 @@
 #include "vendor/cJSON.h"
 
 #define LINK_MAX 64
+#define COMMAND_SCHEME "scrap-cmd:"
+#define COMMAND_MAX 2048
 
 struct styled {
     char        *text;
@@ -132,6 +135,88 @@ static void put_safe(const char *s)
     }
 }
 
+static char *command_url(const char *cmd, size_t n)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t k = sizeof COMMAND_SCHEME - 1;
+    if (!n || n > COMMAND_MAX)
+        return NULL;
+    char *url = malloc(k + n * 3 + 1);
+    if (!url)
+        return NULL;
+    memcpy(url, COMMAND_SCHEME, k);
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)cmd[i];
+        if (isalnum(c) || (c && strchr("-._~/", c))) {
+            url[k++] = (char)c;
+        } else {
+            url[k++] = '%';
+            url[k++] = hex[c >> 4];
+            url[k++] = hex[c & 15];
+        }
+    }
+    url[k] = '\0';
+    return url;
+}
+
+char *md_command(const char *url)
+{
+    size_t k = sizeof COMMAND_SCHEME - 1;
+    if (!url || strncmp(url, COMMAND_SCHEME, k) != 0)
+        return NULL;
+    url += k;
+    char *out = malloc(strlen(url) + 2);
+    if (!out)
+        return NULL;
+    size_t n = 0;
+    out[n++] = '!';
+    for (; *url; url++) {
+        if (url[0] == '%' && isxdigit((unsigned char)url[1]) && isxdigit((unsigned char)url[2])) {
+            char hex[3] = {url[1], url[2], '\0'};
+            out[n++] = (char)strtol(hex, NULL, 16);
+            url += 2;
+        } else {
+            out[n++] = *url;
+        }
+    }
+    out[n] = '\0';
+    return out;
+}
+
+char *md_command_at(int row, int col)
+{
+    char *url = viewport_link_at(row, col);
+    char *cmd = md_command(url);
+    free(url);
+    return cmd;
+}
+
+static int on_path(const char *word, size_t n)
+{
+    if (memchr(word, '/', n))
+        return 1;
+    const char *path = getenv("PATH");
+    char        file[1024];
+    struct stat st;
+    for (const char *d = path; d && *d;) {
+        size_t len = strcspn(d, ":");
+        int    w = snprintf(file, sizeof file, "%.*s/%.*s", (int)len, d, (int)n, word);
+        if (w > 0 && (size_t)w < sizeof file && stat(file, &st) == 0 && S_ISREG(st.st_mode) &&
+            (st.st_mode & 0111))
+            return 1;
+        d += len;
+        if (*d)
+            d++;
+    }
+    return 0;
+}
+
+static int span_is_command(const char *s, size_t n)
+{
+    const char *space = memchr(s, ' ', n);
+    return space && space > s && on_path(s, (size_t)(space - s));
+}
+
 static int is_url_start(const char *p)
 {
     return strncmp(p, "http://", 7) == 0 || strncmp(p, "https://", 8) == 0;
@@ -165,7 +250,13 @@ static void inline_scan(const char *p, struct styled *out)
         if (*p == '`') {
             const char *end = find_close(p + 1, "`", 1, &seen[NM_CODE]);
             if (end) {
-                styled_push(out, p + 1, (size_t)(end - p - 1), UI_CODE + 1);
+                size_t n = (size_t)(end - p - 1);
+                char  *url = span_is_command(p + 1, n) ? command_url(p + 1, n) : NULL;
+                if (url)
+                    out->cur_link = styled_link(out, url, strlen(url));
+                free(url);
+                styled_push(out, p + 1, n, UI_CODE + 1);
+                out->cur_link = 0;
                 p = end + 1;
                 continue;
             }
@@ -782,13 +873,148 @@ static void render_handoff(int indent)
     ui_put("\n");
 }
 
-static void render_code_line(const char *line, int indent)
+static void render_code_line(const char *line, int indent, const char *url)
 {
+    int link = url && ui_color();
     ui_pad(indent);
+    if (link) {
+        ui_esc("\x1b]8;;");
+        ui_esc(url);
+        ui_esc("\x1b\\");
+    }
     ui_esc(ui_style(UI_CODE));
     put_safe(line);
     ui_esc(ui_style(UI_RESET));
+    if (link)
+        ui_esc("\x1b]8;;\x1b\\");
     ui_put("\n");
+}
+
+static int is_fence(const char *body)
+{
+    return strncmp(body, "```", 3) == 0 || strncmp(body, "~~~", 3) == 0;
+}
+
+static int shell_fence(const char *info)
+{
+    static const char *const lang[] = {"", "sh", "bash", "shell", "zsh"};
+    while (*info == ' ')
+        info++;
+    size_t n = strcspn(info, " \t{");
+    for (size_t i = 0; i < sizeof lang / sizeof *lang; i++)
+        if (strlen(lang[i]) == n && strncmp(info, lang[i], n) == 0)
+            return 1;
+    return 0;
+}
+
+static char *fence_block(const char *text, int lead)
+{
+    char  *block = NULL;
+    size_t len = 0;
+    while (*text) {
+        char *line = take_line(&text);
+        if (!line)
+            break;
+        const char *body;
+        leading_indent(line, &body);
+        if (is_fence(body)) {
+            free(line);
+            break;
+        }
+        const char *from = line;
+        for (int i = 0; i < lead && (*from == ' ' || *from == '\t'); i++)
+            from++;
+        size_t n = strlen(from);
+        char  *grown = realloc(block, len + n + 2);
+        if (!grown) {
+            free(line);
+            break;
+        }
+        block = grown;
+        if (len)
+            block[len++] = '\n';
+        memcpy(block + len, from, n);
+        len += n;
+        block[len] = '\0';
+        free(line);
+    }
+    while (len && block[len - 1] == '\n')
+        block[--len] = '\0';
+    return block;
+}
+
+static char *fence_url(const char *text, int lead)
+{
+    char *block = fence_block(text, lead);
+    char *url = block ? command_url(block, strlen(block)) : NULL;
+    free(block);
+    return url;
+}
+
+static char *command_line(const char *cmd, size_t n)
+{
+    if (!n || n > COMMAND_MAX)
+        return NULL;
+    char *out = malloc(n + 2);
+    if (out) {
+        out[0] = '!';
+        memcpy(out + 1, cmd, n);
+        out[n + 1] = '\0';
+    }
+    return out;
+}
+
+char *md_command_nth(const char *text, int nth)
+{
+    char **found = NULL;
+    int    n = 0;
+    int    in_code = 0;
+    while (text && *text) {
+        char *line = take_line(&text);
+        if (!line)
+            break;
+        const char *body;
+        int         lead = leading_indent(line, &body);
+        char       *cmd = NULL;
+        int         fence = is_fence(body);
+        if (fence) {
+            if (!in_code && shell_fence(body + 3)) {
+                char *block = fence_block(text, lead);
+                cmd = block ? command_line(block, strlen(block)) : NULL;
+                free(block);
+            }
+            in_code = !in_code;
+        }
+        for (const char *p = in_code || fence ? NULL : strchr(line, '`'), *end; p;
+             p = strchr(end + 1, '`')) {
+            end = strchr(p + 1, '`');
+            if (!end)
+                break;
+            size_t len = (size_t)(end - p - 1);
+            char  *span = span_is_command(p + 1, len) ? command_line(p + 1, len) : NULL;
+            char **grown = span ? realloc(found, (size_t)(n + 1) * sizeof *found) : NULL;
+            if (grown) {
+                found = grown;
+                found[n++] = span;
+            } else {
+                free(span);
+            }
+        }
+        char **grown = cmd ? realloc(found, (size_t)(n + 1) * sizeof *found) : NULL;
+        if (grown) {
+            found = grown;
+            found[n++] = cmd;
+        } else {
+            free(cmd);
+        }
+        free(line);
+    }
+    char *out = nth >= 0 && nth < n ? found[n - 1 - nth] : NULL;
+    for (int i = 0; i < n; i++)
+        if (found[i] != out)
+            free(found[i]);
+    free(found);
+    return out;
 }
 
 static void render_mermaid(const char *src, int indent)
@@ -803,7 +1029,7 @@ static void render_mermaid(const char *src, int indent)
         for (const char *p = src; *p;) {
             const char *nl = strchr(p, '\n');
             char *line = strndup(p, nl ? (size_t)(nl - p) : strlen(p));
-            render_code_line(line, indent);
+            render_code_line(line, indent, NULL);
             free(line);
             if (!nl)
                 break;
@@ -891,6 +1117,7 @@ void md_render(const char *text, int indent)
     int in_code = 0;
     int code_ansi = 0;
     int code_mermaid = 0;
+    char *code_url = NULL;
     int blank_pending = 0;
     int wrote_any = 0;
     char *mermaid = NULL;
@@ -905,9 +1132,11 @@ void md_render(const char *text, int indent)
         const char *body;
         int lead = leading_indent(line, &body);
 
-        if (strncmp(body, "```", 3) == 0 || strncmp(body, "~~~", 3) == 0) {
+        if (is_fence(body)) {
             in_code = !in_code;
             code_ansi = in_code && strncmp(body + 3, "ansi", 4) == 0;
+            free(code_url);
+            code_url = in_code && shell_fence(body + 3) ? fence_url(text, lead) : NULL;
             if (in_code && strncmp(body + 3, "mermaid", 7) == 0) {
                 code_mermaid = 1;
             } else if (code_mermaid) {
@@ -941,7 +1170,7 @@ void md_render(const char *text, int indent)
             if (code_ansi)
                 render_ansi_line(line, indent + 2);
             else
-                render_code_line(line, indent + 2);
+                render_code_line(line, indent + 2, code_url);
             wrote_any = 1;
             free(line);
             continue;
@@ -1060,8 +1289,9 @@ void md_render(const char *text, int indent)
             ui_put("\n");
         for (char *p = mermaid, *nl; (nl = strchr(p, '\n')); p = nl + 1) {
             *nl = 0;
-            render_code_line(p, indent + 2);
+            render_code_line(p, indent + 2, NULL);
         }
         free(mermaid);
     }
+    free(code_url);
 }

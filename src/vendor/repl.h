@@ -139,7 +139,6 @@ typedef struct {
     bool  dropdown_open;
     bool  suggest_off;           // suppress the inline history autosuggestion
     char  placeholder[512];      // ghost text shown after the caret
-    int   gutter;                // prompt prefix columns; 0/2 -> "> ", 4 -> mark + "> "
 
     // Reverse-incremental history search (Ctrl-R). While active, input edits the
     // query and the matched history entry is previewed; Enter/motion accepts it,
@@ -196,8 +195,7 @@ const char *repl_line(const Repl *r);
 void        repl_insert_text(Repl *r, const char *s);
 
 // Replace the byte range [from, to) with `text`, leaving the cursor after it.
-// Same filtering as repl_insert_text. For a host that maintains a span of
-// machine-written text in the buffer (e.g. a live transcription).
+// Same filtering as repl_insert_text.
 void        repl_replace_range(Repl *r, int from, int to, const char *text);
 
 // Accept the highlighted dropdown candidate — or the first one when nothing is
@@ -736,11 +734,6 @@ static int disp_width(const char *buf, int from, int to) {
 // entries). Returns the row count (always >= 1). A '\n' forces a new row; an
 // over-long line breaks after the last space, or mid-word when a single word
 // exceeds the width.
-static int repl_gutter(const Repl *r)
-{
-    return r->gutter >= 4 ? 4 : 2;
-}
-
 static int wrap_segments(const Repl *r, int text_cols, int *seg, int seg_cap) {
     if (text_cols < 1) text_cols = 1;
     int n = 0;
@@ -793,7 +786,7 @@ static bool caret_owns_row(const Repl *r, int text_cols) {
 // Falls back to logical lines when the render width is unknown. Returns false
 // when already on the first/last row (caller falls back to history).
 static bool cursor_row_move(Repl *r, int dir) {   // dir: -1 up, +1 down
-    int text_cols = r->width - repl_gutter(r);
+    int text_cols = r->width - 2;
     if (text_cols < 1) return cursor_line_move(r, dir);
     int n = wrap_segments(r, text_cols, NULL, 0);
     if (n <= 1) return false;
@@ -1302,7 +1295,7 @@ static int ghost_wrap_rows(const Repl *r, int text_cols, int used)
 
 int repl_input_rows(const Repl *r, int width) {
     if (r->searching) return 1;                    // the single search prompt row
-    int text_cols = width - repl_gutter(r);
+    int text_cols = width - 2;
     if (text_cols < 1) text_cols = 1;
     int n = wrap_segments(r, text_cols, NULL, 0);
     int extra = caret_owns_row(r, text_cols) ? 1 : 0;
@@ -1356,7 +1349,7 @@ static void render_row(const Repl *r, ReplDraw draw, void *ctx, int x, int row_y
                        bool cursor_here, int ls, int le) {
     int max_x = x + width;
     int px = x;
-    int g = repl_gutter(r);
+    int g = 2;
     for (int i = 0; i < g && prefix[i] && px < max_x; i++)
         draw(ctx, px++, row_y, (unsigned char)prefix[i], REPL_STYLE_PROMPT);
 
@@ -1397,11 +1390,11 @@ void repl_render(const Repl *r, int x, int y, int width, bool focused,
     if (r->searching) { render_search(r, draw, ctx, x, y, width); return; }
 
     // --- Input rows (word-wrapped) ---
-    int g = repl_gutter(r);
+    int g = 2;
     int text_cols = width - g;
     if (text_cols < 1) text_cols = 1;
-    const char *head = g >= 4 ? "* > " : "> ";
-    const char *cont = g >= 4 ? "    " : "  ";
+    const char *head = "> ";
+    const char *cont = "  ";
     int row_count = wrap_segments(r, text_cols, NULL, 0);
     int *seg = malloc(sizeof(int) * (size_t)(row_count + 1));
     if (!seg) return;

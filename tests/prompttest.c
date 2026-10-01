@@ -23,9 +23,30 @@ int  sidechannel_fds(int *out, int max) { (void)out; (void)max; return 0; }
 
 static int failures;
 
+static const char *draft_line(struct prompt *p)
+{
+    (void)p;
+    static char buf[1024];
+    char *text;
+    prompt_stash_draft(&text, NULL);
+    snprintf(buf, sizeof buf, "%s", text ? text : "");
+    free(text);
+    return buf;
+}
+
+static int draft_cursor(struct prompt *p)
+{
+    (void)p;
+    char *text;
+    int   cursor;
+    prompt_stash_draft(&text, &cursor);
+    free(text);
+    return cursor;
+}
+
 static void eq_line(struct prompt *p, const char *what, const char *want)
 {
-    const char *got = prompt_line(p);
+    const char *got = draft_line(p);
     if (got && !strcmp(got, want))
         return;
     fprintf(stderr, "FAIL %s: got \"%s\", want \"%s\"\n",
@@ -66,89 +87,7 @@ int main(void)
 
     check_drawn_cursor(p);
 
-    prompt_set_preview(p, "hello");
-    eq_line(p, "the preview is the line text", "hello");
-
-    prompt_set_preview(p, "hello there");
-    eq_line(p, "an update replaces the preview", "hello there");
-
-    prompt_set_preview(p, "");
-    eq_line(p, "an empty preview removes it", "");
-
-    prompt_insert(p, "typed");
-    prompt_set_preview(p, "spoken");
-    eq_line(p, "the preview follows typed text", "typed spoken");
-    prompt_set_preview(p, "spoken words");
-    eq_line(p, "an update keeps the typed text", "typed spoken words");
-    prompt_set_preview(p, "");
-    eq_line(p, "removing the preview keeps the typed text", "typed");
-
-    prompt_set_preview(p, "Listen");
-    prompt_set_preview(p, "Listen Cancel");
-    prompt_set_preview(p, "Listen");
-    prompt_claim_preview(p, prompt_line(p));
-    prompt_set_preview(p, "");
-    eq_line(p, "a spoken cancel empties the box", "");
-    prompt_insert(p, "typed");
-
-    prompt_set_preview(p, "spoken");
-    prompt_insert(p, "more");
-    eq_line(p, "a line inserted under a preview goes before it",
-            "typed more spoken");
-    prompt_set_preview(p, "spoken again");
-    eq_line(p, "the moved preview is still replaced",
-            "typed more spoken again");
-    prompt_set_preview(p, "");
-    eq_line(p, "and removed", "typed more");
-
-    prompt_insert(p, " listen held");
-    if (!prompt_claim_preview(p, "listen held")) {
-        fprintf(stderr, "FAIL a preview is claimed from text in the line\n");
-        failures++;
-    }
-    prompt_set_preview(p, "listen held words");
-    eq_line(p, "a claimed preview is replaced in place", "typed more listen held words");
-    prompt_set_preview(p, "");
-    eq_line(p, "a claimed preview is removed", "typed more");
-    if (prompt_claim_preview(p, "not there")) {
-        fprintf(stderr, "FAIL claiming absent text fails\n");
-        failures++;
-    }
-    prompt_set_preview(p, "spoken");
-    eq_line(p, "a failed claim leaves no preview behind", "typed more spoken");
-    prompt_set_preview(p, "");
-
-    prompt_adopt_draft("x hello y hello", 0);
-    prompt_claim_preview(p, "hello");
-    prompt_insert(p, "ab");
-    prompt_set_preview(p, "hello there");
-    eq_line(p, "a line typed under a claimed preview lands before it",
-            "x hello y ab hello there");
-    tty_event home = {0};
-    home.key = TK_HOME;
-    prompt_live_key(p, &home);
-    prompt_set_preview(p, "hello there");
-    if (prompt_cursor(p) != 0) {
-        fprintf(stderr, "FAIL the same preview again leaves the caret: got %d\n", prompt_cursor(p));
-        failures++;
-    }
-    prompt_adopt_draft("before spoken after", 0);
-    prompt_claim_preview(p, "spoken");
-    prompt_set_preview(p, "spoken words");
-    if (prompt_cursor(p) != 0) {
-        fprintf(stderr, "FAIL updating speech moved a caret before its span\n");
-        failures++;
-    }
-    prompt_adopt_draft("before spoken after", 19);
-    prompt_claim_preview(p, "spoken");
-    prompt_set_preview(p, "spoken words");
-    if (prompt_cursor(p) != 25) {
-        fprintf(stderr, "FAIL updating speech moved a caret out of its typed suffix\n");
-        failures++;
-    }
-    prompt_adopt_draft("typed more", 10);
-
-    prompt_insert(p, " hello world");
+    prompt_adopt_draft("typed more hello world", 22);
     {
         char *draft = NULL;
         int   cursor = 0;
@@ -160,24 +99,24 @@ int main(void)
         }
         prompt_adopt_draft("ab cd", 3);
         eq_line(p, "adopting replaces the line", "ab cd");
-        if (prompt_cursor(p) != 3) {
-            fprintf(stderr, "FAIL adopt cursor: got %d, want 3\n", prompt_cursor(p));
+        if (draft_cursor(p) != 3) {
+            fprintf(stderr, "FAIL adopt cursor: got %d, want 3\n", draft_cursor(p));
             failures++;
         }
         prompt_adopt_draft(NULL, 0);
         eq_line(p, "an empty draft clears the line", "");
         prompt_adopt_draft(draft, 5);
         eq_line(p, "the parked draft comes back", "typed more hello world");
-        if (prompt_cursor(p) != 5) {
+        if (draft_cursor(p) != 5) {
             fprintf(stderr, "FAIL restored cursor: got %d, want 5\n",
-                    prompt_cursor(p));
+                    draft_cursor(p));
             failures++;
         }
         prompt_adopt_draft("one\ntwo", 3);
         eq_line(p, "a multi-line draft is kept", "one\ntwo");
-        if (prompt_cursor(p) != 3) {
+        if (draft_cursor(p) != 3) {
             fprintf(stderr, "FAIL multi-line cursor: got %d, want 3\n",
-                    prompt_cursor(p));
+                    draft_cursor(p));
             failures++;
         }
         free(draft);

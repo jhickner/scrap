@@ -35,7 +35,6 @@
 #include "sessionview.h"
 #include "viewport.h"
 #include "settings.h"
-#include "voicetrace.h"
 #include "sidechannel.h"
 #include "stream.h"
 #include "status.h"
@@ -2172,7 +2171,6 @@ int session_turn_begin(struct session *s, const char *text)
         return 0;
 
     turn_prepare(s, text);
-    voice_trace("turn.begin", "tab=%p text=%s", (void *)s, text);
     replace(&s->asked, text);
     s->reply = NULL;
     s->finished = 0;
@@ -2197,7 +2195,6 @@ int session_turn_continue_begin(struct session *s)
     }
 
     turn_prepare(s, s->remote ? remote_prompt(s->agent) : NULL);
-    voice_trace("turn.continue", "tab=%p", (void *)s);
     replace(&s->asked, NULL);
     s->reply = NULL;
     s->finished = 0;
@@ -2227,8 +2224,6 @@ double session_turn_elapsed(const struct session *s)
 
 void session_interrupt(struct session *s)
 {
-    voice_trace("session.interrupt", "tab=%p running=%d elapsed=%.1f", (void *)s,
-                s ? s->running : 0, session_turn_elapsed(s));
     if (s && s->running)
         s->abort_request = 1;
 }
@@ -2409,9 +2404,8 @@ static void ledger_add(struct session *s, const backend_result *m, const char *p
     snprintf(t->model, sizeof t->model, "%s", shown ? shown : "");
 
     const char *body = prompt ? prompt : "";
-    const char *past = strstr(body, "\n\n");
-    if (!strncmp(body, "The message below was spoken aloud", 34) && past)
-        body = past + 2;
+    if (!strncmp(body, VOICE_PREAMBLE, sizeof VOICE_PREAMBLE - 1))
+        body += sizeof VOICE_PREAMBLE - 1;
     size_t at = 0, cap = sizeof t->prompt - sizeof "\xe2\x80\xa6";
     while (*body == ' ' || *body == '\n' || *body == '\t' || *body == '\r')
         body++;

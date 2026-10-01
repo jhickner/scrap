@@ -14,14 +14,6 @@ ALL_CFLAGS := -std=gnu11 $(WARNINGS) $(CFLAGS) -Isrc -Isrc/vendor
 BIN     := scrap
 BUILD   := build
 
-# The signed Swift helper that /voice talks to. Built from the vendored source
-# in src/vendor/macos-voice and installed beside the binary; voice_helper in
-# settings overrides.
-VOICE_HELPER     := $(BUILD)/VoiceHelper.app
-VOICE_HELPER_DIR := $(PREFIX)/libexec/scrap
-VOICE_SRC        := src/vendor/macos-voice
-ALL_CFLAGS += -DVOICE_HELPER_PATH='"$(VOICE_HELPER_DIR)/VoiceHelper.app"'
-
 CHECK_NAMES  := $(patsubst tests/%.c,%,$(wildcard tests/*.c))
 MANUAL_NAMES := $(patsubst tools/%.c,%,$(wildcard tools/*.c))
 CHECKS := kittywraptest overlaytest viewporttest imagerowtest chrometest imagefittest mdtest \
@@ -30,9 +22,9 @@ CHECKS := kittywraptest overlaytest viewporttest imagerowtest chrometest imagefi
           sessionviewtest sessionloadtest highlighttest telegramtest \
           modelstest sessionpresenttest \
           workspacetest replboxtest ttytest gitinfotest sidechannelviewtest \
-          sidechannelcmdtest taskstest voicetest voicehandofftest filelocktest prompttest \
-          dispatchtest voicetabtest grokbottailtest vncinsettest grokvnctest \
-          settingstest jevtest
+          sidechannelcmdtest taskstest voicetest filelocktest prompttest \
+          dispatchtest grokbottailtest vncinsettest grokvnctest \
+          settingstest
 CHECKS += agentsynctest sessionaddrtest apitest apihttptest activelogtest proxyprototest coreagenttest scheduletest askblocktest chaintest
 MANUAL_TOOLS := imagetest keydump pastetest spintest vncprobe
 
@@ -137,7 +129,7 @@ tests: $(TOOLS)
 manual: $(MANUAL_BINS)
 
 FULL_LIB_TOOLS := spintest chrometest ttytest keydump gitinfotest \
-                  telegramtest workspacetest replboxtest voicetabtest
+                  telegramtest workspacetest replboxtest
 JPEG_TOOLS := imagerowtest vncinsettest imagefittest imagetest mdtest sessionpresenttest
 
 $(addprefix $(BUILD)/,$(FULL_LIB_TOOLS)): TOOL_LIBS = $(LIBS)
@@ -264,11 +256,7 @@ $(BUILD)/highlighttest: tests/highlighttest.c $(BUILD)/highlight.o | $(BUILD)
 
 $(BUILD)/replboxtest: tests/replboxtest.c $(BUILD)/replbox.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/paste.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/files.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/jevtest: tests/jevtest.c $(BUILD)/jev.o $(BUILD)/vendor/cJSON.o | $(BUILD)
-
-$(BUILD)/voicetest: tests/voicetest.c src/voice.c $(BUILD)/jev.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
-
-$(BUILD)/voicetabtest: tests/voicetabtest.c tests/stubs/tabbar.c tests/stubs/keyhelp.c tests/stubs/vendorimpl.c src/voice.c $(BUILD)/jev.o $(BUILD)/workspace.o $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
+$(BUILD)/voicetest: tests/voicetest.c src/voice.c $(BUILD)/text.o | $(BUILD)
 
 $(BUILD)/chaintest: tests/chaintest.c $(BUILD)/chain.o $(BUILD)/text.o | $(BUILD)
 
@@ -280,21 +268,10 @@ check: $(CHECK_BINS)
 install: $(BIN)
 	install -d $(PREFIX)/bin
 	install -m 755 $(BIN) $(PREFIX)/bin/$(BIN)
-	@if [ -d $(VOICE_HELPER) ]; then \
-	  install -d $(VOICE_HELPER_DIR); \
-	  rm -rf $(VOICE_HELPER_DIR)/VoiceHelper.app; \
-	  cp -R $(VOICE_HELPER) $(VOICE_HELPER_DIR)/; \
-	fi
 	@# -URG would parse as -U RG, a user. -a because the scrap running this is an
 	@# ancestor of pkill, and ancestors are excluded by default on macOS; procps
 	@# pkill has no -a and does not exclude them.
 	@pkill -SIGURG $(if $(filter Darwin,$(shell uname -s)),-a) -x $(BIN) || true
-
-# The helper is opt-in: it needs swift and macOS 26.
-voice-helper: | $(BUILD)
-	$(VOICE_SRC)/build.sh $(abspath $(VOICE_HELPER))
-
-.PHONY: voice-helper
 
 $(BUILD) $(BUILD)/vendor $(BUILD)/vendor/mermaid:
 	@mkdir -p $(BUILD)/vendor/mermaid

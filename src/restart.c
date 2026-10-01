@@ -246,7 +246,7 @@ int restart_exec(struct session *s)
     ui_raw(0);
     tty_raw_handoff();
 
-    voice_handoff();
+    voice_stop();
     execvp(argv[0], argv);
 
     if (carried) {

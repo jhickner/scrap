@@ -60,14 +60,10 @@ void prompt_set_takeover(struct prompt *p, int (*pending)(void *ud), void (*run)
 
 void prompt_set_cancel(struct prompt *p, int (*fn)(void *ud), void *ud);
 
-void prompt_set_discard(struct prompt *p, int (*fn)(void *ud), void *ud);
-
 void prompt_set_switcher(struct prompt *p, void (*fn)(void *ud), void *ud);
 
 void prompt_set_click(struct prompt *p, int (*fn)(void *ud, int row, int col),
                       void *ud);
-
-void prompt_set_mic(struct prompt *p, void (*fn)(void *ud), void *ud);
 
 void prompt_set_another(struct prompt *p, void (*fn)(void *ud), void *ud);
 
@@ -101,23 +97,14 @@ char *prompt_take_queued(struct prompt *p);
 
 void prompt_set_external(struct prompt *p, char *(*fn)(void *ud), void *ud);
 
-void prompt_set_preview(struct prompt *p, const char *text);
-void prompt_insert(struct prompt *p, const char *text);
-const char *prompt_line(struct prompt *p);
-int         prompt_cursor(const struct prompt *p);
+void prompt_set_line(struct prompt *p, const char *text);
+void prompt_set_command(struct prompt *p, char *(*fn)(void *ud, int nth), void *ud);
+void prompt_set_send_held(struct prompt *p, void (*fn)(void *ud, const char *text), void *ud);
 
 void prompt_stash_draft(char **text, int *cursor);
 void prompt_adopt_draft(const char *text, int cursor);
 
-void prompt_set_listen(struct prompt *p, int (*fn)(void *ud), void *ud);
-
 int  prompt_line_was_external(struct prompt *p);
-
-int  prompt_line_had_preview(struct prompt *p);
-
-void prompt_release_preview(struct prompt *p);
-
-int  prompt_claim_preview(struct prompt *p, const char *text);
 
 void prompt_echo_message(const char *text);
 

@@ -36,21 +36,6 @@ int  sidechannel_fds(int *out, int max) { (void)out; (void)max; return 0; }
 void gitinfo_forget(void) {}
 void tg_refocus(void) {}
 void voice_refocus(void) {}
-int  voice_starting(void) { return 0; }
-static struct prompt *leave_prompt;
-static struct session *leave_session;
-static int left_before_switch;
-static struct session *forgotten;
-void voice_leave(struct session *s)
-{
-    if (leave_prompt) {
-        left_before_switch = workspace_current() == leave_session && s == leave_session;
-        prompt_set_preview(leave_prompt, "saved speech");
-        prompt_release_preview(leave_prompt);
-        leave_prompt = NULL;
-    }
-}
-void voice_forget(const struct session *s) { forgotten = (struct session *)s; }
 void tg_forget_session(struct session *s) { (void)s; }
 void relay_refocus(void) {}
 void relay_forget_session(struct session *s) { (void)s; }
@@ -173,6 +158,27 @@ void session_spin_word(const struct session *s)
 }
 const char *session_failed_prompt(const struct session *s) { (void)s; return NULL; }
 
+static const char *draft_line(struct prompt *p)
+{
+    (void)p;
+    static char buf[1024];
+    char *text;
+    prompt_stash_draft(&text, NULL);
+    snprintf(buf, sizeof buf, "%s", text ? text : "");
+    free(text);
+    return buf;
+}
+
+static int draft_cursor(struct prompt *p)
+{
+    (void)p;
+    char *text;
+    int   cursor;
+    prompt_stash_draft(&text, &cursor);
+    free(text);
+    return cursor;
+}
+
 int main(void)
 {
     setenv("COLUMNS", "80", 1);
@@ -231,25 +237,25 @@ int main(void)
         a.running = 0;
 
         workspace_show(0);
-        prompt_insert(prompt, "alpha");
+        prompt_adopt_draft("alpha", 5);
         workspace_show(1);
         {
-            const char *got = prompt_line(prompt);
+            const char *got = draft_line(prompt);
             if (got && *got)
                 fail("the other tab does not show this tab's unsent input");
         }
-        prompt_insert(prompt, "beta");
+        prompt_adopt_draft("beta", 4);
         workspace_show(0);
         {
-            const char *got = prompt_line(prompt);
+            const char *got = draft_line(prompt);
             if (!got || strcmp(got, "alpha"))
                 fail("unsent input comes back with its tab");
-            if (prompt_cursor(prompt) != 5)
+            if (draft_cursor(prompt) != 5)
                 fail("the caret comes back where it was");
         }
         workspace_show(1);
         {
-            const char *got = prompt_line(prompt);
+            const char *got = draft_line(prompt);
             if (!got || strcmp(got, "beta"))
                 fail("each tab keeps its own unsent input");
         }
@@ -257,46 +263,30 @@ int main(void)
         prompt_adopt_draft("alpha\nmore", 5);
         workspace_show(1);
         {
-            const char *got = prompt_line(prompt);
+            const char *got = draft_line(prompt);
             if (!got || strcmp(got, "beta"))
                 fail("a multi-line draft stays on its tab");
         }
         workspace_show(0);
         {
-            const char *got = prompt_line(prompt);
+            const char *got = draft_line(prompt);
             if (!got || strcmp(got, "alpha\nmore"))
                 fail("a multi-line draft comes back");
-            if (prompt_cursor(prompt) != 5)
+            if (draft_cursor(prompt) != 5)
                 fail("a multi-line caret comes back");
         }
         if (a.running)
             fail("restoring unsent input does not submit it");
 
-        workspace_show(1);
-        leave_prompt = prompt;
-        leave_session = workspace_current();
-        workspace_show(0);
-        if (!left_before_switch)
-            fail("voice leaves the originating tab while it is current");
-        if (strcmp(prompt_line(prompt), "alpha\nmore"))
-            fail("leaving voice leaves the destination draft alone");
-        workspace_show(1);
-        if (strcmp(prompt_line(prompt), "beta saved speech"))
-            fail("voice is preserved before the departing draft is saved");
-        workspace_show(0);
-
         if (workspace_count() != 2)
             fail("two tabs stay open");
         workspace_show(1);
-        forgotten = NULL;
         if (workspace_close(1) != 1)
             fail("close drops a tab");
-        if (forgotten != &b)
-            fail("closing a tab forgets its held dictation");
         if (workspace_count() != 1 || workspace_current() != &a)
             fail("the remaining tab is the one left");
         {
-            const char *got = prompt_line(prompt);
+            const char *got = draft_line(prompt);
             if (!got || strcmp(got, "alpha\nmore"))
                 fail("closing a tab restores the remaining draft");
         }

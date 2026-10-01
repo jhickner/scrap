@@ -16,7 +16,7 @@
 #include "ui.h"
 #include "voice.h"
 
-enum kind { S_FLAG, S_PERMISSION, S_ROWS, S_BACKEND, S_CHOICE, S_NOUL };
+enum kind { S_FLAG, S_PERMISSION, S_ROWS, S_BACKEND, S_CHOICE };
 
 struct entry {
     const char *name;
@@ -34,12 +34,9 @@ struct entry {
 
     const char *const *choices;
     int                nchoices;
-    double             deff;
 
 };
 
-static const char *const VOICE_MODES[] = {"auto", "wake", "jev"};
-static const char *const JEV_BACKENDS[] = {"typesafe", "experiential"};
 static const char *const FOLDER_SORTS[] = {"name", "recent"};
 
 static const struct entry ENTRIES[] = {
@@ -63,30 +60,9 @@ static const struct entry ENTRIES[] = {
      .off = "off", .on = "on",
      .key = SETTING_STAMP, .def = 1},
     {.name = "voice", .kind = S_FLAG,
-     .about = "talk instead of typing, and hear replies",
+     .about = "read replies aloud",
      .off = "off", .on = "on",
      .key = SETTING_VOICE, .def = 0},
-    {.name = "voice mode", .kind = S_CHOICE,
-     .about = "auto sends after a pause, wake waits for listen, jev ends each turn",
-     .key = SETTING_VOICE_MODE, .choices = VOICE_MODES, .nchoices = (int)COUNT(VOICE_MODES)},
-    {.name = "voice jev backend", .kind = S_CHOICE,
-     .about = "the endpointing service jev mode calls",
-     .key = SETTING_VOICE_JEV_BACKEND, .choices = JEV_BACKENDS,
-     .nchoices = (int)COUNT(JEV_BACKENDS)},
-    {.name = "voice jev ready", .kind = S_NOUL,
-     .about = "how sure jev must be that the turn is finished",
-     .key = SETTING_VOICE_JEV_THRESHOLD, .deff = VOICE_JEV_THRESHOLD_DEFAULT},
-    {.name = "voice jev hold", .kind = S_NOUL,
-     .about = "how sure jev must be that the speaker asked to keep listening",
-     .key = SETTING_VOICE_JEV_HOLD, .deff = VOICE_JEV_HOLD_DEFAULT},
-    {.name = "voice jev delay", .kind = S_ROWS,
-     .about = "shortest gap between jev calls, in milliseconds",
-     .low = 0, .high = VOICE_JEV_DELAY_MAX,
-     .key = SETTING_VOICE_JEV_DELAY, .def = VOICE_JEV_DELAY_DEFAULT},
-    {.name = "voice jev silence", .kind = S_ROWS,
-     .about = "how long the transcript must stay unchanged before jev judges it, in milliseconds",
-     .low = 0, .high = VOICE_JEV_SILENCE_MAX,
-     .key = SETTING_VOICE_JEV_SILENCE, .def = VOICE_JEV_SILENCE_DEFAULT},
     {.name = "voice complete", .kind = S_FLAG,
      .about = "say the session name when a turn ends unfocused",
      .off = "off", .on = "on",
@@ -130,12 +106,6 @@ static const char *choice_of(const struct entry *e)
     return e->choices[0];
 }
 
-static double noul_of(const struct entry *e)
-{
-    double n = atof(settings_get_str(e->key, ""));
-    return n > 0 ? n : e->deff;
-}
-
 static int flag_of(const struct session *s, int at)
 {
     const struct entry *e = &ENTRIES[at];
@@ -159,9 +129,7 @@ static void flag_set(struct session *s, int at, int on)
     const struct entry *e = &ENTRIES[at];
     if (e->key) {
         if (!strcmp(e->key, SETTING_VOICE)) {
-            char err[300];
-            if (!voice_apply(on, voice_speak(), err, sizeof err) && on)
-                status_set_alert(err);
+            voice_set_on(on);
             return;
         }
         settings_set_int(e->key, on);
@@ -228,9 +196,6 @@ static void value_of(const struct session *s, int at, char *out, size_t cap)
         break;
     case S_CHOICE:
         snprintf(out, cap, "%s", choice_of(e));
-        break;
-    case S_NOUL:
-        snprintf(out, cap, "%g", noul_of(e));
         break;
     }
 }
@@ -313,40 +278,7 @@ static void edit_choice(const struct entry *e)
     int index = pick_run(e->name, items, count, initial);
     if (index < 0 || !strcmp(e->choices[index], now))
         return;
-    if (!strcmp(e->key, SETTING_VOICE_MODE)) {
-        voice_set_mode(index);
-        return;
-    }
     settings_set_str(e->key, e->choices[index]);
-}
-
-static void edit_noul(const struct entry *e)
-{
-    char title[160];
-    snprintf(title, sizeof title, "%s \xc2\xb7 0 to 1", e->name);
-
-    for (int tries = 0; tries < 3; tries++) {
-        char now[16];
-        snprintf(now, sizeof now, "%g", noul_of(e));
-
-        char *text = ask_run(title, now);
-        if (!text)
-            return;
-
-        text_chomp(text);
-        char  *end;
-        double n = strtod(text, &end);
-        int    ok = end != text && !*end && n > 0 && n <= 1;
-        free(text);
-
-        if (ok) {
-            char value[16];
-            snprintf(value, sizeof value, "%g", n);
-            settings_set_str(e->key, value);
-            return;
-        }
-        snprintf(title, sizeof title, "%s \xe2\x80\x94 a number from 0 to 1", e->name);
-    }
 }
 
 static void edit(struct session *s, int at)
@@ -368,9 +300,6 @@ static void edit(struct session *s, int at)
         break;
     case S_CHOICE:
         edit_choice(e);
-        break;
-    case S_NOUL:
-        edit_noul(e);
         break;
     }
 }

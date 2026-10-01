@@ -10,6 +10,9 @@ void bash_run(const char *line);
 
 char *bash_take_context(void);
 
+const char *bash_held_command(void);
+const char *bash_held_label(void);
+
 #define BASH_RAN_KIND "bash"
 void bash_ran_load(const cJSON *st);
 

@@ -13,7 +13,6 @@
 #include "chrome.h"
 #include "frontend.h"
 #include "hud.h"
-#include "jev.h"
 #include "relay.h"
 #include "models.h"
 #include "newsession.h"
@@ -700,152 +699,9 @@ static void do_telegram(struct session *s, const char *arg)
     reply_note("telegram off");
 }
 
-static void do_voice_jev(const char *arg)
-{
-    while (*arg == ' ')
-        arg++;
-    const char *backend = settings_get_str(SETTING_VOICE_JEV_BACKEND, VOICE_JEV_BACKEND_DEFAULT);
-    double threshold = atof(settings_get_str(SETTING_VOICE_JEV_THRESHOLD, ""));
-    double hold = atof(settings_get_str(SETTING_VOICE_JEV_HOLD, ""));
-    if (threshold <= 0)
-        threshold = VOICE_JEV_THRESHOLD_DEFAULT;
-    if (hold <= 0)
-        hold = VOICE_JEV_HOLD_DEFAULT;
-    int delay = settings_get_int(SETTING_VOICE_JEV_DELAY, VOICE_JEV_DELAY_DEFAULT);
-    int silence = settings_get_int(SETTING_VOICE_JEV_SILENCE, VOICE_JEV_SILENCE_DEFAULT);
-
-    if (!*arg) {
-        reply_note("voice jev backend %s, threshold %g, hold %g, delay %dms, silence %dms",
-                   backend, threshold, hold, delay, silence);
-        return;
-    }
-
-    const char *rest;
-    if (!strncmp(arg, "backend", 7) && (!arg[7] || arg[7] == ' ')) {
-        rest = arg + 7;
-        while (*rest == ' ')
-            rest++;
-        if (!*rest) {
-            reply_note("voice jev backend %s", backend);
-            return;
-        }
-        if (!jev_set_backend(rest)) {
-            reply_error("/voice jev backend takes experiential or typesafe");
-            return;
-        }
-        settings_set_str(SETTING_VOICE_JEV_BACKEND, rest);
-        reply_note("voice jev backend %s", rest);
-        return;
-    }
-
-    int is_hold = !strncmp(arg, "hold", 4) && (!arg[4] || arg[4] == ' ');
-    if (is_hold || (!strncmp(arg, "threshold", 9) && (!arg[9] || arg[9] == ' '))) {
-        rest = arg + (is_hold ? 4 : 9);
-        while (*rest == ' ')
-            rest++;
-        if (!*rest) {
-            reply_note("voice jev %s %g", is_hold ? "hold" : "threshold",
-                       is_hold ? hold : threshold);
-            return;
-        }
-        char  *end;
-        double n = strtod(rest, &end);
-        while (*end == ' ')
-            end++;
-        if (*end || n <= 0 || n > 1) {
-            reply_error("/voice jev %s takes a number from 0 to 1",
-                        is_hold ? "hold" : "threshold");
-            return;
-        }
-        char text[32];
-        snprintf(text, sizeof text, "%g", n);
-        settings_set_str(is_hold ? SETTING_VOICE_JEV_HOLD : SETTING_VOICE_JEV_THRESHOLD, text);
-        reply_note("voice jev %s %g", is_hold ? "hold" : "threshold", n);
-        return;
-    }
-
-    if (!strncmp(arg, "delay", 5) && (!arg[5] || arg[5] == ' ')) {
-        rest = arg + 5;
-        while (*rest == ' ')
-            rest++;
-        if (!*rest) {
-            reply_note("voice jev delay %dms", delay);
-            return;
-        }
-        char *end;
-        long  n = strtol(rest, &end, 10);
-        if (!strncmp(end, "ms", 2))
-            end += 2;
-        while (*end == ' ')
-            end++;
-        if (*end || n < 0 || n > VOICE_JEV_DELAY_MAX) {
-            reply_error("/voice jev delay takes milliseconds from 0 to %d", VOICE_JEV_DELAY_MAX);
-            return;
-        }
-        settings_set_int(SETTING_VOICE_JEV_DELAY, (int)n);
-        reply_note("voice jev delay %ldms", n);
-        return;
-    }
-
-    if (!strncmp(arg, "silence", 7) && (!arg[7] || arg[7] == ' ')) {
-        rest = arg + 7;
-        while (*rest == ' ')
-            rest++;
-        if (!*rest) {
-            reply_note("voice jev silence %dms", silence);
-            return;
-        }
-        char *end;
-        long  n = strtol(rest, &end, 10);
-        if (!strncmp(end, "ms", 2))
-            end += 2;
-        while (*end == ' ')
-            end++;
-        if (*end || n < 0 || n > VOICE_JEV_SILENCE_MAX) {
-            reply_error("/voice jev silence takes milliseconds from 0 to %d", VOICE_JEV_SILENCE_MAX);
-            return;
-        }
-        settings_set_int(SETTING_VOICE_JEV_SILENCE, (int)n);
-        reply_note("voice jev silence %ldms", n);
-        return;
-    }
-
-    reply_error("/voice jev takes backend, threshold, hold, delay, silence, or nothing to show them");
-}
-
 static void do_voice(struct session *s, const char *arg)
 {
     (void)s;
-    int want, speak;
-
-    if (arg && !strncmp(arg, "mode", 4) && (!arg[4] || arg[4] == ' ')) {
-        const char *rest = arg + 4;
-        while (*rest == ' ')
-            rest++;
-        if (!*rest) {
-            reply_note("voice mode %s", voice_mode_name(voice_mode()));
-            return;
-        }
-        int mode = voice_mode_of(rest);
-        if (mode < 0) {
-            reply_error("/voice mode takes auto, wake or jev");
-            return;
-        }
-        voice_set_mode(mode);
-        if (mode == VOICE_MODE_WAKE)
-            reply_note("voice mode wake: say listen to start, ok done to send, cancel to drop");
-        else if (mode == VOICE_MODE_JEV)
-            reply_note("voice mode jev: %s ends each turn", jev_backend());
-        else
-            reply_note("voice mode auto: send after a pause");
-        return;
-    }
-
-    if (arg && !strncmp(arg, "jev", 3) && (!arg[3] || arg[3] == ' ')) {
-        do_voice_jev(arg + 3);
-        return;
-    }
-
     if (arg && !strncmp(arg, "complete", 8) && (!arg[8] || arg[8] == ' ')) {
         const char *rest = arg + 8;
         while (*rest == ' ')
@@ -907,72 +763,13 @@ static void do_voice(struct session *s, const char *arg)
         return;
     }
 
-    if (arg && !strncmp(arg, "silence", 7) && (!arg[7] || arg[7] == ' ')) {
-        const char *rest = arg + 7;
-        while (*rest == ' ')
-            rest++;
-        if (!*rest) {
-            reply_note("voice silence %gs", voice_silence());
-            return;
-        }
-        char  *end;
-        double n = strtod(rest, &end);
-        if (*end == 's')
-            end++;
-        while (*end == ' ')
-            end++;
-        if (*end || n < VOICE_SILENCE_MIN || n > VOICE_SILENCE_MAX) {
-            reply_error("/voice silence takes seconds from %g to %g",
-                        VOICE_SILENCE_MIN, VOICE_SILENCE_MAX);
-            return;
-        }
-        voice_set_silence(n);
-        reply_note("voice silence %gs", voice_silence());
+    if (arg && *arg && strcmp(arg, "on") && strcmp(arg, "off")) {
+        reply_error("/voice takes on, off, volume, rate, complete, or nothing to flip it");
         return;
     }
-
-    if (arg && !strcmp(arg, "restart")) {
-        char err[300];
-        int was_on = voice_on();
-        if (!voice_restart(err, sizeof err)) {
-            reply_error("voice: %s", err);
-            return;
-        }
-        reply_note(was_on ? "voice restarted" : "voice helper stopped");
-        return;
-    }
-
-    if (!arg || !*arg) {
-        want = !voice_on();
-        speak = voice_speak();
-    } else if (!strcmp(arg, "off")) {
-        want = 0;
-        speak = voice_speak();
-    } else if (!strcmp(arg, "on")) {
-        want = 1;
-        speak = 1;
-    } else if (!strcmp(arg, "listen")) {
-        want = 1;
-        speak = 0;
-
-    } else {
-        reply_error("/voice takes on, off, listen, mode, jev, restart, complete, volume, rate, silence, or nothing to flip it");
-        return;
-    }
-
-    char err[300];
-    if (!voice_apply(want, speak, err, sizeof err)) {
-        reply_error("voice: %s", err);
-        return;
-    }
-    if (!want)
-        reply_note("voice off");
-    else if (voice_mode() == VOICE_MODE_JEV)
-        reply_note("voice on: jev ends each turn");
-    else if (voice_wake())
-        reply_note("voice on: say listen to start, ok done to send, cancel to drop");
-    else
-        reply_note(speak ? "voice on: listening" : "voice on: listen only");
+    int on = arg && *arg ? !strcmp(arg, "on") : !voice_on();
+    voice_set_on(on);
+    reply_note(on ? "voice on: replies are read aloud" : "voice off");
 }
 
 static void do_image(struct session *s, const char *arg)
@@ -1693,7 +1490,7 @@ static const struct cmd COMMANDS[] = {
     {"/sticky", "float the prompt above the spinner", "[on|off]", CMD_LIVE, do_sticky},
     {"/relay", "answer over the phone relay", "[on|off]", CMD_LIVE, do_relay},
     {"/telegram", "answer over Telegram", "[on|off]", CMD_LIVE, do_telegram},
-    {"/voice", "talk instead of typing", "[on|off|listen|mode [auto|wake|jev]|jev|restart|complete|volume|rate|silence]", CMD_LIVE, do_voice},
+    {"/voice", "read replies aloud", "[on|off|volume N|rate N|complete on|off]", CMD_LIVE, do_voice},
     {"/image", "tallest an inline image may be drawn", "[rows]", CMD_LIVE, do_image},
     {"/permission", "how the CLI gates tool calls", "[mode]", 0, do_permission},
     {"/settings", "show and change every setting", NULL, 0, do_settings},
@@ -1903,7 +1700,7 @@ enum cmd_result cmd_submit(struct session *s, const char *line)
     int tab = workspace_index_of(s);
     if (tab >= 0) {
         char *full = strcmp(session_backend(s), "grokbot")
-                         ? voice_with_preamble(line, session_turn_running(s))
+                         ? voice_with_preamble(line)
                          : NULL;
         workspace_send(tab, full ? full : line, full ? line : NULL);
         free(full);
