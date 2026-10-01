@@ -146,8 +146,10 @@ static void paint_row(void *ud, int line, int w)
         }
         ui_esc(ui_style(t->index == workspace_index() ? UI_ACCENT : UI_DIM));
         ui_put(t->name);
-        ui_put(" ");
-        ui_put(t->meter);
+        if (t->meter) {
+            ui_put(" ");
+            ui_put(t->meter);
+        }
         ui_pad(w - 2 - t->cells);
     } else if (at == ntabs) {
         ui_put("\xe2\x95\xb0");
@@ -189,8 +191,9 @@ void tabbar_cover(char **rows, int n, int cols)
         name_of(s, t->name, sizeof t->name);
         t->role = UI_DIM;
         t->glyph = mark(s, &t->role);
-        t->meter = METER[meter_step(s)];
-        t->cells = (int)ui_cells(t->name) + 2 + (t->glyph ? 2 : 0);
+        int step = meter_step(s);
+        t->meter = step ? METER[step] : NULL;
+        t->cells = (int)ui_cells(t->name) + (t->meter ? 2 : 0) + (t->glyph ? 2 : 0);
         if (t->cells > widest)
             widest = t->cells;
     }
