@@ -1702,7 +1702,7 @@ enum cmd_result cmd_submit(struct session *s, const char *line)
         char *full = strcmp(session_backend(s), "grokbot")
                          ? voice_with_preamble(line)
                          : NULL;
-        workspace_send(tab, full ? full : line, full ? line : NULL);
+        workspace_send_typed(tab, line, full);
         free(full);
     }
     return CMD_NOT_A_COMMAND;

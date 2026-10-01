@@ -44,6 +44,7 @@ int  workspace_dump(int index, const char *path);
 int  workspace_close(int index);
 
 int  workspace_send(int index, const char *line, const char *shown);
+int  workspace_send_typed(int index, const char *text, const char *full);
 int  workspace_queued(int index);
 
 const char *workspace_pending_at(int index, int i);

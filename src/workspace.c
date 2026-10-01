@@ -30,6 +30,7 @@
 struct pending {
     char *line;
     char *shown;
+    int   typed;
 };
 
 struct tab {
@@ -680,7 +681,7 @@ int workspace_send(int index, const char *line, const char *shown)
     if (session_turn_running(t->s)) {
         if (t->npending >= PENDING_MAX)
             return 0;
-        struct pending p = {strdup(line), shown ? strdup(shown) : NULL};
+        struct pending p = {strdup(line), shown ? strdup(shown) : NULL, 0};
         if (!p.line || (shown && !p.shown)) {
             free(p.line);
             free(p.shown);
@@ -698,6 +699,36 @@ int workspace_send(int index, const char *line, const char *shown)
     leave();
     spin_follow();
     return ok;
+}
+
+static int join(char **dst, const char *text)
+{
+    size_t n = strlen(*dst) + strlen(text) + 3;
+    char  *j = malloc(n);
+    if (!j)
+        return 0;
+    snprintf(j, n, "%s\n\n%s", *dst, text);
+    free(*dst);
+    *dst = j;
+    return 1;
+}
+
+int workspace_send_typed(int index, const char *text, const char *full)
+{
+    if (index < 0 || index >= ntabs || !text || !*text)
+        return 0;
+    struct tab *t = &tabs[index];
+    if (!session_turn_running(t->s))
+        return workspace_send(index, full ? full : text, full ? text : NULL);
+
+    struct pending *last = t->npending ? &t->pending[t->npending - 1] : NULL;
+    if (last && last->typed)
+        return join(&last->line, text) && (!last->shown || join(&last->shown, text));
+
+    if (!workspace_send(index, full ? full : text, full ? text : NULL))
+        return 0;
+    t->pending[t->npending - 1].typed = 1;
+    return 1;
 }
 
 int workspace_queued(int index)
