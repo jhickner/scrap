@@ -114,6 +114,7 @@ cmd_start() {
     if [ "$fake" = 1 ]; then
         ln -s "$RIG_HOME/fake-claude" "$dir/bin/claude"
         ln -s "$RIG_HOME/fake-pvsay" "$dir/bin/pvsay"
+        ln -s "$RIG_HOME/fake-jev" "$dir/bin/jev"
         ln -s "$scrap" "$dir/bin/scrap"
         path="$dir/bin:$PATH"
     fi

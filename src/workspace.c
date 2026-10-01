@@ -1,5 +1,6 @@
 #include "workspace.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -13,6 +14,8 @@
 #include "session.h"
 #include "sessionview.h"
 #include "settings.h"
+#include "sidechannel.h"
+#include "sideroute.h"
 #include "status.h"
 #include "stamp.h"
 #include "tabbar.h"
@@ -720,6 +723,13 @@ int workspace_send_typed(int index, const char *text, const char *full)
     struct tab *t = &tabs[index];
     if (!session_turn_running(t->s))
         return workspace_send(index, full ? full : text, full ? text : NULL);
+
+    if (!session_remote(t->s) && sideroute_independent(session_prompt(t->s), text)) {
+        char label[4096];
+        snprintf(label, sizeof label, "/btw %s", text);
+        if (sidechannel_start(t->s, text, label))
+            return 1;
+    }
 
     struct pending *last = t->npending ? &t->pending[t->npending - 1] : NULL;
     if (last && last->typed)

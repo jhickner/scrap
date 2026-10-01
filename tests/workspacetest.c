@@ -15,6 +15,7 @@
 #include "sessionview.h"
 #include "stamp.h"
 #include "sidechannel.h"
+#include "sideroute.h"
 #include "status.h"
 #include "relay.h"
 #include "tg.h"
@@ -32,6 +33,7 @@ void sidechannel_poll(void) {}
 int  sidechannel_busy(void) { return 0; }
 void sidechannel_close_all(void) {}
 int  sidechannel_fds(int *out, int max) { (void)out; (void)max; return 0; }
+int  sideroute_independent(const char *running, const char *queued) { (void)running; (void)queued; return 0; }
 
 void gitinfo_forget(void) {}
 void tg_refocus(void) {}
@@ -75,6 +77,9 @@ struct session {
 };
 
 int session_turn_running(const struct session *s) { return s && s->running; }
+const char *session_prompt(const struct session *s) { (void)s; return NULL; }
+const char *session_remote(const struct session *s) { (void)s; return NULL; }
+int sidechannel_start(const struct session *s, const char *prompt, const char *label) { (void)s; (void)prompt; (void)label; return 0; }
 int session_work_count(const struct session *s) { return s ? s->work : 0; }
 int session_busy(const struct session *s) { return s && (s->busy || s->running); }
 int session_compact(const struct session *s) { (void)s; return 0; }
