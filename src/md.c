@@ -768,6 +768,20 @@ static void render_view(const char *path, int indent)
     ui_put("\n");
 }
 
+static int handoff_line(const char *body)
+{
+    return !strncmp(body, "@handoff /", 10);
+}
+
+static void render_handoff(int indent)
+{
+    ui_pad(indent);
+    ui_esc(ui_style(UI_DIM));
+    ui_put("handoff ready");
+    ui_esc(ui_style(UI_RESET));
+    ui_put("\n");
+}
+
 static void render_code_line(const char *line, int indent)
 {
     ui_pad(indent);
@@ -950,6 +964,13 @@ void md_render(const char *text, int indent)
             size_t      width;
             if (!is_bullet(body, &after) && !is_ordered(body, &width))
                 ask_indent = -1;
+        }
+
+        if (handoff_line(body)) {
+            render_handoff(indent);
+            wrote_any = 1;
+            free(line);
+            continue;
         }
 
         char *doc = view_line(body);

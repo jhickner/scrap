@@ -25,6 +25,6 @@
   /new  open a new session, or a new tab running the prompt
   /clear  start a fresh conversation, keeping the scrollback
   /clear-history  start a fresh conversation and clear the scrollback
+  /handoff  write a handoff for review, then continue from it in a fresh conversation
   /model  switch model
   /effort  set reasoning/thinking effort
-  /backend  continue with another backend

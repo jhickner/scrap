@@ -35,6 +35,7 @@ int cmd_self_echoes(const char *line);
 void cmd_dispatch_live(struct session *s, const char *line);
 
 void cmd_run_deferred(struct session *s);
+void cmd_turn_done(struct session *s);
 
 void cmd_forget_session(struct session *s);
 

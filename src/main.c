@@ -617,6 +617,7 @@ static void turn_done(struct session *s)
     stream_turn_done(s);
     voice_turn_done(s);
     cmd_run_deferred(s);
+    cmd_turn_done(s);
 }
 
 static void turn_begin(struct session *s)

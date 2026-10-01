@@ -1141,6 +1141,84 @@ static void clear(struct session *s, int history)
     ui_flush();
 }
 
+static int handoff_path(const struct session *s, char *out, size_t size)
+{
+    const char *id = session_id(s);
+    const char *tmp = getenv("TMPDIR");
+    if (!id || !*id)
+        return 0;
+    if (!tmp || !*tmp)
+        tmp = "/tmp";
+    size_t n = strlen(tmp);
+    while (n > 1 && tmp[n - 1] == '/')
+        n--;
+    return (size_t)snprintf(out, size, "%.*s/" APP_NAME "-handoff-%s.md", (int)n, tmp, id) <
+           size;
+}
+
+static void do_handoff(struct session *s, const char *arg)
+{
+    char path[4200];
+    if (session_remote(s)) {
+        reply_error("/handoff runs on local sessions only");
+        return;
+    }
+    if (!handoff_path(s, path, sizeof path)) {
+        reply_error("nothing to hand off yet");
+        return;
+    }
+
+    char prompt[8192 + 4200 * 3], label[4200];
+    snprintf(prompt, sizeof prompt,
+             "Write a handoff note for a new session that will continue this work with none "
+             "of this conversation's context. Cover the goal, current state, decisions made, "
+             "relevant files, and next steps.%s%s Save it to %s and show it with "
+             "`@view %s`. Revise it when the user asks. When the user approves it, end the "
+             "reply with `@handoff %s` alone on its own line.",
+             arg && *arg ? " Focus: " : "", arg && *arg ? arg : "", path, path, path);
+    snprintf(label, sizeof label, "/handoff%s%s", arg && *arg ? " " : "", arg ? arg : "");
+    workspace_send(workspace_index_of(s), prompt, label);
+}
+
+static int handoff_marked(const char *reply, const char *path)
+{
+    size_t n = reply ? strlen(reply) : 0;
+    while (n && (reply[n - 1] == '\n' || reply[n - 1] == ' ' || reply[n - 1] == '\r'))
+        n--;
+    size_t start = n;
+    while (start && reply[start - 1] != '\n')
+        start--;
+    size_t plen = strlen(path);
+    return n - start == 9 + plen && !strncmp(reply + start, "@handoff ", 9) &&
+           !strncmp(reply + start + 9, path, plen);
+}
+
+void cmd_turn_done(struct session *s)
+{
+    char path[4200];
+    if (session_remote(s) || session_last_result(s)->interrupted ||
+        !handoff_path(s, path, sizeof path) || !handoff_marked(session_last_block(s), path))
+        return;
+
+    char *text = text_slurp(path, 1 << 20, NULL);
+    if (!text || !*text) {
+        reply_error("could not read the handoff at %s", path);
+        free(text);
+        return;
+    }
+    char was[128];
+    snprintf(was, sizeof was, "%s", session_id(s));
+    clear(s, 0);
+    if (!strcmp(was, session_id(s) ? session_id(s) : "")) {
+        free(text);
+        return;
+    }
+    unlink(path);
+    prompt_echo_message("handoff");
+    workspace_send(workspace_index_of(s), text, "handoff");
+    free(text);
+}
+
 static void do_clear(struct session *s, const char *arg)
 {
     (void)arg;
@@ -1598,6 +1676,8 @@ static const struct cmd COMMANDS[] = {
     {"/clear", "start a fresh conversation, keeping the scrollback", NULL, 0, do_clear},
     {"/clear-history", "start a fresh conversation and clear the scrollback", NULL, 0,
      do_clear_history},
+    {"/handoff", "write a handoff for review, then continue from it in a fresh conversation",
+     "[focus]", 0, do_handoff},
     {"/model", "switch model", "[name]", 0, do_model},
     {"/effort", "set reasoning/thinking effort", "[level]", 0, do_effort},
     {"/backend", "continue with another backend", "<name>", 0, do_backend},
