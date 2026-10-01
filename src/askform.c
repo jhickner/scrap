@@ -88,8 +88,6 @@ static int option_rows(const struct form *f, int i)
 
 static int item_rows(struct form *f, int i)
 {
-    if (i > f->b->n)
-        return 1;
     replbox_width(&f->box[i], body_width());
     return wrapped_rows(item_title(f, i), (size_t)body_width()) + option_rows(f, i) +
            replbox_wants(&f->box[i]);
@@ -212,26 +210,10 @@ static void paint_field(struct form *f, int i)
     }
 }
 
-static void paint_submit(struct form *f)
-{
-    if (!row(f))
-        return;
-    int here = f->focus == f->b->n + 1;
-    ui_pad(FORM_INDENT);
-    ui_esc(ui_style(UI_DIM));
-    ui_put("\xe2\x8f\x8e");
-    ui_esc(ui_style(UI_RESET));
-    ui_pad(FORM_BODY - FORM_INDENT - 1);
-    ui_esc(ui_style(here ? UI_ACCENT : UI_TEXT));
-    ui_put("submit");
-    ui_esc(ui_style(UI_RESET));
-    end_row();
-}
-
 static void paint(void *ud)
 {
     struct form *f = ud;
-    int          items = f->b->n + 2;
+    int          items = f->b->n + 1;
     int          room = chrome_modal_rows() - 2;
     if (room < 1)
         room = 1;
@@ -252,10 +234,6 @@ static void paint(void *ud)
 
     f->left = room;
     for (int i = start; i < items && f->left > 0; i++) {
-        if (i > f->b->n) {
-            paint_submit(f);
-            continue;
-        }
         paint_title(f, i);
         if (i < f->b->n)
             paint_options(f, i);
@@ -302,7 +280,7 @@ static void down(struct form *f)
         f->opt++;
     else if (f->opt >= 0)
         f->opt = -1;
-    else if (f->focus <= f->b->n)
+    else if (f->focus < f->b->n)
         enter_item(f, f->focus + 1);
 }
 
@@ -354,7 +332,7 @@ char *askform_run(const struct askblock *b)
 
         int asking = f.focus < b->n;
         int on_option = asking && f.opt >= 0;
-        int on_field = f.focus <= b->n && f.opt < 0;
+        int on_field = f.opt < 0;
 
         if (ev.key == TK_ESCAPE || ev.key == TK_EOF ||
             (ev.key == TK_CHAR && (ev.cp == KEY_CTRL('C') || ev.cp == KEY_CTRL('D'))))
