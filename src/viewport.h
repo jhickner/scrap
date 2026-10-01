@@ -60,6 +60,8 @@ int viewport_ends_blank(void);
 
 void viewport_clear(void);
 
+void viewport_clear_screen(void);
+
 unsigned viewport_mark(void);
 int      viewport_visible(unsigned mark);
 

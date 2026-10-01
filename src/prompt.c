@@ -909,7 +909,8 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             if (live)
                 return KEY_OK;
             status_sticky_erased();
-            block_cleared();
+            block_forget();
+            viewport_clear_screen();
             return KEY_OK;
         }
         return edit_key(p, ev);

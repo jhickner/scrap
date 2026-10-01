@@ -859,6 +859,31 @@ static void check_owed_pad(struct screen *s)
         fail("a padless item's own blank is hidden");
 }
 
+static void check_clear_screen(struct screen *s)
+{
+    viewport_clear();
+    set_size(80, 24);
+    say("before clear");
+    chrome("CHROME-prompt", NULL);
+    refresh(s, 80, 24);
+    viewport_clear_screen();
+    redraw(s);
+    if (count_on_screen(s, "before clear") != 0)
+        fail("clearing the screen leaves old rows on it");
+    if (!strstr(row_text(s, 23), "CHROME-prompt"))
+        fail("clearing the screen keeps the chrome");
+    viewport_scroll(30);
+    pump(s);
+    if (count_on_screen(s, "before clear") != 1)
+        fail("rows cleared off the screen are still in the history");
+    viewport_scroll_end();
+    pump(s);
+    say("after clear");
+    redraw(s);
+    if (!strstr(row_text(s, 22), "after clear"))
+        fail("output after a clear sits above the chrome");
+}
+
 static void check_prepend_pad(struct screen *s)
 {
     viewport_clear();
@@ -926,6 +951,7 @@ int main(void)
     check_suspended_mark();
     check_owed_pad(&s);
     check_prepend_pad(&s);
+    check_clear_screen(&s);
 
     fflush(stdout);
     if (failures)

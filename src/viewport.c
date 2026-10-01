@@ -860,6 +860,23 @@ void viewport_clear(void)
     layout_changed();
 }
 
+void viewport_clear_screen(void)
+{
+    int n = tty_rows() - chrome_n;
+    if (!nitems || n < 1)
+        return;
+    viewport_item_begin(NULL);
+    for (int i = 0; i < n; i++)
+        ui_put("\n");
+    viewport_item_end();
+    tail_pad = 0;
+    scrolled = 0;
+    anchor_id = 0;
+    anchor_skip = 0;
+    dirty = 1;
+    layout_changed();
+}
+
 struct style {
     char  *buf;
     size_t len, cap;
