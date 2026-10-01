@@ -1,5 +1,5 @@
-                                                                                             │ @rig
-                                                                                             ╰──┬───
+                                                                                           │ @rig ⠀
+                                                                                           ╰────┬───
                                                                                                 │ +
                                                                                                 ╰───
 
@@ -23,8 +23,8 @@
 
 ❯ /
   /new  open a new session, or a new tab running the prompt
-  /clear  start a fresh conversation
+  /clear  start a fresh conversation, keeping the scrollback
+  /clear-history  start a fresh conversation and clear the scrollback
   /model  switch model
   /effort  set reasoning/thinking effort
   /backend  continue with another backend
-  /default  set the default backend

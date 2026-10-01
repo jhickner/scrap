@@ -19,6 +19,19 @@
 #define BAR "\xe2\x94\x82"
 #define RULE "\xe2\x94\x80"
 
+static const char *const METER[] = {
+    "\xe2\xa0\x80", "\xe2\xa1\x80", "\xe2\xa3\x80", "\xe2\xa3\x84", "\xe2\xa3\xa4",
+    "\xe2\xa3\xa6", "\xe2\xa3\xb6", "\xe2\xa3\xb7", "\xe2\xa3\xbf",
+};
+
+static int meter_step(const struct session *s)
+{
+    int pct = session_context_percent(s);
+    if (pct < 0)
+        return 0;
+    return pct / 5 < 8 ? pct / 5 : 8;
+}
+
 static int    frame;
 static double frame_at;
 
@@ -36,6 +49,7 @@ static unsigned digest(void)
         for (const char *p = workspace_status(s); *p; p++)
             h = h * 16777619u + (unsigned char)*p;
         h = h * 16777619u + (unsigned)(session_unseen(s) ? 1 : 0);
+        h = h * 16777619u + (unsigned)meter_step(s);
         for (const char *p = name ? name : ""; *p; p++)
             h = h * 16777619u + (unsigned char)*p;
     }
@@ -100,6 +114,7 @@ struct tab {
     int          index;
     char         name[256];
     const char  *glyph;
+    const char  *meter;
     enum ui_role role;
     int          cells;
 };
@@ -131,6 +146,8 @@ static void paint_row(void *ud, int line, int w)
         }
         ui_esc(ui_style(t->index == workspace_index() ? UI_ACCENT : UI_DIM));
         ui_put(t->name);
+        ui_put(" ");
+        ui_put(t->meter);
         ui_pad(w - 2 - t->cells);
     } else if (at == ntabs) {
         ui_put("\xe2\x95\xb0");
@@ -172,7 +189,8 @@ void tabbar_cover(char **rows, int n, int cols)
         name_of(s, t->name, sizeof t->name);
         t->role = UI_DIM;
         t->glyph = mark(s, &t->role);
-        t->cells = (int)ui_cells(t->name) + (t->glyph ? 2 : 0);
+        t->meter = METER[meter_step(s)];
+        t->cells = (int)ui_cells(t->name) + 2 + (t->glyph ? 2 : 0);
         if (t->cells > widest)
             widest = t->cells;
     }
