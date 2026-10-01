@@ -115,6 +115,7 @@ struct tab {
     char         name[256];
     const char  *glyph;
     const char  *meter;
+    int          step;
     enum ui_role role;
     int          cells;
 };
@@ -148,6 +149,8 @@ static void paint_row(void *ud, int line, int w)
         ui_put(t->name);
         if (t->meter) {
             ui_put(" ");
+            if (t->step > 4)
+                ui_esc(ui_style(UI_ERROR));
             ui_put(t->meter);
         }
         ui_pad(w - 2 - t->cells);
@@ -191,8 +194,8 @@ void tabbar_cover(char **rows, int n, int cols)
         name_of(s, t->name, sizeof t->name);
         t->role = UI_DIM;
         t->glyph = mark(s, &t->role);
-        int step = meter_step(s);
-        t->meter = step ? METER[step] : NULL;
+        t->step = meter_step(s);
+        t->meter = t->step ? METER[t->step] : NULL;
         t->cells = (int)ui_cells(t->name) + (t->meter ? 2 : 0) + (t->glyph ? 2 : 0);
         if (t->cells > widest)
             widest = t->cells;
