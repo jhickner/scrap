@@ -1,4 +1,6 @@
 #include "md.h"
+
+#include "highlight.h"
 #include "vendor/mermaid/mermaid.h"
 
 #include <ctype.h>
@@ -120,19 +122,24 @@ static void styled_push(struct styled *s, const char *bytes, size_t n, int role)
     s->text[s->len] = '\0';
 }
 
-static void put_safe(const char *s)
+static void put_safe_n(const char *s, size_t n)
 {
-    const char *run = s;
+    const char *run = s, *end = s + n;
     for (const char *p = s;; p++) {
-        unsigned char c = (unsigned char)*p;
-        if (*p && !(c == 0x7f || (c < 0x20 && c != '\t')))
+        unsigned char c = p < end ? (unsigned char)*p : 0;
+        if (p < end && !(c == 0x7f || (c < 0x20 && c != '\t')))
             continue;
         if (p > run)
             ui_putn(run, (size_t)(p - run));
-        if (!*p)
+        if (p >= end)
             return;
         run = p + 1;
     }
+}
+
+static void put_safe(const char *s)
+{
+    put_safe_n(s, strlen(s));
 }
 
 static char *command_url(const char *cmd, size_t n)
@@ -873,7 +880,8 @@ static void render_handoff(int indent)
     ui_put("\n");
 }
 
-static void render_code_line(const char *line, int indent, const char *url)
+static void render_code_line(const char *line, int indent, const char *url,
+                             const unsigned char *roles)
 {
     int link = url && ui_color();
     ui_pad(indent);
@@ -882,8 +890,14 @@ static void render_code_line(const char *line, int indent, const char *url)
         ui_esc(url);
         ui_esc("\x1b\\");
     }
-    ui_esc(ui_style(UI_CODE));
-    put_safe(line);
+    size_t n = strlen(line);
+    for (size_t i = 0, j; i < n; i = j) {
+        unsigned char role = roles ? roles[i] : UI_RESET;
+        for (j = i + 1; j < n && roles && roles[j] == role; j++)
+            ;
+        ui_esc(ui_style(role == UI_RESET ? UI_CODE : (enum ui_role)role));
+        put_safe_n(line + i, j - i);
+    }
     ui_esc(ui_style(UI_RESET));
     if (link)
         ui_esc("\x1b]8;;\x1b\\");
@@ -949,6 +963,20 @@ static char *fence_url(const char *text, int lead)
     char *url = block ? command_url(block, strlen(block)) : NULL;
     free(block);
     return url;
+}
+
+static unsigned char *fence_roles(const char *info, const char *text, size_t *len)
+{
+    char          *block = fence_block(text, 0);
+    size_t         n = block ? strlen(block) : 0;
+    unsigned char *roles = n ? malloc(n) : NULL;
+    if (roles && !highlight_code(info, block, n, roles)) {
+        free(roles);
+        roles = NULL;
+    }
+    free(block);
+    *len = n;
+    return roles;
 }
 
 static char *command_line(const char *cmd, size_t n)
@@ -1029,7 +1057,7 @@ static void render_mermaid(const char *src, int indent)
         for (const char *p = src; *p;) {
             const char *nl = strchr(p, '\n');
             char *line = strndup(p, nl ? (size_t)(nl - p) : strlen(p));
-            render_code_line(line, indent, NULL);
+            render_code_line(line, indent, NULL, NULL);
             free(line);
             if (!nl)
                 break;
@@ -1118,6 +1146,8 @@ void md_render(const char *text, int indent)
     int code_ansi = 0;
     int code_mermaid = 0;
     char *code_url = NULL;
+    unsigned char *code_roles = NULL;
+    size_t code_len = 0, code_at = 0;
     int blank_pending = 0;
     int wrote_any = 0;
     char *mermaid = NULL;
@@ -1137,6 +1167,9 @@ void md_render(const char *text, int indent)
             code_ansi = in_code && strncmp(body + 3, "ansi", 4) == 0;
             free(code_url);
             code_url = in_code && shell_fence(body + 3) ? fence_url(text, lead) : NULL;
+            free(code_roles);
+            code_roles = in_code ? fence_roles(body + 3, text, &code_len) : NULL;
+            code_at = 0;
             if (in_code && strncmp(body + 3, "mermaid", 7) == 0) {
                 code_mermaid = 1;
             } else if (code_mermaid) {
@@ -1170,7 +1203,9 @@ void md_render(const char *text, int indent)
             if (code_ansi)
                 render_ansi_line(line, indent + 2);
             else
-                render_code_line(line, indent + 2, code_url);
+                render_code_line(line, indent + 2, code_url,
+                                 code_roles && code_at < code_len ? code_roles + code_at : NULL);
+            code_at += strlen(line) + 1;
             wrote_any = 1;
             free(line);
             continue;
@@ -1289,9 +1324,10 @@ void md_render(const char *text, int indent)
             ui_put("\n");
         for (char *p = mermaid, *nl; (nl = strchr(p, '\n')); p = nl + 1) {
             *nl = 0;
-            render_code_line(p, indent + 2, NULL);
+            render_code_line(p, indent + 2, NULL, NULL);
         }
         free(mermaid);
     }
     free(code_url);
+    free(code_roles);
 }

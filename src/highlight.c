@@ -646,3 +646,352 @@ void highlight_shell(const char *text, size_t len, unsigned char *roles)
     struct lex lex = {text, len, roles};
     shell_region(&lex, 0, len, 0);
 }
+
+static size_t json_region(struct lex *L, size_t from, size_t to)
+{
+    const char *s = L->s;
+    for (size_t i = from; i < to;) {
+        char c = s[i];
+        if (c == '"') {
+            size_t end = skip_quote(L, i, to), k = end;
+            while (k < to && blank(s[k]))
+                k++;
+            paint(L, i, end, k < to && s[k] == ':' ? UI_SYN_VAR : UI_SYN_STRING);
+            i = end;
+        } else if (digit(c) || (c == '-' && i + 1 < to && digit(s[i + 1]))) {
+            size_t j = i + 1;
+            while (j < to && (name_char(s[j]) || s[j] == '.' || s[j] == '+' || s[j] == '-'))
+                j++;
+            paint(L, i, j, UI_SYN_NUMBER);
+            i = j;
+        } else if (alpha(c)) {
+            size_t j = i;
+            while (j < to && alpha(s[j]))
+                j++;
+            paint(L, i, j, UI_SYN_KEYWORD);
+            i = j;
+        } else {
+            if (strchr("{}[]:,", c))
+                paint(L, i, i + 1, UI_SYN_OP);
+            i++;
+        }
+    }
+    return to;
+}
+
+static const char *const YAML_WORDS[] = {
+    "true", "false", "null", "yes", "no", "on", "off", "True", "False", "Null", "~",
+};
+
+static size_t yaml_comment(struct lex *L, size_t i, size_t eol)
+{
+    for (size_t j = i; j < eol; j++)
+        if (L->s[j] == '#' && (j == i || blank(L->s[j - 1])))
+            return j;
+    return eol;
+}
+
+static void yaml_value(struct lex *L, size_t i, size_t eol)
+{
+    const char *s = L->s;
+    while (i < eol && blank(s[i]))
+        i++;
+    if (i >= eol)
+        return;
+    if (s[i] == '#') {
+        paint(L, i, eol, UI_SYN_COMMENT);
+        return;
+    }
+    if (s[i] == '[' || s[i] == '{') {
+        size_t end = yaml_comment(L, i, eol);
+        json_region(L, i, end);
+        paint(L, end, eol, UI_SYN_COMMENT);
+        return;
+    }
+    if (s[i] == '\'' || s[i] == '"') {
+        size_t end = skip_quote(L, i, eol);
+        paint(L, i, end, UI_SYN_STRING);
+        paint(L, yaml_comment(L, end, eol), eol, UI_SYN_COMMENT);
+        return;
+    }
+    if (s[i] == '&' || s[i] == '*' || s[i] == '!') {
+        size_t j = i;
+        while (j < eol && !blank(s[j]))
+            j++;
+        paint(L, i, j, UI_SYN_VAR);
+        yaml_value(L, j, eol);
+        return;
+    }
+    size_t end = yaml_comment(L, i, eol);
+    paint(L, end, eol, UI_SYN_COMMENT);
+    while (end > i && blank(s[end - 1]))
+        end--;
+    char word[16];
+    size_t n = end - i;
+    if (n < sizeof word) {
+        memcpy(word, s + i, n);
+        word[n] = '\0';
+        if (in_list(YAML_WORDS, COUNT(YAML_WORDS), word)) {
+            paint(L, i, end, UI_SYN_KEYWORD);
+            return;
+        }
+        if (numeric_word(word)) {
+            paint(L, i, end, UI_SYN_NUMBER);
+            return;
+        }
+    }
+    paint(L, i, end, UI_SYN_STRING);
+}
+
+static void yaml_region(struct lex *L, size_t from, size_t to)
+{
+    const char *s = L->s;
+    long        block = -1;
+    for (size_t i = from; i < to;) {
+        size_t eol = i, at = i;
+        while (eol < to && s[eol] != '\n')
+            eol++;
+        while (at < eol && blank(s[at]))
+            at++;
+        size_t next = eol < to ? eol + 1 : to;
+
+        if (block >= 0 && (at == eol || (long)(at - i) > block)) {
+            paint(L, at, eol, UI_SYN_STRING);
+            i = next;
+            continue;
+        }
+        block = -1;
+        if (at == eol) {
+            i = next;
+            continue;
+        }
+        if (s[at] == '#') {
+            paint(L, at, eol, UI_SYN_COMMENT);
+            i = next;
+            continue;
+        }
+        if (eol - at >= 3 && (!strncmp(s + at, "---", 3) || !strncmp(s + at, "...", 3))) {
+            paint(L, at, at + 3, UI_SYN_OP);
+            i = next;
+            continue;
+        }
+        size_t indent = at - i;
+        while (at + 1 < eol && s[at] == '-' && blank(s[at + 1])) {
+            paint(L, at, at + 1, UI_SYN_OP);
+            at += 2;
+            while (at < eol && blank(s[at]))
+                at++;
+        }
+        size_t key = at, colon = eol;
+        if (at < eol && (s[at] == '"' || s[at] == '\'')) {
+            size_t end = skip_quote(L, at, eol);
+            if (end < eol && s[end] == ':')
+                colon = end;
+        } else {
+            for (size_t j = at; j < eol && s[j] != '#'; j++)
+                if (s[j] == ':' && (j + 1 == eol || blank(s[j + 1]))) {
+                    colon = j;
+                    break;
+                }
+        }
+        size_t value = at;
+        if (colon < eol) {
+            paint(L, key, colon, UI_SYN_VAR);
+            paint(L, colon, colon + 1, UI_SYN_OP);
+            value = colon + 1;
+        }
+        while (value < eol && blank(s[value]))
+            value++;
+        if (value < eol && (s[value] == '|' || s[value] == '>')) {
+            size_t end = value;
+            while (end < eol && !blank(s[end]))
+                end++;
+            paint(L, value, end, UI_SYN_OP);
+            paint(L, yaml_comment(L, end, eol), eol, UI_SYN_COMMENT);
+            block = (long)indent;
+        } else {
+            yaml_value(L, value, eol);
+        }
+        i = next;
+    }
+}
+
+static const char *const C_KEYWORDS[] = {
+    "auto", "break", "case", "char", "const", "continue", "default", "do", "double",
+    "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long",
+    "register", "return", "short", "signed", "sizeof", "static", "struct", "switch",
+    "typedef", "union", "unsigned", "void", "volatile", "while", "bool", "true",
+    "false", "NULL", "nullptr", "class", "namespace", "template", "typename",
+    "public", "private", "protected", "virtual", "override", "new", "delete",
+    "this", "using", "try", "catch", "throw", "constexpr",
+};
+
+static const char *const JS_KEYWORDS[] = {
+    "break", "case", "catch", "class", "const", "continue", "debugger", "default",
+    "delete", "do", "else", "export", "extends", "finally", "for", "function", "if",
+    "import", "in", "instanceof", "let", "new", "return", "super", "switch", "this",
+    "throw", "try", "typeof", "var", "void", "while", "yield", "async", "await", "of",
+    "true", "false", "null", "undefined", "interface", "type", "enum", "implements",
+    "from", "as", "readonly", "static", "public", "private", "protected",
+};
+
+static const char *const GO_KEYWORDS[] = {
+    "break", "case", "chan", "const", "continue", "default", "defer", "else",
+    "fallthrough", "for", "func", "go", "goto", "if", "import", "interface", "map",
+    "package", "range", "return", "select", "struct", "switch", "type", "var",
+    "true", "false", "nil",
+};
+
+static const char *const RUST_KEYWORDS[] = {
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else",
+    "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop",
+    "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self", "static",
+    "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while",
+    "Some", "None", "Ok", "Err",
+};
+
+static const char *const JAVA_KEYWORDS[] = {
+    "abstract", "boolean", "break", "byte", "case", "catch", "char", "class",
+    "continue", "default", "do", "double", "else", "enum", "extends", "final",
+    "finally", "float", "for", "if", "implements", "import", "instanceof", "int",
+    "interface", "long", "new", "package", "private", "protected", "public",
+    "return", "short", "static", "super", "switch", "this", "throw", "throws",
+    "try", "void", "volatile", "while", "true", "false", "null", "var", "val",
+    "fun", "override", "let", "func", "struct", "guard", "self", "nil",
+};
+
+static void clike_region(struct lex *L, size_t from, size_t to,
+                         const char *const *keywords, int nkeywords)
+{
+    const char *s = L->s;
+    int         line_start = 1;
+    for (size_t i = from; i < to;) {
+        char c = s[i];
+        if (c == '\n') {
+            line_start = 1;
+            i++;
+            continue;
+        }
+        if (blank(c)) {
+            i++;
+            continue;
+        }
+        if (c == '#' && line_start && keywords == C_KEYWORDS) {
+            size_t j = i + 1;
+            while (j < to && (blank(s[j]) || alpha(s[j])))
+                j++;
+            paint(L, i, j, UI_SYN_KEYWORD);
+            i = j;
+            line_start = 0;
+            continue;
+        }
+        line_start = 0;
+        if (c == '/' && i + 1 < to && s[i + 1] == '/') {
+            size_t j = i;
+            while (j < to && s[j] != '\n')
+                j++;
+            paint(L, i, j, UI_SYN_COMMENT);
+            i = j;
+            continue;
+        }
+        if (c == '/' && i + 1 < to && s[i + 1] == '*') {
+            size_t j = i + 2;
+            while (j + 1 < to && !(s[j] == '*' && s[j + 1] == '/'))
+                j++;
+            j = j + 2 < to ? j + 2 : to;
+            paint(L, i, j, UI_SYN_COMMENT);
+            i = j;
+            continue;
+        }
+        if (c == '"' || c == '`' || (c == '\'' && memchr(s + i + 1, '\'', to - i - 1))) {
+            size_t end = skip_quote(L, i, to);
+            if (c != '`')
+                for (size_t j = i + 1; j < end; j++)
+                    if (s[j] == '\n') {
+                        end = j;
+                        break;
+                    }
+            paint(L, i, end, UI_SYN_STRING);
+            i = end;
+            continue;
+        }
+        if (digit(c)) {
+            size_t j = i;
+            while (j < to && (name_char(s[j]) || s[j] == '.'))
+                j++;
+            paint(L, i, j, UI_SYN_NUMBER);
+            i = j;
+            continue;
+        }
+        if (alpha(c) || c == '_' || c == '$') {
+            size_t j = i;
+            while (j < to && (name_char(s[j]) || s[j] == '$'))
+                j++;
+            char   word[64];
+            size_t n = j - i < sizeof word - 1 ? j - i : sizeof word - 1;
+            memcpy(word, s + i, n);
+            word[n] = '\0';
+            size_t call = j;
+            while (call < to && blank(s[call]))
+                call++;
+            if (call < to && s[call] == '!')
+                call++;
+            if (in_list(keywords, nkeywords, word))
+                paint(L, i, j, UI_SYN_KEYWORD);
+            else if (call < to && s[call] == '(')
+                paint(L, i, j, UI_SYN_CMD);
+            i = j;
+            continue;
+        }
+        i++;
+    }
+}
+
+int highlight_code(const char *info, const char *text, size_t len, unsigned char *roles)
+{
+    static const struct {
+        const char        *names;
+        const char *const *keywords;
+        int                nkeywords;
+    } clike[] = {
+        {" c h cpp c++ cc hpp cxx objc ", C_KEYWORDS, COUNT(C_KEYWORDS)},
+        {" js javascript jsx mjs ts typescript tsx ", JS_KEYWORDS, COUNT(JS_KEYWORDS)},
+        {" go golang ", GO_KEYWORDS, COUNT(GO_KEYWORDS)},
+        {" rust rs ", RUST_KEYWORDS, COUNT(RUST_KEYWORDS)},
+        {" java kotlin kt swift cs csharp scala ", JAVA_KEYWORDS, COUNT(JAVA_KEYWORDS)},
+    };
+
+    if (!info || !text || !roles || !len)
+        return 0;
+    while (*info == ' ')
+        info++;
+    size_t n = strcspn(info, " \t{,");
+    if (!n || n > 16)
+        return 0;
+    char name[20];
+    name[0] = ' ';
+    for (size_t i = 0; i < n; i++)
+        name[i + 1] = info[i] >= 'A' && info[i] <= 'Z' ? (char)(info[i] + 32) : info[i];
+    name[n + 1] = ' ';
+    name[n + 2] = '\0';
+
+    memset(roles, (unsigned char)UI_RESET, len);
+    struct lex lex = {text, len, roles};
+    if (strstr(" sh bash shell zsh console ", name))
+        shell_region(&lex, 0, len, 0);
+    else if (strstr(" py python python3 ", name))
+        python_region(&lex, 0, len);
+    else if (strstr(" json jsonc json5 jsonl ", name))
+        json_region(&lex, 0, len);
+    else if (strstr(" yaml yml ", name))
+        yaml_region(&lex, 0, len);
+    else {
+        int k = 0;
+        while (k < COUNT(clike) && !strstr(clike[k].names, name))
+            k++;
+        if (k == COUNT(clike))
+            return 0;
+        clike_region(&lex, 0, len, clike[k].keywords, clike[k].nkeywords);
+    }
+    return 1;
+}

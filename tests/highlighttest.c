@@ -4,7 +4,8 @@
 #include "highlight.h"
 #include "ui.h"
 
-static int failures;
+static int         failures;
+static const char *fence;
 
 static char letter(unsigned char role)
 {
@@ -34,7 +35,10 @@ static void role_nth(const char *command, const char *needle, int nth, char want
     unsigned char roles[4096];
     size_t        len = strlen(command);
 
-    highlight_shell(command, len, roles);
+    if (fence)
+        highlight_code(fence, command, len, roles);
+    else
+        highlight_shell(command, len, roles);
 
     const char *at = command;
     for (int i = 0; at && i <= nth; i++)
@@ -136,6 +140,40 @@ int main(void)
 
     role("git commit -m 'wip: highlight'", "git", 'c');
     role("git commit -m 'wip: highlight'", "'wip: highlight'", 's');
+
+    fence = "json";
+    role("{\"name\": \"x\", \"n\": -1.5, \"ok\": true}", "\"name\"", 'v');
+    role("{\"name\": \"x\", \"n\": -1.5, \"ok\": true}", "\"x\"", 's');
+    role("{\"name\": \"x\", \"n\": -1.5, \"ok\": true}", "-1.5", 'n');
+    role("{\"name\": \"x\", \"n\": -1.5, \"ok\": true}", "true", 'k');
+
+    fence = "yaml";
+    role("# top\nname: web\nports:\n  - 80\nenv: {a: 1}\n", "# top", '#');
+    role("# top\nname: web\nports:\n  - 80\nenv: {a: 1}\n", "name", 'v');
+    role("# top\nname: web\nports:\n  - 80\nenv: {a: 1}\n", "web", 's');
+    role("# top\nname: web\nports:\n  - 80\nenv: {a: 1}\n", "80", 'n');
+    role("# top\nname: web\nports:\n  - 80\nenv: {a: 1}\n", "1", 'n');
+    role("url: http://x:80 # c\non: yes\n", "http://x:80", 's');
+    role("url: http://x:80 # c\non: yes\n", "# c", '#');
+    role("url: http://x:80 # c\non: yes\n", "yes", 'k');
+    role("run: |\n  echo: hi\nnext: 1\n", "echo: hi", 's');
+    role("run: |\n  echo: hi\nnext: 1\n", "next", 'v');
+
+    fence = "c";
+    role("#include <stdio.h>\nint main(void) { /* x */ return printf(\"%d\", 1); } // end", "#include", 'k');
+    role("#include <stdio.h>\nint main(void) { /* x */ return printf(\"%d\", 1); } // end", "main", 'c');
+    role("#include <stdio.h>\nint main(void) { /* x */ return printf(\"%d\", 1); } // end", "/* x */", '#');
+    role("#include <stdio.h>\nint main(void) { /* x */ return printf(\"%d\", 1); } // end", "\"%d\"", 's');
+    role("#include <stdio.h>\nint main(void) { /* x */ return printf(\"%d\", 1); } // end", "// end", '#');
+
+    fence = "ts {title}";
+    role("const x = `a\nb`; await go()", "const", 'k');
+    role("const x = `a\nb`; await go()", "b`", 's');
+    role("const x = `a\nb`; await go()", "go", 'c');
+
+    fence = "text";
+    role("const x", "const", '.');
+    fence = NULL;
 
     if (failures)
         printf("%d failure(s)\n", failures);

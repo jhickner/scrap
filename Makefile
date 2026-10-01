@@ -205,9 +205,9 @@ $(BUILD)/coreagenttest: tests/coreagenttest.c $(BUILD)/vendor/impl.o $(BUILD)/ve
 
 $(BUILD)/agenttabstest: tests/agenttabstest.c $(BUILD)/agenttabs.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/imagetest: tools/imagetest.c $(BUILD)/image.o $(BUILD)/md.o $(MERMAID_OBJ) $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
+$(BUILD)/imagetest: tools/imagetest.c $(BUILD)/image.o $(BUILD)/md.o $(BUILD)/highlight.o $(MERMAID_OBJ) $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/mdtest: tests/mdtest.c $(BUILD)/md.o $(MERMAID_OBJ) $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/image.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/mdtest: tests/mdtest.c $(BUILD)/md.o $(BUILD)/highlight.o $(MERMAID_OBJ) $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/image.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/pastetest: tools/pastetest.c $(BUILD)/paste.o $(BUILD)/text.o | $(BUILD)
 
