@@ -569,6 +569,7 @@ static void turn_begin(struct session *s)
     stream_turn_begin(s);
     voice_turn_begin(s);
     bash_drop_held();
+    prompt_drop_held();
 }
 
 static int tab_queued(void *ud)

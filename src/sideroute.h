@@ -1,6 +1,8 @@
 #ifndef SIDEROUTE_H
 #define SIDEROUTE_H
 
-int sideroute_independent(const char *running, const char *queued);
+enum sideroute { SIDEROUTE_QUEUE, SIDEROUTE_SIDE, SIDEROUTE_REDIRECT };
+
+enum sideroute sideroute_classify(const char *running, const char *queued);
 
 #endif

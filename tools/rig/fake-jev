@@ -1,3 +1,8 @@
 #!/bin/sh
 while [ $# -gt 0 ] && [ "$1" != --state ]; do shift; done
-case "$2" in *'"queued":"'*todo*) echo 0.9 ;; *) echo 0.1 ;; esac
+case "$2" in
+*'"queued":"'*todo*) r='"side":0.9,"redirect":0,"other":0.1' ;;
+*'"queued":"no, '*) r='"side":0,"redirect":0.95,"other":0.05' ;;
+*) r='"side":0.1,"redirect":0,"other":0.9' ;;
+esac
+echo "{\"answers\":{\"route\":{\"probabilities\":{$r}}}}"

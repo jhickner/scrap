@@ -110,4 +110,8 @@ void prompt_echo_message(const char *text);
 #define PROMPT_ECHO_KIND "echo"
 void prompt_echo_load(const cJSON *st);
 
+void        prompt_hold(char *text);
+void        prompt_drop_held(void);
+const char *prompt_held_label(void);
+
 #endif

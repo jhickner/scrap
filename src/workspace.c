@@ -716,6 +716,32 @@ static int join(char **dst, const char *text)
     return 1;
 }
 
+static int redirect(struct tab *t, const char *text, const char *full)
+{
+    struct pending p = {strdup(full ? full : text), full ? strdup(text) : NULL, 1};
+    if (!p.line || (full && !p.shown)) {
+        free(p.line);
+        free(p.shown);
+        return 0;
+    }
+    struct pending *last = t->npending ? &t->pending[t->npending - 1] : NULL;
+    if (last && last->typed) {
+        prompt_hold(last->shown ? last->shown : last->line);
+        free(last->shown ? last->line : NULL);
+        t->npending--;
+    }
+    if (t->npending >= PENDING_MAX) {
+        free(p.line);
+        free(p.shown);
+        return 0;
+    }
+    memmove(t->pending + 1, t->pending, (size_t)t->npending * sizeof *t->pending);
+    t->pending[0] = p;
+    t->npending++;
+    session_interrupt(t->s);
+    return 1;
+}
+
 int workspace_send_typed(int index, const char *text, const char *full)
 {
     if (index < 0 || index >= ntabs || !text || !*text)
@@ -724,12 +750,17 @@ int workspace_send_typed(int index, const char *text, const char *full)
     if (!session_turn_running(t->s))
         return workspace_send(index, full ? full : text, full ? text : NULL);
 
-    if (!session_remote(t->s) && sideroute_independent(session_prompt(t->s), text)) {
+    enum sideroute route = session_remote(t->s)
+                               ? SIDEROUTE_QUEUE
+                               : sideroute_classify(session_prompt(t->s), text);
+    if (route == SIDEROUTE_SIDE) {
         char label[4096];
         snprintf(label, sizeof label, "/btw %s", text);
         if (sidechannel_start(t->s, text, label))
             return 1;
     }
+    if (route == SIDEROUTE_REDIRECT && redirect(t, text, full))
+        return 1;
 
     struct pending *last = t->npending ? &t->pending[t->npending - 1] : NULL;
     if (last && last->typed)

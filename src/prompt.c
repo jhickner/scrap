@@ -800,9 +800,51 @@ static enum key_result edit_key(struct prompt *p, tty_event *ev)
     return KEY_OK;
 }
 
+static char *held_prompt;
+static int   held_keep;
+
+void prompt_hold(char *text)
+{
+    free(held_prompt);
+    held_prompt = text;
+    held_keep = 1;
+}
+
+void prompt_drop_held(void)
+{
+    if (held_keep) {
+        held_keep = 0;
+        return;
+    }
+    free(held_prompt);
+    held_prompt = NULL;
+}
+
+static char *take_prompt_held(void)
+{
+    char *out = held_prompt;
+    held_prompt = NULL;
+    held_keep = 0;
+    return out;
+}
+
+const char *prompt_held_label(void)
+{
+    static char label[192];
+    if (!held_prompt)
+        return NULL;
+    size_t first = strcspn(held_prompt, "\n");
+    size_t shown = first < 120 ? first : 120;
+    snprintf(label, sizeof label, "queued: %.*s%s \xc2\xb7 ctrl-x paste", (int)shown,
+             held_prompt, held_prompt[shown] ? " \xe2\x80\xa6" : "");
+    return label;
+}
+
 static void paste_held(struct prompt *p)
 {
     char *text = bash_take_held();
+    if (!text)
+        text = take_prompt_held();
     if (!text)
         return;
     if (p->repl.cursor > 0 && p->repl.buf[p->repl.cursor - 1] != '\n')
