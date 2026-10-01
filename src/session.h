@@ -224,8 +224,10 @@ static inline int scrap_argv(char **out, int max, unsigned what,
         if ((what & SESSION_ARGV_FORK) && n < max)
             out[n++] = (char *)"--fork";
     }
-    if (prompt && n < max)
+    if (prompt && n + 2 <= max) {
+        out[n++] = (char *)"-p";
         out[n++] = (char *)prompt;
+    }
     if (n < max)
         out[n] = NULL;
     return n;

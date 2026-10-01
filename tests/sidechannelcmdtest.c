@@ -43,6 +43,14 @@ int main(void)
         return 1;
     }
 
+    int p = 0;
+    while (argv[p] && strcmp(argv[p], "-p"))
+        p++;
+    if (!argv[p] || !argv[p + 1] || strcmp(argv[p + 1], "answer this") || argv[p + 2]) {
+        fprintf(stderr, "sidechannelcmdtest: prompt is not passed with -p\n");
+        return 1;
+    }
+
     printf("sidechannelcmdtest: ok\n");
     return 0;
 }
