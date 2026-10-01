@@ -28,6 +28,7 @@
 #include "models.h"
 #include "parent.h"
 #include "sessionaddr.h"
+#include "sessionlist.h"
 #include "sessionload.h"
 #include "sessionprefs.h"
 #include "sessionpresent.h"
@@ -1301,6 +1302,11 @@ static int restart(struct session *s, const char *resume_id)
         intercom_name_of(resume_id, s->name, sizeof s->name);
     if (!s->remote)
         claim_name(s);
+
+    char path[4096];
+    if (resume_id && !s->remote && sessionlist_available(s->backend) &&
+        !sessionload_path(s->backend, s->cwd, resume_id, path, sizeof path))
+        resume_id = NULL;
 
     Backend *b = agent(s);
     if (!b || !b->start(b, resume_id)) {

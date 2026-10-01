@@ -534,7 +534,7 @@ static int backend_claude_reset(Backend *b) {
     if (claude_reset(x->client)) return 1;
     claude_stop(x->client);
     x->client = NULL;
-    return 0;
+    return backend_claude_start(b, NULL);
 }
 
 static void backend_claude_set_event_cb(Backend *b,
