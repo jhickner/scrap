@@ -301,9 +301,9 @@ static int typing(const tty_event *ev)
     return ev->key == TK_TEXT || (ev->key == TK_CHAR && ev->cp >= ' ');
 }
 
-char *askform_run(const struct askblock *b, int *cycle)
+char *askform_run(const struct askblock *b, enum askform_exit *how)
 {
-    *cycle = 0;
+    *how = ASKFORM_DONE;
     if (!b || !b->n || !frontend_has_keyboard() || !tty_is_raw())
         return NULL;
 
@@ -335,6 +335,10 @@ char *askform_run(const struct askblock *b, int *cycle)
         int on_option = asking && f.opt >= 0;
         int on_field = f.opt < 0;
 
+        if (ev.key == TK_CHAR && ev.cp == KEY_CTRL('N')) {
+            *how = ASKFORM_NEW_TAB;
+            return finish(&f, 0);
+        }
         if (ev.key == TK_ESCAPE || ev.key == TK_EOF ||
             (ev.key == TK_CHAR && (ev.cp == KEY_CTRL('C') || ev.cp == KEY_CTRL('D'))))
             return finish(&f, 0);
@@ -364,7 +368,7 @@ char *askform_run(const struct askblock *b, int *cycle)
 
         case TK_PREV_TAB:
         case TK_NEXT_TAB:
-            *cycle = ev.key == TK_NEXT_TAB ? 1 : -1;
+            *how = ev.key == TK_NEXT_TAB ? ASKFORM_NEXT_TAB : ASKFORM_PREV_TAB;
             return finish(&f, 0);
 
         case TK_PAGE_UP:

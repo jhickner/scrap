@@ -3,6 +3,8 @@
 
 #include "askblock.h"
 
-char *askform_run(const struct askblock *b, int *cycle);
+enum askform_exit { ASKFORM_DONE, ASKFORM_PREV_TAB, ASKFORM_NEXT_TAB, ASKFORM_NEW_TAB };
+
+char *askform_run(const struct askblock *b, enum askform_exit *how);
 
 #endif

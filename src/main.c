@@ -441,10 +441,14 @@ static int ask_ready(void)
 
 static void ask_run_form(void)
 {
-    int cycle;
-    char *answer = askform_run(asked, &cycle);
-    if (cycle) {
-        workspace_cycle(cycle);
+    enum askform_exit how;
+    char *answer = askform_run(asked, &how);
+    if (how == ASKFORM_NEW_TAB) {
+        another(NULL);
+        return;
+    }
+    if (how != ASKFORM_DONE) {
+        workspace_cycle(how == ASKFORM_NEXT_TAB ? 1 : -1);
         return;
     }
     drop_asked();
