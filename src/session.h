@@ -87,6 +87,10 @@ void session_interrupt(struct session *s);
 int  session_busy(const struct session *s);
 
 void session_set_unseen(struct session *s, int on);
+
+void        session_on_permission(int (*fn)(struct session *s, const char *question));
+const char *session_permission_pending(struct session *s);
+void        session_permission_answer(struct session *s, int allow);
 void session_republish(const struct session *s);
 int  session_unseen(const struct session *s);
 

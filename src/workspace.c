@@ -571,6 +571,9 @@ static int pump(int hold, int screen)
         if (!running)
             nudge_stalled(i, hold, screen);
 
+        if (i != cur && session_permission_pending(s))
+            session_set_unseen(s, 1);
+
         if (running && !session_turn_running(s)) {
             tabs[i].finished = 1;
             if (i != cur)

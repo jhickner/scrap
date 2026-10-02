@@ -135,6 +135,9 @@ struct session {
     int             start_ok;
     volatile int    finished;
     volatile int    abort_request;
+    char           *perm_question;
+    volatile int    perm_state;
+    int             perm_allow;
     pthread_mutex_t lock;
     struct evcopy  *head, *tail;
     int             wake[2];
@@ -730,6 +733,88 @@ static void status_update_tick(struct session *s)
 
 static __thread struct session *owner;
 
+static int (*permission_hook)(struct session *s, const char *question);
+
+void session_on_permission(int (*fn)(struct session *s, const char *question))
+{
+    permission_hook = fn;
+}
+
+static char *permission_question(const backend_permission *req)
+{
+    static const char *const keys[] = {"command", "file_path", "notebook_path", "url",
+                                       "pattern", "path"};
+    const char *detail = NULL;
+    cJSON *input = req->input_json ? cJSON_Parse(req->input_json) : NULL;
+    for (int i = 0; input && !detail && i < COUNT(keys); i++) {
+        const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(input, keys[i]));
+        if (v && *v)
+            detail = v;
+    }
+    if (!detail)
+        detail = req->description ? req->description : req->path;
+
+    char buf[600];
+    snprintf(buf, sizeof buf, "allow %s%s%.400s?", req->tool ? req->tool : "tool call",
+             detail ? ": " : "", detail ? detail : "");
+    cJSON_Delete(input);
+    return strdup(buf);
+}
+
+static int on_permission(void *ud, const backend_permission *req)
+{
+    struct session *s = ud;
+    char *question = permission_question(req);
+    if (!question)
+        return 0;
+
+    if (owner != s) {
+        int allow = permission_hook && permission_hook(s, question);
+        free(question);
+        return allow;
+    }
+
+    pthread_mutex_lock(&s->lock);
+    free(s->perm_question);
+    s->perm_question = question;
+    s->perm_allow = 0;
+    s->perm_state = 1;
+    pthread_mutex_unlock(&s->lock);
+    wake_write(s);
+
+    struct timespec tick = {0, 20 * 1000000L};
+    while (s->perm_state == 1 && !s->abort_request)
+        nanosleep(&tick, NULL);
+
+    pthread_mutex_lock(&s->lock);
+    int allow = s->perm_state == 2 && s->perm_allow;
+    s->perm_state = 0;
+    pthread_mutex_unlock(&s->lock);
+    return allow;
+}
+
+const char *session_permission_pending(struct session *s)
+{
+    if (!s || s->perm_state != 1)
+        return NULL;
+    pthread_mutex_lock(&s->lock);
+    const char *q = s->perm_state == 1 ? s->perm_question : NULL;
+    pthread_mutex_unlock(&s->lock);
+    return q;
+}
+
+void session_permission_answer(struct session *s, int allow)
+{
+    if (!s)
+        return;
+    pthread_mutex_lock(&s->lock);
+    if (s->perm_state == 1) {
+        s->perm_allow = allow;
+        s->perm_state = 2;
+    }
+    pthread_mutex_unlock(&s->lock);
+}
+
 static int abort_check(void)
 {
     if (owner)
@@ -864,6 +949,7 @@ void session_free(struct session *s)
     free(s->prompt);
     free(s->status_last);
     free(s->permission);
+    free(s->perm_question);
     free(s->error_note);
     free(s->system_extra);
     free(s->handoff);
@@ -1000,6 +1086,8 @@ static Backend *agent(struct session *s)
     if (s->agent) {
         s->agent->set_event_cb(s->agent, on_event, s);
         s->agent->set_abort_check(s->agent, abort_check);
+        if (s->agent->set_permission_cb)
+            s->agent->set_permission_cb(s->agent, on_permission, s);
     }
     return s->agent;
 }
@@ -1072,6 +1160,8 @@ int session_switch_backend(struct session *s, const char *backend)
         return 0;
     }
 
+    if (replacement->set_permission_cb)
+        replacement->set_permission_cb(replacement, on_permission, s);
     if (!replacement->start(replacement, NULL)) {
         const char *why = replacement->last_error ? replacement->last_error(replacement) : NULL;
         snprintf(start_error, sizeof start_error, "%s", why ? why : "");
@@ -1569,10 +1659,10 @@ static const struct {
     const char *desc;
 } PERMISSIONS[] = {
     {"bypassPermissions", "never refuses a tool call"},
-    {"auto", "approves the safe calls, refuses the rest"},
-    {"acceptEdits", "edits without asking, refuses the rest"},
+    {"auto", "approves the safe calls, asks about the rest"},
+    {"acceptEdits", "edits without asking, asks about the rest"},
     {"dontAsk", "refuses anything that would ask"},
-    {"manual", "refuses everything not pre-allowed"},
+    {"manual", "asks about everything not pre-allowed"},
     {"plan", "read-only: research and propose, no changes"},
 };
 #define PERMISSION_COUNT (COUNT(PERMISSIONS))

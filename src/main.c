@@ -455,12 +455,23 @@ static void ask_run_form(void)
     free(answer);
 }
 
+static int ask_permission(struct session *s, const char *question)
+{
+    if (s == workspace_current())
+        return confirm_run(question);
+    char buf[700];
+    snprintf(buf, sizeof buf, "@%s: %s", session_name(s), question);
+    return confirm_run(buf);
+}
+
 static int takeover_pending(void *ud)
 {
     (void)ud;
     if (tty_quit_requested())
         return 1;
     if (ask_ready())
+        return 1;
+    if (session_permission_pending(workspace_current()))
         return 1;
     return restart_wanted() && handoff_wanted();
 }
@@ -469,6 +480,12 @@ static void takeover_run(void *ud)
 {
     if (tty_quit_requested()) {
         prompt_stop(ud);
+        return;
+    }
+    struct session *s = workspace_current();
+    const char *question = session_permission_pending(s);
+    if (question) {
+        session_permission_answer(s, confirm_run(question));
         return;
     }
     if (ask_ready()) {
@@ -949,6 +966,7 @@ int main(int argc, char **argv)
     prompt_set_idle(prompt, idle_fds, idle_render, idle_poll, NULL);
     prompt_set_restart(prompt, restart_pending, idle_restart, NULL);
     prompt_set_takeover(prompt, takeover_pending, takeover_run, prompt);
+    session_on_permission(ask_permission);
     prompt_set_switcher(prompt, switcher, prompt);
     prompt_set_click(prompt, clicked, prompt);
     prompt_set_command(prompt, reply_command, NULL);

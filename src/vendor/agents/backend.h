@@ -104,6 +104,15 @@ typedef struct {
                              it reports one: "success", "error_max_turns", ... */
 } backend_result;
 
+/* A tool call the agent asks permission for. Strings are borrowed for the
+ * callback; any may be NULL. */
+typedef struct {
+    const char *tool;
+    const char *description;
+    const char *input_json;
+    const char *path;        /* the path that triggered the prompt, if any */
+} backend_permission;
+
 /* Subscription rate limit reported by a backend's local protocol. This is
  * deliberately separate from context usage above: one measures account quota,
  * the other measures how full the current model request is. */
@@ -176,6 +185,14 @@ struct Backend {
      * for a caller painting its own display and the point at which a caller
      * that keeps its input live can pick up a keystroke. */
     void (*set_abort_check)(Backend *b, int (*cb)(void));
+
+    /* Approver for tool calls the permission mode would ask about, called on
+     * the thread reading the stream (ask() or idle_pump()) and allowed to
+     * block. Nonzero allows the call. Takes effect at the next start(); with
+     * none set those calls are refused. NULL for drivers without prompts. */
+    void (*set_permission_cb)(Backend *b,
+                              int (*cb)(void *ud, const backend_permission *req),
+                              void *ud);
 
     /* Some agents run turns between sends — a finished background task wakes
      * the model with no prompt. idle_fd() is an fd that becomes readable when
@@ -258,6 +275,8 @@ typedef struct {
     char *plugin_dir;
     void (*on_event)(void *ud, const backend_event *ev);
     void *event_ud;
+    int (*on_permission)(void *ud, const backend_permission *req);
+    void *permission_ud;
     int (*abort)(void);
     /* Assistant and reasoning text arriving in fragments, held until the block
      * it belongs to is complete. */
@@ -399,6 +418,14 @@ static void backend_claude_event(void *ud, const claude_event *e) {
     backend_emit(&x->st, &ev);
 }
 
+static int backend_claude_permission(void *ud, const claude_permission *p) {
+    backend_claude *x = ((Backend *)ud)->ctx;
+    if (!x->st.on_permission) return 0;
+    backend_permission req = { .tool = p->tool, .description = p->description,
+                               .input_json = p->input_json, .path = p->path };
+    return x->st.on_permission(x->st.permission_ud, &req);
+}
+
 static int backend_claude_start(Backend *b, const char *resume) {
     backend_claude *x = b->ctx;
     claude_opts o = {0};
@@ -418,9 +445,11 @@ static int backend_claude_start(Backend *b, const char *resume) {
     o.session_name = x->st.session_name;
     o.no_session_persistence = x->st.ephemeral;
     if (x->st.disable_tools) o.tools = "";
+    o.permission_prompt = x->st.on_permission != NULL;
     claude_client *c = claude_start(&o);
     if (!c) return 0;
     claude_set_event_cb(c, backend_claude_event, b);
+    claude_set_permission_cb(c, backend_claude_permission, b);
     claude_set_abort_check(c, x->st.abort);
     if (x->client) claude_stop(x->client);
     x->client = c;
@@ -551,6 +580,13 @@ static void backend_claude_set_abort(Backend *b, int (*cb)(void)) {
     if (x->client) claude_set_abort_check(x->client, cb);
 }
 
+static void backend_claude_set_permission_cb(Backend *b,
+                                             int (*cb)(void *ud, const backend_permission *req),
+                                             void *ud) {
+    backend_claude *x = b->ctx;
+    x->st.on_permission = cb; x->st.permission_ud = ud;
+}
+
 static int backend_claude_set_effort(Backend *b, const char *effort) {
     backend_claude *x = b->ctx;
     if (x->client && !claude_set_effort(x->client, effort)) return 0;
@@ -623,6 +659,7 @@ static Backend *backend_claude_open(const backend_opts *o) {
     b->set_permission = backend_set_permission_generic;
     b->set_event_cb = backend_claude_set_event_cb;
     b->set_abort_check = backend_claude_set_abort;
+    b->set_permission_cb = backend_claude_set_permission_cb;
     b->idle_fd = backend_claude_idle_fd;
     b->idle_pump = backend_claude_idle_pump;
     b->busy = backend_claude_busy;

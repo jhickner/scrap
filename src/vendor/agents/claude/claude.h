@@ -58,6 +58,11 @@ typedef struct {
                                     session; NULL -> flag omitted. Ignored by the
                                     CLI unless allow_customizations is set, which
                                     is what lets the plugin's hooks run.           */
+    int permission_prompt;       /* nonzero: --permission-prompt-tool stdio, so a
+                                    tool call the permission mode would ask about
+                                    reaches the callback set by
+                                    claude_set_permission_cb instead of being
+                                    refused                                        */
 } claude_opts;
 
 /* Start a persistent headless claude process and prewarm it in the background.
@@ -179,6 +184,23 @@ void claude_set_event_cb(claude_client *c,
                          void (*cb)(void *ud, const claude_event *ev),
                          void *ud);
 
+/* A tool call the CLI asks permission for (permission_prompt must be set).
+ * Strings are borrowed for the call; any may be NULL. */
+typedef struct {
+    const char *tool;        /* tool name, e.g. "Bash", "Edit"                  */
+    const char *description; /* the CLI's one-line description of the call      */
+    const char *input_json;  /* tool input as compact JSON                      */
+    const char *path;        /* the path that triggered the prompt, if any      */
+} claude_permission;
+
+/* Register the approver for permission prompts. Called on whichever thread is
+ * reading the stream (claude_send or claude_idle_pump) and may block; the turn
+ * waits on it. Return nonzero to allow the call as requested. With no callback
+ * every prompt is refused. */
+void claude_set_permission_cb(claude_client *c,
+                              int (*cb)(void *ud, const claude_permission *req),
+                              void *ud);
+
 /* How many background tasks the CLI currently has outstanding — subagents and
  * detached bash it started and has not yet been told about. A turn can end with
  * these still running, so a front end showing the agent as busy has to ask this
@@ -275,6 +297,8 @@ struct claude_client {
     int   verbose;
     void (*on_event)(void *ud, const claude_event *ev);
     void *on_event_ud;
+    int  (*on_permission)(void *ud, const claude_permission *req);
+    void *on_permission_ud;
     char  session_id[128];
     char  requested[128];     /* --model value, or the settings.json default */
     char  model[128];
@@ -305,6 +329,12 @@ void claude_set_event_cb(claude_client *c,
                          void (*cb)(void *ud, const claude_event *ev),
                          void *ud) {
     if (c) { c->on_event = cb; c->on_event_ud = ud; }
+}
+
+void claude_set_permission_cb(claude_client *c,
+                              int (*cb)(void *ud, const claude_permission *req),
+                              void *ud) {
+    if (c) { c->on_permission = cb; c->on_permission_ud = ud; }
 }
 
 const char *claude_model(claude_client *c) {
@@ -524,6 +554,7 @@ claude_client *claude_start(const claude_opts *opts) {
                                                        if (o.fork_session) argv[n++] = "--fork-session"; }
         if (o.append_system && *o.append_system)     { argv[n++] = "--append-system-prompt"; argv[n++] = o.append_system; }
         if (o.tools)                                 { argv[n++] = "--tools";                argv[n++] = o.tools; }
+        if (o.permission_prompt)                     { argv[n++] = "--permission-prompt-tool"; argv[n++] = "stdio"; }
         argv[n] = NULL;
         execvp(cli, (char *const *)argv);
         _exit(127);   /* exec failed */
@@ -808,6 +839,42 @@ static void cl_fill_result(claude_client *c, cJSON *ev) {
     if (sub) snprintf(m->subtype, sizeof m->subtype, "%s", sub);
 }
 
+static int cl_write_json(claude_client *c, cJSON *msg);
+
+/* Answer a can_use_tool control request: allow with the input unchanged, or
+ * deny with a message the model sees as the tool's result. */
+static void cl_answer_permission(claude_client *c, cJSON *ev) {
+    cJSON *req = cJSON_GetObjectItemCaseSensitive(ev, "request");
+    const char *id = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(ev, "request_id"));
+    if (!req || !id) return;
+    cJSON *input = cJSON_GetObjectItemCaseSensitive(req, "input");
+    char *input_json = input ? cJSON_PrintUnformatted(input) : NULL;
+    claude_permission p = {
+        .tool = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(req, "tool_name")),
+        .description = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(req, "description")),
+        .input_json = input_json,
+        .path = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(req, "blocked_path")),
+    };
+    int allow = c->on_permission && c->on_permission(c->on_permission_ud, &p);
+    free(input_json);
+
+    cJSON *msg = cJSON_CreateObject();
+    cJSON_AddStringToObject(msg, "type", "control_response");
+    cJSON *resp = cJSON_AddObjectToObject(msg, "response");
+    cJSON_AddStringToObject(resp, "subtype", "success");
+    cJSON_AddStringToObject(resp, "request_id", id);
+    cJSON *decision = cJSON_AddObjectToObject(resp, "response");
+    if (allow) {
+        cJSON_AddStringToObject(decision, "behavior", "allow");
+        cJSON_AddItemToObject(decision, "updatedInput",
+                              input ? cJSON_Duplicate(input, 1) : cJSON_CreateObject());
+    } else {
+        cJSON_AddStringToObject(decision, "behavior", "deny");
+        cJSON_AddStringToObject(decision, "message", "The user denied this tool call.");
+    }
+    cl_write_json(c, msg);
+}
+
 /* Parse one JSONL event line. If it is the turn's `result`, return its text
  * (malloc'd) via *out and return 1. Otherwise return 0. */
 static int cl_handle_line(claude_client *c, const char *line, char **out) {
@@ -869,6 +936,11 @@ static int cl_handle_line(claude_client *c, const char *line, char **out) {
             claude_event out = {.kind = CLAUDE_EV_INIT, .name = c->model};
             cl_sink(c, &out);
         }
+    }
+    if (strcmp(ts, "control_request") == 0) {
+        const char *sub = cJSON_GetStringValue(cJSON_GetObjectItem(
+            cJSON_GetObjectItem(ev, "request"), "subtype"));
+        if (sub && strcmp(sub, "can_use_tool") == 0) cl_answer_permission(c, ev);
     }
     if (strcmp(ts, "rate_limit_event") == 0) cl_note_rate_limit(c, ev);
     cl_note_context(c, ev, ts);
