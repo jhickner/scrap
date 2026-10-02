@@ -301,8 +301,9 @@ static int typing(const tty_event *ev)
     return ev->key == TK_TEXT || (ev->key == TK_CHAR && ev->cp >= ' ');
 }
 
-char *askform_run(const struct askblock *b)
+char *askform_run(const struct askblock *b, int *cycle)
 {
+    *cycle = 0;
     if (!b || !b->n || !frontend_has_keyboard() || !tty_is_raw())
         return NULL;
 
@@ -353,15 +354,18 @@ char *askform_run(const struct askblock *b)
             break;
 
         case TK_UP:
-        case TK_PREV_TAB:
             up(&f);
             break;
 
         case TK_DOWN:
         case TK_TAB:
-        case TK_NEXT_TAB:
             down(&f);
             break;
+
+        case TK_PREV_TAB:
+        case TK_NEXT_TAB:
+            *cycle = ev.key == TK_NEXT_TAB ? 1 : -1;
+            return finish(&f, 0);
 
         case TK_PAGE_UP:
             viewport_scroll(tty_rows() / 2);

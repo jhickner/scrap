@@ -430,7 +430,9 @@ static int ask_ready(void)
     if (!asked)
         return 0;
     struct session *s = workspace_current();
-    if (s != asked_by || session_turn_running(s) || workspace_queued(workspace_index())) {
+    if (s != asked_by)
+        return 0;
+    if (session_turn_running(s) || workspace_queued(workspace_index())) {
         drop_asked();
         return 0;
     }
@@ -439,7 +441,12 @@ static int ask_ready(void)
 
 static void ask_run_form(void)
 {
-    char *answer = askform_run(asked);
+    int cycle;
+    char *answer = askform_run(asked, &cycle);
+    if (cycle) {
+        workspace_cycle(cycle);
+        return;
+    }
     drop_asked();
     if (answer && *answer) {
         prompt_echo_message(answer);
@@ -568,6 +575,8 @@ static void turn_begin(struct session *s)
     api_turn_begin(s);
     stream_turn_begin(s);
     voice_turn_begin(s);
+    if (s == asked_by)
+        drop_asked();
     bash_drop_held();
     prompt_drop_held();
 }

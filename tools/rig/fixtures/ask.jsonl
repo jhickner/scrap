@@ -1,0 +1,1 @@
+{"type":"assistant","message":{"role":"assistant","model":"fake","content":[{"type":"text","text":"Pick one.\n\n@ask\n1. Which color?\n- red\n- blue"}]}}

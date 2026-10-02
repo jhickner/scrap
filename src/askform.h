@@ -3,6 +3,6 @@
 
 #include "askblock.h"
 
-char *askform_run(const struct askblock *b);
+char *askform_run(const struct askblock *b, int *cycle);
 
 #endif
