@@ -831,7 +831,10 @@ void session_free(struct session *s)
     sidechannel_forget(s);
 
     if (s->running) {
-        s->abort_request = 1;
+        if (s->remote)
+            remote_detach(s->agent);
+        else
+            s->abort_request = 1;
         pthread_join(s->thread, NULL);
         s->running = 0;
         free(s->reply);

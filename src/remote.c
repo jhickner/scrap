@@ -478,6 +478,13 @@ cJSON *remote_side_take(Backend *b)
     return n;
 }
 
+void remote_detach(Backend *b)
+{
+    struct remote *r = R(b);
+    if (r->fd >= 0)
+        shutdown(r->fd, SHUT_RDWR);
+}
+
 int remote_btw(Backend *b, const char *prompt)
 {
     struct remote *r = R(b);

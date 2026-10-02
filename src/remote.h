@@ -16,4 +16,6 @@ cJSON *remote_side_take(Backend *b);
 
 int remote_btw(Backend *b, const char *prompt);
 
+void remote_detach(Backend *b);
+
 #endif
