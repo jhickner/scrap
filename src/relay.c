@@ -1074,11 +1074,13 @@ struct session *relay_session(void)
 
 void relay_refocus(void)
 {
-    if (rt.active)
+    if (rt.active && !tgbridge_session(&rt.bridge))
         tgbridge_refocus(&rt.bridge);
 }
 
 void relay_forget_session(struct session *s)
 {
     tgbridge_forget(&rt.bridge, s);
+    if (workspace_current() != s)
+        relay_refocus();
 }
