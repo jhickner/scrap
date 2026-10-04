@@ -639,7 +639,7 @@ int main(int argc, char **argv)
         return agentsync_main(argc - 1, argv + 1);
     if (argc > 1 && (!strcmp(argv[1], "ls") || !strcmp(argv[1], "read") ||
                      !strcmp(argv[1], "send") || !strcmp(argv[1], "open") ||
-                     !strcmp(argv[1], "attach")))
+                     !strcmp(argv[1], "attach") || !strcmp(argv[1], "yank")))
         return intercom_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "hub"))
         return hub_main(argc - 1, argv + 1);

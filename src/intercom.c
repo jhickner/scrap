@@ -15,6 +15,7 @@
 
 #include "chain.h"
 #include "dispatch.h"
+#include "handoff.h"
 #include "hub.h"
 #include "tailnet.h"
 #include "kvlog.h"
@@ -240,6 +241,9 @@ char *intercom_note(const char *name)
         "- `scrap read TARGET [-n TURNS] [--bytes N]` prints a session's recent turns.\n"
         "- `scrap send TARGET TEXT` sends a message to a live session.\n"
         "- `scrap open TARGET` resumes a past session in a new tab.\n"
+        "- `scrap yank TARGET...` moves live sessions from other windows into this window as tabs.\n"
+        "- `scrap attach --tab TARGET` opens a live session from another window or machine "
+        "as a tab in this window, without moving it.\n"
         "- `scrap ls --net` lists live sessions on every machine on the tailnet.\n"
         "TARGET is @name, a session id prefix, or a title; machine:@name reaches a session "
         "on another tailnet machine through `send` and `read`. Messages from other "
@@ -978,6 +982,69 @@ static int cmd_open(int argc, char **argv)
     return rc;
 }
 
+static int yank_one(long pid, const char *target)
+{
+    struct entries l = {0};
+    collect(&l, NULL, 1, 0);
+    const struct entry *e = resolve(&l, target);
+    int                 rc = 1;
+    if (!e)
+        fprintf(stderr, "scrap: no live session matches %s\n", target);
+    else if (e->pid == pid)
+        fprintf(stderr, "scrap: %s is already in this window\n", target);
+    else {
+        struct live_session *v = NULL;
+        int                  n = livelist_load(&v);
+        const char          *model = NULL, *effort = NULL;
+        for (int i = 0; i < n; i++)
+            if (!strcmp(v[i].id, e->id)) {
+                model = v[i].model[0] ? v[i].model : NULL;
+                effort = v[i].effort[0] ? v[i].effort : NULL;
+            }
+        char screen[4400];
+        if (!handoff_ask(e->pid, e->id, screen, sizeof screen, NULL, NULL))
+            fprintf(stderr, "scrap: the window holding %s did not release it\n", target);
+        else {
+            unlink(screen);
+            char   reply[1024] = "", done[200];
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddStringToObject(o, "backend", e->backend);
+            cJSON_AddStringToObject(o, "cwd", e->cwd);
+            cJSON_AddStringToObject(o, "resume", e->id);
+            if (model)
+                cJSON_AddStringToObject(o, "model", model);
+            if (effort)
+                cJSON_AddStringToObject(o, "effort", effort);
+            if (e->name[0])
+                cJSON_AddStringToObject(o, "name", e->name);
+            snprintf(done, sizeof done, "yanked %s into this window", target);
+            rc = request(pid, o, reply, sizeof reply) ? answered(reply, done) : 1;
+            cJSON_Delete(o);
+        }
+        free(v);
+    }
+    free(l.e);
+    return rc;
+}
+
+static int cmd_yank(int argc, char **argv)
+{
+    if (argc < 2) {
+        fprintf(stderr, "usage: scrap yank TARGET...\n");
+        return 2;
+    }
+    const char *owner = getenv("SCRAP_PID");
+    long        pid = owner ? atol(owner) : 0;
+    if (pid <= 0 || !livelist_alive(pid)) {
+        fprintf(stderr, "scrap: yank runs inside a scrap session\n");
+        return 1;
+    }
+    int rc = 0;
+    for (int i = 1; i < argc; i++)
+        rc |= yank_one(pid, argv[i]);
+    return rc;
+}
+
 static int connect_unix(long pid)
 {
     struct sockaddr_un sa = {.sun_family = AF_UNIX};
@@ -1041,10 +1108,29 @@ int intercom_attach(const char *target, char *msg, size_t size)
     return fd;
 }
 
+static int attach_tab(const char *target)
+{
+    const char *owner = getenv("SCRAP_PID");
+    long        pid = owner ? atol(owner) : 0;
+    if (pid <= 0 || !livelist_alive(pid)) {
+        fprintf(stderr, "scrap: attach --tab runs inside a scrap session\n");
+        return 1;
+    }
+    char   reply[1024] = "", done[200];
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "tab", target);
+    snprintf(done, sizeof done, "attached %s as a tab", target);
+    int rc = request(pid, o, reply, sizeof reply) ? answered(reply, done) : 1;
+    cJSON_Delete(o);
+    return rc;
+}
+
 static int cmd_attach(int argc, char **argv)
 {
+    if (argc == 3 && !strcmp(argv[1], "--tab"))
+        return attach_tab(argv[2]);
     if (argc != 2) {
-        fprintf(stderr, "usage: scrap attach TARGET\n");
+        fprintf(stderr, "usage: scrap attach [--tab] TARGET\n");
         return 2;
     }
     char msg[1200];
@@ -1107,5 +1193,7 @@ int intercom_main(int argc, char **argv)
         return cmd_open(argc, argv);
     if (!strcmp(argv[0], "attach"))
         return cmd_attach(argc, argv);
+    if (!strcmp(argv[0], "yank"))
+        return cmd_yank(argc, argv);
     return -1;
 }

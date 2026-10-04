@@ -370,6 +370,17 @@ static void serve(int fd, const char *text)
         return;
     }
 
+    const char *tab = cJSON_GetStringValue(cJSON_GetObjectItem(o, "tab"));
+    if (tab) {
+        char why[600] = "";
+        if (cmd_attach_tab(tab, why, sizeof why) < 0)
+            reply_error(fd, why[0] ? why : "could not attach", NULL);
+        else
+            reply(fd, "{\"ok\": true}");
+        cJSON_Delete(o);
+        return;
+    }
+
     cJSON *target = cJSON_GetObjectItem(o, "close");
     if (target) {
         close_session(fd, target);

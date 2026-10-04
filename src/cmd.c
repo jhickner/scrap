@@ -1227,25 +1227,32 @@ static void do_send(struct session *s, const char *arg)
     ui_flush();
 }
 
+int cmd_attach_tab(const char *target, char *why, size_t size)
+{
+    for (int i = 0; i < workspace_count(); i++) {
+        const char *remote = session_remote(workspace_at(i));
+        if (remote && !strcmp(remote, target))
+            return i;
+    }
+    struct session *was = workspace_current();
+    int             at = workspace_spawn_remote(target, why, size);
+    if (at < 0)
+        return -1;
+    struct session *s = workspace_at(at);
+    session_replay(s);
+    workspace_show(workspace_index_of(was));
+    return workspace_index_of(s);
+}
+
 void cmd_attach(const char *target)
 {
     char why[600];
-    int  at = -1;
-    for (int i = 0; i < workspace_count() && at < 0; i++) {
-        const char *remote = session_remote(workspace_at(i));
-        if (remote && !strcmp(remote, target))
-            at = i;
-    }
-    int fresh = at < 0;
-    if (fresh)
-        at = workspace_spawn_remote(target, why, sizeof why);
+    int  at = cmd_attach_tab(target, why, sizeof why);
     if (at < 0) {
         reply(1, "%s", why);
         return;
     }
     workspace_show(at);
-    if (fresh)
-        session_replay(workspace_at(at));
 }
 
 static void do_attach(struct session *s, const char *arg)
