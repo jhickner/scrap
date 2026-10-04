@@ -340,7 +340,7 @@ static void send_tabs(int force)
         cJSON_AddNumberToObject(it, "index", i + 1);
         cJSON_AddStringToObject(it, "id", session_id(s) ? session_id(s) : "");
         cJSON_AddStringToObject(it, "label", title);
-        if (session_name(s))
+        if (session_name(s) && *session_name(s))
             cJSON_AddStringToObject(it, "name", session_name(s));
         cJSON_AddStringToObject(it, "cwd", session_cwd(s));
         cJSON_AddBoolToObject(it, "current", s == current_session());

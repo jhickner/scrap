@@ -308,7 +308,6 @@ int dispatch_spawn(const char *backend, const char *model, const char *effort, c
                    const char *title, const char *resume, const char *const *env,
                    const char *prompt)
 {
-    struct session *was = workspace_current();
     char here[4096];
     if (!cwd && getcwd(here, sizeof here))
         cwd = here;
@@ -324,10 +323,7 @@ int dispatch_spawn(const char *backend, const char *model, const char *effort, c
             session_set_naming(s, 0);
     }
     if (resume)
-        session_replay(workspace_at(at));
-
-    workspace_show(workspace_index_of(was));
-    at = workspace_index_of(workspace_at(at));
+        workspace_replay(at);
     if (prompt)
         dispatch_send(at, prompt);
     return at;

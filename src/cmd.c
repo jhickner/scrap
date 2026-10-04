@@ -1234,14 +1234,10 @@ int cmd_attach_tab(const char *target, char *why, size_t size)
         if (remote && !strcmp(remote, target))
             return i;
     }
-    struct session *was = workspace_current();
-    int             at = workspace_spawn_remote(target, why, size);
-    if (at < 0)
-        return -1;
-    struct session *s = workspace_at(at);
-    session_replay(s);
-    workspace_show(workspace_index_of(was));
-    return workspace_index_of(s);
+    int at = workspace_spawn_remote(target, why, size);
+    if (at >= 0)
+        workspace_replay(at);
+    return at;
 }
 
 void cmd_attach(const char *target)
