@@ -325,8 +325,9 @@ static void send_history(struct session *s)
     send_json(o);
 }
 
-static void send_tabs(void)
+static void send_tabs(int force)
 {
+    static char *sent;
     cJSON *o = frame("tabs");
     cJSON *items = cJSON_AddArrayToObject(o, "items");
     int n = workspace_count();
@@ -339,13 +340,24 @@ static void send_tabs(void)
         cJSON_AddNumberToObject(it, "index", i + 1);
         cJSON_AddStringToObject(it, "id", session_id(s) ? session_id(s) : "");
         cJSON_AddStringToObject(it, "label", title);
+        if (session_name(s))
+            cJSON_AddStringToObject(it, "name", session_name(s));
         cJSON_AddStringToObject(it, "cwd", session_cwd(s));
         cJSON_AddBoolToObject(it, "current", s == current_session());
         cJSON_AddBoolToObject(it, "busy", session_busy(s));
         cJSON_AddBoolToObject(it, "unseen", session_unseen(s));
         cJSON_AddItemToArray(items, it);
     }
-    send_json(o);
+    char *now = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (!now || (!force && sent && !strcmp(now, sent))) {
+        free(now);
+        return;
+    }
+    if (rt.ws)
+        wsd_send(rt.ws, now, 0);
+    free(sent);
+    sent = now;
 }
 
 static void send_hello(void)
@@ -362,7 +374,7 @@ static void send_hello(void)
     send_json(o);
     if (s)
         send_history(s);
-    send_tabs();
+    send_tabs(1);
     rt.busy_sent = -1;
     send_busy(session_busy(s));
 }
@@ -662,6 +674,7 @@ int relay_poll(struct session *live)
         return 0;
     mirror_prompt(current_session());
     send_busy(session_busy(current_session()));
+    send_tabs(0);
     if (live)
         drain_mid_turn();
     if (rt.stop_wanted && (!live || live == current_session())) {
@@ -747,7 +760,6 @@ static int bridge_command(const char *line)
     }
     if ((arg = arg_of(line, "/close")) != NULL) {
         tgbridge_close_tab(&rt.bridge, *arg ? atoi(arg) - 1 : workspace_index());
-        send_tabs();
         return 1;
     }
     if ((arg = arg_of(line, "/resume")) != NULL) {

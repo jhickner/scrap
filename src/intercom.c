@@ -244,6 +244,7 @@ char *intercom_note(const char *name)
         "- `scrap yank TARGET...` moves live sessions from other windows into this window as tabs.\n"
         "- `scrap attach --tab TARGET` opens a live session from another window or machine "
         "as a tab in this window, without moving it.\n"
+        "- `scrap close TARGET...` closes tabs in this window; an attached tab detaches.\n"
         "- `scrap ls --net` lists live sessions on every machine on the tailnet.\n"
         "TARGET is @name, a session id prefix, or a title; machine:@name reaches a session "
         "on another tailnet machine through `send` and `read`. Messages from other "
@@ -1125,6 +1126,30 @@ static int attach_tab(const char *target)
     return rc;
 }
 
+static int cmd_close(int argc, char **argv)
+{
+    if (argc < 2) {
+        fprintf(stderr, "usage: scrap close TARGET...\n");
+        return 2;
+    }
+    const char *owner = getenv("SCRAP_PID");
+    long        pid = owner ? atol(owner) : 0;
+    if (pid <= 0 || !livelist_alive(pid)) {
+        fprintf(stderr, "scrap: close runs inside a scrap session\n");
+        return 1;
+    }
+    int rc = 0;
+    for (int i = 1; i < argc; i++) {
+        char   reply[1024] = "", done[200];
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "close", argv[i]);
+        snprintf(done, sizeof done, "closed %s", argv[i]);
+        rc |= request(pid, o, reply, sizeof reply) ? answered(reply, done) : 1;
+        cJSON_Delete(o);
+    }
+    return rc;
+}
+
 static int cmd_attach(int argc, char **argv)
 {
     if (argc == 3 && !strcmp(argv[1], "--tab"))
@@ -1195,5 +1220,7 @@ int intercom_main(int argc, char **argv)
         return cmd_attach(argc, argv);
     if (!strcmp(argv[0], "yank"))
         return cmd_yank(argc, argv);
+    if (!strcmp(argv[0], "close"))
+        return cmd_close(argc, argv);
     return -1;
 }
