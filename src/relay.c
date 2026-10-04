@@ -1,5 +1,6 @@
 #include "relay.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -281,6 +282,58 @@ static void add_clipped(cJSON *o, const char *key, const char *text, size_t max)
     free(cut);
 }
 
+static cJSON *image_list(const char *text)
+{
+    cJSON *list = cJSON_CreateArray();
+    if (!rt.files || !text)
+        return list;
+    for (const char *p = text; (p = strstr(p, "![")) != NULL;) {
+        const char *open = strstr(p, "](");
+        if (!open)
+            break;
+        open += 2;
+        const char *close = strchr(open, ')');
+        p = open;
+        if (!close || *open != '/' || close - open > 1023)
+            continue;
+        char path[1024];
+        snprintf(path, sizeof path, "%.*s", (int)(close - open), open);
+        struct stat st;
+        if (stat(path, &st) != 0 || access(path, R_OK) != 0)
+            continue;
+        unsigned long long h = 1469598103934665603ULL ^ (unsigned long long)st.st_mtime;
+        for (const char *c = path; *c; c++)
+            h = (h ^ (unsigned char)*c) * 1099511628211ULL;
+        const char *base = strrchr(path, '/');
+        base = base ? base + 1 : path;
+        char name[300], link[4600], url[5000];
+        snprintf(name, sizeof name, "%016llx-%s", h, base);
+        snprintf(link, sizeof link, "%s/%s", rt.files_dir, name);
+        if (symlink(path, link) != 0 && errno != EEXIST)
+            continue;
+        snprintf(url, sizeof url, "%s/%s", rt.files_base, name);
+        cJSON *it = cJSON_CreateObject();
+        cJSON_AddStringToObject(it, "url", url);
+        cJSON_AddStringToObject(it, "path", path);
+        cJSON_AddItemToArray(list, it);
+        p = close;
+    }
+    return list;
+}
+
+static void send_images(const char *text)
+{
+    cJSON *list = image_list(text), *it;
+    cJSON_ArrayForEach(it, list)
+    {
+        cJSON *o = frame("image");
+        cJSON_AddStringToObject(o, "url", cJSON_GetStringValue(cJSON_GetObjectItem(it, "url")));
+        cJSON_AddStringToObject(o, "path", cJSON_GetStringValue(cJSON_GetObjectItem(it, "path")));
+        send_json(o);
+    }
+    cJSON_Delete(list);
+}
+
 static void send_history(struct session *s)
 {
     const struct transcript *t = session_transcript(s);
@@ -291,6 +344,11 @@ static void send_history(struct session *s)
         cJSON *it = cJSON_CreateObject();
         add_clipped(it, "user", t->turns[i].user, HISTORY_BYTES);
         add_clipped(it, "assistant", t->turns[i].assistant, HISTORY_BYTES);
+        cJSON *images = image_list(t->turns[i].assistant);
+        if (cJSON_GetArraySize(images))
+            cJSON_AddItemToObject(it, "images", images);
+        else
+            cJSON_Delete(images);
         if (t->turns[i].interrupted)
             cJSON_AddBoolToObject(it, "stopped", 1);
         cJSON_AddItemToArray(turns, it);
@@ -369,39 +427,6 @@ const char *relay_system_note(void)
             "does not show it to you.\n");
 
     return rt.system_note;
-}
-
-static void send_images(const char *text)
-{
-    if (!rt.files || !text)
-        return;
-    for (const char *p = text; (p = strstr(p, "![")) != NULL;) {
-        const char *open = strstr(p, "](");
-        if (!open)
-            return;
-        open += 2;
-        const char *close = strchr(open, ')');
-        p = open;
-        if (!close || *open != '/' || close - open > 1023)
-            continue;
-        char path[1024];
-        snprintf(path, sizeof path, "%.*s", (int)(close - open), open);
-        if (access(path, R_OK) != 0)
-            continue;
-        const char *base = strrchr(path, '/');
-        base = base ? base + 1 : path;
-        char name[300], link[4600], url[5000];
-        snprintf(name, sizeof name, "%ld-%s", (long)time(NULL), base);
-        snprintf(link, sizeof link, "%s/%s", rt.files_dir, name);
-        if (symlink(path, link) != 0 && errno != EEXIST)
-            continue;
-        snprintf(url, sizeof url, "%s/%s", rt.files_base, name);
-        cJSON *o = frame("image");
-        cJSON_AddStringToObject(o, "url", url);
-        cJSON_AddStringToObject(o, "path", path);
-        send_json(o);
-        p = close;
-    }
 }
 
 static void menu_begin(const char *kind)
@@ -941,6 +966,16 @@ static void files_start(void)
     if (!path_config_subdir(rt.files_dir, sizeof rt.files_dir, "relay-files"))
         return;
     mkdir(rt.files_dir, 0700);
+    DIR *d = opendir(rt.files_dir);
+    for (struct dirent *e; d && (e = readdir(d)) != NULL;) {
+        char        link[4600];
+        struct stat st;
+        snprintf(link, sizeof link, "%s/%s", rt.files_dir, e->d_name);
+        if (lstat(link, &st) == 0 && S_ISLNK(st.st_mode))
+            unlink(link);
+    }
+    if (d)
+        closedir(d);
     int port = atoi(cfg_get("files_port", "0"));
     if (port <= 0)
         port = rt.port + 1;
