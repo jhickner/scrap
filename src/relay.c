@@ -24,7 +24,6 @@
 #include "gitinfo.h"
 #include "livelist.h"
 #include "session.h"
-#include "sessionload.h"
 #include "sessionview.h"
 #include "settings.h"
 #include "status.h"
@@ -338,12 +337,7 @@ static void send_images(const char *text)
 
 static void send_history(struct session *s)
 {
-    struct transcript        disk = {0};
     const struct transcript *t = session_transcript(s);
-    const char              *id = session_id(s);
-    if (s && !session_remote(s) && id && *id &&
-        sessionload_fill(&disk, session_backend(s), session_cwd(s), id))
-        t = &disk;
     cJSON *o = frame("history");
     cJSON *turns = cJSON_AddArrayToObject(o, "turns");
     size_t from = t && t->count > HISTORY_TURNS ? t->count - HISTORY_TURNS : 0;
@@ -360,7 +354,6 @@ static void send_history(struct session *s)
             cJSON_AddBoolToObject(it, "stopped", 1);
         cJSON_AddItemToArray(turns, it);
     }
-    transcript_free(&disk);
     send_json(o);
 }
 

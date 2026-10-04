@@ -245,7 +245,7 @@ const char *session_prompt(const struct session *s);
 double      session_turn_started(const struct session *s);
 
 double      session_event_queued_at(void);
-const struct transcript *session_transcript(const struct session *s);
+const struct transcript *session_transcript(struct session *s);
 const char *session_last_error(const struct session *s);
 int         session_last_interrupted(const struct session *s);
 

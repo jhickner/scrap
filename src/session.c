@@ -79,6 +79,7 @@ struct session {
     char    *last_reply;
     char    *failed_prompt;
     struct transcript transcript;
+    int      transcript_loaded;
     char    *last_block;
     int      turns;
     int      saved;
@@ -1198,9 +1199,21 @@ int session_switch_backend(struct session *s, const char *backend)
 
 void session_set_quiet(struct session *s, int quiet) { s->quiet = quiet; }
 
-const struct transcript *session_transcript(const struct session *s)
+const struct transcript *session_transcript(struct session *s)
 {
-    return s ? &s->transcript : NULL;
+    if (!s)
+        return NULL;
+    if (!s->transcript_loaded && !s->remote && s->id[0]) {
+        s->transcript_loaded = 1;
+        struct transcript disk = {0};
+        if (sessionload_fill(&disk, s->backend, s->cwd, s->id) > 0) {
+            transcript_free(&s->transcript);
+            s->transcript = disk;
+        } else {
+            transcript_free(&disk);
+        }
+    }
+    return &s->transcript;
 }
 
 int session_add_listener(session_listener_fn fn, void *ud)
@@ -1748,6 +1761,7 @@ static void reset_turns(struct session *s, int flags)
     if (flags & RESET_BLOCK)
         replace(&s->last_block, NULL);
     transcript_clear(&s->transcript);
+    s->transcript_loaded = 0;
 }
 
 int session_resume(struct session *s, const char *id)
