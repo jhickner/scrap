@@ -5,7 +5,6 @@ struct session;
 
 int  relay_start(struct session *s);
 void relay_stop(void);
-const char *relay_start_error(void);
 
 const char *relay_label(void);
 const char *relay_system_note(void);

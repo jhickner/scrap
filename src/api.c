@@ -15,7 +15,6 @@
 
 #include "apicore.h"
 #include "app.h"
-#include "restart.h"
 #include "session.h"
 #include "settings.h"
 #include "text.h"
@@ -403,7 +402,6 @@ int api_start(void)
     }
     session_add_listener(apicore_event, NULL);
     api.active = 1;
-    restart_flag("--api");
     snprintf(api.url, sizeof api.url, "http://%s:%d", bind, port);
     return 1;
 }

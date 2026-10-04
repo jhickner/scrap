@@ -773,11 +773,10 @@ int im_start(struct session *s)
     }
 
     char cfgpath[4200];
-    settings_load(&imcfg, path_config_file(cfgpath, sizeof cfgpath, "imessage") ? cfgpath : "");
+    int  have = path_config_file(cfgpath, sizeof cfgpath, "imessage");
+    settings_load(&imcfg, have ? cfgpath : "");
 
-    char lock[128];
-    snprintf(lock, sizeof lock, "/tmp/" APP_NAME "-%lu-imessage", (unsigned long)getuid());
-    owner_lock = filelock_acquire(lock, LOCK_EX | LOCK_NB);
+    owner_lock = have ? filelock_acquire(cfgpath, LOCK_EX | LOCK_NB) : -1;
     if (owner_lock < 0) {
         fail_note("imessage is already enabled by another scrap instance");
         return 0;

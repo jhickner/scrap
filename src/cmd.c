@@ -10,10 +10,10 @@
 #include <string.h>
 
 #include "app.h"
+#include "bridges.h"
 #include "chrome.h"
 #include "frontend.h"
 #include "hud.h"
-#include "relay.h"
 #include "models.h"
 #include "newsession.h"
 #include "pick.h"
@@ -38,7 +38,6 @@
 #include "settings.h"
 #include "settingsui.h"
 #include "text.h"
-#include "tg.h"
 #include "status.h"
 #include "instance.h"
 #include "ui.h"
@@ -653,50 +652,36 @@ static void do_sticky(struct session *s, const char *arg)
     reply_note("floating prompt %s", on ? "on" : "off");
 }
 
-static void do_relay(struct session *s, const char *arg)
+static void toggle_bridge(const char *name, const char *arg)
 {
-    int current = relay_label() != NULL;
-    int on = toggle_arg(arg, "on", "off", current, "/relay");
+    char command[32];
+    snprintf(command, sizeof command, "/%s", name);
+    int on = toggle_arg(arg, "on", "off", bridges_wanted(name), command);
     if (on < 0)
         return;
-    if (on == current) {
-        reply_note("relay already %s", on ? "on" : "off");
-        return;
-    }
-    if (on) {
-        if (relay_start(s))
-            workspace_republish();
-        else
-            reply_error("%s", relay_start_error() ? relay_start_error()
-                                                   : "could not enable relay");
-        return;
-    }
-    relay_stop();
-    workspace_republish();
-    reply_note("relay off");
+    char msg[300];
+    if (bridges_set(name, on, msg, sizeof msg))
+        reply_note("%s", msg);
+    else
+        reply_error("%s", msg);
+}
+
+static void do_relay(struct session *s, const char *arg)
+{
+    (void)s;
+    toggle_bridge("relay", arg);
 }
 
 static void do_telegram(struct session *s, const char *arg)
 {
-    int current = tg_label() != NULL;
-    int on = toggle_arg(arg, "on", "off", current, "/telegram");
-    if (on < 0)
-        return;
-    if (on == current) {
-        reply_note("telegram already %s", on ? "on" : "off");
-        return;
-    }
-    if (on) {
-        if (tg_start(s))
-            workspace_republish();
-        else
-            reply_error("%s", tg_start_error() ? tg_start_error()
-                                                : "could not enable telegram");
-        return;
-    }
-    tg_stop();
-    workspace_republish();
-    reply_note("telegram off");
+    (void)s;
+    toggle_bridge("telegram", arg);
+}
+
+static void do_api(struct session *s, const char *arg)
+{
+    (void)s;
+    toggle_bridge("api", arg);
 }
 
 static void do_voice(struct session *s, const char *arg)
@@ -1493,6 +1478,7 @@ static const struct cmd COMMANDS[] = {
     {"/sticky", "float the prompt above the spinner", "[on|off]", CMD_LIVE, do_sticky},
     {"/relay", "answer over the phone relay", "[on|off]", CMD_LIVE, do_relay},
     {"/telegram", "answer over Telegram", "[on|off]", CMD_LIVE, do_telegram},
+    {"/api", "serve the HTTP API", "[on|off]", CMD_LIVE, do_api},
     {"/voice", "read replies aloud", "[on|off|volume N|rate N|complete on|off]", CMD_LIVE, do_voice},
     {"/image", "tallest an inline image may be drawn", "[rows]", CMD_LIVE, do_image},
     {"/permission", "how the CLI gates tool calls", "[mode]", 0, do_permission},

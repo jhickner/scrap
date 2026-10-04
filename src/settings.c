@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "filelock.h"
@@ -114,6 +115,19 @@ void settings_put(struct settings *s, const char *key, const char *value)
 void settings_open(const char *path)
 {
     settings_load(&global, path);
+}
+
+void settings_reload(void)
+{
+    static ino_t  ino;
+    static time_t mtime;
+    struct stat   st;
+    if (!global.path[0] || stat(global.path, &st) != 0 ||
+        (st.st_ino == ino && st.st_mtime == mtime))
+        return;
+    ino = st.st_ino;
+    mtime = st.st_mtime;
+    settings_load(&global, global.path);
 }
 
 const char *settings_get_str(const char *key, const char *fallback)

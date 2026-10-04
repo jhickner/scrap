@@ -53,6 +53,7 @@
 #include "im.h"
 #include "agentsync.h"
 #include "relay.h"
+#include "bridges.h"
 #include "api.h"
 #include "voice.h"
 #include "tty.h"
@@ -158,11 +159,11 @@ static void usage(void)
             "  -p text    --prompt: answer text and exit\n"
             "  -s         safe mode: skip skills, CLAUDE.md, MCP servers, hooks\n"
             "  --name x   session name (default: a generated one)\n"
-            "  --telegram also answer over Telegram, in the same session\n"
-            "  --relay    also answer a phone over WebSocket, in the same session\n"
+            "  --telegram turn on the Telegram bridge; one open window hosts it\n"
+            "  --relay    turn on the WebSocket phone relay; one open window hosts it\n"
             "  --imessage also answer over iMessage, in the same session (config: ~/.config/scrap/imessage)\n"
             "  --connect telegram|relay   the same thing, spelled out\n"
-            "  --api      serve the worker API (config: ~/.config/scrap/api)\n"
+            "  --api      turn on the worker API; one open window hosts it (config: ~/.config/scrap/api)\n"
             "  --state dir  keep config and state under dir instead of ~/.config/scrap\n"
             "  -r         --resume: pick a past conversation to continue\n"
             "  --session id  resume a specific conversation (used by the fork commands)\n"
@@ -245,6 +246,7 @@ static int idle_render(void *ud)
     voice_pending();
     relay_poll(NULL);
     api_poll();
+    bridges_tick();
     struct session *drew = session_set_drawing(workspace_current());
     image_poll();
     session_set_drawing(drew);
@@ -740,10 +742,6 @@ int main(int argc, char **argv)
     }
 
     if (state_arg) {
-        if (telegram || relay || imessage || api_on) {
-            fprintf(stderr, APP_NAME ": --state does not combine with --telegram, --relay, --imessage, --api\n");
-            return 2;
-        }
         if (!state_enter(state_arg))
             return 1;
     }
@@ -909,15 +907,14 @@ int main(int argc, char **argv)
             session_set_remote(session, attach_arg);
     }
 
-    if (telegram && session && !tg_start(session))
-        telegram = 0;
-    if (relay && session && !relay_start(session))
-        relay = 0;
-    if (imessage && session && !im_start(session))
-        imessage = 0;
-    if (api_on && session && !api_start())
-        api_on = 0;
-    if (telegram || relay || imessage || api_on)
+    const char *wanted[] = {telegram ? "telegram" : NULL, relay ? "relay" : NULL,
+                            api_on ? "api" : NULL};
+    for (int i = 0; i < 3 && session; i++) {
+        char msg[300];
+        if (wanted[i] && !bridges_set(wanted[i], 1, msg, sizeof msg))
+            fprintf(stderr, APP_NAME ": %s\n", msg);
+    }
+    if (imessage && session && im_start(session))
         workspace_republish();
 
     if (!session) {

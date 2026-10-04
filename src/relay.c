@@ -20,9 +20,7 @@
 #include "bash.h"
 #include "cmd.h"
 #include "frontend.h"
-#include "filelock.h"
 #include "gitinfo.h"
-#include "restart.h"
 #include "session.h"
 #include "sessionview.h"
 #include "settings.h"
@@ -96,31 +94,6 @@ static struct {
 };
 
 static struct settings cfg;
-static int             owner_lock = -1;
-static char            start_error[256];
-
-const char *relay_start_error(void)
-{
-    return start_error[0] ? start_error : NULL;
-}
-
-static int claim_relay(void)
-{
-    char path[128];
-    snprintf(path, sizeof path, "/tmp/" APP_NAME "-%lu-relay", (unsigned long)getuid());
-    owner_lock = filelock_acquire(path, LOCK_EX | LOCK_NB);
-    if (owner_lock >= 0)
-        return 1;
-    if (errno == EWOULDBLOCK || errno == EAGAIN)
-        snprintf(start_error, sizeof start_error,
-                 "relay is already enabled by another scrap instance");
-    else
-        snprintf(start_error, sizeof start_error,
-                 "could not claim relay for this scrap instance: %s", strerror(errno));
-    fprintf(stderr, APP_NAME ": %s\n", start_error);
-    return 0;
-}
-
 static const char *cfg_get(const char *key, const char *dflt)
 {
     const char *v = settings_get(&cfg, key, NULL);
@@ -1006,14 +979,10 @@ static void cleanup(void)
     rt.from_chat = rt.repeat_task = rt.stop_wanted = 0;
     rt.busy_sent = -1;
     rt.menu = (struct relay_menu){0};
-    restart_unflag("--relay");
-    filelock_release(owner_lock);
-    owner_lock = -1;
 }
 
 int relay_start(struct session *s)
 {
-    start_error[0] = '\0';
     if (rt.active)
         return 0;
     char cfgpath[4200];
@@ -1048,9 +1017,6 @@ int relay_start(struct session *s)
                                                                     : MIRROR_ALL;
     snprintf(rt.label, sizeof rt.label, "relay");
 
-    if (!claim_relay())
-        return 0;
-
     if (pipe(rt.wake) != 0) {
         fprintf(stderr, APP_NAME ": relay wake pipe: %s\n", strerror(errno));
         goto fail;
@@ -1080,7 +1046,6 @@ int relay_start(struct session *s)
     }
     files_start();
     session_set_system_extra(s, relay_system_note());
-    restart_flag("--relay");
     rt.active = 1;
     note_up("relay on ws://%s:%d", rt.bind[0] ? rt.bind : "*", rt.port);
     return 1;
@@ -1092,7 +1057,7 @@ fail:
 
 void relay_stop(void)
 {
-    if (!rt.active && !rt.ws && rt.wake[0] < 0 && owner_lock < 0)
+    if (!rt.active && !rt.ws && rt.wake[0] < 0)
         return;
     cleanup();
 }

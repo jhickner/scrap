@@ -74,6 +74,7 @@ const char *settings_get(const struct settings *s, const char *key,
 void settings_put(struct settings *s, const char *key, const char *value);
 
 void settings_open(const char *path);
+void settings_reload(void);
 
 int  settings_get_int(const char *key, int fallback);
 
