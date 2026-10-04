@@ -25,7 +25,7 @@ CHECKS := kittywraptest overlaytest viewporttest imagerowtest chrometest imagefi
           sidechannelcmdtest taskstest voicetest filelocktest prompttest \
           dispatchtest grokbottailtest vncinsettest grokvnctest \
           settingstest
-CHECKS += agentsynctest sessionaddrtest apitest apihttptest activelogtest proxyprototest coreagenttest scheduletest askblocktest chaintest
+CHECKS += agentsynctest sessionaddrtest apitest apihttptest activelogtest proxyprototest coreagenttest scheduletest askblocktest chaintest optchattest
 MANUAL_TOOLS := imagetest keydump pastetest spintest vncprobe
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,
@@ -202,6 +202,8 @@ $(BUILD)/claudetest: tests/claudetest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/c
 $(BUILD)/pitest: tests/pitest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/coreagenttest: tests/coreagenttest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+
+$(BUILD)/optchattest: tests/optchattest.c $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/agenttabstest: tests/agenttabstest.c $(BUILD)/agenttabs.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 

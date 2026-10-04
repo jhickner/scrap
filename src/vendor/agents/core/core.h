@@ -79,7 +79,8 @@ static const char SA_DEFAULT_CONFIG[] =
     "    \"deepseek\":   { \"base_url\": \"https://api.deepseek.com/v1\", \"key_env\": \"DEEPSEEK_API_KEY\" },\n"
     "    \"fireworks\":  { \"base_url\": \"https://api.fireworks.ai/inference/v1\", \"key_env\": \"FIREWORKS_API_KEY\", \"effort\": \"openai\" },\n"
     "    \"together\":   { \"base_url\": \"https://api.together.xyz/v1\", \"key_env\": \"TOGETHER_API_KEY\" },\n"
-    "    \"ollama\":     { \"base_url\": \"http://localhost:11434/v1\" }\n"
+    "    \"ollama\":     { \"base_url\": \"http://localhost:11434/v1\" },\n"
+    "    \"mtplx\":      { \"base_url\": \"http://127.0.0.1:8000/v1\" }\n"
     "  }\n"
     "}\n";
 
@@ -1518,6 +1519,59 @@ static void sa_effort(sa_agent *x, cJSON *root) {
     }
 }
 
+static int sa_cache_control(const sa_agent *x) {
+    const char *m = x->route.model;
+    return m && (!strncmp(m, "anthropic/", 10) || !strncmp(m, "google/gemini", 13) || strstr(m, "claude"));
+}
+
+static cJSON *sa_text_part(const char *s, size_t n, int cache) {
+    cJSON *p = cJSON_CreateObject();
+    char *t = strndup(s, n);
+    cJSON_AddStringToObject(p, "type", "text");
+    cJSON_AddStringToObject(p, "text", t);
+    free(t);
+    if (cache) cJSON_AddItemToObject(p, "cache_control", cJSON_Parse("{\"type\":\"ephemeral\"}"));
+    return p;
+}
+
+static void sa_cache_marks(cJSON *msgs, int cache) {
+    int budget = 3;
+    cJSON *msg;
+    cJSON_ArrayForEach(msg, msgs) {
+        const char *c = sa_jstr(msg, "content");
+        if (!c || !strstr(c, BACKEND_CACHE_MARK)) continue;
+        cJSON *parts = cJSON_CreateArray();
+        sa_buf flat = {0};
+        for (const char *s = c, *e;; s = e + 1) {
+            e = strstr(s, BACKEND_CACHE_MARK);
+            size_t n = e ? (size_t)(e - s) : strlen(s);
+            sa_put(&flat, s, n);
+            if (n) cJSON_AddItemToArray(parts, sa_text_part(s, n, e && budget > 0));
+            if (e && n && budget > 0) budget--;
+            if (!e) break;
+        }
+        if (cache) {
+            cJSON_ReplaceItemInObject(msg, "content", parts);
+        } else {
+            cJSON_Delete(parts);
+            cJSON_ReplaceItemInObject(msg, "content", cJSON_CreateString(sa_str(&flat)));
+        }
+        sa_free(&flat);
+    }
+    if (!cache) return;
+    cJSON *last = cJSON_GetArrayItem(msgs, cJSON_GetArraySize(msgs) - 1);
+    cJSON *content = cJSON_GetObjectItem(last, "content");
+    if (cJSON_IsString(content) && *content->valuestring) {
+        cJSON *parts = cJSON_CreateArray();
+        cJSON_AddItemToArray(parts, sa_text_part(content->valuestring, strlen(content->valuestring), 1));
+        cJSON_ReplaceItemInObject(last, "content", parts);
+    } else if (cJSON_IsArray(content)) {
+        cJSON *tail = cJSON_GetArrayItem(content, cJSON_GetArraySize(content) - 1);
+        if (tail && !cJSON_GetObjectItem(tail, "cache_control"))
+            cJSON_AddItemToObject(tail, "cache_control", cJSON_Parse("{\"type\":\"ephemeral\"}"));
+    }
+}
+
 static char *sa_body(sa_agent *x, int upto, const char *extra_user, int tools) {
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "model", x->route.model);
@@ -1539,6 +1593,7 @@ static char *sa_body(sa_agent *x, int upto, const char *extra_user, int tools) {
         cJSON_AddStringToObject(u, "content", extra_user);
         cJSON_AddItemToArray(msgs, u);
     }
+    sa_cache_marks(msgs, sa_cache_control(x));
     cJSON_AddItemToObject(root, "messages", msgs);
     if (!x->st.disable_tools) {
         cJSON *defs = cJSON_Parse(SA_TOOLS);
@@ -1571,7 +1626,7 @@ typedef struct {
     cJSON *details;
     sa_call *calls;
     int ncalls;
-    long in, out, cached;
+    long in, out, cached, written;
     double cost;
     char err[512];
 } sa_resp;
@@ -1635,6 +1690,7 @@ static void sa_chunk(sa_resp *r, const cJSON *j) {
         r->in = (long)sa_jnum(usage, "prompt_tokens");
         r->out = (long)sa_jnum(usage, "completion_tokens");
         r->cached = (long)sa_jnum(cJSON_GetObjectItem(usage, "prompt_tokens_details"), "cached_tokens");
+        r->written = (long)sa_jnum(cJSON_GetObjectItem(usage, "prompt_tokens_details"), "cache_write_tokens");
         r->cost = sa_jnum(usage, "cost");
     }
     const cJSON *delta = cJSON_GetObjectItem(cJSON_GetArrayItem(cJSON_GetObjectItem(j, "choices"), 0), "delta");
@@ -2154,6 +2210,7 @@ static cJSON *sa_assistant_line(sa_agent *x, sa_resp *r, int with_calls) {
     cJSON_AddNumberToObject(u, "input_tokens", (double)r->in);
     cJSON_AddNumberToObject(u, "output_tokens", (double)r->out);
     cJSON_AddNumberToObject(u, "cache_read_input_tokens", (double)r->cached);
+    cJSON_AddNumberToObject(u, "cache_creation_input_tokens", (double)r->written);
     cJSON_AddNumberToObject(u, "totalTokens", (double)(r->in + r->out));
     if (r->cost) cJSON_AddNumberToObject(u, "cost", r->cost);
     cJSON_AddItemToObject(m, "usage", u);
@@ -2220,6 +2277,7 @@ static char *sa_ask_ex(Backend *b, const char *user, backend_result *meta) {
         res.input_tokens += r.in;
         res.output_tokens += r.out;
         res.cache_read_tokens += r.cached;
+        res.cache_creation_tokens += r.written;
         x->cost += r.cost;
         if (r.in + r.out > 0) x->ctx_tokens = r.in + r.out;
         if (interrupted || !ok) {

@@ -23,6 +23,8 @@
 
 typedef struct Backend Backend;
 
+#define BACKEND_CACHE_MARK "\x1e"
+
 /* Nothing here is retained: a backend copies what it needs. */
 typedef struct {
     const char *name;           /* "claude" | "codex" | "grok" | "pi" | "grokbot" | "core";
