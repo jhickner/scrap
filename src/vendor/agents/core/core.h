@@ -79,7 +79,8 @@ static const char SA_DEFAULT_CONFIG[] =
     "    \"deepseek\":   { \"base_url\": \"https://api.deepseek.com/v1\", \"key_env\": \"DEEPSEEK_API_KEY\" },\n"
     "    \"fireworks\":  { \"base_url\": \"https://api.fireworks.ai/inference/v1\", \"key_env\": \"FIREWORKS_API_KEY\", \"effort\": \"openai\" },\n"
     "    \"together\":   { \"base_url\": \"https://api.together.xyz/v1\", \"key_env\": \"TOGETHER_API_KEY\" },\n"
-    "    \"ollama\":     { \"base_url\": \"http://localhost:11434/v1\" }\n"
+    "    \"ollama\":     { \"base_url\": \"http://localhost:11434/v1\" },\n"
+    "    \"mtplx\":      { \"base_url\": \"http://127.0.0.1:8000/v1\" }\n"
     "  }\n"
     "}\n";
 
