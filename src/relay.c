@@ -22,7 +22,9 @@
 #include "cmd.h"
 #include "frontend.h"
 #include "gitinfo.h"
+#include "livelist.h"
 #include "session.h"
+#include "sessionload.h"
 #include "sessionview.h"
 #include "settings.h"
 #include "status.h"
@@ -336,7 +338,12 @@ static void send_images(const char *text)
 
 static void send_history(struct session *s)
 {
+    struct transcript        disk = {0};
     const struct transcript *t = session_transcript(s);
+    const char              *id = session_id(s);
+    if (s && !session_remote(s) && id && *id &&
+        sessionload_fill(&disk, session_backend(s), session_cwd(s), id))
+        t = &disk;
     cJSON *o = frame("history");
     cJSON *turns = cJSON_AddArrayToObject(o, "turns");
     size_t from = t && t->count > HISTORY_TURNS ? t->count - HISTORY_TURNS : 0;
@@ -353,7 +360,53 @@ static void send_history(struct session *s)
             cJSON_AddBoolToObject(it, "stopped", 1);
         cJSON_AddItemToArray(turns, it);
     }
+    transcript_free(&disk);
     send_json(o);
+}
+
+static int attached_here(const char *target)
+{
+    for (int i = 0; i < workspace_count(); i++) {
+        const char *remote = session_remote(workspace_at(i));
+        if (remote && !strcmp(remote, target))
+            return 1;
+    }
+    return 0;
+}
+
+static cJSON *other_windows(void)
+{
+    static cJSON  *cached;
+    static time_t  at;
+    time_t         now = time(NULL);
+    if (cached && now == at)
+        return cJSON_Duplicate(cached, 1);
+    cJSON_Delete(cached);
+    cached = cJSON_CreateArray();
+    at = now;
+    struct live_session *v = NULL;
+    int                  n = livelist_load(&v);
+    for (int i = 0; i < n; i++) {
+        if (v[i].pid == (long)getpid() || (!v[i].name[0] && !v[i].id[0]))
+            continue;
+        char target[200];
+        snprintf(target, sizeof target, "%s%s", v[i].name[0] ? "@" : "",
+                 v[i].name[0] ? v[i].name : v[i].id);
+        if (attached_here(target))
+            continue;
+        cJSON *it = cJSON_CreateObject();
+        cJSON_AddStringToObject(it, "target", target);
+        if (v[i].name[0])
+            cJSON_AddStringToObject(it, "name", v[i].name);
+        cJSON_AddStringToObject(it, "label",
+                                v[i].title[0] ? v[i].title : tgbridge_dir_name(v[i].cwd));
+        cJSON_AddStringToObject(it, "cwd", v[i].cwd);
+        cJSON_AddBoolToObject(it, "busy", !strcmp(v[i].status, "working"));
+        cJSON_AddBoolToObject(it, "unseen", v[i].unseen != 0);
+        cJSON_AddItemToArray(cached, it);
+    }
+    free(v);
+    return cJSON_Duplicate(cached, 1);
 }
 
 static void send_tabs(int force)
@@ -379,6 +432,7 @@ static void send_tabs(int force)
         cJSON_AddBoolToObject(it, "unseen", session_unseen(s));
         cJSON_AddItemToArray(items, it);
     }
+    cJSON_AddItemToObject(o, "others", other_windows());
     char *now = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     if (!now || (!force && sent && !strcmp(now, sent))) {
@@ -733,8 +787,8 @@ static const char *arg_of(const char *line, const char *cmd)
 
 static int bridge_command_name(const char *line)
 {
-    static const char *CMDS[] = {"/tabs", "/tab",    "/sessions", "/open",
-                                 "/close", "/resume", "/stop"};
+    static const char *CMDS[] = {"/tabs",   "/tab",  "/sessions", "/open",
+                                 "/close",  "/resume", "/stop",   "/attach"};
     for (int i = 0; i < COUNT(CMDS); i++)
         if (arg_of(line, CMDS[i]))
             return 1;
@@ -770,6 +824,15 @@ static int bridge_command(const char *line)
         } else {
             tgbridge_send_resume(&rt.bridge, MENU_MAX);
         }
+        return 1;
+    }
+    if ((arg = arg_of(line, "/attach")) != NULL && *arg) {
+        char why[600];
+        int  at = cmd_attach_tab(arg, why, sizeof why);
+        if (at < 0)
+            send_note(why);
+        else
+            tgbridge_switch_tab(&rt.bridge, at);
         return 1;
     }
     if (!strcmp(line, "/stop"))
