@@ -1,4 +1,4 @@
-#include "tgbridge.h"
+#include "chatnav.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -10,33 +10,33 @@
 #include "text.h"
 #include "workspace.h"
 
-void tgbridge_init(struct tgbridge *b, struct session *s,
-                   tgbridge_bind_fn bind, void *ud)
+void chatnav_init(struct chatnav *b, struct session *s,
+                   chatnav_bind_fn bind, void *ud)
 {
-    *b = (struct tgbridge){
+    *b = (struct chatnav){
         .session = s,
         .bind = bind,
         .bind_ud = ud,
     };
 }
 
-void tgbridge_set_output(struct tgbridge *b, const struct tgbridge_output *output)
+void chatnav_set_output(struct chatnav *b, const struct chatnav_output *output)
 {
-    b->output = output ? *output : (struct tgbridge_output){0};
+    b->output = output ? *output : (struct chatnav_output){0};
 }
 
-struct session *tgbridge_session(const struct tgbridge *b)
+struct session *chatnav_session(const struct chatnav *b)
 {
     return b->session;
 }
 
-void tgbridge_forget(struct tgbridge *b, struct session *s)
+void chatnav_forget(struct chatnav *b, struct session *s)
 {
     if (b->session == s)
         b->session = NULL;
 }
 
-void tgbridge_focus(struct tgbridge *b, struct session *s)
+void chatnav_focus(struct chatnav *b, struct session *s)
 {
     if (b->session == s)
         return;
@@ -47,21 +47,21 @@ void tgbridge_focus(struct tgbridge *b, struct session *s)
         b->bind(b->session, 1, b->bind_ud);
 }
 
-void tgbridge_refocus(struct tgbridge *b)
+void chatnav_refocus(struct chatnav *b)
 {
-    tgbridge_focus(b, workspace_current());
+    chatnav_focus(b, workspace_current());
 }
 
-int tgbridge_switch(struct tgbridge *b, int index)
+int chatnav_switch(struct chatnav *b, int index)
 {
     if (index < 0 || index >= workspace_count())
         return 0;
     workspace_show(index);
-    tgbridge_focus(b, workspace_at(index));
+    chatnav_focus(b, workspace_at(index));
     return 1;
 }
 
-int tgbridge_open(const char *cwd, const char *id)
+static int spawn(const char *cwd, const char *id)
 {
     struct session *from = workspace_current();
     if (!from)
@@ -71,14 +71,14 @@ int tgbridge_open(const char *cwd, const char *id)
                            cwd && *cwd ? cwd : session_cwd(from), id);
 }
 
-static void note(struct tgbridge *b, const char *text)
+static void note(struct chatnav *b, const char *text)
 {
     if (b->output.note)
         b->output.note(b->output.ud, text);
 }
 
 __attribute__((format(printf, 2, 3)))
-static void notef(struct tgbridge *b, const char *fmt, ...)
+static void notef(struct chatnav *b, const char *fmt, ...)
 {
     char text[600];
     va_list ap;
@@ -88,7 +88,7 @@ static void notef(struct tgbridge *b, const char *fmt, ...)
     note(b, text);
 }
 
-void tgbridge_send_here(struct tgbridge *b)
+void chatnav_send_here(struct chatnav *b)
 {
     struct session *s = b->session;
     if (!s)
@@ -96,10 +96,10 @@ void tgbridge_send_here(struct tgbridge *b)
     const char *title = session_title(s);
     notef(b, "%d/%d  %s  in %s", workspace_index() + 1, workspace_count(),
           title && *title ? title : "untitled",
-          tgbridge_dir_name(session_cwd(s)));
+          chatnav_dir_name(session_cwd(s)));
 }
 
-void tgbridge_send_tabs(struct tgbridge *b, int menu_max)
+void chatnav_send_tabs(struct chatnav *b, int menu_max)
 {
     int n = workspace_count();
     if (n <= 0) {
@@ -111,8 +111,8 @@ void tgbridge_send_tabs(struct tgbridge *b, int menu_max)
     b->output.menu_begin(b->output.ud, "tab");
     for (int i = 0; i < n && i < menu_max - 3; i++) {
         char label[80], payload[200];
-        tgbridge_tab_label(i, label, sizeof label);
-        tgbridge_tab_payload(i, payload, sizeof payload);
+        chatnav_tab_label(i, label, sizeof label);
+        chatnav_tab_payload(i, payload, sizeof payload);
         b->output.menu_add(b->output.ud, label, payload);
     }
     if (n < WORKSPACE_MAX)
@@ -122,7 +122,7 @@ void tgbridge_send_tabs(struct tgbridge *b, int menu_max)
     b->output.menu_send(b->output.ud, "conversations", 1);
 }
 
-void tgbridge_send_resume(struct tgbridge *b, int menu_max)
+void chatnav_send_resume(struct chatnav *b, int menu_max)
 {
     if (!b->session) {
         note(b, "no conversation to resume alongside");
@@ -162,7 +162,7 @@ void tgbridge_send_resume(struct tgbridge *b, int menu_max)
     b->output.menu_send(b->output.ud, title, 1);
 }
 
-void tgbridge_open_tab(struct tgbridge *b, const char *cwd, const char *id)
+void chatnav_cmd_open(struct chatnav *b, const char *cwd, const char *id)
 {
     if (workspace_count() >= WORKSPACE_MAX) {
         notef(b, "that is all %d conversations; close one first", WORKSPACE_MAX);
@@ -181,16 +181,16 @@ void tgbridge_open_tab(struct tgbridge *b, const char *cwd, const char *id)
     }
     free(expanded);
 
-    int index = tgbridge_open(where, id);
+    int index = spawn(where, id);
     if (index < 0) {
         note(b, "could not start another conversation");
         return;
     }
-    tgbridge_focus(b, workspace_at(index));
-    tgbridge_send_here(b);
+    chatnav_focus(b, workspace_at(index));
+    chatnav_send_here(b);
 }
 
-void tgbridge_close_tab(struct tgbridge *b, int index)
+void chatnav_cmd_close(struct chatnav *b, int index)
 {
     if (index < 0 || index >= workspace_count()) {
         note(b, "no such conversation");
@@ -201,19 +201,19 @@ void tgbridge_close_tab(struct tgbridge *b, int index)
         return;
     }
     workspace_close(index);
-    tgbridge_send_here(b);
+    chatnav_send_here(b);
 }
 
-void tgbridge_switch_tab(struct tgbridge *b, int index)
+void chatnav_cmd_switch(struct chatnav *b, int index)
 {
-    if (!tgbridge_switch(b, index)) {
+    if (!chatnav_switch(b, index)) {
         note(b, "no such conversation");
         return;
     }
-    tgbridge_send_here(b);
+    chatnav_send_here(b);
 }
 
-const char *tgbridge_dir_name(const char *path)
+const char *chatnav_dir_name(const char *path)
 {
     if (!path || !*path)
         return "?";
@@ -221,12 +221,12 @@ const char *tgbridge_dir_name(const char *path)
     return slash && slash[1] ? slash + 1 : path;
 }
 
-void tgbridge_tab_label(int index, char *out, size_t size)
+void chatnav_tab_label(int index, char *out, size_t size)
 {
     struct session *s = workspace_at(index);
     const char *title = session_title(s);
     if (!title || !*title)
-        title = tgbridge_dir_name(session_cwd(s));
+        title = chatnav_dir_name(session_cwd(s));
 
     const char *mark = index == workspace_index() ? "> "
                      : session_unseen(s)          ? "* "
@@ -235,7 +235,7 @@ void tgbridge_tab_label(int index, char *out, size_t size)
     snprintf(out, size, "%s%d  %s%s", mark, index + 1, title, what);
 }
 
-void tgbridge_tab_payload(int index, char *out, size_t size)
+void chatnav_tab_payload(int index, char *out, size_t size)
 {
     const char *id = session_id(workspace_at(index));
     if (id && *id)
@@ -244,7 +244,7 @@ void tgbridge_tab_payload(int index, char *out, size_t size)
         snprintf(out, size, "#%d", index);
 }
 
-int tgbridge_tab_from_payload(const char *payload)
+int chatnav_tab_from_payload(const char *payload)
 {
     if (!payload || !*payload)
         return -1;
@@ -253,16 +253,4 @@ int tgbridge_tab_from_payload(const char *payload)
         return index >= 0 && index < workspace_count() ? index : -1;
     }
     return workspace_find_id(payload);
-}
-
-int tgbridge_workspace_fds(void *ud, int *out, int max)
-{
-    (void)ud;
-    return workspace_fds(out, max);
-}
-
-void tgbridge_workspace_ready(void *ud)
-{
-    (void)ud;
-    workspace_drain();
 }

@@ -205,18 +205,6 @@ static int idle_fds(void *ud, int *out, int max)
     return n + tg_fds(out + n, max - n);
 }
 
-static int bash_fds(void *ud, int *out, int max)
-{
-    (void)ud;
-    return workspace_fds(out, max);
-}
-
-static void bash_ready(void *ud)
-{
-    (void)ud;
-    workspace_drain();
-}
-
 static void offer_project_trust(struct session *s)
 {
     if (!session_take_trust_request(s))
@@ -255,17 +243,12 @@ static int idle_render(void *ud)
     return busy;
 }
 
-static int relay_took;
 static int im_took;
 
 static char *chat_line(void *ud)
 {
     (void)ud;
-    char *line = relay_take_line();
-    relay_took = line != NULL;
-    if (line)
-        return line;
-    line = im_take_line();
+    char *line = im_take_line();
     im_took = line != NULL;
     if (line)
         return line;
@@ -587,6 +570,7 @@ static void turn_done(struct session *s)
         }
     }
     api_turn_done(s);
+    relay_turn_done(s);
     stream_turn_done(s);
     voice_turn_done(s);
     cmd_run_deferred(s);
@@ -1105,7 +1089,7 @@ int main(int argc, char **argv)
         }
 
         if (bash_is_command(line)) {
-            tty_watch(bash_fds, bash_ready, NULL);
+            tty_watch(workspace_watch_fds, workspace_watch_ready, NULL);
             bash_run(line);
             tty_watch(NULL, NULL, NULL);
             gitinfo_forget();
@@ -1115,10 +1099,7 @@ int main(int argc, char **argv)
         }
 
         if (prompt_line_was_external(prompt)) {
-            if (relay_took) {
-                workspace_settle(relay_session());
-                relay_run_line(line);
-            } else if (im_took) {
+            if (im_took) {
                 workspace_settle(im_session());
                 im_run_line(line);
             } else {

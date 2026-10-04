@@ -19,21 +19,19 @@
 
 #include "app.h"
 #include "bash.h"
+#include "chatnav.h"
+#include "chrome.h"
 #include "cmd.h"
 #include "frontend.h"
-#include "gitinfo.h"
 #include "livelist.h"
+#include "prompt.h"
 #include "session.h"
 #include "sessionview.h"
 #include "settings.h"
-#include "status.h"
-#include "tasks.h"
 #include "text.h"
 #include "tg.h"
-#include "tgbridge.h"
 #include "transcript.h"
 #include "toolstyle.h"
-#include "tty.h"
 #include "ui.h"
 #include "viewport.h"
 #include "workspace.h"
@@ -44,8 +42,7 @@
 #define HISTORY_TURNS 6
 #define HISTORY_BYTES 6000
 
-enum { MIRROR_OFF = 0, MIRROR_REMOTE = 1, MIRROR_ALL = 2 };
-enum { ITEM_LINE = 0, ITEM_PICK = 1, ITEM_HELLO = 2 };
+enum { ITEM_LINE, ITEM_PICK, ITEM_HELLO, ITEM_STOP };
 
 struct inbox_item {
     char *text;
@@ -55,14 +52,8 @@ struct inbox_item {
     int   tab;
 };
 
-struct relay_menu {
-    char kind[16];
-    char payload[MENU_MAX][200];
-    int  count;
-};
-
 static struct {
-    struct tgbridge bridge;
+    struct chatnav nav;
     wsd            *ws;
     httpd          *files;
     char            files_dir[4200];
@@ -71,25 +62,19 @@ static struct {
     int             mirror;
     int             wake[2];
     char            label[64];
-    char            client[64];
     char            token[128];
     int             port;
     char            bind[64];
-    volatile int    stop_wanted;
-    int             from_chat;
-    int             queued_told;
     int             draining;
     char            system_note[900];
-    char            want_id[80];
-    int             want_tab;
     int             repeat_task;
     int             busy_sent;
     double          mirrored_turn;
+    char           *sent;
     struct inbox_item inbox[INBOX_MAX];
     int             inbox_head;
     int             inbox_count;
     pthread_mutex_t inbox_lock;
-    struct relay_menu menu;
 } rt = {
     .wake = {-1, -1},
     .inbox_lock = PTHREAD_MUTEX_INITIALIZER,
@@ -102,9 +87,9 @@ static const char *cfg_get(const char *key, const char *dflt)
     return (v && *v) ? v : dflt;
 }
 
-static struct session *current_session(void)
+struct session *relay_session(void)
 {
-    return tgbridge_session(&rt.bridge);
+    return chatnav_session(&rt.nav);
 }
 
 static void wake_up(void)
@@ -146,32 +131,19 @@ static int inbox_push(char *text, int kind, const char *tab_id, int tab)
     return ok;
 }
 
-static char *inbox_take_if(int *kind, int (*want)(const struct inbox_item *))
+static int inbox_take(struct inbox_item *out, int all)
 {
     pthread_mutex_lock(&rt.inbox_lock);
-    char *text = NULL;
-    if (rt.inbox_count > 0 && (!want || want(&rt.inbox[rt.inbox_head]))) {
-        struct inbox_item *it = &rt.inbox[rt.inbox_head];
-        text = it->text;
-        *kind = it->kind;
-        snprintf(rt.want_id, sizeof rt.want_id, "%s", it->tab_id);
-        rt.want_tab = it->tab;
+    struct inbox_item *it = &rt.inbox[rt.inbox_head];
+    int ok = rt.inbox_count > 0 &&
+             (all || it->kind == ITEM_HELLO || it->kind == ITEM_STOP);
+    if (ok) {
+        *out = *it;
         rt.inbox_head = (rt.inbox_head + 1) % INBOX_MAX;
         rt.inbox_count--;
     }
-    int remaining = rt.inbox_count;
     pthread_mutex_unlock(&rt.inbox_lock);
-    if (text) {
-        wake_drain();
-        if (remaining)
-            wake_up();
-    }
-    return text;
-}
-
-static char *inbox_take(int *kind)
-{
-    return inbox_take_if(kind, NULL);
+    return ok;
 }
 
 static void inbox_clear(void)
@@ -392,7 +364,7 @@ static cJSON *other_windows(void)
         if (v[i].name[0])
             cJSON_AddStringToObject(it, "name", v[i].name);
         cJSON_AddStringToObject(it, "label",
-                                v[i].title[0] ? v[i].title : tgbridge_dir_name(v[i].cwd));
+                                v[i].title[0] ? v[i].title : chatnav_dir_name(v[i].cwd));
         cJSON_AddStringToObject(it, "cwd", v[i].cwd);
         cJSON_AddBoolToObject(it, "busy", !strcmp(v[i].status, "working"));
         cJSON_AddBoolToObject(it, "unseen", v[i].unseen != 0);
@@ -412,7 +384,7 @@ static void send_tabs(int force)
         struct session *s = workspace_at(i);
         const char *title = session_title(s);
         if (!title || !*title)
-            title = tgbridge_dir_name(session_cwd(s));
+            title = chatnav_dir_name(session_cwd(s));
         cJSON *it = cJSON_CreateObject();
         cJSON_AddNumberToObject(it, "index", i + 1);
         cJSON_AddStringToObject(it, "id", session_id(s) ? session_id(s) : "");
@@ -420,7 +392,7 @@ static void send_tabs(int force)
         if (session_name(s) && *session_name(s))
             cJSON_AddStringToObject(it, "name", session_name(s));
         cJSON_AddStringToObject(it, "cwd", session_cwd(s));
-        cJSON_AddBoolToObject(it, "current", s == current_session());
+        cJSON_AddBoolToObject(it, "current", s == relay_session());
         cJSON_AddBoolToObject(it, "busy", session_busy(s));
         cJSON_AddBoolToObject(it, "unseen", session_unseen(s));
         cJSON_AddItemToArray(items, it);
@@ -438,9 +410,19 @@ static void send_tabs(int force)
     sent = now;
 }
 
+static void send_view(void)
+{
+    struct session *s = relay_session();
+    if (s)
+        send_history(s);
+    send_tabs(1);
+    rt.busy_sent = -1;
+    send_busy(session_busy(s));
+}
+
 static void send_hello(void)
 {
-    struct session *s = current_session();
+    struct session *s = relay_session();
     cJSON *o = frame("hello");
     cJSON_AddStringToObject(o, "name", APP_NAME);
     cJSON_AddStringToObject(o, "label", rt.label);
@@ -450,11 +432,7 @@ static void send_hello(void)
         cJSON_AddStringToObject(o, "backend", session_backend(s));
     }
     send_json(o);
-    if (s)
-        send_history(s);
-    send_tabs(1);
-    rt.busy_sent = -1;
-    send_busy(session_busy(s));
+    send_view();
 }
 
 const char *relay_system_note(void)
@@ -476,109 +454,47 @@ const char *relay_system_note(void)
     return rt.system_note;
 }
 
-static void menu_begin(const char *kind)
-{
-    rt.menu.count = 0;
-    snprintf(rt.menu.kind, sizeof rt.menu.kind, "%s", kind);
-}
-
-static void menu_add(const char *label, const char *payload)
-{
-    (void)label;
-    if (rt.menu.count >= MENU_MAX)
-        return;
-    snprintf(rt.menu.payload[rt.menu.count], sizeof rt.menu.payload[0], "%s",
-             payload ? payload : "");
-    rt.menu.count++;
-}
-
 static cJSON *menu_items;
+static char   menu_kind[16];
 
-static void bridge_menu_begin(void *ud, const char *kind)
+static void nav_menu_begin(void *ud, const char *kind)
 {
     (void)ud;
-    menu_begin(kind);
+    snprintf(menu_kind, sizeof menu_kind, "%s", kind);
     cJSON_Delete(menu_items);
     menu_items = cJSON_CreateArray();
 }
 
-static void bridge_menu_add(void *ud, const char *label, const char *payload)
+static void nav_menu_add(void *ud, const char *label, const char *payload)
 {
     (void)ud;
-    menu_add(label, payload);
     cJSON *it = cJSON_CreateObject();
     cJSON_AddStringToObject(it, "label", label);
     cJSON_AddStringToObject(it, "payload", payload ? payload : "");
     cJSON_AddItemToArray(menu_items, it);
 }
 
-static void bridge_menu_send(void *ud, const char *title, int per_row)
+static void nav_menu_send(void *ud, const char *title, int per_row)
 {
     (void)ud;
     (void)per_row;
     cJSON *o = frame("menu");
-    cJSON_AddStringToObject(o, "kind", rt.menu.kind);
+    cJSON_AddStringToObject(o, "kind", menu_kind);
     cJSON_AddStringToObject(o, "title", title ? title : "");
     cJSON_AddItemToObject(o, "items", menu_items ? menu_items : cJSON_CreateArray());
     menu_items = NULL;
     send_json(o);
 }
 
-static void bridge_note(void *ud, const char *text)
+static void nav_note(void *ud, const char *text)
 {
     (void)ud;
     send_note(text);
 }
 
-static int menu_known(const char *payload)
-{
-    for (int i = 0; i < rt.menu.count; i++)
-        if (!strcmp(rt.menu.payload[i], payload))
-            return 1;
-    return 0;
-}
-
-static char *menu_line(const char *payload)
-{
-    char line[256];
-    if (!menu_known(payload))
-        return NULL;
-    if (!strcmp(rt.menu.kind, "tab")) {
-        if (!strcmp(payload, "new")) {
-            snprintf(line, sizeof line, "/open");
-        } else if (!strcmp(payload, "resume")) {
-            snprintf(line, sizeof line, "/resume");
-        } else if (!strcmp(payload, "cancel")) {
-            return NULL;
-        } else {
-            int at = tgbridge_tab_from_payload(payload);
-            if (at < 0) {
-                send_note("that conversation is gone");
-                return NULL;
-            }
-            snprintf(line, sizeof line, "/tab %d", at + 1);
-        }
-    } else if (!strcmp(rt.menu.kind, "resume")) {
-        if (!strcmp(payload, "back"))
-            snprintf(line, sizeof line, "/tabs");
-        else
-            snprintf(line, sizeof line, "/resume %s", payload);
-    } else {
-        return NULL;
-    }
-    return strdup(line);
-}
-
-static int mirroring(void)
-{
-    if (!rt.active || rt.mirror == MIRROR_OFF)
-        return 0;
-    return rt.mirror == MIRROR_ALL || rt.from_chat;
-}
-
 static const char *short_path(const char *p)
 {
-    const char *cwd = current_session() ? session_cwd(current_session()) : NULL;
+    const char *cwd = relay_session() ? session_cwd(relay_session()) : NULL;
     size_t n = cwd ? strlen(cwd) : 0;
     if (n && !strncmp(p, cwd, n) && p[n] == '/')
         return p + n + 1;
@@ -606,7 +522,7 @@ static void send_tool_line(const backend_event *ev)
 static void on_event(void *ud, struct session *s, const backend_event *ev)
 {
     (void)ud;
-    if (s != current_session() || !mirroring())
+    if (!rt.active || !rt.mirror || s != relay_session())
         return;
     if (ev->parent && *ev->parent)
         return;
@@ -616,7 +532,7 @@ static void on_event(void *ud, struct session *s, const backend_event *ev)
             rt.repeat_task = 1;
         return;
     }
-    if (rt.repeat_task && !rt.from_chat) {
+    if (rt.repeat_task) {
         if (ev->kind == BACKEND_EV_ASSISTANT)
             rt.repeat_task = 0;
         return;
@@ -640,202 +556,25 @@ static void on_event(void *ud, struct session *s, const backend_event *ev)
 
 static void mirror_prompt(struct session *s)
 {
-    if (!s || rt.from_chat || !mirroring() || !session_busy(s))
+    if (!s || !rt.mirror || !session_busy(s))
         return;
     double started = session_turn_started(s);
     if (started == rt.mirrored_turn)
         return;
     rt.mirrored_turn = started;
-    send_text("user", session_prompt(s));
-}
-
-static int  bridge_command(const char *line);
-static int  bridge_command_name(const char *line);
-static int  stamped_tab(void);
-
-static int runs_mid_turn(const struct inbox_item *it)
-{
-    if (it->kind == ITEM_HELLO)
-        return 1;
-    if (it->kind != ITEM_LINE)
-        return 0;
-    return bridge_command_name(it->text) || cmd_runs_mid_turn(it->text);
-}
-
-static void run_live(char *line)
-{
-    rt.from_chat = 1;
-    status_pause();
-    if (!bridge_command(line)) {
-        ui_sink_begin_tee();
-        cmd_dispatch_live(current_session(), line);
-        char *raw = ui_sink_end();
-        char *shown = ui_plain(raw, 1);
-        free(raw);
-        if (shown && *shown)
-            send_pre(shown);
-        else
-            send_note("ok");
-        free(shown);
-    }
-    status_resume();
-    rt.from_chat = 0;
-    send_idle();
-}
-
-static void drain_mid_turn(void)
-{
-    if (rt.draining)
-        return;
-    rt.draining = 1;
-    for (;;) {
-        int   kind = 0;
-        char *line = inbox_take_if(&kind, runs_mid_turn);
-        if (!line)
-            break;
-        if (kind == ITEM_HELLO) {
-            send_hello();
-            free(line);
-            continue;
-        }
-        int at = stamped_tab();
-        rt.want_id[0] = '\0';
-        rt.want_tab = 0;
-        if (at >= 0 && workspace_at(at) != current_session())
-            tgbridge_switch(&rt.bridge, at);
-        run_live(line);
-        free(line);
-    }
-    if (relay_pending() && !rt.queued_told) {
-        rt.queued_told = 1;
-        send_note("queued until this turn finishes");
-    }
-    rt.draining = 0;
-}
-
-int relay_poll(struct session *live)
-{
-    if (!rt.active)
-        return 0;
-    mirror_prompt(current_session());
-    send_busy(session_busy(current_session()));
-    send_tabs(0);
-    if (live)
-        drain_mid_turn();
-    if (rt.stop_wanted && (!live || live == current_session())) {
-        rt.stop_wanted = 0;
-        return 1;
-    }
-    return 0;
-}
-
-static void on_text(void *ud, const char *text, size_t n)
-{
-    (void)ud;
-    (void)n;
-    cJSON *o = cJSON_Parse(text);
-    if (!o)
-        return;
-    const char *t = cJSON_GetStringValue(cJSON_GetObjectItem(o, "t"));
-    const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(o, "text"));
-    const char *payload = cJSON_GetStringValue(cJSON_GetObjectItem(o, "payload"));
-    const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(o, "name"));
-    if (!t) {
-        cJSON_Delete(o);
+    const char *p = session_prompt(s);
+    if (rt.sent && p && strstr(p, rt.sent)) {
+        free(rt.sent);
+        rt.sent = NULL;
         return;
     }
-    const char *tab_id = cJSON_GetStringValue(cJSON_GetObjectItem(o, "id"));
-    cJSON *tab = cJSON_GetObjectItem(o, "tab");
-    int at = cJSON_IsNumber(tab) ? (int)cJSON_GetNumberValue(tab) : 0;
-    if (!strcmp(t, "line") && v && *v) {
-        inbox_push(strdup(v), ITEM_LINE, tab_id, at);
-    } else if (!strcmp(t, "pick") && payload) {
-        inbox_push(strdup(payload), ITEM_PICK, tab_id, at);
-    } else if (!strcmp(t, "stop")) {
-        rt.stop_wanted = 1;
-    } else if (!strcmp(t, "hello")) {
-        snprintf(rt.client, sizeof rt.client, "%s", name ? name : "client");
-        inbox_push(strdup(""), ITEM_HELLO, NULL, 0);
-    }
-    cJSON_Delete(o);
+    send_text("user", p);
 }
 
-static void on_state(void *ud, int connected)
-{
-    (void)ud;
-    if (!connected)
-        rt.client[0] = '\0';
-}
-
-static const char *arg_of(const char *line, const char *cmd)
-{
-    size_t n = strlen(cmd);
-    if (strncmp(line, cmd, n) || (line[n] && line[n] != ' '))
-        return NULL;
-    const char *arg = line + n;
-    while (*arg == ' ')
-        arg++;
-    return arg;
-}
-
-static int bridge_command_name(const char *line)
-{
-    static const char *CMDS[] = {"/tabs",   "/tab",  "/sessions", "/open",
-                                 "/close",  "/resume", "/stop",   "/attach"};
-    for (int i = 0; i < COUNT(CMDS); i++)
-        if (arg_of(line, CMDS[i]))
-            return 1;
-    return 0;
-}
-
-static int bridge_command(const char *line)
-{
-    const char *arg;
-    if (!strcmp(line, "/tabs") || !strcmp(line, "/tab") || !strcmp(line, "/sessions")) {
-        tgbridge_send_tabs(&rt.bridge, MENU_MAX);
-        return 1;
-    }
-    if ((arg = arg_of(line, "/tab")) != NULL && *arg) {
-        tgbridge_switch_tab(&rt.bridge, atoi(arg) - 1);
-        return 1;
-    }
-    if ((arg = arg_of(line, "/open")) != NULL) {
-        tgbridge_open_tab(&rt.bridge, *arg ? arg : NULL, NULL);
-        return 1;
-    }
-    if ((arg = arg_of(line, "/close")) != NULL) {
-        tgbridge_close_tab(&rt.bridge, *arg ? atoi(arg) - 1 : workspace_index());
-        return 1;
-    }
-    if ((arg = arg_of(line, "/resume")) != NULL) {
-        if (*arg) {
-            int at = workspace_find_id(arg);
-            if (at >= 0)
-                tgbridge_switch_tab(&rt.bridge, at);
-            else
-                tgbridge_open_tab(&rt.bridge, NULL, arg);
-        } else {
-            tgbridge_send_resume(&rt.bridge, MENU_MAX);
-        }
-        return 1;
-    }
-    if ((arg = arg_of(line, "/attach")) != NULL && *arg) {
-        char why[600];
-        int  at = cmd_attach_tab(arg, why, sizeof why);
-        if (at < 0)
-            send_note(why);
-        else
-            tgbridge_switch_tab(&rt.bridge, at);
-        return 1;
-    }
-    if (!strcmp(line, "/stop"))
-        return 1;
-    return 0;
-}
-
-static void send_turn_reply(struct session *s, int ok)
+static void send_done(struct session *s)
 {
     cJSON *o = frame("done");
+    int ok = !session_last_result(s)->is_error;
     cJSON_AddBoolToObject(o, "ok", ok);
     if (!ok) {
         const char *why = session_last_error(s);
@@ -849,162 +588,235 @@ static void send_turn_reply(struct session *s, int ok)
     send_json(o);
 }
 
-static int stamped_tab(void)
+void relay_turn_done(struct session *s)
 {
-    if (rt.want_id[0]) {
-        int at = workspace_find_id(rt.want_id);
+    if (rt.active && rt.mirror && s == relay_session() &&
+        !workspace_queued(workspace_index_of(s)))
+        send_done(s);
+}
+
+static void stop_turn(void)
+{
+    session_interrupt(relay_session());
+}
+
+static void open_or_switch(const char *id)
+{
+    int at = workspace_find_id(id);
+    if (at >= 0)
+        chatnav_cmd_switch(&rt.nav, at);
+    else
+        chatnav_cmd_open(&rt.nav, NULL, id);
+}
+
+static const char *arg_of(const char *line, const char *cmd)
+{
+    size_t n = strlen(cmd);
+    if (strncmp(line, cmd, n) || (line[n] && line[n] != ' '))
+        return NULL;
+    const char *arg = line + n;
+    while (*arg == ' ')
+        arg++;
+    return arg;
+}
+
+static int nav_command(const char *line)
+{
+    const char *arg;
+    if (!strcmp(line, "/tabs") || !strcmp(line, "/tab") || !strcmp(line, "/sessions")) {
+        chatnav_send_tabs(&rt.nav, MENU_MAX);
+        return 1;
+    }
+    if ((arg = arg_of(line, "/tab")) != NULL) {
+        chatnav_cmd_switch(&rt.nav, atoi(arg) - 1);
+        return 1;
+    }
+    if ((arg = arg_of(line, "/open")) != NULL) {
+        chatnav_cmd_open(&rt.nav, *arg ? arg : NULL, NULL);
+        return 1;
+    }
+    if ((arg = arg_of(line, "/close")) != NULL) {
+        chatnav_cmd_close(&rt.nav, *arg ? atoi(arg) - 1 : workspace_index());
+        return 1;
+    }
+    if ((arg = arg_of(line, "/resume")) != NULL) {
+        if (*arg)
+            open_or_switch(arg);
+        else
+            chatnav_send_resume(&rt.nav, MENU_MAX);
+        return 1;
+    }
+    if ((arg = arg_of(line, "/attach")) != NULL && *arg) {
+        char why[600];
+        int  at = cmd_attach_tab(arg, why, sizeof why);
+        if (at < 0)
+            send_note(why);
+        else
+            chatnav_cmd_switch(&rt.nav, at);
+        return 1;
+    }
+    if (!strcmp(line, "/stop")) {
+        stop_turn();
+        return 1;
+    }
+    return 0;
+}
+
+static void run_pick(const char *payload)
+{
+    if (!strcmp(payload, "new"))
+        chatnav_cmd_open(&rt.nav, NULL, NULL);
+    else if (!strcmp(payload, "resume"))
+        chatnav_send_resume(&rt.nav, MENU_MAX);
+    else if (!strcmp(payload, "back"))
+        chatnav_send_tabs(&rt.nav, MENU_MAX);
+    else if (*payload == '#')
+        chatnav_cmd_switch(&rt.nav, chatnav_tab_from_payload(payload));
+    else if (strcmp(payload, "cancel"))
+        open_or_switch(payload);
+}
+
+static int stamped_tab(const struct inbox_item *it)
+{
+    if (it->tab_id[0]) {
+        int at = workspace_find_id(it->tab_id);
         return at >= 0 ? at : -2;
     }
-    if (rt.want_tab >= 1)
-        return rt.want_tab <= workspace_count() ? rt.want_tab - 1 : -2;
+    if (it->tab >= 1)
+        return it->tab <= workspace_count() ? it->tab - 1 : -2;
     return -1;
 }
 
-struct run_ctx {
-    char *line;
-    int   ran;
-};
-
-static void run_body(struct session *s, void *ud)
+static void submit(struct session *s, void *ud)
 {
-    struct run_ctx *c = ud;
-    char *line = c->line;
+    const char *line = ud;
+    int command = cmd_is_command(line);
+    if (!cmd_self_echoes(line) && (command || !session_turn_running(s)))
+        prompt_echo_message(line);
 
-    rt.from_chat = 1;
-    rt.repeat_task = 0;
-    rt.stop_wanted = 0;
     frontend_push(0);
-
-    if (bridge_command(line))
-        goto done;
-
-    if (bash_is_command(line)) {
-        tty_watch(tgbridge_workspace_fds, tgbridge_workspace_ready, NULL);
-        bash_run(line);
-        tty_watch(NULL, NULL, NULL);
-        gitinfo_forget();
-        char *context = bash_take_context();
-        if (context) {
-            send_pre(context);
-            send_turn_reply(s, session_turn(s, context));
-            cmd_run_deferred(s);
-            free(context);
-        }
-        goto done;
+    if (!command) {
+        rt.repeat_task = 0;
+        free(rt.sent);
+        rt.sent = strdup(line);
+        cmd_submit(s, line);
+        frontend_pop();
+        return;
     }
-
     ui_sink_begin_tee();
-    enum cmd_result r = cmd_dispatch(s, line);
+    enum cmd_result r = cmd_submit(s, line);
     char *raw = ui_sink_end();
     char *shown = ui_plain(raw, 1);
     free(raw);
-    if (r != CMD_NOT_A_COMMAND) {
-        if (shown && *shown)
-            send_pre(shown);
-        else
-            send_note("ok");
-    }
-    free(shown);
-
-    if (r == CMD_QUIT) {
-        send_note("the terminal owns this session; /quit there");
-        goto done;
-    }
-    if (r == CMD_NOT_A_COMMAND) {
-        status_sticky_prompt(line);
-        send_turn_reply(s, session_turn(s, line));
-        cmd_run_deferred(s);
-    }
-
-done:
-    rt.from_chat = 0;
-    rt.mirrored_turn = session_turn_started(s);
     frontend_pop();
-    c->ran = 1;
+    if (r == CMD_QUIT)
+        send_note("the terminal owns this session; /quit there");
+    else if (shown && *shown)
+        send_pre(shown);
+    else
+        send_note("ok");
+    free(shown);
 }
 
-static void run_line(char *line)
+static void run_line(const struct inbox_item *it)
 {
-    int at = stamped_tab();
+    int at = stamped_tab(it);
     if (at == -2) {
         send_note("that conversation is gone; the tab list has moved");
-        free(line);
-        rt.want_id[0] = '\0';
-        rt.want_tab = 0;
-        relay_poll(NULL);
-        send_idle();
         return;
     }
-    rt.want_id[0] = '\0';
-    rt.want_tab = 0;
-
-    if (at >= 0 && workspace_at(at) != current_session())
-        tgbridge_switch(&rt.bridge, at);
-
-    if (!current_session())
-        tgbridge_refocus(&rt.bridge);
-    if (!current_session()) {
+    if (at >= 0 && workspace_at(at) != relay_session())
+        chatnav_switch(&rt.nav, at);
+    if (!relay_session())
+        chatnav_refocus(&rt.nav);
+    struct session *s = relay_session();
+    if (!s) {
         send_note("that session is gone — start a new one at the terminal");
-        free(line);
-        send_idle();
         return;
     }
+    if (nav_command(it->text))
+        return;
+    if (bash_is_command(it->text)) {
+        send_note("shell lines run at the terminal only");
+        return;
+    }
+    workspace_render(workspace_index_of(s), submit, it->text);
+}
 
-    struct session *s = current_session();
-    struct run_ctx c = {.line = line};
-    int tab = workspace_index_of(s);
-    if (tab >= 0)
-        workspace_render(tab, run_body, &c);
-    if (!c.ran)
-        run_body(s, &c);
-
-    free(line);
-    rt.queued_told = 0;
-    relay_poll(NULL);
+static void run_item(const struct inbox_item *it)
+{
+    switch (it->kind) {
+    case ITEM_HELLO:
+        send_hello();
+        return;
+    case ITEM_STOP:
+        stop_turn();
+        return;
+    case ITEM_PICK:
+        run_pick(it->text);
+        break;
+    default:
+        run_line(it);
+        break;
+    }
     send_idle();
 }
 
-void relay_run_line(char *line)
-{
-    run_line(line);
-}
-
-char *relay_take_line(void)
+void relay_poll(struct session *live)
 {
     if (!rt.active)
-        return NULL;
-    for (;;) {
-        int kind = 0;
-        char *line = inbox_take(&kind);
-        if (!line)
-            return NULL;
-        if (kind == ITEM_LINE)
-            return line;
-        if (kind == ITEM_HELLO) {
-            free(line);
-            send_hello();
-            continue;
+        return;
+    if (!rt.draining) {
+        rt.draining = 1;
+        wake_drain();
+        struct inbox_item it;
+        while (inbox_take(&it, !live && !chrome_modal_active())) {
+            run_item(&it);
+            free(it.text);
         }
-        char *cmd = menu_line(line);
-        free(line);
-        if (cmd)
-            return cmd;
-        send_idle();
+        rt.draining = 0;
     }
+    mirror_prompt(relay_session());
+    send_busy(session_busy(relay_session()));
+    send_tabs(0);
+}
+
+static void on_text(void *ud, const char *text, size_t n)
+{
+    (void)ud;
+    (void)n;
+    cJSON *o = cJSON_Parse(text);
+    if (!o)
+        return;
+    const char *t = cJSON_GetStringValue(cJSON_GetObjectItem(o, "t"));
+    const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(o, "text"));
+    const char *payload = cJSON_GetStringValue(cJSON_GetObjectItem(o, "payload"));
+    const char *tab_id = cJSON_GetStringValue(cJSON_GetObjectItem(o, "id"));
+    cJSON *tab = cJSON_GetObjectItem(o, "tab");
+    int at = cJSON_IsNumber(tab) ? (int)cJSON_GetNumberValue(tab) : 0;
+    if (!t)
+        ;
+    else if (!strcmp(t, "line") && v && *v)
+        inbox_push(strdup(v), ITEM_LINE, tab_id, at);
+    else if (!strcmp(t, "pick") && payload)
+        inbox_push(strdup(payload), ITEM_PICK, NULL, 0);
+    else if (!strcmp(t, "stop"))
+        inbox_push(strdup(""), ITEM_STOP, NULL, 0);
+    else if (!strcmp(t, "hello"))
+        inbox_push(strdup(""), ITEM_HELLO, NULL, 0);
+    cJSON_Delete(o);
 }
 
 static void bind_session(struct session *s, int active, void *ud)
 {
     (void)ud;
     session_set_system_extra(s, active ? relay_system_note() : NULL);
-    if (active) {
-        rt.busy_sent = -1;
-        send_hello();
-    }
+    if (active)
+        send_view();
 }
 
 __attribute__((format(printf, 1, 2)))
-static void note_up(const char *fmt, ...)
+static void terminal_note(const char *fmt, ...)
 {
     char line[700];
     va_list ap;
@@ -1037,7 +849,7 @@ static void files_start(void)
         port = rt.port + 1;
     rt.files = httpd_start(rt.files_dir, rt.bind[0] ? rt.bind : NULL, port, rt.token);
     if (!rt.files) {
-        note_up("relay: no file server on %s:%d (port taken?)", rt.bind[0] ? rt.bind : "*", port);
+        terminal_note("relay: no file server on %s:%d (port taken?)", rt.bind[0] ? rt.bind : "*", port);
         return;
     }
     snprintf(rt.files_base, sizeof rt.files_base, "http://%s:%d/%s",
@@ -1046,7 +858,7 @@ static void files_start(void)
 
 static void cleanup(void)
 {
-    struct session *s = current_session();
+    struct session *s = relay_session();
     rt.active = 0;
     wsd_stop(rt.ws);
     rt.ws = NULL;
@@ -1065,11 +877,12 @@ static void cleanup(void)
                                       ? tg_system_note() : NULL);
     cJSON_Delete(menu_items);
     menu_items = NULL;
-    tgbridge_forget(&rt.bridge, s);
-    rt.label[0] = rt.client[0] = '\0';
-    rt.from_chat = rt.repeat_task = rt.stop_wanted = 0;
+    chatnav_forget(&rt.nav, s);
+    rt.label[0] = '\0';
+    rt.repeat_task = 0;
     rt.busy_sent = -1;
-    rt.menu = (struct relay_menu){0};
+    free(rt.sent);
+    rt.sent = NULL;
 }
 
 int relay_start(struct session *s)
@@ -1103,9 +916,7 @@ int relay_start(struct session *s)
         }
     }
     snprintf(rt.bind, sizeof rt.bind, "%s", !strcmp(bind, "*") ? "" : bind);
-    const char *m = cfg_get("mirror", "all");
-    rt.mirror = !strcmp(m, "off") ? MIRROR_OFF : !strcmp(m, "remote") ? MIRROR_REMOTE
-                                                                    : MIRROR_ALL;
+    rt.mirror = strcmp(cfg_get("mirror", "all"), "off") != 0;
     snprintf(rt.label, sizeof rt.label, "relay");
 
     if (pipe(rt.wake) != 0) {
@@ -1117,19 +928,19 @@ int relay_start(struct session *s)
         fcntl(rt.wake[i], F_SETFD, FD_CLOEXEC);
     }
 
-    tgbridge_init(&rt.bridge, s, bind_session, NULL);
-    const struct tgbridge_output out = {
-        .note = bridge_note,
-        .menu_begin = bridge_menu_begin,
-        .menu_add = bridge_menu_add,
-        .menu_send = bridge_menu_send,
+    chatnav_init(&rt.nav, s, bind_session, NULL);
+    const struct chatnav_output out = {
+        .note = nav_note,
+        .menu_begin = nav_menu_begin,
+        .menu_add = nav_menu_add,
+        .menu_send = nav_menu_send,
     };
-    tgbridge_set_output(&rt.bridge, &out);
+    chatnav_set_output(&rt.nav, &out);
     session_add_listener(on_event, NULL);
     rt.busy_sent = -1;
 
     wsd_opts o = {.bind_ip = rt.bind, .port = rt.port, .token = rt.token};
-    rt.ws = wsd_start(&o, on_text, on_state, NULL);
+    rt.ws = wsd_start(&o, on_text, NULL, NULL);
     if (!rt.ws) {
         fprintf(stderr, APP_NAME ": relay: can't listen on %s:%d\n",
                 rt.bind[0] ? rt.bind : "*", rt.port);
@@ -1138,7 +949,7 @@ int relay_start(struct session *s)
     files_start();
     session_set_system_extra(s, relay_system_note());
     rt.active = 1;
-    note_up("relay on ws://%s:%d", rt.bind[0] ? rt.bind : "*", rt.port);
+    terminal_note("relay on ws://%s:%d", rt.bind[0] ? rt.bind : "*", rt.port);
     return 1;
 
 fail:
@@ -1158,20 +969,15 @@ const char *relay_label(void)
     return rt.active ? rt.label : NULL;
 }
 
-struct session *relay_session(void)
-{
-    return current_session();
-}
-
 void relay_refocus(void)
 {
-    if (rt.active && !tgbridge_session(&rt.bridge))
-        tgbridge_refocus(&rt.bridge);
+    if (rt.active && !chatnav_session(&rt.nav))
+        chatnav_refocus(&rt.nav);
 }
 
 void relay_forget_session(struct session *s)
 {
-    tgbridge_forget(&rt.bridge, s);
+    chatnav_forget(&rt.nav, s);
     if (workspace_current() != s)
         relay_refocus();
 }

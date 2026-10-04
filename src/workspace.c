@@ -632,6 +632,18 @@ int workspace_drain(void)
     return pump(1, 0);
 }
 
+int workspace_watch_fds(void *ud, int *out, int max)
+{
+    (void)ud;
+    return workspace_fds(out, max);
+}
+
+void workspace_watch_ready(void *ud)
+{
+    (void)ud;
+    workspace_drain();
+}
+
 void workspace_settle(struct session *s)
 {
     int at = workspace_index_of(s);

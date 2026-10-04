@@ -23,6 +23,7 @@
 
 #include "app.h"
 #include "bash.h"
+#include "chatnav.h"
 #include "cmd.h"
 #include "frontend.h"
 #include "gitinfo.h"
@@ -39,7 +40,6 @@
 #include "tasks.h"
 #include "text.h"
 #include "tgartifacts.h"
-#include "tgbridge.h"
 #include "tgqueue.h"
 #include "toolstyle.h"
 #include "tty.h"
@@ -75,7 +75,7 @@ struct tg_receipt {
 };
 
 struct tg_runtime {
-    struct tgbridge     bridge;
+    struct chatnav     nav;
     tg_client          *receiver;
     tg_client          *sender;
     struct tgqueue     *sendq;
@@ -152,7 +152,7 @@ static struct tg_runtime runtime = {
 
 static struct session *current_session(void)
 {
-    return tgbridge_session(&runtime.bridge);
+    return chatnav_session(&runtime.nav);
 }
 
 static void tg_cleanup(void);
@@ -1159,25 +1159,25 @@ static void bind_session(struct session *s, int active, void *ud)
         session_set_abort_hook(s, on_abort, s);
 }
 
-static void bridge_note(void *ud, const char *text)
+static void nav_note(void *ud, const char *text)
 {
     (void)ud;
     send_note(text);
 }
 
-static void bridge_menu_begin(void *ud, const char *kind)
+static void nav_menu_begin(void *ud, const char *kind)
 {
     (void)ud;
     menu_begin(kind);
 }
 
-static void bridge_menu_add(void *ud, const char *label, const char *payload)
+static void nav_menu_add(void *ud, const char *label, const char *payload)
 {
     (void)ud;
     menu_add(label, payload);
 }
 
-static void bridge_menu_send(void *ud, const char *title, int per_row)
+static void nav_menu_send(void *ud, const char *title, int per_row)
 {
     (void)ud;
     menu_send(title, per_row);
@@ -1187,7 +1187,7 @@ void tg_refocus(void)
 {
     if (!running)
         return;
-    tgbridge_refocus(&runtime.bridge);
+    chatnav_refocus(&runtime.nav);
 }
 
 static char *menu_line(const char *tapped)
@@ -1204,7 +1204,7 @@ static char *menu_line(const char *tapped)
         } else if (!strcmp(payload, "cancel")) {
             goto nothing;
         } else {
-            int at = tgbridge_tab_from_payload(payload);
+            int at = chatnav_tab_from_payload(payload);
             if (at < 0) {
                 send_note("that conversation is gone");
                 goto nothing;
@@ -1289,20 +1289,20 @@ static int bridge_command(const char *line)
 {
     if (!strcmp(line, "/tabs") || !strcmp(line, "/tab") ||
         !strcmp(line, "/sessions")) {
-        tgbridge_send_tabs(&runtime.bridge, MENU_MAX);
+        chatnav_send_tabs(&runtime.nav, MENU_MAX);
         return 1;
     }
     const char *arg = arg_of(line, "/tab");
     if (arg && *arg) {
-        tgbridge_switch_tab(&runtime.bridge, atoi(arg) - 1);
+        chatnav_cmd_switch(&runtime.nav, atoi(arg) - 1);
         return 1;
     }
     if ((arg = arg_of(line, "/open")) != NULL) {
-        tgbridge_open_tab(&runtime.bridge, *arg ? arg : NULL, NULL);
+        chatnav_cmd_open(&runtime.nav, *arg ? arg : NULL, NULL);
         return 1;
     }
     if ((arg = arg_of(line, "/close")) != NULL) {
-        tgbridge_close_tab(&runtime.bridge,
+        chatnav_cmd_close(&runtime.nav,
                            *arg ? atoi(arg) - 1 : workspace_index());
         return 1;
     }
@@ -1310,11 +1310,11 @@ static int bridge_command(const char *line)
         if (*arg) {
             int at = workspace_find_id(arg);
             if (at >= 0)
-                tgbridge_switch_tab(&runtime.bridge, at);
+                chatnav_cmd_switch(&runtime.nav, at);
             else
-                tgbridge_open_tab(&runtime.bridge, NULL, arg);
+                chatnav_cmd_open(&runtime.nav, NULL, arg);
         } else {
-            tgbridge_send_resume(&runtime.bridge, MENU_MAX);
+            chatnav_send_resume(&runtime.nav, MENU_MAX);
         }
         return 1;
     }
@@ -1378,14 +1378,14 @@ static void run_line(char *line, int quiet)
         goto done;
 
     if (!current_session())
-        tgbridge_refocus(&runtime.bridge);
+        chatnav_refocus(&runtime.nav);
     if (!current_session()) {
         send_note("that session is gone — start a new one at the terminal");
         goto done;
     }
 
     if (bash_is_command(line)) {
-        tty_watch(tgbridge_workspace_fds, tgbridge_workspace_ready, NULL);
+        tty_watch(workspace_watch_fds, workspace_watch_ready, NULL);
         bash_run(line);
         tty_watch(NULL, NULL, NULL);
         gitinfo_forget();
@@ -1510,14 +1510,14 @@ int tg_start(struct session *s)
     if (!mkdtemp(attach_dir))
         attach_dir[0] = '\0';
 
-    tgbridge_init(&runtime.bridge, s, bind_session, NULL);
-    const struct tgbridge_output bridge_output = {
-        .note = bridge_note,
-        .menu_begin = bridge_menu_begin,
-        .menu_add = bridge_menu_add,
-        .menu_send = bridge_menu_send,
+    chatnav_init(&runtime.nav, s, bind_session, NULL);
+    const struct chatnav_output bridge_output = {
+        .note = nav_note,
+        .menu_begin = nav_menu_begin,
+        .menu_add = nav_menu_add,
+        .menu_send = nav_menu_send,
     };
-    tgbridge_set_output(&runtime.bridge, &bridge_output);
+    chatnav_set_output(&runtime.nav, &bridge_output);
     artifacts_init();
     session_set_system_extra(s, tg_system_note());
     session_set_observer(s, on_event, NULL);
@@ -1617,7 +1617,7 @@ static void tg_cleanup(void)
         session_set_system_extra(s, relay_label() && relay_session() == s
                                       ? relay_system_note() : NULL);
     }
-    tgbridge_forget(&runtime.bridge, s);
+    chatnav_forget(&runtime.nav, s);
     runtime.chat_id = 0;
     runtime.label[0] = '\0';
     voice = (whisper_config){0};
@@ -1662,7 +1662,7 @@ struct session *tg_session(void)
 
 void tg_forget_session(struct session *s)
 {
-    tgbridge_forget(&runtime.bridge, s);
+    chatnav_forget(&runtime.nav, s);
 }
 
 void tg_run_line(char *line)

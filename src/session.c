@@ -832,7 +832,7 @@ static int abort_check(void)
     int interrupt = session_poll_input();
     if (live && live->abort_hook)
         interrupt |= live->abort_hook(live->abort_ud);
-    interrupt |= relay_poll(live);
+    relay_poll(live);
     if (live && live->abort_request)
         interrupt = 1;
 

@@ -69,6 +69,8 @@ int  workspace_pump(void);
 int  workspace_pump_quiet(void);
 
 int  workspace_drain(void);
+int  workspace_watch_fds(void *ud, int *out, int max);
+void workspace_watch_ready(void *ud);
 int  workspace_busy(void);
 
 const char *workspace_status(const struct session *s);
