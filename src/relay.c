@@ -4,12 +4,16 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <pthread.h>
+#include <signal.h>
+#include <spawn.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -51,6 +55,8 @@
 #define MESSAGE_MAX   (64u << 20)
 #define QUEUE_MAX     (96u << 20)
 #define FILE_MAX      (32u << 20)
+#define MEM_MAX       (8u << 20)
+#define MEM_TIMEOUT   15
 #define DONE_MAX      64
 #define SENT_MAX      16
 #define OPEN_TOOLS    64
@@ -1510,6 +1516,146 @@ static void send_file(int client, const char *req, const char *path)
     free(s);
 }
 
+extern char **environ;
+
+/* Runs `mem --json -s STORE ARGS...` for the phone's mem screen; the output is mem's JSON.
+ * With `attachment`, runs `mem -s STORE get ID --output -` and returns the bytes as base64. */
+static cJSON *mem_run(const char *req, const cJSON *msg)
+{
+    const char *attachment = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "attachment"));
+    size_t      cap = attachment ? FILE_MAX : MEM_MAX;
+    static const char *const allowed[] = {"search", "get", "create", "edit", "delete", "tags", "stores", NULL};
+    const char  *store = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "store"));
+    const cJSON *args = cJSON_GetObjectItem(msg, "args");
+    int          n = cJSON_GetArraySize(args);
+    const char  *verb = n > 0 ? cJSON_GetStringValue(cJSON_GetArrayItem(args, 0)) : NULL;
+    int          ok = 0;
+    for (int i = 0; verb && allowed[i]; i++)
+        ok |= !strcmp(verb, allowed[i]);
+    for (int i = 0; ok && i < n; i++)
+        ok = cJSON_IsString(cJSON_GetArrayItem(args, i));
+    if (!ok && !attachment)
+        return res_error(req, "invalid", "unsupported mem command");
+
+    char **argv = calloc((size_t)n + 8, sizeof *argv);
+    int    a = 0;
+    argv[a++] = "mem";
+    if (!attachment)
+        argv[a++] = "--json";
+    if (store && *store) {
+        argv[a++] = "-s";
+        argv[a++] = (char *)store;
+    }
+    if (attachment) {
+        argv[a++] = "get";
+        argv[a++] = (char *)attachment;
+        argv[a++] = "--output";
+        argv[a++] = "-";
+    } else
+        for (int i = 0; i < n; i++)
+            argv[a++] = cJSON_GetArrayItem(args, i)->valuestring;
+
+    int fds[2];
+    if (pipe(fds) != 0) {
+        free(argv);
+        return res_error(req, "failed", "pipe");
+    }
+    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+    posix_spawn_file_actions_t acts;
+    posix_spawn_file_actions_init(&acts);
+    posix_spawn_file_actions_adddup2(&acts, fds[1], STDOUT_FILENO);
+    if (attachment)
+        posix_spawn_file_actions_addopen(&acts, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    else
+        posix_spawn_file_actions_adddup2(&acts, fds[1], STDERR_FILENO);
+    posix_spawn_file_actions_addopen(&acts, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
+    posix_spawnattr_setpgroup(&attr, 0);
+    pid_t pid;
+    int   spawned = posix_spawnp(&pid, argv[0], &acts, &attr, argv, environ) == 0;
+    posix_spawnattr_destroy(&attr);
+    posix_spawn_file_actions_destroy(&acts);
+    close(fds[1]);
+    free(argv);
+
+    char  *buf = spawned ? malloc(cap + 1) : NULL;
+    size_t got = 0;
+    int    timed_out = 0;
+    time_t until = time(NULL) + MEM_TIMEOUT;
+    while (buf && got < cap) {
+        struct pollfd p = {.fd = fds[0], .events = POLLIN};
+        int           left = (int)(until - time(NULL));
+        int           r = left > 0 ? poll(&p, 1, left * 1000) : 0;
+        if (r < 0 && errno == EINTR)
+            continue;
+        if (r == 0) {
+            kill(-pid, SIGKILL);
+            timed_out = 1;
+            break;
+        }
+        ssize_t k = read(fds[0], buf + got, cap - got);
+        if (k < 0 && errno == EINTR)
+            continue;
+        if (k <= 0)
+            break;
+        got += (size_t)k;
+    }
+    close(fds[0]);
+    int status = -1;
+    if (spawned)
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+            ;
+    if (!buf)
+        return res_error(req, "failed", "could not run mem");
+    buf[got] = '\0';
+
+    if (attachment) {
+        int    clean = !timed_out && got < cap && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        char  *b64 = clean ? malloc((got + 2) / 3 * 4 + 1) : NULL;
+        cJSON *res;
+        if (b64) {
+            wsd_b64((const unsigned char *)buf, got, b64);
+            res = res_ok(req);
+            cJSON_AddStringToObject(res, "data", b64);
+        } else
+            res = res_error(req, got >= cap ? "too_large" : "failed", "could not read the attachment");
+        free(b64);
+        free(buf);
+        return res;
+    }
+
+    cJSON *out = timed_out ? NULL : cJSON_Parse(buf);
+    cJSON *err = cJSON_GetObjectItem(out, "error");
+    cJSON *res;
+    if (timed_out)
+        res = res_error(req, "failed", "mem timed out");
+    else if (err || !out || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        const char *m = cJSON_GetStringValue(cJSON_GetObjectItem(err, "message"));
+        text_chomp(buf);
+        res = res_error(req, "failed", m ? m : *buf ? buf : "mem failed");
+    } else {
+        res = res_ok(req);
+        cJSON_AddItemToObject(res, "mem", out);
+        out = NULL;
+    }
+    cJSON_Delete(out);
+    free(buf);
+    return res;
+}
+
+static void send_mem(int client, const char *req, const cJSON *msg)
+{
+    cJSON *o = mem_run(req, msg);
+    char  *s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (s)
+        wsd_send(rt.ws, client, s, 0);
+    free(s);
+}
+
 static void reply_error(int client, const char *req, const char *code, const char *msg)
 {
     cJSON *o = res_error(req, code, msg);
@@ -1539,6 +1685,11 @@ static void on_text(void *ud, int client, const char *text, size_t n)
     }
     if (!strcmp(op_of(msg), "file")) {
         send_file(client, req, cJSON_GetStringValue(cJSON_GetObjectItem(msg, "path")));
+        cJSON_Delete(msg);
+        return;
+    }
+    if (!strcmp(op_of(msg), "mem")) {
+        send_mem(client, req, msg);
         cJSON_Delete(msg);
         return;
     }
