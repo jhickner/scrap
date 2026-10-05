@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-import json, os, subprocess, sys, uuid
+import json, os, re, subprocess, sys, time, uuid
 
 SESSION = "fake-%d" % os.getpid()
+NOTES = 0
+CHAIN = 0
 MODEL = "fake"
 
 
@@ -48,7 +50,7 @@ def prompt_text(msg):
 
 
 def main():
-    global SESSION
+    global SESSION, NOTES, CHAIN
     turns = load_turns()
     for line in sys.stdin:
         try:
@@ -90,6 +92,26 @@ def main():
                     {"type": "tool_result", "tool_use_id": "tu-1",
                      "content": (ran.stdout + ran.stderr).strip()}]}})
                 text = "tool done"
+            elif "auto-handoff threshold" in text:
+                path = re.search(r"Save it to (\S+), make no other changes", text).group(1)
+                NOTES += 1
+                with open(path, "w") as f:
+                    f.write("note %d%s%s" % (NOTES, " interrupted" if "interrupted" in text else "",
+                                             " ctx: %d chain" % CHAIN if CHAIN else ""))
+                text = "saved\n@handoff " + path
+            elif re.search(r"\bctx: \d+", text):
+                used = int(re.search(r"\bctx: (\d+)", text).group(1))
+                CHAIN = used if "chain" in text else 0
+                emit({"type": "assistant", "message": {"role": "assistant", "model": MODEL,
+                      "usage": {"input_tokens": used, "output_tokens": 0},
+                      "content": [{"type": "text", "text": "working at %d" % used}]}})
+                time.sleep(1.5)
+                emit({"type": "result", "subtype": "success", "is_error": False,
+                      "duration_ms": 1, "num_turns": 1, "total_cost_usd": 0,
+                      "usage": {"input_tokens": used, "output_tokens": 0},
+                      "modelUsage": {MODEL: {"contextWindow": 1000}},
+                      "result": "ctx %d" % used})
+                continue
             elif text == "askme":
                 text = "Pick one.\n\n@ask\n1. Color?\n- red\n- blue"
             elif text.startswith("run: "):

@@ -55,6 +55,11 @@
 
 #define SETTING_STAMP "stamp"
 
+#define SETTING_AUTO_HANDOFF "auto_handoff"
+
+#define AUTO_HANDOFF_MIN 10
+#define AUTO_HANDOFF_MAX 90
+
 #define MAX_SETTING_KEY    64
 #define MAX_SETTING_VALUE  256
 #define MAX_SETTINGS       512

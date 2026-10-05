@@ -257,6 +257,20 @@ long session_tokens_cached(const struct session *s);
 
 int session_context_percent(const struct session *s);
 
+enum {
+    AUTOHANDOFF_IDLE,
+    AUTOHANDOFF_DUE,
+    AUTOHANDOFF_WRITING,
+    AUTOHANDOFF_SEEDED,
+    AUTOHANDOFF_OFF,
+};
+
+#define AUTOHANDOFF_RUN_MAX 2
+
+int  session_autohandoff(const struct session *s);
+void session_autohandoff_set(struct session *s, int state);
+int  session_autohandoff_ready(const struct session *s);
+
 long session_context_window(const struct session *s);
 
 void session_spin_word(const struct session *s);

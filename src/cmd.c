@@ -963,6 +963,19 @@ static int handoff_path(const struct session *s, char *out, size_t size)
            size;
 }
 
+#define HANDOFF_WRITE                                                                     \
+    "Write a handoff note for a new session that will continue this work with none of "   \
+    "this conversation's context. Cover the goal; the user's last request, quoted "       \
+    "verbatim, and whether it is answered; the current state, including uncommitted "     \
+    "changes; decisions made; relevant files; dead ends and why they failed; assumptions " \
+    "to verify, each with the command that checks it; and the single next step."
+
+static const char AUTOHANDOFF_SEED[] =
+    "This message is from scrap, not the user. The previous session reached its context "
+    "limit and was cleared; below is the handoff note it wrote. Continue any in-progress "
+    "work it describes. If there is none, reply in at most two sentences that you have "
+    "the context. Do not restate the note.\n\n";
+
 static void do_handoff(struct session *s, const char *arg)
 {
     char path[4200];
@@ -977,9 +990,7 @@ static void do_handoff(struct session *s, const char *arg)
 
     char prompt[8192 + 4200 * 3], label[4200];
     snprintf(prompt, sizeof prompt,
-             "Write a handoff note for a new session that will continue this work with none "
-             "of this conversation's context. Cover the goal, current state, decisions made, "
-             "relevant files, and next steps.%s%s Save it to %s and show it with "
+             HANDOFF_WRITE "%s%s Save it to %s and show it with "
              "`@view %s`. Revise it when the user asks. When the user approves it, end the "
              "reply with `@handoff %s` alone on its own line.",
              arg && *arg ? " Focus: " : "", arg && *arg ? arg : "", path, path, path);
@@ -1000,30 +1011,115 @@ static int handoff_marked(const char *reply, const char *path)
            !strncmp(reply + start + 9, path, plen);
 }
 
-void cmd_turn_done(struct session *s)
+static void archive_handoff(const char *path, const char *was)
+{
+    char dir[4200], dst[4400];
+    if (path_config_subdir(dir, sizeof dir, "handoffs/") &&
+        (size_t)snprintf(dst, sizeof dst, "%s%s.md", dir, was) < sizeof dst &&
+        rename(path, dst) == 0)
+        return;
+    unlink(path);
+}
+
+static int handoff_swap(struct session *s, int automatic)
 {
     char path[4200];
     if (session_remote(s) || session_last_result(s)->interrupted ||
         !handoff_path(s, path, sizeof path) || !handoff_marked(session_last_block(s), path))
-        return;
+        return 0;
 
     char *text = text_slurp(path, 1 << 20, NULL);
     if (!text || !*text) {
         reply_error("could not read the handoff at %s", path);
         free(text);
-        return;
+        return 1;
     }
     char was[128];
     snprintf(was, sizeof was, "%s", session_id(s));
     clear(s, 0);
     if (!strcmp(was, session_id(s) ? session_id(s) : "")) {
         free(text);
+        return 1;
+    }
+    if (automatic) {
+        archive_handoff(path, was);
+        session_autohandoff_set(s, AUTOHANDOFF_SEEDED);
+        char *seed = text_dsprintf("%s%s", AUTOHANDOFF_SEED, text);
+        prompt_echo_message("auto-handoff");
+        workspace_send(workspace_index_of(s), seed ? seed : text, "auto-handoff");
+        free(seed);
+    } else {
+        unlink(path);
+        prompt_echo_message("handoff");
+        workspace_send(workspace_index_of(s), text, "handoff");
+    }
+    free(text);
+    return 1;
+}
+
+static void autohandoff_ask(struct session *s, int interrupted)
+{
+    char path[4200];
+    if (!handoff_path(s, path, sizeof path)) {
+        session_autohandoff_set(s, AUTOHANDOFF_OFF);
         return;
     }
-    unlink(path);
-    prompt_echo_message("handoff");
-    workspace_send(workspace_index_of(s), text, "handoff");
-    free(text);
+    char prompt[8192 + 4200 * 2];
+    snprintf(prompt, sizeof prompt,
+             "Context is at %d%%, past the auto-handoff threshold of %d%%%s. " HANDOFF_WRITE
+             " Save it to %s, make no other changes, and end the reply with `@handoff %s` "
+             "alone on its own line.",
+             session_context_percent(s), settings_get_int(SETTING_AUTO_HANDOFF, 0),
+             interrupted ? ", so your last turn was interrupted; include the step that was in "
+                           "flight"
+                         : "",
+             path, path);
+    session_autohandoff_set(s, AUTOHANDOFF_WRITING);
+    workspace_send(workspace_index_of(s), prompt, "auto-handoff");
+}
+
+void cmd_turn_done(struct session *s)
+{
+    int state = session_autohandoff(s);
+    if (handoff_swap(s, state == AUTOHANDOFF_WRITING))
+        return;
+    if (state == AUTOHANDOFF_WRITING) {
+        session_autohandoff_set(s, AUTOHANDOFF_OFF);
+        reply_error("auto-handoff: no handoff note came back; this session carries on");
+        return;
+    }
+    if (state == AUTOHANDOFF_DUE ||
+        (!session_last_result(s)->interrupted && session_autohandoff_ready(s))) {
+        autohandoff_ask(s, state == AUTOHANDOFF_DUE);
+        return;
+    }
+    if (state == AUTOHANDOFF_IDLE || state == AUTOHANDOFF_SEEDED)
+        session_autohandoff_set(s, AUTOHANDOFF_IDLE);
+}
+
+static void do_autohandoff(struct session *s, const char *arg)
+{
+    (void)s;
+    if (arg && *arg) {
+        long at = 0;
+        if (strcmp(arg, "off")) {
+            char *end;
+            at = strtol(arg, &end, 10);
+            while (*end == '%' || *end == ' ')
+                end++;
+            if (*end || at < AUTO_HANDOFF_MIN || at > AUTO_HANDOFF_MAX) {
+                reply_error("/autohandoff takes off or a context percent between %d and %d",
+                            AUTO_HANDOFF_MIN, AUTO_HANDOFF_MAX);
+                return;
+            }
+        }
+        settings_set_int(SETTING_AUTO_HANDOFF, (int)at);
+    }
+    int at = settings_get_int(SETTING_AUTO_HANDOFF, 0);
+    if (at > 0)
+        reply_note("auto-handoff at %d%% context", at);
+    else
+        reply_note("auto-handoff off");
 }
 
 static void do_clear(struct session *s, const char *arg)
@@ -1494,6 +1590,8 @@ static const struct cmd COMMANDS[] = {
      do_clear_history},
     {"/handoff", "write a handoff for review, then continue from it in a fresh conversation",
      "[focus]", 0, do_handoff},
+    {"/autohandoff", "hand off to a fresh conversation when context reaches a percent",
+     "[percent|off]", CMD_LIVE, do_autohandoff},
     {"/model", "switch model", "[name]", 0, do_model},
     {"/effort", "set reasoning/thinking effort", "[level]", 0, do_effort},
     {"/backend", "continue with another backend", "<name>", 0, do_backend},

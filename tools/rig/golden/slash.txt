@@ -26,5 +26,5 @@
   /clear  start a fresh conversation, keeping the scrollback
   /clear-history  start a fresh conversation and clear the scrollback
   /handoff  write a handoff for review, then continue from it in a fresh conversation
+  /autohandoff  hand off to a fresh conversation when context reaches a percent
   /model  switch model
-  /effort  set reasoning/thinking effort

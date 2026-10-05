@@ -91,6 +91,8 @@ struct session {
     int      ledger_n, ledger_cap;
     long     context_tokens;
     long     context_window;
+    int      autohandoff;
+    int      autohandoffs;
     int      quiet;
     char    *system_extra;
     char    *handoff;
@@ -1798,6 +1800,7 @@ static void started_over(struct session *s)
     s->announce_title = 0;
     s->retitle = 1;
     s->named = 0;
+    s->autohandoff = AUTOHANDOFF_IDLE;
     status_set_note(NULL);
 
     s->id[0] = '\0';
@@ -2389,6 +2392,10 @@ int session_turn_pump(struct session *s)
     usage_poll(s);
 
     if (!s->finished) {
+        if (!s->abort_request && session_autohandoff_ready(s)) {
+            s->autohandoff = AUTOHANDOFF_DUE;
+            s->abort_request = 1;
+        }
         side_drain(s);
         status_update_tick(s);
         return 1;
@@ -2776,6 +2783,30 @@ int session_context_percent(const struct session *s)
         return -1;
     int percent = (int)(used * 100 / window);
     return percent > 100 ? 100 : percent;
+}
+
+int session_autohandoff(const struct session *s)
+{
+    return s->autohandoff;
+}
+
+void session_autohandoff_set(struct session *s, int state)
+{
+    if (state == AUTOHANDOFF_SEEDED)
+        s->autohandoffs++;
+    else if (state == AUTOHANDOFF_IDLE)
+        s->autohandoffs = 0;
+    s->autohandoff = state;
+}
+
+int session_autohandoff_ready(const struct session *s)
+{
+    int at = settings_get_int(SETTING_AUTO_HANDOFF, 0);
+    if (at <= 0 || s->remote || s->autohandoffs >= AUTOHANDOFF_RUN_MAX)
+        return 0;
+    if (s->autohandoff != AUTOHANDOFF_IDLE && s->autohandoff != AUTOHANDOFF_SEEDED)
+        return 0;
+    return session_context_percent(s) >= at;
 }
 
 static const char *auth_description(const struct session *s)
