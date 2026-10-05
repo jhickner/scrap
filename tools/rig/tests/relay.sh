@@ -17,4 +17,8 @@ $R relay $a '[
 ]' >/dev/null
 $R say $a 'run: sleep 3; echo late'
 $R relay $a '[{"wait": "\"t\":\"user\",\"text\":\"run: sleep 3; echo late\"", "secs": 2}]' >/dev/null
+$R relay $a '[{"t": "line", "text": "look", "tab": 1, "files": [{"name": "a b.txt", "data": "aGVsbG8gZmlsZQ=="}]},
+  {"wait": "I sent a file:\\\\n- /tmp/scrap_relay_[^ ]*-a_b.txt\\\\n\\\\nlook", "secs": 3}]' >/dev/null
+f=$($R snap $a | grep -o '/tmp/scrap_relay_[^ ]*-a_b.txt' | head -1)
+[ "$(cat "$f")" = "hello file" ] || { echo "relay: upload not saved: $f"; exit 1; }
 echo "relay: ok"

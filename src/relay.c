@@ -1,5 +1,6 @@
 #include "relay.h"
 
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -41,6 +42,8 @@
 #define PORT_DEFAULT 8790
 #define HISTORY_BYTES 6000
 #define HISTORY_BATCH 4000
+#define UPLOAD_MAX    8
+#define MESSAGE_MAX   (64u << 20)
 
 enum { ITEM_LINE, ITEM_PICK, ITEM_HELLO, ITEM_STOP, ITEM_MORE };
 
@@ -58,6 +61,7 @@ static struct {
     httpd          *files;
     char            files_dir[4200];
     char            files_base[160];
+    char            upload_dir[64];
     int             active;
     int             mirror;
     int             wake[2];
@@ -807,6 +811,74 @@ void relay_poll(struct session *live)
     send_tabs(0);
 }
 
+static size_t b64_decode(const char *in, unsigned char *out)
+{
+    static const char A[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    unsigned v = 0;
+    int      bits = 0;
+    size_t   n = 0;
+    for (; *in && *in != '='; in++) {
+        const char *at = strchr(A, *in);
+        if (!at)
+            continue;
+        v = v << 6 | (unsigned)(at - A);
+        if ((bits += 6) >= 8)
+            out[n++] = (unsigned char)(v >> (bits -= 8));
+    }
+    return n;
+}
+
+static int save_upload(const cJSON *f, char *path, size_t size)
+{
+    static int  seq;
+    const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(f, "name"));
+    const char *data = cJSON_GetStringValue(cJSON_GetObjectItem(f, "data"));
+    if (!data || !rt.upload_dir[0])
+        return 0;
+    char safe[120] = "file";
+    if (name && *name) {
+        size_t k = 0;
+        for (const char *c = name; *c && k < sizeof safe - 1; c++)
+            safe[k++] = isalnum((unsigned char)*c) || strchr("._-", *c) ? *c : '_';
+        safe[k] = '\0';
+    }
+    snprintf(path, size, "%s/%ld-%d-%s", rt.upload_dir, (long)time(NULL), ++seq, safe);
+    unsigned char *bytes = malloc(strlen(data) / 4 * 3 + 3);
+    FILE          *out = bytes ? fopen(path, "wb") : NULL;
+    size_t         len = bytes ? b64_decode(data, bytes) : 0;
+    int            ok = out && fwrite(bytes, 1, len, out) == len;
+    if (out && fclose(out) != 0)
+        ok = 0;
+    free(bytes);
+    if (!ok)
+        unlink(path);
+    return ok;
+}
+
+static char *with_uploads(const char *text, const cJSON *files)
+{
+    char   paths[UPLOAD_MAX][200];
+    int    n = 0;
+    const cJSON *f;
+    cJSON_ArrayForEach(f, files)
+    {
+        if (n < UPLOAD_MAX && save_upload(f, paths[n], sizeof paths[n]))
+            n++;
+    }
+    if (!n)
+        return text && *text ? strdup(text) : NULL;
+    size_t cap = (text ? strlen(text) : 0) + 64 + n * sizeof paths[0];
+    char  *out = malloc(cap);
+    if (!out)
+        return NULL;
+    size_t at = (size_t)snprintf(out, cap, "I sent %s:\n", n == 1 ? "a file" : "some files");
+    for (int i = 0; i < n; i++)
+        at += (size_t)snprintf(out + at, cap - at, "- %s\n", paths[i]);
+    if (text && *text)
+        snprintf(out + at, cap - at, "\n%s", text);
+    return out;
+}
+
 static void on_text(void *ud, const char *text, size_t n)
 {
     (void)ud;
@@ -822,8 +894,8 @@ static void on_text(void *ud, const char *text, size_t n)
     int at = cJSON_IsNumber(tab) ? (int)cJSON_GetNumberValue(tab) : 0;
     if (!t)
         ;
-    else if (!strcmp(t, "line") && v && *v)
-        inbox_push(strdup(v), ITEM_LINE, tab_id, at);
+    else if (!strcmp(t, "line"))
+        inbox_push(with_uploads(v, cJSON_GetObjectItem(o, "files")), ITEM_LINE, tab_id, at);
     else if (!strcmp(t, "pick") && payload)
         inbox_push(strdup(payload), ITEM_PICK, NULL, 0);
     else if (!strcmp(t, "stop"))
@@ -887,6 +959,9 @@ static void files_start(void)
 static void cleanup(void)
 {
     struct session *s = relay_session();
+    if (rt.upload_dir[0])
+        rmdir(rt.upload_dir);
+    rt.upload_dir[0] = '\0';
     rt.active = 0;
     wsd_stop(rt.ws);
     rt.ws = NULL;
@@ -967,7 +1042,11 @@ int relay_start(struct session *s)
     session_add_listener(on_event, NULL);
     rt.busy_sent = -1;
 
-    wsd_opts o = {.bind_ip = rt.bind, .port = rt.port, .token = rt.token};
+    snprintf(rt.upload_dir, sizeof rt.upload_dir, "/tmp/" APP_NAME "_relay_XXXXXX");
+    if (!mkdtemp(rt.upload_dir))
+        rt.upload_dir[0] = '\0';
+    wsd_opts o = {.bind_ip = rt.bind, .port = rt.port, .token = rt.token,
+                  .max_message = MESSAGE_MAX};
     rt.ws = wsd_start(&o, on_text, NULL, NULL);
     if (!rt.ws) {
         fprintf(stderr, APP_NAME ": relay: can't listen on %s:%d\n",
