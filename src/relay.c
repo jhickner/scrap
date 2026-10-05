@@ -914,7 +914,7 @@ static cJSON *do_open(const char *req, const cJSON *msg)
     const cJSON *tab = cJSON_GetObjectItem(msg, "tab");
     char why[256] = "";
     int  at = cJSON_IsNumber(tab) ? (int)tab->valuedouble
-            : target && *target ? sessionswitch_yank(target, why, sizeof why) : -1;
+            : target && *target ? cmd_attach_tab(target, why, sizeof why) : -1;
     struct session *s = at >= 0 && at < workspace_count() ? workspace_at(at) : NULL;
     if (!s)
         return res_error(req, "not_found", why[0] ? why : "no such session");

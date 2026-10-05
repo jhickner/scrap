@@ -349,48 +349,6 @@ static int group_rows(const struct row *in, int n, struct row *out,
     return m;
 }
 
-cJSON *sessionswitch_rows(void)
-{
-    struct live_session *live = NULL;
-    int nlive = livelist_load(&live);
-    struct row *found = calloc(MAX_ROWS, sizeof *found);
-    struct row *rows = calloc(MAX_ROWS, sizeof *rows);
-    unsigned char *heading = calloc(MAX_ROWS, 1);
-    cJSON *list = cJSON_CreateArray();
-    if (found && rows && heading) {
-        int nfound = 0;
-        tab_rows(found, &nfound);
-        live_rows(found, &nfound, live, nlive);
-        int n = group_rows(found, nfound, rows, heading, MAX_ROWS);
-        for (int i = 0; i < n; i++) {
-            const struct row *r = &rows[i];
-            cJSON *o = cJSON_CreateObject();
-            cJSON_AddStringToObject(o, "kind", r->kind == ROW_HEAD ? "head"
-                                               : r->kind == ROW_TAB ? "tab" : "live");
-            cJSON_AddStringToObject(o, "label", r->label);
-            if (r->kind != ROW_HEAD) {
-                cJSON_AddStringToObject(o, "detail", r->detail);
-                cJSON_AddStringToObject(o, "target", r->target);
-                cJSON_AddStringToObject(o, "id", r->id);
-                if (r->when[0])
-                    cJSON_AddStringToObject(o, "when", r->when);
-                if (r->spin)
-                    cJSON_AddBoolToObject(o, "busy", 1);
-                if (r->mark[0])
-                    cJSON_AddBoolToObject(o, "error", 1);
-                if (r->kind == ROW_TAB)
-                    cJSON_AddNumberToObject(o, "tab", r->at);
-            }
-            cJSON_AddItemToArray(list, o);
-        }
-    }
-    free(found);
-    free(rows);
-    free(heading);
-    free(live);
-    return list;
-}
-
 static int remote_on(void)
 {
     return settings_get_int(SETTING_SESSIONS_REMOTE, 0);
@@ -452,12 +410,9 @@ static int machine_block(const struct row *found, int nfound, const char *machin
     return m;
 }
 
-static int layout(struct row *found, int nfound, struct row *out, unsigned char *heading)
+static int layout_machines(struct row *found, int nfound, struct row *out,
+                           unsigned char *heading, const cJSON *machines, int with_new)
 {
-    if (!remote_on())
-        return add_new(out, heading, group_rows(found, nfound, out, heading, MAX_ROWS), "");
-
-    cJSON *machines = survey ? tailnet_survey_result(survey, &survey_version, NULL) : NULL;
     const cJSON *m;
     const char  *self = tailnet_self_name();
     cJSON_ArrayForEach(m, machines)
@@ -470,7 +425,8 @@ static int layout(struct row *found, int nfound, struct row *out, unsigned char 
 
     int n = add_heading(out, heading, 0, SELF_MARK "%s%s", self && *self ? self : "this machine", "");
     n = machine_block(found, nfound, "", out, heading, n);
-    n = add_new(out, heading, n, "");
+    if (with_new)
+        n = add_new(out, heading, n, "");
     if (!machines)
         n = add_heading(out, heading, n, "%s%s", "tailscale status is unavailable", "");
     cJSON_ArrayForEach(m, machines)
@@ -486,11 +442,74 @@ static int layout(struct row *found, int nfound, struct row *out, unsigned char 
         else if (n == start)
             snprintf(out[start - 1].label, sizeof out[start - 1].label,
                      "%s \xc2\xb7 no live sessions", machine);
-        if (!*error)
+        if (!*error && with_new)
             n = add_new(out, heading, n, machine);
     }
+    return n;
+}
+
+static int layout(struct row *found, int nfound, struct row *out, unsigned char *heading)
+{
+    if (!remote_on())
+        return add_new(out, heading, group_rows(found, nfound, out, heading, MAX_ROWS), "");
+    cJSON *machines = survey ? tailnet_survey_result(survey, &survey_version, NULL) : NULL;
+    int    n = layout_machines(found, nfound, out, heading, machines, 1);
     cJSON_Delete(machines);
     return n;
+}
+
+cJSON *sessionswitch_rows(void)
+{
+    struct live_session *live = NULL;
+    int nlive = livelist_load(&live);
+    struct row *found = calloc(MAX_ROWS, sizeof *found);
+    struct row *rows = calloc(MAX_ROWS, sizeof *rows);
+    unsigned char *heading = calloc(MAX_ROWS, 1);
+    cJSON *list = cJSON_CreateArray();
+    if (found && rows && heading) {
+        int nfound = 0;
+        tab_rows(found, &nfound);
+        live_rows(found, &nfound, live, nlive);
+        int n;
+        if (remote_on()) {
+            hub_ensure();
+            struct tailnet_survey *sv = tailnet_survey_start();
+            tailnet_survey_wait(sv, 1000);
+            cJSON *machines = tailnet_survey_result(sv, NULL, NULL);
+            tailnet_survey_end(sv);
+            n = layout_machines(found, nfound, rows, heading, machines, 0);
+            cJSON_Delete(machines);
+        } else {
+            n = group_rows(found, nfound, rows, heading, MAX_ROWS);
+        }
+        for (int i = 0; i < n; i++) {
+            const struct row *r = &rows[i];
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddStringToObject(o, "kind", r->kind == ROW_HEAD     ? "head"
+                                               : r->kind == ROW_TAB    ? "tab"
+                                               : r->kind == ROW_REMOTE ? "remote" : "live");
+            cJSON_AddStringToObject(o, "label", r->label);
+            if (r->kind != ROW_HEAD) {
+                cJSON_AddStringToObject(o, "detail", r->detail);
+                cJSON_AddStringToObject(o, "target", r->target);
+                cJSON_AddStringToObject(o, "id", r->id);
+                if (r->when[0])
+                    cJSON_AddStringToObject(o, "when", r->when);
+                if (r->spin)
+                    cJSON_AddBoolToObject(o, "busy", 1);
+                if (r->mark[0])
+                    cJSON_AddBoolToObject(o, "error", 1);
+                if (r->kind == ROW_TAB)
+                    cJSON_AddNumberToObject(o, "tab", r->at);
+            }
+            cJSON_AddItemToArray(list, o);
+        }
+    }
+    free(found);
+    free(rows);
+    free(heading);
+    free(live);
+    return list;
 }
 
 static int survey_moved(void)
