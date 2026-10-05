@@ -49,7 +49,7 @@ typedef struct {
     int chrome;                 /* claude: --chrome, Claude in Chrome browser tools */
     const char *plugin_dir;     /* claude: --plugin-dir, one plugin for this session.
                                    Needs allow_customizations for its hooks to run */
-    int memory;                 /* OptChat memory, one endless chat in agent/chat; core,
+    int memory;                 /* OptChat memory, one endless chat in scrap/memory; core,
                                    and claude, codex and grok run through core      */
     const char *const *mcp;     /* claude, codex, grok: argv of a stdio MCP server
                                    added as "optchat", NULL-ended; NULL -> none    */

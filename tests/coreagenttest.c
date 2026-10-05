@@ -730,7 +730,7 @@ static void memory_test(void)
     CHECK(time(NULL) - t0 < 5);
 
     char cmd[600];
-    snprintf(cmd, sizeof cmd, "cat %s/agent/chat/main/*.jsonl > %s/log.jsonl", dir, dir);
+    snprintf(cmd, sizeof cmd, "cat %s/memory/main/*.jsonl > %s/log.jsonl", dir, dir);
     CHECK(system(cmd) == 0);
     char *log = strdup(get_file("log.jsonl")), kinds[512] = "";
     CHECK(!strstr(log, "hmm"));

@@ -2933,13 +2933,13 @@ static char *sa_drive_ask(sa_agent *x, const char *user, backend_result *meta) {
 }
 
 static int sa_memory_open(sa_agent *x) {
-    char dir[4096], chat[4200];
-    if (!core_agent_config_dir(dir, sizeof dir)) {
+    char dir[4096], *slash;
+    if (!core_agent_config_dir(dir, sizeof dir) || !(slash = strrchr(dir, '/'))) {
         snprintf(x->err, sizeof x->err, "no config directory (HOME unset)");
         return 0;
     }
-    snprintf(chat, sizeof chat, "%s/chat", dir);
-    x->mem = oc_open(chat, 0, 0, x->err, sizeof x->err);
+    snprintf(slash, sizeof dir - (size_t)(slash - dir), "/memory");
+    x->mem = oc_open(dir, 0, 0, x->err, sizeof x->err);
     if (!x->mem) return 0;
     const char *backend = sa_jstr(x->config, "compactor_backend"), *model = sa_jstr(x->config, "compactor_model");
     snprintf(x->compactor_backend, sizeof x->compactor_backend, "%s", backend ? backend : OC_COMPACT_BACKEND);
