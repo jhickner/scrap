@@ -409,9 +409,16 @@ static void splitter(void *ud, int quiet)
 
 static struct askblock *asked;
 static struct session  *asked_by;
+static int              asking;
+static int              ask_stale;
 
 static void drop_asked(void)
 {
+    if (asking) {
+        ask_stale = 1;
+        tty_wake();
+        return;
+    }
     askblock_free(asked);
     asked = NULL;
     asked_by = NULL;
@@ -438,15 +445,23 @@ static int ask_ready(void)
 
 static int ask_interrupted(void)
 {
-    return handoff_wanted() || relay_pending();
+    return ask_stale || handoff_wanted() || relay_pending();
 }
 
 static void ask_run_form(void)
 {
     enum askform_exit how;
     chrome_modal_interrupt(ask_interrupted);
+    asking = 1;
     char *answer = askform_run(asked, &how);
+    asking = 0;
     chrome_modal_interrupt(handoff_wanted);
+    if (ask_stale) {
+        ask_stale = 0;
+        drop_asked();
+        free(answer);
+        return;
+    }
     if (how == ASKFORM_NEW_TAB) {
         another(NULL);
         return;
