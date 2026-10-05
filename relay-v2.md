@@ -58,11 +58,13 @@ traffic is already encrypted by WireGuard. The token compare is constant-time.
 ### 3.1 Frames
 
 ```
-C→S {t:"hello", v:2, client:"<uuid, stable per install>"}        first frame
+C→S {t:"hello", v:2, client:"<uuid, stable per install>",
+     resume?:{server, seq, binding}}                              first frame
 S→C {t:"hello", v:2, server:"<per process>", name:"scrap",
      theme:{background, roles:{<role>:{fg, wash?, style?}}}}
 S→C {t:"error", code:"version", v:2}                              on a v mismatch
 S→C {t:"view", seq, binding, session, entries, older, live, ask}  after hello and on rebind
+S→C {t:"resumed", seq}                                           instead of a view; missed deltas follow
 S→C {t:"delta", seq, ops:[op]}                                    seq = previous seq + 1
 C→S {t:"req", id:"<client id>", op, binding?, ...args}
 S→C {t:"res", id, ok:true, ...result} | {t:"res", id, ok:false, code, msg}
@@ -71,6 +73,10 @@ S→C {t:"res", id, ok:true, ...result} | {t:"res", id, ok:false, code, msg}
 - **seq and resync:** `seq` is one counter shared by all clients. A `view` carries the
   current value and each delta increments it. On a gap, send `hello` again (or
   reconnect); the new `view` replaces all local state.
+- **Resume:** a reconnecting client that kept its state sends `resume` with the hello's
+  `server`, its `seq` and `binding`. If the server is the same process, the binding is
+  unchanged and the last 256 deltas cover everything since `seq`, it answers `resumed`
+  and replays them; otherwise it sends a `view`. Rebinds and server restarts force a view.
 - **Rebind:** `/relay on` in another tab sends a new `view` with `binding + 1` on the
   same socket.
 - **Liveness:** the server pings at the websocket level every 15 s and drops a client
@@ -91,6 +97,7 @@ entry:   {id, kind, ts, ...}   id: per-relay counter, never reused within a bind
   assistant  text, images?:[path]   absolute paths; fetch with op "file"
   thinking   text
   tool       name, arg, input?(raw JSON text), then done, result?, diff?, failed?
+             input, result and diff are not sent; held:true marks them, fetch with op "entry"
   note       text                   backend warnings
   btw        text, answer, failed?  /btw side-channel answers
   end        every turn: secs; stopped:true | failed:true, text = error
@@ -144,8 +151,8 @@ entry:   {id, kind, ts, ...}   id: per-relay counter, never reused within a bind
 ### 3.5 Client contract (Scrap, `ios-scrap`)
 
 1. Connect, send `hello` with a stable `client` uuid, render `view`, then apply deltas in
-   `seq` order. On a gap or a disconnect, reconnect with backoff (1 s → 30 s) and send
-   `hello` again.
+   `seq` order. On a disconnect, reconnect with backoff (1 s → 30 s) and send `hello`
+   with `resume`; on a gap, send it without.
 2. Keep unanswered mutating requests (with their ids) locally and resend them after
    reconnecting.
 3. Render from the view only. A pending local bubble is replaced by the `user` entry

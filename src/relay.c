@@ -53,6 +53,7 @@
 #define DONE_MAX      64
 #define SENT_MAX      16
 #define OPEN_TOOLS    64
+#define REPLAY_MAX    256
 
 struct item {
     int    client;
@@ -90,6 +91,8 @@ static struct {
 
     struct client   clients[WSD_MAX_CLIENTS];
     long            seq;
+    long            replay_base;
+    char           *replay[REPLAY_MAX];
     int             binding;
 
     cJSON          *entries;
@@ -275,7 +278,19 @@ static void emit(cJSON *op)
     for (int i = 0; s && rt.ws && i < WSD_MAX_CLIENTS; i++)
         if (rt.clients[i].id)
             wsd_send(rt.ws, rt.clients[i].id, s, 0);
-    free(s);
+    char **slot = &rt.replay[rt.seq % REPLAY_MAX];
+    free(*slot);
+    *slot = s;
+    if (!s)
+        rt.replay_base = rt.seq;
+}
+
+static void replay_clear(void)
+{
+    for (int i = 0; i < REPLAY_MAX; i++) {
+        free(rt.replay[i]);
+        rt.replay[i] = NULL;
+    }
 }
 
 static cJSON *op2(const char *name, cJSON *a)
@@ -308,22 +323,34 @@ static cJSON *clipped_string(const char *text, size_t max, int *cut)
     return o;
 }
 
+static int is_tool(const cJSON *e)
+{
+    const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(e, "kind"));
+    return kind && !strcmp(kind, "tool");
+}
+
 /* An entry as sent in a view or delta: long text fields clipped, with
- * `clipped` set so the client can fetch the whole entry. */
-static cJSON *entry_out(const cJSON *e)
+ * `clipped` set so the client can fetch the whole entry. A tool's input,
+ * result and diff are held back behind `held` until the client asks. */
+static cJSON *entry_out(const cJSON *e, int tool)
 {
     cJSON *o = cJSON_CreateObject();
-    int    cut = 0;
+    int    cut = 0, held = 0;
     const cJSON *f;
     cJSON_ArrayForEach(f, e)
     {
-        if (cJSON_IsString(f) && strlen(f->valuestring) > CLIP)
+        if (tool && (!strcmp(f->string, "input") || !strcmp(f->string, "result") ||
+                     !strcmp(f->string, "diff")))
+            held = 1;
+        else if (cJSON_IsString(f) && strlen(f->valuestring) > CLIP)
             cJSON_AddItemToObject(o, f->string, clipped_string(f->valuestring, CLIP, &cut));
         else
             cJSON_AddItemToObject(o, f->string, cJSON_Duplicate(f, 1));
     }
     if (cut)
         cJSON_AddBoolToObject(o, "clipped", 1);
+    if (held)
+        cJSON_AddBoolToObject(o, "held", 1);
     return o;
 }
 
@@ -341,7 +368,7 @@ static cJSON *entry_new(const char *kind, const char *text)
 static void entry_add(cJSON *e)
 {
     cJSON_AddItemToArray(rt.entries, e);
-    emit(op2("add", entry_out(e)));
+    emit(op2("add", entry_out(e, is_tool(e))));
 }
 
 static cJSON *entry_find(long id, int *at)
@@ -377,7 +404,7 @@ static void entry_set(long id, cJSON *fields)
     cJSON *op = cJSON_CreateArray();
     cJSON_AddItemToArray(op, cJSON_CreateString("set"));
     cJSON_AddItemToArray(op, cJSON_CreateNumber((double)id));
-    cJSON_AddItemToArray(op, entry_out(fields));
+    cJSON_AddItemToArray(op, entry_out(fields, is_tool(e)));
     cJSON_Delete(fields);
     emit(op);
 }
@@ -526,7 +553,10 @@ static cJSON *entries_before(int end, int limit)
     cJSON *list = cJSON_CreateArray();
     int from = end - limit < 0 ? 0 : end - limit;
     for (int i = from; i < end; i++)
-        cJSON_AddItemToArray(list, entry_out(cJSON_GetArrayItem(rt.entries, i)));
+    {
+        const cJSON *e = cJSON_GetArrayItem(rt.entries, i);
+        cJSON_AddItemToArray(list, entry_out(e, is_tool(e)));
+    }
     return list;
 }
 
@@ -547,6 +577,7 @@ static void send_view(int client)
 
 static void send_view_all(void)
 {
+    rt.replay_base = rt.seq;
     for (int i = 0; i < WSD_MAX_CLIENTS; i++)
         if (rt.clients[i].id)
             send_view(rt.clients[i].id);
@@ -1095,6 +1126,27 @@ static cJSON *theme_obj(void)
     return o;
 }
 
+/* A client reconnecting to the same relay gets the deltas it missed
+ * instead of a full view, while they are all still in the replay ring. */
+static int resume(int client, const cJSON *r)
+{
+    const char *server = cJSON_GetStringValue(cJSON_GetObjectItem(r, "server"));
+    const cJSON *jseq = cJSON_GetObjectItem(r, "seq");
+    const cJSON *jbind = cJSON_GetObjectItem(r, "binding");
+    if (!server || strcmp(server, rt.server) || !cJSON_IsNumber(jseq) || !cJSON_IsNumber(jbind) ||
+        (int)jbind->valuedouble != rt.binding)
+        return 0;
+    long seq = (long)jseq->valuedouble;
+    if (seq < rt.replay_base || seq > rt.seq || rt.seq - seq > REPLAY_MAX)
+        return 0;
+    cJSON *o = frame("resumed");
+    cJSON_AddNumberToObject(o, "seq", (double)seq);
+    send_to(client, o);
+    for (long n = seq + 1; n <= rt.seq; n++)
+        wsd_send(rt.ws, client, rt.replay[n % REPLAY_MAX], 0);
+    return 1;
+}
+
 static void hello(int client, const cJSON *msg)
 {
     if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(msg, "v")) != PROTOCOL) {
@@ -1118,7 +1170,8 @@ static void hello(int client, const cJSON *msg)
     cJSON_AddStringToObject(o, "name", APP_NAME);
     cJSON_AddItemToObject(o, "theme", theme_obj());
     send_to(client, o);
-    send_view(client);
+    if (!resume(client, cJSON_GetObjectItem(msg, "resume")))
+        send_view(client);
 }
 
 static void run_request(int client, const cJSON *msg)
@@ -1466,6 +1519,7 @@ static void cleanup(void)
     memset(rt.clients, 0, sizeof rt.clients);
     cJSON_Delete(rt.entries);
     rt.entries = NULL;
+    replay_clear();
     askblock_free(rt.ask);
     rt.ask = NULL;
     free(rt.session_json);
@@ -1530,6 +1584,7 @@ int relay_start(struct session *s)
 
     rt.s = s;
     rt.seq = 0;
+    rt.replay_base = 0;
     entries_load(s, 0);
     session_add_listener(on_event, NULL);
 

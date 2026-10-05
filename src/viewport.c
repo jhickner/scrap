@@ -145,10 +145,12 @@ void viewport_sync_placeholders(int on)
 static char  *batch;
 static size_t batch_len, batch_cap;
 static int    batching;
+static int    caret_row = -1, caret_col = -1;
 
 static void direct(const char *s, size_t n)
 {
     if (!batching) {
+        caret_row = caret_col = -1;
         fwrite(s, 1, n, stdout);
         return;
     }
@@ -1380,6 +1382,7 @@ static int frame_shift(int body, int *score_out)
 void viewport_forget(void)
 {
     frame_reset(&shown);
+    caret_row = caret_col = -1;
 }
 
 void viewport_defer(void)
@@ -1515,8 +1518,10 @@ void viewport_paint(void)
 
     int span = built.n;
     int score = 0;
+    int wrote = 0;
     int k = shown.n == built.n ? frame_shift(span, &score) : 0;
     if (k != 0 && score >= span / 3) {
+        wrote = 1;
         char esc[32];
         snprintf(esc, sizeof esc, "\x1b[1;%dr", span);
         direct_str(esc);
@@ -1544,6 +1549,7 @@ void viewport_paint(void)
             continue;
         cup(i + 1, 1);
         put_row(built.row[i], W);
+        wrote = 1;
     }
 
     direct_str("\x1b[?7h");
@@ -1553,11 +1559,18 @@ void viewport_paint(void)
         int col = chrome_caret_col + 1;
         if (col > W)
             col = W;
-        cup(body + 1 + chrome_caret_row, col);
+        if (wrote || body + 1 + chrome_caret_row != caret_row || col != caret_col)
+            wrote = 1;
+        caret_row = body + 1 + chrome_caret_row;
+        caret_col = col;
+        cup(caret_row, caret_col);
     }
 
     if (sync)
         direct_str("\x1b[?2026l");
+    /* An unchanged frame writes nothing, so an idle screen sends no bytes. */
+    if (!wrote)
+        batch_len = 0;
     batch_end();
 
     frame_swap(&shown, &built);

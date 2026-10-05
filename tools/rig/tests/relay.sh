@@ -37,11 +37,11 @@ f=$($R snap $a | grep -o '/tmp/scrap_relay_[^ ]*-a_b.txt' | head -1)
 [ "$(cat "$f")" = "hello file" ] || { echo "relay: upload not saved: $f"; exit 1; }
 $R idle $a
 
-# tool call with its result patched in; file request
+# tool call with its result held back until fetched; file request
 $R relay $a '[
   {"t": "req", "op": "send", "text": "tool: echo hi"},
   {"wait": "\"kind\":\"tool\".*\"name\":\"bash\".*\"runs\":\\[\\[\"echo\",\"syntax_command\"\\]"},
-  {"wait": "\\[\"set\",[0-9]+,\\{\"done\":true,\"result\":\"hi\"\\}\\]"},
+  {"wait": "\\[\"set\",[0-9]+,\\{\"done\":true,\"held\":true\\}\\]"},
   {"wait": "tool done"},
   {"check": true},
   {"t": "req", "op": "file", "path": "'"$f"'", "id": "f1"},
@@ -67,6 +67,17 @@ $R relay $a '[
   {"check": true},
   {"t": "req", "op": "answer", "ask": 1, "choice": [0], "id": "late"},
   {"wait": "\"id\":\"late\",\"ok\":false,\"code\":\"stale\""}
+]' >/dev/null
+$R idle $a
+
+# resuming after missing a turn replays the deltas instead of a view
+$R relay $a '[
+  {"wait": "\"t\":\"view\""},
+  {"t": "req", "op": "send", "text": "run: sleep 1; echo missed"},
+  {"resume": 2.5},
+  {"wait": "\"t\":\"resumed\""},
+  {"check": true},
+  {"count": "ran: missed", "n": 1}
 ]' >/dev/null
 $R idle $a
 

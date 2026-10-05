@@ -19,11 +19,16 @@ def fail(msg):
 
 class Replica:
     def __init__(self):
-        self.view, self.seq = None, None
+        self.view, self.seq, self.server = None, None, None
 
     def apply(self, m):
-        if m["t"] == "view":
+        if m["t"] == "hello":
+            self.server = m["server"]
+        elif m["t"] == "view":
             self.view, self.seq = m, m["seq"]
+        elif m["t"] == "resumed":
+            if m["seq"] != self.seq:
+                fail(f"resumed at {m['seq']}, replica at {self.seq}")
         elif m["t"] == "delta":
             if self.seq is None or m["seq"] != self.seq + 1:
                 fail(f"delta seq {m['seq']} after {self.seq}")
@@ -42,9 +47,12 @@ class Replica:
                     fail(f"unknown op {kind}")
 
 
-async def connect(rep, inbox):
+async def connect(rep, inbox, resume=False):
     ws = await websockets.connect(url, additional_headers=headers, max_size=None)
-    await ws.send(json.dumps({"t": "hello", "v": 2, "client": me}))
+    hello = {"t": "hello", "v": 2, "client": me}
+    if resume:
+        hello["resume"] = {"server": rep.server, "seq": rep.seq, "binding": rep.view["binding"]}
+    await ws.send(json.dumps(hello))
 
     async def reader():
         async for raw in ws:
@@ -101,6 +109,13 @@ async def main():
             rep, inbox = Replica(), asyncio.Queue()
             ws, task = await connect(rep, inbox)
             say("= reconnected")
+        elif "resume" in step:
+            task.cancel()
+            await ws.close()
+            await asyncio.sleep(step["resume"])
+            inbox = asyncio.Queue()
+            ws, task = await connect(rep, inbox, resume=True)
+            say("= resuming")
         else:
             if step.get("t") == "req" and "id" not in step:
                 n += 1
