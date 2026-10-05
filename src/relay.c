@@ -887,7 +887,7 @@ void relay_btw(const struct session *owner, const char *question,
 }
 
 /* A cleared or replaced conversation in the tab starts a new binding. */
-static void check_reset(struct log *l)
+static int check_reset(struct log *l)
 {
     const struct transcript *t = session_transcript(l->s);
     size_t count = t ? t->count : 0;
@@ -899,9 +899,10 @@ static void check_reset(struct log *l)
         entries_load(l, 1);
         if (l == rt.cur)
             rebind();
-    } else {
-        l->tcount = count;
+        return 1;
     }
+    l->tcount = count;
+    return 0;
 }
 
 /* ---- requests ----------------------------------------------------------- */
@@ -994,7 +995,7 @@ static void submit(struct session *s, void *ud)
         c->res = res_ok(c->req);
         if (picked)
             cJSON_AddItemToObject(c->res, "pick", pick_obj(&pick, line));
-        else if (shown && *shown)
+        else if (!check_reset(rt.cur) && shown && *shown)
             entry_add(rt.cur, entry_new("note", shown));
     }
     pick_capture_free(&pick);
