@@ -1609,6 +1609,13 @@ static int cx_reap_within(codex_client *c, int ms) {
 void codex_stop(codex_client *c) {
     if (!c) return;
     if (c->in_fd >= 0) close(c->in_fd);     /* EOF on stdin asks it to exit */
+    /* The startup worker reaps the child and zeroes c->pid when stdout closes;
+     * racing it here would turn the kill below into kill(0, SIGKILL). */
+    if (c->warm_joinable) {
+        if (c->pid > 0) kill(c->pid, SIGKILL);
+        pthread_join(c->warm_thread, NULL);
+        c->warm_joinable = 0;
+    }
     if (c->pid > 0) {
         /* We only stop between turns, so the app-server has nothing left to
          * finish. Waiting out its unwind costs about a second, which an
@@ -1619,10 +1626,6 @@ void codex_stop(codex_client *c) {
             waitpid(c->pid, NULL, 0);
             c->pid = 0;
         }
-    }
-    if (c->warm_joinable) {
-        pthread_join(c->warm_thread, NULL);
-        c->warm_joinable = 0;
     }
     if (c->out_fd >= 0) close(c->out_fd);
     if (c->err_fd >= 0) close(c->err_fd);

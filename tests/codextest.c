@@ -342,10 +342,20 @@ static int mock_server(void)
 
 int main(int argc, char **argv)
 {
-    if (argc > 1 && !strcmp(argv[1], "app-server"))
+    if (argc > 1 && !strcmp(argv[1], "app-server")) {
+        if (getenv("CODEXTEST_SILENT"))
+            pause();
         return mock_server();
+    }
 
     codex_opts opts = { .cli_path = argv[0], .effort = "high", .ephemeral = 1 };
+    setenv("CODEXTEST_SILENT", "1", 1);
+    for (int i = 0; i < 5; i++) {
+        codex_client *silent = codex_start(&opts);
+        usleep(50000);
+        codex_stop(silent);
+    }
+    unsetenv("CODEXTEST_SILENT");
     long started = milliseconds();
     codex_client *client = codex_start(&opts);
     if (!client) {
