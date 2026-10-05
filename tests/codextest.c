@@ -13,6 +13,8 @@ static long live_tokens, live_window;
 static int shell_starts, edit_starts, tool_results;
 static char shell_input[2][1024], shell_output[512], exec_output[1024];
 static char edit_input[1024], edit_diff[1024];
+static int mcp_pending;
+static char mcp_name[128], mcp_input[256], mcp_output[256];
 static int warning_events;
 static char warning_text[1024];
 static int trust_events;
@@ -37,7 +39,14 @@ static int should_abort(void)
 static void capture_event(void *ud, const codex_event *ev)
 {
     (void)ud;
-    if (ev->kind == CODEX_EV_TOOL && ev->name && !strcmp(ev->name, "Shell")) {
+    if (ev->kind == CODEX_EV_TOOL && ev->name && !strncmp(ev->name, "mcp__", 5)) {
+        mcp_pending = 1;
+        snprintf(mcp_name, sizeof mcp_name, "%s", ev->name);
+        snprintf(mcp_input, sizeof mcp_input, "%s", ev->input_json ? ev->input_json : "");
+    } else if (ev->kind == CODEX_EV_TOOL_RESULT && mcp_pending) {
+        mcp_pending = 0;
+        snprintf(mcp_output, sizeof mcp_output, "%s", ev->text ? ev->text : "");
+    } else if (ev->kind == CODEX_EV_TOOL && ev->name && !strcmp(ev->name, "Shell")) {
         int index = shell_starts < 2 ? shell_starts : 1;
         shell_starts++;
         snprintf(shell_input[index], sizeof shell_input[index], "%s",
@@ -244,6 +253,14 @@ static int mock_server(void)
                            "\"call_id\":\"call-1\",\"output\":["
                            "{\"type\":\"input_text\",\"text\":\"Script completed\\n\"},"
                            "{\"type\":\"input_text\",\"text\":\"Output:\\n/project\\n\"}]}}}\n");
+                    printf("{\"method\":\"item/started\",\"params\":{\"item\":{"
+                           "\"type\":\"mcpToolCall\",\"id\":\"mcp-1\",\"server\":\"optchat\","
+                           "\"tool\":\"zoom\",\"arguments\":{\"id\":0,\"n\":1}}}}\n"
+                           "{\"method\":\"item/completed\",\"params\":{\"item\":{"
+                           "\"type\":\"mcpToolCall\",\"id\":\"mcp-1\",\"server\":\"optchat\","
+                           "\"tool\":\"zoom\",\"arguments\":{\"id\":0,\"n\":1},"
+                           "\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"0+0|user: hi\"}]},"
+                           "\"error\":null}}}\n");
 
                     printf("{\"method\":\"item/started\",\"params\":{"
                            "\"threadId\":\"thread-1\",\"turnId\":\"turn-2\",\"item\":{"
@@ -476,6 +493,8 @@ int main(int argc, char **argv)
         !cwd || strcmp(cwd, "/project") ||
         strcmp(exec_output, "/project\n") ||
         strcmp(shell_output, "line one\nline two\n") ||
+        strcmp(mcp_name, "mcp__optchat__zoom") || strcmp(mcp_input, "{\"id\":0,\"n\":1}") ||
+        strcmp(mcp_output, "0+0|user: hi") ||
         !file_path || strcmp(file_path, "src/session.c") ||
         !cJSON_IsArray(changes) || cJSON_GetArraySize(changes) != 2 ||
         strcmp(edit_diff,

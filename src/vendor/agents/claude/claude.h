@@ -63,6 +63,8 @@ typedef struct {
                                     reaches the callback set by
                                     claude_set_permission_cb instead of being
                                     refused                                        */
+    const char *mcp_config;      /* --mcp-config JSON, its optchat server's tools
+                                    allowed; NULL -> flag omitted                 */
 } claude_opts;
 
 /* Start a persistent headless claude process and prewarm it in the background.
@@ -558,6 +560,8 @@ claude_client *claude_start(const claude_opts *opts) {
                                                        if (o.fork_session) argv[n++] = "--fork-session"; }
         if (o.append_system && *o.append_system)     { argv[n++] = "--append-system-prompt"; argv[n++] = o.append_system; }
         if (o.tools)                                 { argv[n++] = "--tools";                argv[n++] = o.tools; }
+        if (o.mcp_config && *o.mcp_config)           { argv[n++] = "--mcp-config";           argv[n++] = o.mcp_config;
+                                                       argv[n++] = "--allowedTools";         argv[n++] = "mcp__optchat"; }
         if (o.permission_prompt)                     { argv[n++] = "--permission-prompt-tool"; argv[n++] = "stdio"; }
         argv[n] = NULL;
         execvp(cli, (char *const *)argv);

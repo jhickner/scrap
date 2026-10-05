@@ -49,7 +49,13 @@ typedef struct {
     int chrome;                 /* claude: --chrome, Claude in Chrome browser tools */
     const char *plugin_dir;     /* claude: --plugin-dir, one plugin for this session.
                                    Needs allow_customizations for its hooks to run */
-    int memory;                 /* core: OptChat memory, one endless chat in agent/chat */
+    int memory;                 /* OptChat memory, one endless chat in agent/chat; core,
+                                   and claude, codex and grok run through core      */
+    const char *const *mcp;     /* claude, codex, grok: argv of a stdio MCP server
+                                   added as "optchat", NULL-ended; NULL -> none    */
+    const char *memory_relay;   /* memory mode on a CLI: the program run as
+                                   "<memory_relay> mcp-memory <socket>" to reach
+                                   the memory tools; NULL -> no memory tools       */
 } backend_opts;
 
 /* One interesting event from a turn's stream. Only the fields a kind documents
@@ -287,6 +293,7 @@ typedef struct {
     char *model, *effort, *system, *cwd, *resume, *permission, *session_name;
     char *session_file;
     char **env;
+    char **mcp;
     int   allow_customizations, ephemeral, disable_tools, fork_session;
     int   no_browser_login;
     int   chrome;
@@ -311,19 +318,28 @@ static void backend_set(char **slot, const char *value) {
     *slot = backend_dup(value);
 }
 
+static char **backend_argv_dup(const char *const *v) {
+    if (!v) return NULL;
+    size_t n = 0;
+    while (v[n]) n++;
+    char **out = calloc(n + 1, sizeof *out);
+    for (size_t i = 0; out && i < n; i++) out[i] = strdup(v[i]);
+    return out;
+}
+
+static void backend_argv_free(char **v) {
+    for (char **p = v; p && *p; p++) free(*p);
+    free(v);
+}
+
 static void backend_state_init(backend_state *st, const backend_opts *o) {
     st->model  = backend_dup(o->model);
     st->effort = backend_dup(o->effort);
     st->system = backend_dup(o->system);
     st->cwd    = backend_dup(o->cwd);
     st->session_file = backend_dup(o->session_file);
-    st->env = NULL;
-    if (o->env) {
-        size_t n = 0;
-        while (o->env[n]) n++;
-        st->env = calloc(n + 1, sizeof *st->env);
-        for (size_t i = 0; st->env && i < n; i++) st->env[i] = strdup(o->env[i]);
-    }
+    st->env = backend_argv_dup(o->env);
+    st->mcp = backend_argv_dup(o->mcp);
     st->resume = backend_dup(o->resume_session);
     st->permission = backend_dup(o->permission_mode);
     st->session_name = backend_dup(o->session_name);
@@ -341,8 +357,8 @@ static void backend_state_free(backend_state *st) {
     free(st->model); free(st->effort); free(st->system); free(st->cwd); free(st->resume);
     free(st->permission); free(st->session_name); free(st->pending);
     free(st->session_file);
-    for (char **e = st->env; e && *e; e++) free(*e);
-    free(st->env);
+    backend_argv_free(st->env);
+    backend_argv_free(st->mcp);
     free(st->plugin_dir);
 }
 
@@ -466,7 +482,19 @@ static int backend_claude_start(Backend *b, const char *resume) {
     o.no_session_persistence = x->st.ephemeral;
     if (x->st.disable_tools) o.tools = "";
     o.permission_prompt = x->st.on_permission != NULL;
+    char *mcp = NULL;
+    if (x->st.mcp && x->st.mcp[0]) {
+        cJSON *root = cJSON_CreateObject(), *srv = cJSON_CreateObject(), *args = cJSON_CreateArray();
+        cJSON_AddItemToObject(cJSON_AddObjectToObject(root, "mcpServers"), "optchat", srv);
+        cJSON_AddStringToObject(srv, "command", x->st.mcp[0]);
+        for (char **a = x->st.mcp + 1; *a; a++) cJSON_AddItemToArray(args, cJSON_CreateString(*a));
+        cJSON_AddItemToObject(srv, "args", args);
+        mcp = cJSON_PrintUnformatted(root);
+        cJSON_Delete(root);
+    }
+    o.mcp_config = mcp;
     claude_client *c = claude_start(&o);
+    free(mcp);
     if (!c) return 0;
     claude_set_event_cb(c, backend_claude_event, b);
     claude_set_permission_cb(c, backend_claude_permission, b);
@@ -754,7 +782,23 @@ static int backend_codex_start(Backend *b, const char *resume) {
     o.resume_session = resume;
     o.ephemeral = x->st.ephemeral;
     o.fork_session = x->st.fork_session;
+    char *config[4] = {0};
+    if (x->st.mcp && x->st.mcp[0]) {
+        cJSON *cmd = cJSON_CreateString(x->st.mcp[0]), *args = cJSON_CreateArray();
+        for (char **a = x->st.mcp + 1; *a; a++) cJSON_AddItemToArray(args, cJSON_CreateString(*a));
+        char *c1 = cJSON_PrintUnformatted(cmd), *c2 = cJSON_PrintUnformatted(args);
+        size_t n1 = strlen(c1) + 40, n2 = strlen(c2) + 40;
+        config[0] = malloc(n1);
+        config[1] = malloc(n2);
+        snprintf(config[0], n1, "mcp_servers.optchat.command=%s", c1);
+        snprintf(config[1], n2, "mcp_servers.optchat.args=%s", c2);
+        config[2] = strdup("mcp_servers.optchat.default_tools_approval_mode=\"approve\"");
+        free(c1); free(c2);
+        cJSON_Delete(cmd); cJSON_Delete(args);
+        o.config = (const char *const *)config;
+    }
     codex_client *c = codex_start(&o);
+    for (int i = 0; i < 3; i++) free(config[i]);
     if (!c) return 0;
     codex_set_event_cb(c, backend_codex_event, b);
     codex_set_abort_check(c, x->st.abort);
@@ -995,6 +1039,7 @@ static int backend_grok_start(Backend *b, const char *resume) {
     o.reasoning_effort = x->st.effort ? x->st.effort : getenv("GROK_EFFORT");
     o.resume_session = resume;
     o.no_session = x->st.ephemeral;
+    o.mcp = (const char *const *)x->st.mcp;
     grok_client *c = grok_start(&o);
     if (!c) return 0;
     grok_set_event_cb(c, backend_grok_event, b);
@@ -1033,8 +1078,12 @@ static char *backend_grok_ask(Backend *b, const char *user) {
     return backend_grok_ask_ex(b, user, NULL);
 }
 
-/* There is no clear command, so a fresh context means a fresh process. */
-static int backend_grok_reset(Backend *b) { return backend_grok_start(b, NULL); }
+static int backend_grok_reset(Backend *b) {
+    backend_grok *x = b->ctx;
+    if (!x->client) return backend_grok_start(b, NULL);
+    backend_set(&x->st.resume, NULL);
+    return grok_new_session(x->client);
+}
 
 static void backend_grok_set_event_cb(Backend *b,
                                       void (*cb)(void *ud, const backend_event *ev),
@@ -1556,6 +1605,9 @@ const char *const *backend_names(void) { return BACKEND_NAMES; }
 
 Backend *backend_open_ex(const backend_opts *opts) {
     backend_opts o = opts ? *opts : (backend_opts){0};
+    if (o.memory && o.name && (!strcmp(o.name, "claude") || !strcmp(o.name, "codex") ||
+                               !strcmp(o.name, "grok")))
+        return core_agent_open(&o);
     if (!o.name || !strcmp(o.name, "claude")) return backend_claude_open(&o);
     if (!strcmp(o.name, "codex"))             return backend_codex_open(&o);
     if (!strcmp(o.name, "grok"))              return backend_grok_open(&o);

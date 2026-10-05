@@ -73,7 +73,7 @@ static void emit_tool(const char *id, const char *status, const char *content,
     fflush(stdout);
 }
 
-static int pinned_model;
+static int pinned_model, inits, sessions;
 static int abort_flag;
 
 static int abort_check(void)
@@ -101,6 +101,7 @@ static int mock_server(int argc, char **argv)
         int id = cJSON_IsNumber(idj) ? idj->valueint : 0;
 
         if (method && !strcmp(method, "initialize")) {
+            inits++;
             respond(id, "{}");
         } else if (method && !strcmp(method, "session/new")) {
             cJSON *params = cJSON_GetObjectItemCaseSensitive(msg, "params");
@@ -110,7 +111,9 @@ static int mock_server(int argc, char **argv)
                        "\"code\":-32602,\"message\":\"session was persistent\"}}\n", id);
                 fflush(stdout);
             } else {
-                respond(id, "{\"sessionId\":\"grok-session-1\"}");
+                char sid[64];
+                snprintf(sid, sizeof sid, "{\"sessionId\":\"grok-session-%d\"}", ++sessions);
+                respond(id, sid);
             }
         } else if (method && !strcmp(method, "session/set_model")) {
             cJSON *params = cJSON_GetObjectItemCaseSensitive(msg, "params");
@@ -140,7 +143,20 @@ static int mock_server(int argc, char **argv)
             fprintf(stderr, "2026-08-21T17:42:19.713144Z ERROR tool_error: "
                     "tool_output_error session_id=test tool_name=\"read_file\"\n");
             fflush(stderr);
-            if (text && strstr(text, "path-only")) {
+            if (text && strstr(text, "mcp-use")) {
+                printf("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":{"
+                       "\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"mcp-1\",\"title\":\"use_tool\","
+                       "\"status\":\"in_progress\",\"rawInput\":{\"tool_name\":\"optchat__zoom\","
+                       "\"tool_input\":{\"id\":0,\"n\":1}}}}}\n"
+                       "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":{"
+                       "\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"mcp-1\",\"status\":\"completed\","
+                       "\"rawOutput\":{\"type\":\"MCP\",\"tool_name\":\"zoom\",\"server_name\":\"optchat\","
+                       "\"output\":{\"OkayOutput\":\"0+0|user: hi\"}}}}}\n");
+                printf("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":{"
+                       "\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\","
+                       "\"text\":\"inits=%d sessions=%d\"}}}}\n", inits, sessions);
+                fflush(stdout);
+            } else if (text && strstr(text, "path-only")) {
                 emit_tool("edit-path", "failed",
                           "[{\"type\":\"diff\",\"path\":\"/tmp/status.c\"}]", NULL);
             } else if (text && strstr(text, "denied")) {
@@ -451,6 +467,19 @@ int main(int argc, char **argv)
         fprintf(stderr, "groktest: an abort from the previous turn interrupted "
                 "the next one (reply=%s interrupted=%d)\n",
                 reply ? reply : "NULL", meta.interrupted);
+        free(reply);
+        grok_stop(client);
+        return 1;
+    }
+    free(reply);
+
+    starts = tool_starts;
+    grok_new_session(client);
+    reply = grok_send(client, "mcp-use");
+    if (!reply || strcmp(reply, "inits=1 sessions=2") || tool_starts != starts + 1 ||
+        !strstr(last_input, "optchat__zoom") || strcmp(last_result, "0+0|user: hi")) {
+        fprintf(stderr, "groktest: new session or MCP tool call went wrong "
+                "(%s input=%s result=%s)\n", reply ? reply : "NULL", last_input, last_result);
         free(reply);
         grok_stop(client);
         return 1;

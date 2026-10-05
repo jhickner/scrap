@@ -1,6 +1,7 @@
 #include "session.h"
 
 #include <fcntl.h>
+#include <limits.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -19,6 +20,7 @@
 #include "app.h"
 #include "gitinfo.h"
 #include "grokbottail.h"
+#include "hub.h"
 #include "hud.h"
 #include "image.h"
 #include "intercom.h"
@@ -1074,7 +1076,7 @@ const backend_result *session_last_result(const struct session *s)
 struct agent_job {
     struct agent_job *next;
     Backend          *child;
-    char             *task, *cwd, *model, *effort;
+    char             *task, *cwd, *model, *effort, *backend;
     char             *report;
     int               status, taken, abandoned, refs;
 };
@@ -1092,6 +1094,7 @@ static void job_unref(struct agent_job *j)
     free(j->task);
     free(j->cwd);
     free(j->model);
+    free(j->backend);
     free(j->effort);
     free(j->report);
     free(j);
@@ -1120,6 +1123,7 @@ static int host_agent(void *ud, Backend *child, const char *task, char **report)
     j->cwd    = s->cwd ? strdup(s->cwd) : NULL;
     j->model  = s->model ? strdup(s->model) : NULL;
     j->effort = s->effort ? strdup(s->effort) : NULL;
+    j->backend = strdup(s->backend);
     j->status = AGENT_PENDING;
     j->refs   = 2;
 
@@ -1186,7 +1190,7 @@ static void job_finish(struct agent_job *j, int status, const char *report)
 
 struct session *session_agent_open(struct agent_job *j)
 {
-    struct session *s = session_new("core", j->cwd, j->model, j->effort);
+    struct session *s = session_new(j->backend, j->cwd, j->model, j->effort);
     if (!s) {
         j->child->close(j->child);
         job_finish(j, BACKEND_AGENT_FAILED, "could not open a tab for the subagent");
@@ -1269,6 +1273,9 @@ static Backend *agent(struct session *s)
     o.chrome = settings_get_int(SETTING_CHROME, 0);
     o.plugin_dir = shunt_plugin_dir(s);
     o.env = (const char *const *)s->env;
+    char exe[PATH_MAX];
+    if (s->memory && hub_self_path(exe, sizeof exe))
+        o.memory_relay = exe;
 
     char *joined = s->remote ? NULL : session_system(s, s->handoff);
     o.system = joined;

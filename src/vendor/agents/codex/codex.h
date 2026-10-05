@@ -36,6 +36,7 @@ typedef struct {
     int bypass_approvals;       /* danger-full-access, only if externally sandboxed */
     int skip_git_repo_check;    /* retained for source compatibility; unused  */
     int ephemeral;              /* nonzero: do not materialize the thread on disk */
+    const char *const *config;  /* extra --config key=value entries, NULL-ended */
 } codex_opts;
 
 /* Spawn app-server and initialize/start its thread in the background. Returns
@@ -869,14 +870,19 @@ codex_client *codex_start(const codex_opts *opts) {
         if (o.cwd && *o.cwd && chdir(o.cwd)) _exit(126);
         if (o.session_file && *o.session_file) setenv("MUX_SESSION_FILE", o.session_file, 1);
         for (const char *const *e = o.env; e && *e; e++) putenv((char *)*e);
-        const char *argv[] = {
+        const char *argv[32] = {
             cli, "app-server", "--stdio",
             "--disable", "hooks",
             "--disable", "apps",
             "--disable", "remote_plugin",
             "--config", "project_doc_max_bytes=0",
-            NULL
         };
+        int n = 11;
+        for (const char *const *k = o.config; k && *k && n < 30; k++) {
+            argv[n++] = "--config";
+            argv[n++] = *k;
+        }
+        argv[n] = NULL;
         execvp(cli, (char *const *)argv); _exit(127);
     }
     close(in[0]); close(out[1]); close(err[1]);
@@ -1377,6 +1383,31 @@ static void cx_item_event(codex_client *c, cJSON *params, int started,
                 .failed = failed,
             };
             cx_emit(c, &ev);
+        }
+    } else if (!strcmp(type, "mcpToolCall")) {
+        if (started) {
+            char name[256];
+            snprintf(name, sizeof name, "mcp__%s__%s",
+                     cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "server")) ?: "",
+                     cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "tool")) ?: "");
+            char *input = cJSON_PrintUnformatted(cJSON_GetObjectItemCaseSensitive(item, "arguments"));
+            codex_event ev = { .kind = CODEX_EV_TOOL, .name = name, .input_json = input };
+            cx_emit(c, &ev);
+            free(input);
+        } else {
+            cJSON *result = cJSON_GetObjectItemCaseSensitive(item, "result"), *block;
+            cJSON *error = cJSON_GetObjectItemCaseSensitive(item, "error");
+            char *text = NULL;
+            cJSON *content = result ? cJSON_GetObjectItemCaseSensitive(result, "content") : NULL;
+            cJSON_ArrayForEach(block, content) {
+                const char *t = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(block, "text"));
+                if (t) cx_append(&text, t);
+            }
+            const char *why = error ? cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(error, "message")) : NULL;
+            codex_event ev = { .kind = CODEX_EV_TOOL_RESULT, .text = text ? text : why ? why : "",
+                               .failed = error && !cJSON_IsNull(error) };
+            cx_emit(c, &ev);
+            free(text);
         }
     } else if (!strcmp(type, "fileChange")) {
         cJSON *changes = cJSON_GetObjectItemCaseSensitive(item, "changes");

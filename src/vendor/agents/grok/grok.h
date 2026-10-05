@@ -39,6 +39,8 @@ typedef struct {
     const char *append_system;   /* prepended to each user turn; NULL -> none   */
     const char *resume_session;  /* ACP session/resume this id; NULL -> new     */
     int no_session;              /* nonzero: ask Grok not to persist the session */
+    const char *const *mcp;      /* argv of a stdio MCP server named "optchat",
+                                    NULL-ended; NULL -> none                    */
 } grok_opts;
 
 /* Spawn a persistent `grok agent stdio` process. Returns NULL only on a local
@@ -52,6 +54,10 @@ grok_client *grok_start(const grok_opts *opts);
  * the requested session is live. New clients normally need not call it because
  * grok_send performs the handshake itself. */
 int grok_connect(grok_client *c);
+
+/* Drop the current session; the next grok_send opens a new one in the same
+ * process. Returns nonzero on success. */
+int grok_new_session(grok_client *c);
 
 /* Send one user turn (plain text) and return the final assistant text (malloc'd,
  * caller frees), or NULL on failure / process death. Blocks until the turn's
@@ -216,6 +222,8 @@ struct grok_client {
     gk_model models[GK_MODEL_CAP];
     int   n_models;
     int   no_session;         /* use an ephemeral session/new                */
+    char **mcp;               /* optchat MCP server argv, NULL-ended        */
+    int   initialized;        /* initialize has been answered               */
     int   handshake_failed;   /* the deferred handshake was tried and lost  */
     int   rpc_quiet;          /* skip last_error for a probe whose fail is ok */
     grok_rate_limit rate_limit;
@@ -533,6 +541,12 @@ static char *gk_mine_reason(cJSON *raw) { return gk_mine_at(raw, 0); }
 
 static char *gk_raw_text(cJSON *raw) {
     if (!raw) return NULL;
+    cJSON *mcp = cJSON_GetObjectItem(raw, "output");
+    if (mcp && gk_str(raw, "type") && !strcmp(gk_str(raw, "type"), "MCP")) {
+        cJSON *ok = cJSON_GetObjectItem(mcp, "OkayOutput");
+        if (cJSON_IsString(ok)) return strdup(ok->valuestring);
+        return cJSON_PrintUnformatted(ok ? ok : mcp);
+    }
     char *mined = gk_mine_reason(raw);
     if (mined) return mined;
     if (cJSON_IsString(raw)) return strdup(raw->valuestring ? raw->valuestring : "");
@@ -669,7 +683,7 @@ static void gk_keep_reason(grok_client *c, int slot, char *text) {
 
 static const char *const GK_ARG_KEYS[] = {
     "command", "file_path", "target_file", "path", "target_directory", "directory",
-    "pattern", "url", "query", "prompt", "description", "notebook_path", NULL
+    "pattern", "url", "query", "prompt", "description", "notebook_path", "tool_name", NULL
 };
 
 static const char *gk_first_string(cJSON *obj, const char *const *keys)
@@ -1252,6 +1266,12 @@ grok_client *grok_start(const grok_opts *opts) {
     c->model = (o.model && *o.model) ? strdup(o.model) : NULL;
     c->effort = (o.reasoning_effort && *o.reasoning_effort) ? strdup(o.reasoning_effort) : NULL;
     c->no_session = o.no_session;
+    if (o.mcp) {
+        size_t n = 0;
+        while (o.mcp[n]) n++;
+        c->mcp = calloc(n + 1, sizeof *c->mcp);
+        for (size_t i = 0; c->mcp && i < n; i++) c->mcp[i] = strdup(o.mcp[i]);
+    }
 
     return c;
 }
@@ -1268,18 +1288,21 @@ static int gk_handshake(grok_client *c) {
     if (c->handshake_failed) return 0;
     c->handshake_failed = 1;
 
-    cJSON *init = cJSON_CreateObject();
-    cJSON_AddStringToObject(init, "jsonrpc", "2.0");
-    cJSON_AddNumberToObject(init, "id", c->next_id);
-    cJSON_AddStringToObject(init, "method", "initialize");
-    cJSON *ip = cJSON_AddObjectToObject(init, "params");
-    cJSON_AddNumberToObject(ip, "protocolVersion", 1);
-    cJSON_AddObjectToObject(ip, "clientCapabilities");
-    cJSON *info = cJSON_AddObjectToObject(ip, "clientInfo");
-    cJSON_AddStringToObject(info, "name", "grok.h");
-    cJSON_AddStringToObject(info, "version", "1");
-    if (!gk_write(c, init) || !gk_await(c, c->next_id, NULL, NULL, 0, 0)) return 0;
-    c->next_id++;
+    if (!c->initialized) {
+        cJSON *init = cJSON_CreateObject();
+        cJSON_AddStringToObject(init, "jsonrpc", "2.0");
+        cJSON_AddNumberToObject(init, "id", c->next_id);
+        cJSON_AddStringToObject(init, "method", "initialize");
+        cJSON *ip = cJSON_AddObjectToObject(init, "params");
+        cJSON_AddNumberToObject(ip, "protocolVersion", 1);
+        cJSON_AddObjectToObject(ip, "clientCapabilities");
+        cJSON *info = cJSON_AddObjectToObject(ip, "clientInfo");
+        cJSON_AddStringToObject(info, "name", "grok.h");
+        cJSON_AddStringToObject(info, "version", "1");
+        if (!gk_write(c, init) || !gk_await(c, c->next_id, NULL, NULL, 0, 0)) return 0;
+        c->next_id++;
+        c->initialized = 1;
+    }
 
     /* session/resume keeps prior context without replaying the transcript into
      * the event stream, which is what this driver wants on a restart. */
@@ -1292,7 +1315,16 @@ static int gk_handshake(grok_client *c) {
     if (resume)
         cJSON_AddStringToObject(sp, "sessionId", resume);
     cJSON_AddStringToObject(sp, "cwd", c->cwd ? c->cwd : "/");
-    cJSON_AddItemToObject(sp, "mcpServers", cJSON_CreateArray());
+    cJSON *servers = cJSON_AddArrayToObject(sp, "mcpServers");
+    if (c->mcp && c->mcp[0]) {
+        cJSON *srv = cJSON_CreateObject();
+        cJSON_AddStringToObject(srv, "name", "optchat");
+        cJSON_AddStringToObject(srv, "command", c->mcp[0]);
+        cJSON *args = cJSON_AddArrayToObject(srv, "args");
+        for (char **a = c->mcp + 1; *a; a++) cJSON_AddItemToArray(args, cJSON_CreateString(*a));
+        cJSON_AddArrayToObject(srv, "env");
+        cJSON_AddItemToArray(servers, srv);
+    }
     cJSON *meta = cJSON_AddObjectToObject(sp, "_meta");
     cJSON_AddBoolToObject(meta, "yoloMode", 1);
     if (c->no_session)
@@ -1422,6 +1454,14 @@ int grok_connect(grok_client *c) {
     return c && gk_handshake(c);
 }
 
+int grok_new_session(grok_client *c) {
+    if (!c) return 0;
+    c->session_id[0] = '\0';
+    free(c->resume);
+    c->resume = NULL;
+    return 1;
+}
+
 char *grok_send_ex(grok_client *c, const char *user_text, grok_result *meta) {
     if (meta) memset(meta, 0, sizeof *meta);
     if (!c || !user_text) return NULL;
@@ -1514,6 +1554,8 @@ void grok_stop(grok_client *c) {
     free(c->cwd);
     free(c->sys);
     free(c->resume);
+    for (char **m = c->mcp; m && *m; m++) free(*m);
+    free(c->mcp);
     free(c->model);
     free(c->effort);
     free(c->buf);

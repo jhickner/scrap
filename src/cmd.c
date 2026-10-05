@@ -588,8 +588,9 @@ static void memory_view(struct session *s)
 
 static void do_memory(struct session *s, const char *arg)
 {
-    if (strcmp(session_backend(s), "core") != 0) {
-        ui_note("/memory only applies to core");
+    const char *be = session_backend(s);
+    if (strcmp(be, "core") && strcmp(be, "claude") && strcmp(be, "codex") && strcmp(be, "grok")) {
+        ui_note("/memory applies to core, claude, codex and grok");
         return;
     }
     if (arg && !strcmp(arg, "view")) {
@@ -1540,7 +1541,7 @@ static const struct cmd COMMANDS[] = {
     {"/cd", "move the conversation to another directory", "<path or zoxide query>", 0, do_cd},
     {"/btw", "answer this on the side, without waiting", "<prompt>",
      CMD_SELF_ECHOES | CMD_LIVE, do_btw},
-    {"/memory", "core: one endless chat rebuilt from OptChat memory each turn", "[on|off|view]", 0,
+    {"/memory", "one endless chat rebuilt from OptChat memory each turn", "[on|off|view]", 0,
      do_memory},
     {"/thinking", "show or hide the model's reasoning", "[on|off]", CMD_LIVE,
      do_thinking},

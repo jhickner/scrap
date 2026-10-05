@@ -1,9 +1,12 @@
 #include <errno.h>
 #include <getopt.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include "agenttabs.h"
@@ -635,8 +638,42 @@ static int live_command(void *ud, const char *line)
     return 1;
 }
 
+/* Relays MCP between stdio and the memory tools' unix socket. */
+static int mcp_memory_main(int argc, char **argv)
+{
+    if (argc < 2) {
+        fprintf(stderr, "usage: " APP_NAME " mcp-memory SOCKET\n");
+        return 2;
+    }
+    struct sockaddr_un a = {.sun_family = AF_UNIX};
+    snprintf(a.sun_path, sizeof a.sun_path, "%s", argv[1]);
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof a)) {
+        perror(argv[1]);
+        return 1;
+    }
+    struct pollfd p[2] = {{.fd = STDIN_FILENO, .events = POLLIN}, {.fd = fd, .events = POLLIN}};
+    int to[2] = {fd, STDOUT_FILENO};
+    char buf[16384];
+    while (poll(p, 2, -1) > 0) {
+        for (int i = 0; i < 2; i++) {
+            if (!p[i].revents)
+                continue;
+            ssize_t n = read(p[i].fd, buf, sizeof buf);
+            if (n <= 0)
+                return 0;
+            for (ssize_t off = 0, w; off < n; off += w)
+                if ((w = write(to[i], buf + off, (size_t)(n - off))) <= 0)
+                    return 0;
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "mcp-memory"))
+        return mcp_memory_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "sync"))
         return agentsync_main(argc - 1, argv + 1);
     if (argc > 1 && (!strcmp(argv[1], "ls") || !strcmp(argv[1], "read") ||

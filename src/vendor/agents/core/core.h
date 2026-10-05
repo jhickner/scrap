@@ -47,7 +47,9 @@ Backend *core_agent_open(const backend_opts *o);
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -152,6 +154,13 @@ static const char SA_SUBAGENT[] =
     "it is your task from " OC_AGENT ", and later ones come from the user. Do not stop to ask: do "
     "the task, then reply with a report for " OC_AGENT ": what you did, what you found and what is left. "
     "Your steps are not kept, so the report must hold everything that matters.\n\n";
+
+static const char SA_DRIVE_TOOLS[] =
+    "zoom and date are tools of the optchat MCP server.\n\n";
+
+static const char SA_DRIVE_AGENT[] =
+    "zoom, date and agent are tools of the optchat MCP server. Use its agent rather than a "
+    "built-in subagent tool: only its subagent starts from the view.\n\n";
 
 static const char SA_ROLE[] =
     "You are an expert coding assistant running inside scrap, a terminal coding harness. "
@@ -549,6 +558,16 @@ typedef struct {
     int sub;
     int (*agent_host)(void *ud, Backend *child, const char *task, char **report);
     void *agent_ud;
+    char drive[16];
+    Backend *inner;
+    int inner_used;
+    char *relay;
+    int lfd, nconn;
+    _Atomic int relay_stop;
+    pthread_t accept_thread;
+    pthread_mutex_t conn_mu;
+    pthread_cond_t conn_cond;
+    char sock[104];
 } sa_agent;
 
 static void sa_warn(sa_agent *x, const char *text) {
@@ -1177,7 +1196,10 @@ static void sa_skills_in(const char *dir, sa_buf *out, int *any) {
 
 static void sa_build_system(sa_agent *x) {
     sa_buf b = {0};
-    if (!x->st.disable_tools) {
+    if (x->drive[0]) {
+        sa_printf(&b, "%s\n\n%s\n\n%s%s", OC_MASTER, OC_VIEW_DOC, x->sub ? SA_SUBAGENT : SA_DELEGATE,
+                  x->sub ? SA_DRIVE_TOOLS : SA_DRIVE_AGENT);
+    } else if (!x->st.disable_tools) {
         if (x->st.memory) sa_printf(&b, "%s\n\n%s\n\n%s", OC_MASTER, OC_VIEW_DOC, x->sub ? SA_SUBAGENT : SA_DELEGATE);
         else sa_puts(&b, SA_ROLE);
         sa_puts(&b, SA_GUIDE);
@@ -2207,8 +2229,9 @@ static int sa_tool_agent(sa_agent *x, const cJSON *input, sa_buf *out, int *inte
         sa_puts(out, "task is required");
         return 1;
     }
-    backend_opts o = { .name = "core", .model = x->st.model, .effort = x->st.effort, .cwd = x->st.cwd,
-                       .system = x->st.system, .memory = 1 };
+    backend_opts o = { .name = x->drive[0] ? x->drive : "core", .model = x->st.model, .effort = x->st.effort,
+                       .cwd = x->st.cwd, .system = x->st.system, .memory = 1, .memory_relay = x->relay,
+                       .permission_mode = x->st.permission, .env = (const char *const *)x->st.env };
     Backend *b = core_agent_open(&o);
     if (!b) {
         sa_puts(out, "could not open a subagent");
@@ -2239,6 +2262,26 @@ static int sa_tool_agent(sa_agent *x, const cJSON *input, sa_buf *out, int *inte
     return failed;
 }
 
+/* zoom, date and agent; -1 when name is none of them. */
+static int sa_memory_tool(sa_agent *x, const char *name, const cJSON *input, sa_buf *out, int *interrupted) {
+    if (!x->mem) return -1;
+    if (!strcmp(name, "zoom")) {
+        char *z = oc_zoom(x->mem, (long)sa_jnum(input, "id"), (long)sa_jnum(input, "n"));
+        sa_puts(out, z);
+        int failed = !strncmp(z, "No line", 7);
+        free(z);
+        return failed;
+    }
+    if (!strcmp(name, "date")) {
+        const char *d = oc_date(x->mem, (long)sa_jnum(input, "id"));
+        if (d) sa_puts(out, d);
+        else sa_printf(out, "No message %ld.", (long)sa_jnum(input, "id"));
+        return !d;
+    }
+    if (!x->sub && !strcmp(name, "agent")) return sa_tool_agent(x, input, out, interrupted);
+    return -1;
+}
+
 static void sa_run_call(sa_agent *x, sa_call *call, int *interrupted) {
     const char *name = call->name ? call->name : "";
     cJSON *input = cJSON_Parse(call->args.n ? sa_str(&call->args) : "{}");
@@ -2251,7 +2294,7 @@ static void sa_run_call(sa_agent *x, sa_call *call, int *interrupted) {
     backend_emit(&x->st, &ev);
 
     sa_buf out = {0}, reason = {0}, ctx = {0};
-    int failed = 1;
+    int failed = 1, mem_failed;
     sa_mcp *server = NULL;
     const cJSON *tool;
     if (bad) {
@@ -2270,18 +2313,8 @@ static void sa_run_call(sa_agent *x, sa_call *call, int *interrupted) {
             failed = sa_tool_edit(x, input, &out);
         } else if (!strcmp(name, "bash")) {
             failed = sa_tool_bash(x, input, &out, interrupted);
-        } else if (x->mem && !strcmp(name, "zoom")) {
-            char *z = oc_zoom(x->mem, (long)sa_jnum(input, "id"), (long)sa_jnum(input, "n"));
-            sa_puts(&out, z);
-            failed = !strncmp(z, "No line", 7);
-            free(z);
-        } else if (x->mem && !strcmp(name, "date")) {
-            const char *d = oc_date(x->mem, (long)sa_jnum(input, "id"));
-            if (d) sa_puts(&out, d);
-            else sa_printf(&out, "No message %ld.", (long)sa_jnum(input, "id"));
-            failed = !d;
-        } else if (x->mem && !x->sub && !strcmp(name, "agent")) {
-            failed = sa_tool_agent(x, input, &out, interrupted);
+        } else if ((mem_failed = sa_memory_tool(x, name, input, &out, interrupted)) >= 0) {
+            failed = mem_failed;
         } else if ((tool = sa_mcp_find(x, name, &server))) {
             failed = sa_mcp_call(x, server, tool, input, &out, interrupted);
         } else {
@@ -2372,7 +2405,7 @@ static int sa_start(Backend *b, const char *resume);
 
 static int sa_settle_abort(void *ud) { return sa_aborted(ud); }
 
-static int sa_memory_turn(sa_agent *x, const char *user, const sa_buf *reminder) {
+static int sa_memory_turn(sa_agent *x, const char *user, const sa_buf *reminder, sa_buf *out) {
     if (!oc_settled(x->mem)) sa_warn(x, "waiting for memory summaries");
     if (!oc_settle(x->mem, sa_settle_abort, x)) {
         char why[512];
@@ -2380,8 +2413,13 @@ static int sa_memory_turn(sa_agent *x, const char *user, const sa_buf *reminder)
         oc_append(x->mem, "user", user);
         return 0;
     }
-    char *view = oc_render(x->mem, 1);
+    char *view = oc_render(x->mem, !out);
     if (!x->sub) oc_append(x->mem, "user", user);
+    if (out) {
+        sa_printf(out, "%s\n%s", view, user);
+        free(view);
+        return 1;
+    }
     sa_buf b = {0};
     sa_printf(&b, "%s\n" BACKEND_CACHE_MARK "%s", view, user);
     if (reminder->n) sa_printf(&b, "\n\n%s", sa_str(reminder));
@@ -2391,8 +2429,11 @@ static int sa_memory_turn(sa_agent *x, const char *user, const sa_buf *reminder)
     return 1;
 }
 
+static char *sa_drive_ask(sa_agent *x, const char *user, backend_result *meta);
+
 static char *sa_ask_ex(Backend *b, const char *user, backend_result *meta) {
     sa_agent *x = b->ctx;
+    if (x->drive[0]) return sa_drive_ask(x, user, meta);
     backend_result res = {0};
     snprintf(res.subtype, sizeof res.subtype, "success");
     if (meta) memset(meta, 0, sizeof *meta);
@@ -2424,7 +2465,7 @@ static char *sa_ask_ex(Backend *b, const char *user, backend_result *meta) {
         sa_free(&reason);
     }
     if (x->mem) {
-        if (!sa_memory_turn(x, user ? user : "", &reminder)) {
+        if (!sa_memory_turn(x, user ? user : "", &reminder, NULL)) {
             res.interrupted = 1;
             snprintf(res.subtype, sizeof res.subtype, "interrupted");
         }
@@ -2570,6 +2611,327 @@ static Backend *sa_compactor_open(void *ud, const char *system) {
     return b;
 }
 
+static int sa_memory_open(sa_agent *x);
+
+/* ---------- memory mode on a CLI ----------
+ *
+ * The CLI runs each turn in a fresh context holding the view and the user's
+ * message. Its events are written to memory, and its zoom, date and agent
+ * tools come from an MCP server on a unix socket, reached through
+ * "<relay> mcp-memory <socket>". */
+
+static cJSON *sa_relay_tools(sa_agent *x) {
+    cJSON *defs = cJSON_Parse(SA_MEMORY_TOOLS), *out = cJSON_CreateArray(), *t;
+    if (!x->sub) cJSON_AddItemToArray(defs, cJSON_Parse(SA_AGENT_TOOL));
+    cJSON_ArrayForEach(t, defs) {
+        cJSON *f = cJSON_GetObjectItem(t, "function"), *tool = cJSON_CreateObject();
+        cJSON_AddStringToObject(tool, "name", sa_jstr(f, "name"));
+        cJSON_AddStringToObject(tool, "description", sa_jstr(f, "description"));
+        cJSON_AddItemToObject(tool, "inputSchema", cJSON_Duplicate(cJSON_GetObjectItem(f, "parameters"), 1));
+        if (strcmp(sa_jstr(f, "name"), "agent"))
+            cJSON_AddBoolToObject(cJSON_AddObjectToObject(tool, "annotations"), "readOnlyHint", 1);
+        cJSON_AddItemToArray(out, tool);
+    }
+    cJSON_Delete(defs);
+    return out;
+}
+
+typedef struct {
+    sa_agent *x;
+    int fd, inflight;
+    pthread_mutex_t mu;
+    pthread_cond_t cond;
+} sa_relay_conn;
+
+static int sa_relay_send(sa_relay_conn *c, cJSON *msg) {
+    char *s = cJSON_PrintUnformatted(msg);
+    cJSON_Delete(msg);
+    if (!s) return 0;
+    size_t n = strlen(s), off = 0;
+    s[n++] = '\n';
+    pthread_mutex_lock(&c->mu);
+    while (off < n) {
+        ssize_t w = write(c->fd, s + off, n - off);
+        if (w <= 0) break;
+        off += (size_t)w;
+    }
+    pthread_mutex_unlock(&c->mu);
+    free(s);
+    return off == n;
+}
+
+static int sa_relay_handle(sa_relay_conn *c, const cJSON *m) {
+    sa_agent *x = c->x;
+    const cJSON *id = cJSON_GetObjectItem(m, "id"), *params = cJSON_GetObjectItem(m, "params");
+    const char *method = sa_jstr(m, "method");
+    if (!id || !method) return 1;
+    cJSON *reply = cJSON_CreateObject(), *r = cJSON_CreateObject();
+    cJSON_AddStringToObject(reply, "jsonrpc", "2.0");
+    cJSON_AddItemToObject(reply, "id", cJSON_Duplicate(id, 1));
+    if (!strcmp(method, "initialize")) {
+        const char *v = sa_jstr(params, "protocolVersion");
+        cJSON_AddStringToObject(r, "protocolVersion", v ? v : "2025-06-18");
+        cJSON_AddObjectToObject(cJSON_AddObjectToObject(r, "capabilities"), "tools");
+        cJSON *info = cJSON_AddObjectToObject(r, "serverInfo");
+        cJSON_AddStringToObject(info, "name", "optchat");
+        cJSON_AddStringToObject(info, "version", "1");
+    } else if (!strcmp(method, "tools/list")) {
+        cJSON_AddItemToObject(r, "tools", sa_relay_tools(x));
+    } else if (!strcmp(method, "tools/call")) {
+        const char *name = sa_jstr(params, "name");
+        const cJSON *args = cJSON_GetObjectItem(params, "arguments");
+        cJSON *empty = cJSON_CreateObject();
+        sa_buf out = {0};
+        int interrupted = 0;
+        int failed = sa_memory_tool(x, name ? name : "", cJSON_IsObject(args) ? args : empty, &out, &interrupted);
+        if (failed < 0) sa_printf(&out, "unknown tool '%s'", name ? name : "");
+        cJSON *block = cJSON_CreateObject();
+        cJSON_AddStringToObject(block, "type", "text");
+        cJSON_AddStringToObject(block, "text", sa_str(&out));
+        cJSON_AddItemToArray(cJSON_AddArrayToObject(r, "content"), block);
+        cJSON_AddBoolToObject(r, "isError", failed != 0);
+        sa_free(&out);
+        cJSON_Delete(empty);
+    } else if (strcmp(method, "ping")) {
+        cJSON_Delete(r);
+        r = NULL;
+        cJSON *e = cJSON_AddObjectToObject(reply, "error");
+        cJSON_AddNumberToObject(e, "code", -32601);
+        cJSON_AddStringToObject(e, "message", "method not found");
+    }
+    if (r) cJSON_AddItemToObject(reply, "result", r);
+    return sa_relay_send(c, reply);
+}
+
+typedef struct { sa_relay_conn *c; cJSON *m; } sa_relay_job;
+
+static void *sa_relay_call(void *arg) {
+    sa_relay_job *j = arg;
+    sa_relay_handle(j->c, j->m);
+    cJSON_Delete(j->m);
+    pthread_mutex_lock(&j->c->mu);
+    j->c->inflight--;
+    pthread_cond_broadcast(&j->c->cond);
+    pthread_mutex_unlock(&j->c->mu);
+    free(j);
+    return NULL;
+}
+
+/* tools/call runs on its own thread, so a subagent does not hold up the calls
+ * made alongside it; the rest is answered in order. */
+static int sa_relay_dispatch(sa_relay_conn *c, cJSON *m) {
+    const char *method = sa_jstr(m, "method");
+    if (!method || strcmp(method, "tools/call")) {
+        int ok = sa_relay_handle(c, m);
+        cJSON_Delete(m);
+        return ok;
+    }
+    sa_relay_job *j = malloc(sizeof *j);
+    pthread_t t;
+    if (!j) { cJSON_Delete(m); return 0; }
+    *j = (sa_relay_job){ c, m };
+    pthread_mutex_lock(&c->mu);
+    c->inflight++;
+    pthread_mutex_unlock(&c->mu);
+    if (pthread_create(&t, NULL, sa_relay_call, j)) {
+        pthread_mutex_lock(&c->mu);
+        c->inflight--;
+        pthread_mutex_unlock(&c->mu);
+        free(j);
+        int ok = sa_relay_handle(c, m);
+        cJSON_Delete(m);
+        return ok;
+    }
+    pthread_detach(t);
+    return 1;
+}
+
+static void *sa_relay_serve(void *arg) {
+    sa_relay_conn *c = arg;
+    sa_agent *x = c->x;
+    sa_buf in = {0};
+    char chunk[8192];
+    while (!x->relay_stop) {
+        struct pollfd p = { .fd = c->fd, .events = POLLIN };
+        int ready = poll(&p, 1, 200);
+        if (ready < 0) break;
+        if (!ready) continue;
+        ssize_t r = read(c->fd, chunk, sizeof chunk);
+        if (r <= 0) break;
+        sa_put(&in, chunk, (size_t)r);
+        char *nl;
+        int ok = 1;
+        while (ok && in.n && (nl = memchr(in.p, '\n', in.n))) {
+            *nl = '\0';
+            cJSON *m = cJSON_Parse(in.p);
+            if (m) ok = sa_relay_dispatch(c, m);
+            size_t used = (size_t)(nl + 1 - in.p);
+            memmove(in.p, nl + 1, in.n - used);
+            in.n -= used;
+        }
+        if (!ok) break;
+    }
+    sa_free(&in);
+    pthread_mutex_lock(&c->mu);
+    while (c->inflight) pthread_cond_wait(&c->cond, &c->mu);
+    pthread_mutex_unlock(&c->mu);
+    close(c->fd);
+    pthread_mutex_destroy(&c->mu);
+    pthread_cond_destroy(&c->cond);
+    free(c);
+    pthread_mutex_lock(&x->conn_mu);
+    x->nconn--;
+    pthread_cond_broadcast(&x->conn_cond);
+    pthread_mutex_unlock(&x->conn_mu);
+    return NULL;
+}
+
+static void *sa_relay_accept(void *arg) {
+    sa_agent *x = arg;
+    while (!x->relay_stop) {
+        struct pollfd p = { .fd = x->lfd, .events = POLLIN };
+        if (poll(&p, 1, 200) <= 0) continue;
+        int fd = accept(x->lfd, NULL, NULL);
+        if (fd < 0) continue;
+        sa_relay_conn *c = malloc(sizeof *c);
+        pthread_t t;
+        if (!c) { close(fd); continue; }
+        *c = (sa_relay_conn){ .x = x, .fd = fd };
+        pthread_mutex_init(&c->mu, NULL);
+        pthread_cond_init(&c->cond, NULL);
+        pthread_mutex_lock(&x->conn_mu);
+        x->nconn++;
+        pthread_mutex_unlock(&x->conn_mu);
+        if (pthread_create(&t, NULL, sa_relay_serve, c)) {
+            close(fd);
+            pthread_mutex_destroy(&c->mu);
+            pthread_cond_destroy(&c->cond);
+            free(c);
+            pthread_mutex_lock(&x->conn_mu);
+            x->nconn--;
+            pthread_mutex_unlock(&x->conn_mu);
+            continue;
+        }
+        pthread_detach(t);
+    }
+    return NULL;
+}
+
+static int sa_relay_listen(sa_agent *x) {
+    static _Atomic long seq;
+    struct sockaddr_un a = { .sun_family = AF_UNIX };
+    snprintf(x->sock, sizeof x->sock, "/tmp/optchat-%d-%ld.sock", (int)getpid(), ++seq);
+    snprintf(a.sun_path, sizeof a.sun_path, "%s", x->sock);
+    unlink(x->sock);
+    x->lfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (x->lfd < 0) return 0;
+    fcntl(x->lfd, F_SETFD, FD_CLOEXEC);
+    mode_t old = umask(077);
+    int bound = !bind(x->lfd, (struct sockaddr *)&a, sizeof a);
+    umask(old);
+    if (!bound || listen(x->lfd, 8) || pthread_create(&x->accept_thread, NULL, sa_relay_accept, x)) {
+        snprintf(x->err, sizeof x->err, "could not listen on %s", x->sock);
+        close(x->lfd);
+        x->lfd = -1;
+        unlink(x->sock);
+        return 0;
+    }
+    return 1;
+}
+
+static void sa_relay_close(sa_agent *x) {
+    if (x->lfd < 0) return;
+    x->relay_stop = 1;
+    pthread_join(x->accept_thread, NULL);
+    close(x->lfd);
+    x->lfd = -1;
+    unlink(x->sock);
+    pthread_mutex_lock(&x->conn_mu);
+    while (x->nconn) pthread_cond_wait(&x->conn_cond, &x->conn_mu);
+    pthread_mutex_unlock(&x->conn_mu);
+}
+
+static void sa_drive_event(void *ud, const backend_event *ev) {
+    sa_agent *x = ud;
+    backend_emit(&x->st, ev);
+    if (!x->mem || x->sub || ev->parent) return;
+    if (ev->kind == BACKEND_EV_ASSISTANT && ev->text) {
+        oc_append(x->mem, "talk", ev->text);
+    } else if (ev->kind == BACKEND_EV_TOOL) {
+        sa_buf b = {0};
+        sa_printf(&b, "%s %s", ev->name ? ev->name : "", ev->input_json ? ev->input_json : ev->arg ? ev->arg : "{}");
+        oc_append(x->mem, "tool", sa_str(&b));
+        sa_free(&b);
+    } else if (ev->kind == BACKEND_EV_TOOL_RESULT) {
+        sa_echo(x, ev->text ? ev->text : "");
+    }
+}
+
+static int sa_drive_start(sa_agent *x) {
+    cJSON_Delete(x->config);
+    x->config = sa_config_load(x->err, sizeof x->err);
+    if (!x->config) return 0;
+    if (!x->mem && !sa_memory_open(x)) return 0;
+    sa_build_system(x);
+    if (x->relay && x->lfd < 0 && !sa_relay_listen(x)) return 0;
+    const char *argv[] = { x->relay, "mcp-memory", x->sock, NULL };
+    backend_opts o = { .name = x->drive, .model = x->st.model, .effort = x->st.effort, .system = x->system,
+                       .cwd = x->st.cwd, .session_file = x->st.session_file,
+                       .env = (const char *const *)x->st.env, .permission_mode = x->st.permission,
+                       .allow_customizations = x->st.allow_customizations,
+                       .no_browser_login = x->st.no_browser_login, .chrome = x->st.chrome,
+                       .plugin_dir = x->st.plugin_dir, .ephemeral = 1, .mcp = x->relay ? argv : NULL };
+    if (x->inner) x->inner->close(x->inner);
+    x->inner_used = 0;
+    x->inner = backend_open_ex(&o);
+    if (!x->inner) {
+        snprintf(x->err, sizeof x->err, "could not open %s", x->drive);
+        return 0;
+    }
+    x->inner->set_event_cb(x->inner, sa_drive_event, x);
+    x->inner->set_abort_check(x->inner, x->st.abort);
+    if (x->st.on_permission && x->inner->set_permission_cb)
+        x->inner->set_permission_cb(x->inner, x->st.on_permission, x->st.permission_ud);
+    if (!x->inner->start(x->inner, NULL)) {
+        const char *e = x->inner->last_error ? x->inner->last_error(x->inner) : NULL;
+        snprintf(x->err, sizeof x->err, "could not start %s%s%s", x->drive, e ? ": " : "", e ? e : "");
+        return 0;
+    }
+    x->started = 1;
+    return 1;
+}
+
+static char *sa_drive_ask(sa_agent *x, const char *user, backend_result *meta) {
+    backend_result res = {0};
+    if (meta) memset(meta, 0, sizeof *meta);
+    if (!x->started && !sa_drive_start(x)) {
+        if (meta) { meta->is_error = 1; snprintf(meta->subtype, sizeof meta->subtype, "error"); }
+        return NULL;
+    }
+    x->err[0] = '\0';
+    sa_buf text = {0}, none = {0};
+    if (!sa_memory_turn(x, user ? user : "", &none, &text)) {
+        if (meta) { meta->interrupted = 1; snprintf(meta->subtype, sizeof meta->subtype, "interrupted"); }
+        return strdup("");
+    }
+    if (x->inner_used && !x->inner->reset(x->inner)) {
+        snprintf(x->err, sizeof x->err, "could not clear the %s context", x->drive);
+        sa_free(&text);
+        if (meta) { meta->is_error = 1; snprintf(meta->subtype, sizeof meta->subtype, "error"); }
+        return NULL;
+    }
+    x->inner_used = 1;
+    char *reply = x->inner->ask_ex(x->inner, sa_str(&text), &res);
+    sa_free(&text);
+    if (!reply && !res.interrupted) {
+        const char *e = x->inner->last_error ? x->inner->last_error(x->inner) : NULL;
+        snprintf(x->err, sizeof x->err, "%s", e && *e ? e : "no reply");
+        res.is_error = 1;
+    }
+    if (meta) *meta = res;
+    return reply;
+}
+
 static int sa_memory_open(sa_agent *x) {
     char dir[4096], chat[4200];
     if (!core_agent_config_dir(dir, sizeof dir)) {
@@ -2588,6 +2950,7 @@ static int sa_memory_open(sa_agent *x) {
 
 static int sa_start(Backend *b, const char *resume) {
     sa_agent *x = b->ctx;
+    if (x->drive[0]) return sa_drive_start(x);
     static pthread_once_t once = PTHREAD_ONCE_INIT;
     pthread_once(&once, sa_curl_init);
     sa_teardown(x);
@@ -2617,6 +2980,7 @@ static int sa_start(Backend *b, const char *resume) {
 static int sa_reset(Backend *b) {
     sa_agent *x = b->ctx;
     if (!x->started) return sa_start(b, NULL);
+    if (x->drive[0]) return 1;
     sa_teardown(x);
     sa_new_id(x->id, sizeof x->id);
     backend_set(&x->st.resume, NULL);
@@ -2630,7 +2994,24 @@ static void sa_set_event_cb(Backend *b, void (*cb)(void *ud, const backend_event
     x->st.event_ud = ud;
 }
 
-static void sa_set_abort(Backend *b, int (*cb)(void)) { ((sa_agent *)b->ctx)->st.abort = cb; }
+static void sa_set_abort(Backend *b, int (*cb)(void)) {
+    sa_agent *x = b->ctx;
+    x->st.abort = cb;
+    if (x->inner) x->inner->set_abort_check(x->inner, cb);
+}
+
+static void sa_set_permission_cb(Backend *b, int (*cb)(void *ud, const backend_permission *req), void *ud) {
+    sa_agent *x = b->ctx;
+    x->st.on_permission = cb;
+    x->st.permission_ud = ud;
+    if (x->inner && x->inner->set_permission_cb) x->inner->set_permission_cb(x->inner, cb, ud);
+}
+
+static void sa_rate_limit(Backend *b, backend_rate_limit *out) {
+    sa_agent *x = b->ctx;
+    memset(out, 0, sizeof *out);
+    if (x->inner && x->inner->rate_limit) x->inner->rate_limit(x->inner, out);
+}
 
 static void sa_set_agent_host(Backend *b, int (*host)(void *ud, Backend *child, const char *task, char **report),
                               void *ud) {
@@ -2645,12 +3026,15 @@ static char *sa_memory_view(Backend *b) {
 }
 
 static int sa_set_effort(Backend *b, const char *effort) {
-    backend_set(&((sa_agent *)b->ctx)->st.effort, effort);
+    sa_agent *x = b->ctx;
+    if (x->inner && !x->inner->set_effort(x->inner, effort)) return 0;
+    backend_set(&x->st.effort, effort);
     return 1;
 }
 
 static void sa_usage(Backend *b, long *tokens, long *window) {
     sa_agent *x = b->ctx;
+    if (x->inner && x->inner->usage) { x->inner->usage(x->inner, tokens, window); return; }
     *tokens = x->ctx_tokens;
     *window = x->window;
 }
@@ -2662,17 +3046,25 @@ static const char *sa_session_id(Backend *b) {
 
 static const char *sa_model(Backend *b) {
     sa_agent *x = b->ctx;
+    const char *m = x->inner ? x->inner->model(x->inner) : NULL;
+    if (m) return m;
     return x->route.full ? x->route.full : x->st.model;
 }
 
 static const char *sa_error(Backend *b) {
     sa_agent *x = b->ctx;
+    if (!x->err[0] && x->inner && x->inner->last_error) return x->inner->last_error(x->inner);
     return x->err[0] ? x->err : NULL;
 }
 
 static void sa_close(Backend *b) {
     sa_agent *x = b->ctx;
     x->halting = 1;
+    if (x->inner) x->inner->close(x->inner);
+    sa_relay_close(x);
+    free(x->relay);
+    pthread_mutex_destroy(&x->conn_mu);
+    pthread_cond_destroy(&x->conn_cond);
     oc_compactor_stop(x->compactor);
     if (x->sub) oc_release(x->mem);
     else oc_close(x->mem);
@@ -2695,8 +3087,16 @@ Backend *core_agent_open(const backend_opts *o) {
     if (!x || !b) { free(x); free(b); return NULL; }
     backend_state_init(&x->st, o);
     x->msgs = cJSON_CreateArray();
+    x->lfd = -1;
+    pthread_mutex_init(&x->conn_mu, NULL);
+    pthread_cond_init(&x->conn_cond, NULL);
+    if (o->memory && o->name && strcmp(o->name, "core")) {
+        snprintf(x->drive, sizeof x->drive, "%s", o->name);
+        x->relay = o->memory_relay ? strdup(o->memory_relay) : NULL;
+    }
     b->ctx = x;
-    b->caps = BACKEND_CAP_RESUME | BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT;
+    b->caps = x->drive[0] ? BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT
+                          : BACKEND_CAP_RESUME | BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT;
     b->ask = sa_ask;
     b->reset = sa_reset;
     b->close = sa_close;
@@ -2705,7 +3105,11 @@ Backend *core_agent_open(const backend_opts *o) {
     b->usage = sa_usage;
     b->set_model = backend_set_model_generic;
     b->set_effort = sa_set_effort;
-    b->set_permission = backend_set_permission_none;
+    b->set_permission = x->drive[0] ? backend_set_permission_generic : backend_set_permission_none;
+    if (x->drive[0]) {
+        b->set_permission_cb = sa_set_permission_cb;
+        b->rate_limit = sa_rate_limit;
+    }
     b->set_event_cb = sa_set_event_cb;
     b->set_abort_check = sa_set_abort;
     b->set_agent_host = sa_set_agent_host;

@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -441,6 +442,212 @@ static const char *msg_text(cJSON *msgs, int i)
     return cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(msgs, i), "content"));
 }
 
+
+static const char *arg_after(int argc, char **argv, const char *option)
+{
+    for (int i = 1; i + 1 < argc; i++)
+        if (!strcmp(argv[i], option))
+            return argv[i + 1];
+    return NULL;
+}
+
+static void cli_log(const char *tag, const char *text)
+{
+    char path[512];
+    snprintf(path, sizeof path, "%s/cli.log", getenv("SCRAP_CONFIG_DIR"));
+    FILE *f = fopen(path, "a");
+    cJSON *j = cJSON_CreateString(text);
+    char *s = cJSON_PrintUnformatted(j);
+    fprintf(f, "%s %s\n", tag, s);
+    free(s);
+    cJSON_Delete(j);
+    fclose(f);
+}
+
+/* Calls zoom(0, 1) on the memory socket named in --mcp-config. */
+static char *cli_zoom(const char *mcp_config)
+{
+    cJSON *cfg = cJSON_Parse(mcp_config);
+    cJSON *args = cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(cfg, "mcpServers"), "optchat"), "args");
+    struct sockaddr_un a = {.sun_family = AF_UNIX};
+    snprintf(a.sun_path, sizeof a.sun_path, "%s", cJSON_GetStringValue(cJSON_GetArrayItem(args, 1)));
+    cJSON_Delete(cfg);
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (connect(fd, (struct sockaddr *)&a, sizeof a))
+        return strdup("no socket");
+    send_all(fd, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n"
+                 "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":"
+                 "{\"name\":\"zoom\",\"arguments\":{\"id\":0,\"n\":1}}}\n");
+    char buf[16384];
+    size_t n = 0;
+    int lines = 0;
+    while (lines < 2 && n < sizeof buf - 1) {
+        ssize_t r = read(fd, buf + n, sizeof buf - 1 - n);
+        if (r <= 0)
+            break;
+        for (ssize_t i = 0; i < r; i++)
+            lines += buf[n + i] == '\n';
+        n += (size_t)r;
+    }
+    buf[n] = '\0';
+    close(fd);
+    char *second = strchr(buf, '\n');
+    cJSON *reply = cJSON_Parse(second ? second + 1 : "");
+    cJSON *block = cJSON_GetArrayItem(cJSON_GetObjectItem(cJSON_GetObjectItem(reply, "result"), "content"), 0);
+    char *out = strdup(cJSON_GetStringValue(cJSON_GetObjectItem(block, "text")) ?: "no reply");
+    cJSON_Delete(reply);
+    if (!strstr(buf, "\"name\":\"agent\"")) {
+        free(out);
+        out = strdup("agent tool missing");
+    }
+    return out;
+}
+
+/* Sends a slow agent call, then a zoom, and returns the ids in reply order. */
+static char *cli_parallel(const char *mcp_config)
+{
+    cJSON *cfg = cJSON_Parse(mcp_config);
+    cJSON *args = cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(cfg, "mcpServers"), "optchat"), "args");
+    struct sockaddr_un a = {.sun_family = AF_UNIX};
+    snprintf(a.sun_path, sizeof a.sun_path, "%s", cJSON_GetStringValue(cJSON_GetArrayItem(args, 1)));
+    cJSON_Delete(cfg);
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (connect(fd, (struct sockaddr *)&a, sizeof a))
+        return strdup("no socket");
+    send_all(fd, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":"
+                 "{\"name\":\"agent\",\"arguments\":{\"task\":\"SLOW\"}}}\n"
+                 "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":"
+                 "{\"name\":\"zoom\",\"arguments\":{\"id\":0,\"n\":1}}}\n");
+    char buf[16384], out[64] = "order:";
+    size_t n = 0;
+    int lines = 0;
+    while (lines < 2 && n < sizeof buf - 1) {
+        ssize_t r = read(fd, buf + n, sizeof buf - 1 - n);
+        if (r <= 0)
+            break;
+        for (ssize_t i = 0; i < r; i++)
+            lines += buf[n + i] == '\n';
+        n += (size_t)r;
+    }
+    buf[n] = '\0';
+    close(fd);
+    for (char *line = strtok(buf, "\n"); line; line = strtok(NULL, "\n")) {
+        cJSON *j = cJSON_Parse(line);
+        snprintf(out + strlen(out), sizeof out - strlen(out), " %d", cJSON_GetObjectItem(j, "id")->valueint);
+        cJSON_Delete(j);
+    }
+    return strdup(out);
+}
+
+static void cli_result(const char *text)
+{
+    cJSON *j = cJSON_CreateObject();
+    cJSON_AddStringToObject(j, "type", "result");
+    cJSON_AddStringToObject(j, "subtype", "success");
+    cJSON_AddBoolToObject(j, "is_error", 0);
+    cJSON_AddStringToObject(j, "result", text);
+    char *s = cJSON_PrintUnformatted(j);
+    printf("%s\n", s);
+    fflush(stdout);
+    free(s);
+    cJSON_Delete(j);
+}
+
+/* Stands in for `claude --print` in memory mode. */
+static int mock_claude(int argc, char **argv)
+{
+    cli_log("SYSTEM", arg_after(argc, argv, "--append-system-prompt") ?: "");
+    cli_log("MCP", arg_after(argc, argv, "--mcp-config") ?: "");
+    char *line = NULL;
+    size_t cap = 0;
+    while (getline(&line, &cap, stdin) >= 0) {
+        cJSON *msg = cJSON_Parse(line);
+        cJSON *req = cJSON_GetObjectItem(msg, "request");
+        if (req && !strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(req, "subtype")) ?: "", "initialize")) {
+            printf("{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\","
+                   "\"request_id\":\"claude_h_initialize\",\"response\":{}},\"session_id\":\"s1\"}\n");
+            fflush(stdout);
+            cJSON_Delete(msg);
+            continue;
+        }
+        cJSON *content = cJSON_GetObjectItem(cJSON_GetObjectItem(msg, "message"), "content");
+        const char *text = cJSON_IsString(content) ? content->valuestring
+                         : cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(content, 0), "text"));
+        printf("{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"mock\"}\n");
+        if (text && !strcmp(text, "/clear")) {
+            cli_log("CLEAR", "");
+            cli_result("");
+        } else {
+            cli_log("PROMPT", text ?: "");
+            printf("{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":["
+                   "{\"type\":\"text\",\"text\":\"cli says hi\"},"
+                   "{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{\"command\":\"echo x\"}}]}}\n"
+                   "{\"type\":\"assistant\",\"parent_tool_use_id\":\"t1\",\"message\":{\"role\":\"assistant\","
+                   "\"content\":[{\"type\":\"tool_use\",\"id\":\"t2\",\"name\":\"Read\",\"input\":{\"file_path\":\"/sub\"}}]}}\n"
+                   "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":["
+                   "{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":\"x-out\"}]}}\n");
+            fflush(stdout);
+            if (text && strstr(text, "SLOW"))
+                usleep(300000);
+            const char *mcp = arg_after(argc, argv, "--mcp-config") ?: "{}";
+            char *zoom = text && strstr(text, "PAR") ? cli_parallel(mcp) : text && strstr(text, "ZOOM") ? cli_zoom(mcp) : NULL;
+            cli_result(zoom ? zoom : "done");
+            free(zoom);
+        }
+        cJSON_Delete(msg);
+    }
+    free(line);
+    return 0;
+}
+
+static void drive_test(void)
+{
+    char bin[512], self[1024], link[600];
+    snprintf(bin, sizeof bin, "%s/bin", dir);
+    mkdir(bin, 0700);
+    snprintf(link, sizeof link, "%s/claude", bin);
+    CHECK(realpath("/proc/self/exe", self) || realpath(getenv("CORETEST_SELF"), self));
+    CHECK(symlink(self, link) == 0);
+    char path[8192];
+    snprintf(path, sizeof path, "%s:%s", bin, getenv("PATH"));
+    setenv("PATH", path, 1);
+    char home[512];
+    snprintf(home, sizeof home, "%s/drive", dir);
+    mkdir(home, 0700);
+    mkdir(strcat(home, "/agent"), 0700);
+    put_file("drive/agent/providers.json", get_file("agent/providers.json"));
+    snprintf(home, sizeof home, "%s/drive", dir);
+    setenv("SCRAP_CONFIG_DIR", home, 1);
+
+    backend_opts o = {.name = "claude", .cwd = dir, .memory = 1, .memory_relay = "relay"};
+    Backend *b = backend_open_ex(&o);
+    b->set_event_cb(b, on_event, NULL);
+    b->set_abort_check(b, should_abort);
+    CHECK(b->start(b, NULL));
+    CHECK(!b->session_id(b));
+    backend_result meta;
+    char *reply = ask(b, "drive one", &meta);
+    CHECK(reply && !strcmp(reply, "done"));
+    free(reply);
+    reply = ask(b, "drive ZOOM", &meta);
+    CHECK(reply && !strcmp(reply, "0+0|user: drive one"));
+    free(reply);
+    reply = ask(b, "drive PAR", &meta);
+    CHECK(reply && !strcmp(reply, "order: 3 2"));
+    free(reply);
+    b->close(b);
+
+    char *log = get_file("drive/cli.log");
+    CHECK(strstr(log, "SYSTEM \"You are scrap") && strstr(log, "tools of the optchat MCP server"));
+    CHECK(strstr(log, "MCP \"{\\\"mcpServers\\\":{\\\"optchat\\\":{\\\"command\\\":\\\"relay\\\",\\\"args\\\":[\\\"mcp-memory\\\",\\\"/tmp/optchat-"));
+    char *first = strstr(log, "PROMPT "), *clear = strstr(log, "CLEAR"), *second = first ? strstr(first + 1, "PROMPT ") : NULL;
+    CHECK(first && clear && second && first < clear && clear < second);
+    CHECK(first && strstr(first, "\\n</chat>\\ndrive one\""));
+    CHECK(second && strstr(second, "|user: drive one\\n") && strstr(second, "|talk: cli says hi\\n") &&
+          strstr(second, "|tool: Bash {\\\"command\\\":\\\"echo x\\\"}\\n") && strstr(second, "|echo: x-out\\n"));
+    CHECK(!strstr(log, "/sub"));
+}
+
 static void memory_test(void)
 {
     backend_opts o = {.name = "core", .model = "fake/echo", .cwd = dir, .memory = 1};
@@ -547,8 +754,11 @@ static void memory_test(void)
     free(log);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "--print"))
+        return mock_claude(argc, argv);
+    setenv("CORETEST_SELF", argv[0], 1);
     snprintf(dir, sizeof dir, "/tmp/coreagenttest.%d", (int)getpid());
     mkdir(dir, 0700);
     setenv("SCRAP_CONFIG_DIR", dir, 1);
@@ -705,6 +915,7 @@ int main(void)
     b->close(b);
 
     memory_test();
+    drive_test();
 
     kill(server, SIGKILL);
     waitpid(server, NULL, 0);
