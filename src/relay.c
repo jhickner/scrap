@@ -668,10 +668,19 @@ static void ask_set(struct askblock *b)
     emit(op2("ask", ask_obj()));
 }
 
-static void rebind(void)
+/* The question the served session is waiting on, if any. */
+static void ask_load(void)
 {
     askblock_free(rt.ask);
-    rt.ask = NULL;
+    rt.ask = session_ask_open(rt.s) && !session_busy(rt.s)
+                 ? askblock_parse(session_last_block(rt.s)) : NULL;
+    if (rt.ask)
+        rt.ask_id++;
+}
+
+static void rebind(void)
+{
+    ask_load();
     rt.binding++;
     free(rt.session_json);
     free(rt.live_json);
@@ -1684,6 +1693,7 @@ int relay_start(struct session *s)
     rt.seq = 0;
     rt.replay_base = 0;
     rt.cur = log_for(s);
+    ask_load();
     session_add_listener(on_event, NULL);
 
     snprintf(rt.upload_dir, sizeof rt.upload_dir, "/tmp/" APP_NAME "_relay_XXXXXX");
