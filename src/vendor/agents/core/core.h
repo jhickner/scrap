@@ -133,6 +133,26 @@ static const char SA_MEMORY_TOOLS[] =
     "\"required\":[\"id\"]}}}"
     "]";
 
+static const char SA_AGENT_TOOL[] =
+    "{\"type\":\"function\",\"function\":{\"name\":\"agent\",\"description\":"
+    "\"Run a subagent on a task and return its report. The subagent starts from this view, "
+    "including this turn so far, and has the same tools, so give it the task, not the background. "
+    "Its steps stay out of the chat; only its report is returned.\","
+    "\"parameters\":{\"type\":\"object\",\"properties\":{"
+    "\"task\":{\"type\":\"string\",\"description\":\"What the subagent is to do and report\"}},"
+    "\"required\":[\"task\"]}}}";
+
+static const char SA_DELEGATE[] =
+    "Give work that takes many tool calls, such as searching, reading several files, or running "
+    "and fixing builds and tests, to a subagent with agent: its steps stay out of the chat and "
+    "only its report enters the view. Do work of one or two tool calls yourself.\n\n";
+
+static const char SA_SUBAGENT[] =
+    "You are a subagent of " OC_AGENT ". The view is " OC_AGENT "'s chat; the message after it "
+    "is your task from " OC_AGENT ", not from the user. Nobody answers questions: do the task, "
+    "then reply with a report for " OC_AGENT ": what you did, what you found and what is left. "
+    "Your steps are not kept, so the report must hold everything that matters.\n\n";
+
 static const char SA_ROLE[] =
     "You are an expert coding assistant running inside scrap, a terminal coding harness. "
     "You help the user by reading files, running commands, editing code, and writing files.\n\n";
@@ -526,6 +546,7 @@ typedef struct {
     _Atomic int halting;
     const _Atomic int *halt;
     long timeout;
+    int sub;
 } sa_agent;
 
 static void sa_warn(sa_agent *x, const char *text) {
@@ -816,7 +837,7 @@ static void sa_remember(sa_agent *x, const cJSON *line) {
 
 static void sa_store(sa_agent *x, cJSON *line) {
     sa_write_line(x, line);
-    if (x->mem) sa_remember(x, line);
+    if (x->mem && !x->sub) sa_remember(x, line);
     cJSON_AddItemToArray(x->msgs, line);
 }
 
@@ -1155,7 +1176,7 @@ static void sa_skills_in(const char *dir, sa_buf *out, int *any) {
 static void sa_build_system(sa_agent *x) {
     sa_buf b = {0};
     if (!x->st.disable_tools) {
-        if (x->st.memory) sa_printf(&b, "%s\n\n%s\n\n", OC_MASTER, OC_VIEW_DOC);
+        if (x->st.memory) sa_printf(&b, "%s\n\n%s\n\n%s", OC_MASTER, OC_VIEW_DOC, x->sub ? SA_SUBAGENT : SA_DELEGATE);
         else sa_puts(&b, SA_ROLE);
         sa_puts(&b, SA_GUIDE);
         sa_puts(&b, "\n\n");
@@ -1669,6 +1690,7 @@ static char *sa_body(sa_agent *x, int upto, const char *extra_user, int tools) {
             cJSON *more = cJSON_Parse(SA_MEMORY_TOOLS), *t;
             while ((t = cJSON_DetachItemFromArray(more, 0))) cJSON_AddItemToArray(defs, t);
             cJSON_Delete(more);
+            if (!x->sub) cJSON_AddItemToArray(defs, cJSON_Parse(SA_AGENT_TOOL));
         }
         sa_mcp_tools(x, defs);
         cJSON_AddItemToObject(root, "tools", defs);
@@ -2175,6 +2197,37 @@ static int sa_tool_bash(sa_agent *x, const cJSON *in, sa_buf *out, int *interrup
     return failed;
 }
 
+static char *sa_ask_ex(Backend *b, const char *user, backend_result *meta);
+
+static int sa_tool_agent(sa_agent *x, const cJSON *input, sa_buf *out, int *interrupted) {
+    const char *task = sa_jstr(input, "task");
+    if (!task || !*task) {
+        sa_puts(out, "task is required");
+        return 1;
+    }
+    backend_opts o = { .name = "core", .model = x->st.model, .effort = x->st.effort, .cwd = x->st.cwd,
+                       .system = x->st.system, .memory = 1 };
+    Backend *b = core_agent_open(&o);
+    if (!b) {
+        sa_puts(out, "could not open a subagent");
+        return 1;
+    }
+    sa_agent *c = b->ctx;
+    c->sub = 1;
+    c->mem = x->mem;
+    c->halt = x->halt;
+    c->st.abort = x->st.abort;
+    backend_result res;
+    char *reply = sa_ask_ex(b, task, &res);
+    int failed = !reply || res.is_error || res.interrupted;
+    if (res.interrupted) *interrupted = 1;
+    if (reply && *reply) sa_puts(out, reply);
+    else sa_printf(out, "subagent failed: %s", c->err[0] ? c->err : "no report");
+    free(reply);
+    b->close(b);
+    return failed;
+}
+
 static void sa_run_call(sa_agent *x, sa_call *call, int *interrupted) {
     const char *name = call->name ? call->name : "";
     cJSON *input = cJSON_Parse(call->args.n ? sa_str(&call->args) : "{}");
@@ -2216,11 +2269,13 @@ static void sa_run_call(sa_agent *x, sa_call *call, int *interrupted) {
             if (d) sa_puts(&out, d);
             else sa_printf(&out, "No message %ld.", (long)sa_jnum(input, "id"));
             failed = !d;
+        } else if (x->mem && !x->sub && !strcmp(name, "agent")) {
+            failed = sa_tool_agent(x, input, &out, interrupted);
         } else if ((tool = sa_mcp_find(x, name, &server))) {
             failed = sa_mcp_call(x, server, tool, input, &out, interrupted);
         } else {
             sa_printf(&out, "unknown tool '%s'; the tools are read, write, edit, bash%s", name,
-                      x->mem ? ", zoom, date" : "");
+                      !x->mem ? "" : x->sub ? ", zoom, date" : ", zoom, date, agent");
             for (int i = 0; i < x->nmcp; i++) {
                 char full[512];
                 const cJSON *t;
@@ -2315,7 +2370,7 @@ static int sa_memory_turn(sa_agent *x, const char *user, const sa_buf *reminder)
         return 0;
     }
     char *view = oc_render(x->mem, 1);
-    oc_append(x->mem, "user", user);
+    if (!x->sub) oc_append(x->mem, "user", user);
     sa_buf b = {0};
     sa_printf(&b, "%s\n" BACKEND_CACHE_MARK "%s", view, user);
     if (reminder->n) sa_printf(&b, "\n\n%s", sa_str(reminder));
@@ -2601,7 +2656,7 @@ static void sa_close(Backend *b) {
     sa_agent *x = b->ctx;
     x->halting = 1;
     oc_compactor_stop(x->compactor);
-    oc_close(x->mem);
+    if (!x->sub) oc_close(x->mem);
     sa_close_file(x);
     cJSON_Delete(x->msgs);
     cJSON_Delete(x->config);

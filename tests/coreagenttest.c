@@ -235,7 +235,9 @@ static void serve_one(int fd)
     const char *sys = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(msgs, 0), "content"));
     char path[512];
     snprintf(path, sizeof path, "%s/%s", dir,
-             sys && !strncmp(sys, "You write the memory", 20) ? "compactor-request.json" : "last-request.json");
+             sys && !strncmp(sys, "You write the memory", 20) ? "compactor-request.json"
+             : sys && strstr(sys, "You are a subagent of scrap")  ? "sub-request.json"
+                                                                  : "last-request.json");
     FILE *f = fopen(path, "w");
     if (f) {
         fputs(req + body_at, f);
@@ -457,6 +459,7 @@ static void memory_test(void)
     CHECK(cJSON_GetArraySize(msgs) == 2);
     char *sys = strdup(msg_text(msgs, 0) ? msg_text(msgs, 0) : "");
     CHECK(!strstr(sys, "Date:") && strstr(sys, "zoom(id, n)") && strstr(sys, "project rule 42"));
+    CHECK(strstr(sys, "to a subagent with agent"));
     CHECK(msg_text(msgs, 1) && !strcmp(msg_text(msgs, 1), "<chat>\n</chat>\nfirst"));
     CHECK(strstr(get_file("last-request.json"), "\"name\":\"zoom\"") &&
           strstr(get_file("last-request.json"), "\"name\":\"date\""));
@@ -495,6 +498,16 @@ static void memory_test(void)
     CHECK(last_failed && !strcmp(last_result, "No line 1+2."));
     free(reply);
 
+    reply = ask(b, "tool: agent|{\"task\":\"run: echo sub\"}", &meta);
+    CHECK(!strcmp(last_tool, "agent") && !last_failed && !strcmp(last_result, "tool said: sub\n"));
+    CHECK(reply && !strcmp(reply, "tool said: tool said: sub\n"));
+    free(reply);
+    CHECK(strstr(get_file("last-request.json"), "\"name\":\"agent\""));
+    char *sub = get_file("sub-request.json");
+    CHECK(strstr(sub, "|tool: agent {") && strstr(sub, "</chat>\\nrun: echo sub") && strstr(sub, "zoom(id, n)"));
+    CHECK(!strstr(sub, "\"name\":\"agent\"") && strstr(sub, "\"name\":\"zoom\""));
+    CHECK(!strstr(sub, "to a subagent with agent"));
+
     b->set_model(b, "fake/anthropic/echo");
     reply = ask(b, "blocks", &meta);
     CHECK(reply && !strcmp(reply, "echo: blocks"));
@@ -527,9 +540,9 @@ static void memory_test(void)
         cJSON_Delete(j);
     }
     CHECK(!strcmp(kinds, "user talk user talk user tool echo talk user tool echo talk user tool echo talk "
-                         "user tool echo talk user talk user talk "));
+                         "user tool echo talk user tool echo talk user talk user talk "));
     if (strcmp(kinds, "user talk user talk user tool echo talk user tool echo talk user tool echo talk "
-                      "user tool echo talk user talk user talk "))
+                      "user tool echo talk user tool echo talk user talk user talk "))
         fprintf(stderr, "kinds: %s\n", kinds);
     free(log);
 }
