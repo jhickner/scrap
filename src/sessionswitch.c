@@ -349,6 +349,48 @@ static int group_rows(const struct row *in, int n, struct row *out,
     return m;
 }
 
+cJSON *sessionswitch_rows(void)
+{
+    struct live_session *live = NULL;
+    int nlive = livelist_load(&live);
+    struct row *found = calloc(MAX_ROWS, sizeof *found);
+    struct row *rows = calloc(MAX_ROWS, sizeof *rows);
+    unsigned char *heading = calloc(MAX_ROWS, 1);
+    cJSON *list = cJSON_CreateArray();
+    if (found && rows && heading) {
+        int nfound = 0;
+        tab_rows(found, &nfound);
+        live_rows(found, &nfound, live, nlive);
+        int n = group_rows(found, nfound, rows, heading, MAX_ROWS);
+        for (int i = 0; i < n; i++) {
+            const struct row *r = &rows[i];
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddStringToObject(o, "kind", r->kind == ROW_HEAD ? "head"
+                                               : r->kind == ROW_TAB ? "tab" : "live");
+            cJSON_AddStringToObject(o, "label", r->label);
+            if (r->kind != ROW_HEAD) {
+                cJSON_AddStringToObject(o, "detail", r->detail);
+                cJSON_AddStringToObject(o, "target", r->target);
+                cJSON_AddStringToObject(o, "id", r->id);
+                if (r->when[0])
+                    cJSON_AddStringToObject(o, "when", r->when);
+                if (r->spin)
+                    cJSON_AddBoolToObject(o, "busy", 1);
+                if (r->mark[0])
+                    cJSON_AddBoolToObject(o, "error", 1);
+                if (r->kind == ROW_TAB)
+                    cJSON_AddNumberToObject(o, "tab", r->at);
+            }
+            cJSON_AddItemToArray(list, o);
+        }
+    }
+    free(found);
+    free(rows);
+    free(heading);
+    free(live);
+    return list;
+}
+
 static int remote_on(void)
 {
     return settings_get_int(SETTING_SESSIONS_REMOTE, 0);

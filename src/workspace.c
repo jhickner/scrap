@@ -822,7 +822,8 @@ int workspace_dequeue(int index, const char *line)
         return 0;
     struct tab *t = &tabs[index];
     for (int i = 0; i < t->npending; i++) {
-        if (strcmp(t->pending[i].line, line))
+        if (strcmp(t->pending[i].line, line) &&
+            (!t->pending[i].shown || strcmp(t->pending[i].shown, line)))
             continue;
         free(t->pending[i].line);
         free(t->pending[i].shown);

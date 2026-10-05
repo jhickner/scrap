@@ -1,16 +1,17 @@
 /**
- * wsd.h — single-header WebSocket server for one client (C)
+ * wsd.h — single-header WebSocket server (C)
  *
- * Accepts one WebSocket client at a time on its own thread and hands text
- * messages to a callback. A new client replaces the old one, so a phone that
- * reconnects after sleeping does not have to wait for the stale socket to time
- * out. Sends go straight to the socket under a lock and may be called from
- * any thread.
+ * Accepts up to WSD_MAX_CLIENTS WebSocket clients on its own thread and hands
+ * text messages to a callback, tagged with a client id. When the table is
+ * full, the oldest client is dropped. Sends are queued per client and written
+ * by the server thread, so wsd_send never blocks on the network; a client
+ * whose queue passes max_queue is dropped. The server pings every client
+ * every 15 s and drops one that has sent nothing for 45 s.
  *
- * Only what a chat transport needs: RFC 6455 text and close frames, pings
- * answered, no extensions, no fragmentation, no TLS. Bind it to a Tailscale
- * address (see wsd_tailscale_ip) and require a token; treat it as a private
- * socket, not a public endpoint.
+ * Only what a chat transport needs: RFC 6455 text and close frames, pings,
+ * no extensions, no fragmentation, no TLS. Bind it to a Tailscale address
+ * (see wsd_tailscale_ip) and require a token; treat it as a private socket,
+ * not a public endpoint.
  *
  * USAGE (stb style):
  *
@@ -20,7 +21,7 @@
  *
  *   wsd_opts o = { .bind_ip = wsd_tailscale_ip(), .port = 8790, .token = tok };
  *   wsd *w = wsd_start(&o, on_text, on_state, ud);
- *   wsd_send(w, "{\"t\":\"hello\"}", 0);
+ *   wsd_send(w, client, "{\"t\":\"hello\"}", 0);
  *   wsd_stop(w);
  *
  * The client authenticates in the upgrade request, either with
@@ -34,30 +35,34 @@
 
 #include <stddef.h>
 
+#define WSD_MAX_CLIENTS 8
+
 typedef struct wsd wsd;
 
 typedef struct {
-    const char *bind_ip; /* NULL/"" binds every interface                     */
+    const char *bind_ip;     /* NULL/"" binds every interface                  */
     int         port;
-    const char *token;   /* required in the upgrade request when non-empty    */
+    const char *token;       /* required in the upgrade request when non-empty */
     size_t      max_message; /* incoming text limit, 0 -> 1 MiB               */
+    size_t      max_queue;   /* outgoing bytes per client, 0 -> 64 MiB         */
 } wsd_opts;
 
-/* Both run on the server thread. on_text gets a NUL-terminated copy that is
- * valid for the call only. on_state fires with 1 after a client's handshake
- * and 0 when it goes away (also when a new client displaces it). */
-typedef void (*wsd_text_fn)(void *ud, const char *text, size_t n);
-typedef void (*wsd_state_fn)(void *ud, int connected);
+/* Both run on the server thread. Client ids are positive and never reused.
+ * on_text gets a NUL-terminated copy that is valid for the call only.
+ * on_state fires with 1 after a client's handshake and 0 when it goes. */
+typedef void (*wsd_text_fn)(void *ud, int client, const char *text, size_t n);
+typedef void (*wsd_state_fn)(void *ud, int client, int connected);
 
 wsd *wsd_start(const wsd_opts *opts, wsd_text_fn on_text, wsd_state_fn on_state, void *ud);
 
-/* Send a text frame to the connected client. n == 0 means strlen(text).
- * Returns 0 on success, -1 when no client is connected or the write failed. */
-int wsd_send(wsd *w, const char *text, size_t n);
+/* Queue a text frame for a client. n == 0 means strlen(text). Returns 0 when
+ * queued, -1 when the client is gone. Any thread. */
+int wsd_send(wsd *w, int client, const char *text, size_t n);
 
-int wsd_connected(const wsd *w);
+/* Connected client count. */
+int wsd_clients(wsd *w);
 
-/* Close the client, stop the thread and free. Safe with NULL. */
+/* Close every client, stop the thread and free. Safe with NULL. */
 void wsd_stop(wsd *w);
 
 /* This machine's Tailscale address, or NULL when the tailnet is not up. Points
@@ -86,22 +91,37 @@ const char *wsd_tailscale_ip(void);
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
+#define WSD_PING_SECS 15
+#define WSD_DEAD_SECS 45
+
+typedef struct {
+    int            fd;     /* -1 when the slot is free */
+    int            id;
+    unsigned char *in;
+    size_t         in_len, in_cap;
+    unsigned char *out;    /* framed bytes not yet written, from out_off */
+    size_t         out_len, out_off, out_cap;
+    int            doomed; /* queue overflow: drop on the next loop */
+    time_t         last_rx, last_ping;
+} wsd_client;
+
 struct wsd {
-    wsd_opts      opts;
-    char          token[128];
-    char          bind_ip[64];
-    wsd_text_fn   on_text;
-    wsd_state_fn  on_state;
-    void         *ud;
-    int           listen_fd;
-    int           client_fd;
-    int           stop_pipe[2];
-    pthread_t     thread;
-    pthread_mutex_t send_lock;
-    unsigned char *buf;
-    size_t        len, cap;
+    wsd_opts        opts;
+    char            token[128];
+    char            bind_ip[64];
+    wsd_text_fn     on_text;
+    wsd_state_fn    on_state;
+    void           *ud;
+    int             listen_fd;
+    int             wake[2];
+    volatile int    stopping;
+    int             next_id;
+    pthread_t       thread;
+    pthread_mutex_t lock;
+    wsd_client      c[WSD_MAX_CLIENTS];
 };
 
 /* ---- sha1 + base64, for the handshake only ------------------------------ */
@@ -185,6 +205,7 @@ const char *wsd_tailscale_ip(void) {
     return ip[0] ? ip : NULL;
 }
 
+
 static int wsd_write_all(int fd, const void *p, size_t n) {
     const unsigned char *b = p;
     while (n) {
@@ -195,30 +216,75 @@ static int wsd_write_all(int fd, const void *p, size_t n) {
     return 0;
 }
 
-static int wsd_write_frame(int fd, int opcode, const void *data, size_t n) {
-    unsigned char hdr[10];
-    size_t hl = 2;
+static size_t wsd_frame_header(unsigned char hdr[10], int opcode, size_t n) {
     hdr[0] = (unsigned char)(0x80 | opcode);
-    if (n < 126) hdr[1] = (unsigned char)n;
-    else if (n < 65536) { hdr[1] = 126; hdr[2] = (unsigned char)(n >> 8); hdr[3] = (unsigned char)n; hl = 4; }
-    else { hdr[1] = 127; for (int i = 0; i < 8; i++) hdr[2 + i] = (unsigned char)((uint64_t)n >> (56 - 8 * i)); hl = 10; }
-    if (wsd_write_all(fd, hdr, hl)) return -1;
-    return n ? wsd_write_all(fd, data, n) : 0;
+    if (n < 126) { hdr[1] = (unsigned char)n; return 2; }
+    if (n < 65536) { hdr[1] = 126; hdr[2] = (unsigned char)(n >> 8); hdr[3] = (unsigned char)n; return 4; }
+    hdr[1] = 127;
+    for (int i = 0; i < 8; i++) hdr[2 + i] = (unsigned char)((uint64_t)n >> (56 - 8 * i));
+    return 10;
 }
 
-static void wsd_drop_client(wsd *w, int tell) {
-    pthread_mutex_lock(&w->send_lock);
-    int fd = w->client_fd;
-    w->client_fd = -1;
-    pthread_mutex_unlock(&w->send_lock);
+/* Caller holds the lock. */
+static void wsd_queue(wsd *w, wsd_client *c, int opcode, const void *data, size_t n) {
+    if (c->doomed) return;
+    unsigned char hdr[10];
+    size_t hl = wsd_frame_header(hdr, opcode, n);
+    if (c->out_off && c->out_off == c->out_len) c->out_off = c->out_len = 0;
+    if (c->out_len - c->out_off + hl + n > w->opts.max_queue) { c->doomed = 1; return; }
+    if (c->out_len + hl + n > c->out_cap) {
+        if (c->out_off) {
+            memmove(c->out, c->out + c->out_off, c->out_len - c->out_off);
+            c->out_len -= c->out_off;
+            c->out_off = 0;
+        }
+        size_t nc = c->out_cap ? c->out_cap : 8192;
+        while (nc < c->out_len + hl + n) nc *= 2;
+        unsigned char *nb = realloc(c->out, nc);
+        if (!nb) { c->doomed = 1; return; }
+        c->out = nb; c->out_cap = nc;
+    }
+    memcpy(c->out + c->out_len, hdr, hl);
+    if (n) memcpy(c->out + c->out_len + hl, data, n);
+    c->out_len += hl + n;
+}
+
+static void wsd_wake(wsd *w) {
+    char b = 1;
+    ssize_t ignored = write(w->wake[1], &b, 1);
+    (void)ignored;
+}
+
+static void wsd_drop(wsd *w, wsd_client *c, int tell) {
+    pthread_mutex_lock(&w->lock);
+    int fd = c->fd, id = c->id;
+    c->fd = -1;
+    free(c->out);
+    c->out = NULL;
+    c->out_len = c->out_off = c->out_cap = 0;
+    c->doomed = 0;
+    pthread_mutex_unlock(&w->lock);
     if (fd < 0) return;
-    if (tell) wsd_write_frame(fd, 0x8, "\x03\xe8", 2);
+    if (tell) {
+        unsigned char f[4] = {0x88, 2, 0x03, 0xe8};
+        ssize_t ignored = send(fd, f, sizeof f, MSG_DONTWAIT);
+        (void)ignored;
+    }
     close(fd);
-    w->len = 0;
-    if (w->on_state) w->on_state(w->ud, 0);
+    free(c->in);
+    c->in = NULL;
+    c->in_len = c->in_cap = 0;
+    if (w->on_state) w->on_state(w->ud, id, 0);
 }
 
 /* ---- handshake ---------------------------------------------------------- */
+
+static int wsd_token_eq(const char *a, size_t n, const char *token) {
+    size_t tn = strlen(token);
+    unsigned char d = (unsigned char)(n != tn);
+    for (size_t i = 0; i < tn; i++) d |= (unsigned char)((i < n ? a[i] : 0) ^ token[i]);
+    return d == 0;
+}
 
 static int wsd_header(const char *req, const char *name, char *out, size_t size) {
     size_t nl = strlen(name);
@@ -240,13 +306,13 @@ static int wsd_authorized(const wsd *w, const char *req) {
     if (!w->token[0]) return 1;
     char v[256];
     if (wsd_header(req, "Authorization", v, sizeof v) &&
-        !strncasecmp(v, "Bearer ", 7) && !strcmp(v + 7, w->token))
+        !strncasecmp(v, "Bearer ", 7) && wsd_token_eq(v + 7, strlen(v + 7), w->token))
         return 1;
     const char *q = strstr(req, "token=");
     if (q && q < strchr(req, '\n')) {
         q += 6;
         size_t n = strcspn(q, "& \r\n");
-        return n == strlen(w->token) && !strncmp(q, w->token, n);
+        return wsd_token_eq(q, n, w->token);
     }
     return 0;
 }
@@ -294,56 +360,75 @@ static int wsd_handshake(wsd *w, int fd) {
 /* ---- frames ------------------------------------------------------------- */
 
 /* Consume complete frames from the buffer; -1 asks for the client to go. */
-static int wsd_parse(wsd *w) {
+static int wsd_parse(wsd *w, wsd_client *c) {
     for (;;) {
-        if (w->len < 2) return 0;
-        unsigned char *b = w->buf;
+        if (c->in_len < 2) return 0;
+        unsigned char *b = c->in;
         int fin = b[0] & 0x80, op = b[0] & 0x0f, masked = b[1] & 0x80;
         uint64_t plen = b[1] & 0x7f;
         size_t hl = 2;
-        if (plen == 126) { if (w->len < 4) return 0; plen = (uint64_t)b[2] << 8 | b[3]; hl = 4; }
+        if (plen == 126) { if (c->in_len < 4) return 0; plen = (uint64_t)b[2] << 8 | b[3]; hl = 4; }
         else if (plen == 127) {
-            if (w->len < 10) return 0;
+            if (c->in_len < 10) return 0;
             plen = 0;
             for (int i = 0; i < 8; i++) plen = plen << 8 | b[2 + i];
             hl = 10;
         }
         if (!masked || !fin) return -1;
         if (plen > w->opts.max_message) return -1;
-        if (w->len < hl + 4 + plen) return 0;
+        if (c->in_len < hl + 4 + plen) return 0;
         unsigned char *mask = b + hl, *p = b + hl + 4;
         for (uint64_t i = 0; i < plen; i++) p[i] ^= mask[i & 3];
         size_t used = hl + 4 + (size_t)plen;
         if (op == 0x1) {
             unsigned char save = p[plen];
             p[plen] = '\0';
-            if (w->on_text) w->on_text(w->ud, (const char *)p, (size_t)plen);
+            if (w->on_text) w->on_text(w->ud, c->id, (const char *)p, (size_t)plen);
             p[plen] = save;
         } else if (op == 0x8) {
             return -1;
         } else if (op == 0x9) {
-            pthread_mutex_lock(&w->send_lock);
-            if (w->client_fd >= 0) wsd_write_frame(w->client_fd, 0xA, p, (size_t)plen);
-            pthread_mutex_unlock(&w->send_lock);
+            pthread_mutex_lock(&w->lock);
+            wsd_queue(w, c, 0xA, p, (size_t)plen);
+            pthread_mutex_unlock(&w->lock);
         }
-        memmove(w->buf, w->buf + used, w->len - used);
-        w->len -= used;
+        memmove(c->in, c->in + used, c->in_len - used);
+        c->in_len -= used;
     }
 }
 
-static int wsd_read(wsd *w) {
-    if (w->cap - w->len < 4096) {
-        size_t nc = w->cap ? w->cap * 2 : 8192;
+static int wsd_read(wsd *w, wsd_client *c) {
+    if (c->in_cap - c->in_len < 4096) {
+        size_t nc = c->in_cap ? c->in_cap * 2 : 8192;
         if (nc > w->opts.max_message + 16 + 4096) nc = w->opts.max_message + 16 + 4096;
-        if (nc <= w->len + 1) return -1;
-        unsigned char *nb = realloc(w->buf, nc);
+        if (nc <= c->in_len + 1) return -1;
+        unsigned char *nb = realloc(c->in, nc);
         if (!nb) return -1;
-        w->buf = nb; w->cap = nc;
+        c->in = nb; c->in_cap = nc;
     }
-    ssize_t k = recv(w->client_fd, w->buf + w->len, w->cap - w->len - 1, 0);
-    if (k <= 0) return (k < 0 && (errno == EINTR || errno == EAGAIN)) ? 0 : -1;
-    w->len += (size_t)k;
-    return wsd_parse(w);
+    ssize_t k = recv(c->fd, c->in + c->in_len, c->in_cap - c->in_len - 1, 0);
+    if (k < 0) return (errno == EINTR || errno == EAGAIN) ? 0 : -1;
+    if (k == 0) return -1;
+    c->in_len += (size_t)k;
+    c->last_rx = time(NULL);
+    return wsd_parse(w, c);
+}
+
+/* Write what the socket takes; -1 asks for the client to go. */
+static int wsd_flush(wsd *w, wsd_client *c) {
+    pthread_mutex_lock(&w->lock);
+    int r = c->doomed ? -1 : 0;
+    while (!r && c->out_off < c->out_len) {
+        ssize_t k = send(c->fd, c->out + c->out_off, c->out_len - c->out_off, MSG_DONTWAIT);
+        if (k < 0) {
+            if (errno != EINTR && errno != EAGAIN) r = -1;
+            if (errno != EINTR) break;
+            continue;
+        }
+        c->out_off += (size_t)k;
+    }
+    pthread_mutex_unlock(&w->lock);
+    return r;
 }
 
 static void wsd_accept(wsd *w) {
@@ -351,28 +436,75 @@ static void wsd_accept(wsd *w) {
     if (fd < 0) return;
     int one = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-    struct timeval tv = {10, 0};
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
     if (wsd_handshake(w, fd)) { close(fd); return; }
-    wsd_drop_client(w, 1);
-    pthread_mutex_lock(&w->send_lock);
-    w->client_fd = fd;
-    pthread_mutex_unlock(&w->send_lock);
-    if (w->on_state) w->on_state(w->ud, 1);
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    wsd_client *slot = NULL;
+    for (int i = 0; i < WSD_MAX_CLIENTS && !slot; i++)
+        if (w->c[i].fd < 0) slot = &w->c[i];
+    if (!slot) {
+        slot = &w->c[0];
+        for (int i = 1; i < WSD_MAX_CLIENTS; i++)
+            if (w->c[i].id < slot->id) slot = &w->c[i];
+        wsd_drop(w, slot, 1);
+    }
+    pthread_mutex_lock(&w->lock);
+    slot->fd = fd;
+    slot->id = ++w->next_id;
+    slot->last_rx = slot->last_ping = time(NULL);
+    pthread_mutex_unlock(&w->lock);
+    if (w->on_state) w->on_state(w->ud, slot->id, 1);
+}
+
+static void wsd_heartbeat(wsd *w) {
+    time_t now = time(NULL);
+    for (int i = 0; i < WSD_MAX_CLIENTS; i++) {
+        wsd_client *c = &w->c[i];
+        if (c->fd < 0) continue;
+        if (now - c->last_rx > WSD_DEAD_SECS) { wsd_drop(w, c, 1); continue; }
+        if (now - c->last_ping >= WSD_PING_SECS) {
+            pthread_mutex_lock(&w->lock);
+            wsd_queue(w, c, 0x9, "", 0);
+            pthread_mutex_unlock(&w->lock);
+            c->last_ping = now;
+        }
+    }
 }
 
 static void *wsd_loop(void *ud) {
     wsd *w = ud;
-    for (;;) {
-        struct pollfd p[3] = {
-            {w->stop_pipe[0], POLLIN, 0}, {w->listen_fd, POLLIN, 0}, {w->client_fd, POLLIN, 0}};
-        int n = w->client_fd >= 0 ? 3 : 2;
-        if (poll(p, (nfds_t)n, -1) < 0) { if (errno == EINTR) continue; break; }
-        if (p[0].revents) break;
-        if (n == 3 && p[2].revents && wsd_read(w) < 0) wsd_drop_client(w, 1);
+    while (!w->stopping) {
+        struct pollfd p[2 + WSD_MAX_CLIENTS];
+        wsd_client *who[2 + WSD_MAX_CLIENTS];
+        nfds_t n = 0;
+        p[n] = (struct pollfd){w->wake[0], POLLIN, 0}; who[n++] = NULL;
+        p[n] = (struct pollfd){w->listen_fd, POLLIN, 0}; who[n++] = NULL;
+        pthread_mutex_lock(&w->lock);
+        for (int i = 0; i < WSD_MAX_CLIENTS; i++) {
+            wsd_client *c = &w->c[i];
+            if (c->fd < 0) continue;
+            short ev = POLLIN;
+            if (c->out_off < c->out_len || c->doomed) ev |= POLLOUT;
+            p[n] = (struct pollfd){c->fd, ev, 0}; who[n++] = c;
+        }
+        pthread_mutex_unlock(&w->lock);
+        if (poll(p, n, 1000) < 0) { if (errno == EINTR) continue; break; }
+        if (p[0].revents) {
+            char buf[64];
+            while (read(w->wake[0], buf, sizeof buf) > 0) {}
+        }
+        for (nfds_t i = 2; i < n; i++) {
+            wsd_client *c = who[i];
+            if (c->fd != p[i].fd) continue;
+            int bad = 0;
+            if (p[i].revents & (POLLIN | POLLHUP | POLLERR)) bad = wsd_read(w, c) < 0;
+            if (!bad) bad = wsd_flush(w, c) < 0;
+            if (bad) wsd_drop(w, c, 1);
+        }
         if (p[1].revents) wsd_accept(w);
+        wsd_heartbeat(w);
     }
-    wsd_drop_client(w, 1);
+    for (int i = 0; i < WSD_MAX_CLIENTS; i++) wsd_drop(w, &w->c[i], 1);
     return NULL;
 }
 
@@ -384,14 +516,15 @@ wsd *wsd_start(const wsd_opts *opts, wsd_text_fn on_text, wsd_state_fn on_state,
     if (!w) return NULL;
     w->opts = *opts;
     if (!w->opts.max_message) w->opts.max_message = 1 << 20;
+    if (!w->opts.max_queue) w->opts.max_queue = 64u << 20;
     if (opts->token) snprintf(w->token, sizeof w->token, "%s", opts->token);
     if (opts->bind_ip) snprintf(w->bind_ip, sizeof w->bind_ip, "%s", opts->bind_ip);
     w->opts.token = w->token;
     w->opts.bind_ip = w->bind_ip;
     w->on_text = on_text; w->on_state = on_state; w->ud = ud;
-    w->client_fd = -1;
-    w->stop_pipe[0] = w->stop_pipe[1] = -1;
-    pthread_mutex_init(&w->send_lock, NULL);
+    for (int i = 0; i < WSD_MAX_CLIENTS; i++) w->c[i].fd = -1;
+    w->wake[0] = w->wake[1] = -1;
+    pthread_mutex_init(&w->lock, NULL);
     signal(SIGPIPE, SIG_IGN);
 
     w->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -405,43 +538,58 @@ wsd *wsd_start(const wsd_opts *opts, wsd_text_fn on_text, wsd_state_fn on_state,
     if (w->bind_ip[0] && inet_pton(AF_INET, w->bind_ip, &sa.sin_addr) != 1) goto fail;
     if (bind(w->listen_fd, (struct sockaddr *)&sa, sizeof sa) || listen(w->listen_fd, 4)) goto fail;
     fcntl(w->listen_fd, F_SETFD, FD_CLOEXEC);
-    if (pipe(w->stop_pipe)) goto fail;
-    fcntl(w->stop_pipe[0], F_SETFD, FD_CLOEXEC);
-    fcntl(w->stop_pipe[1], F_SETFD, FD_CLOEXEC);
+    if (pipe(w->wake)) goto fail;
+    for (int i = 0; i < 2; i++) {
+        fcntl(w->wake[i], F_SETFD, FD_CLOEXEC);
+        fcntl(w->wake[i], F_SETFL, O_NONBLOCK);
+    }
     if (pthread_create(&w->thread, NULL, wsd_loop, w)) goto fail;
     return w;
 fail:
     if (w->listen_fd >= 0) close(w->listen_fd);
-    if (w->stop_pipe[0] >= 0) close(w->stop_pipe[0]);
-    if (w->stop_pipe[1] >= 0) close(w->stop_pipe[1]);
+    if (w->wake[0] >= 0) close(w->wake[0]);
+    if (w->wake[1] >= 0) close(w->wake[1]);
+    pthread_mutex_destroy(&w->lock);
     free(w);
     return NULL;
 }
 
-int wsd_send(wsd *w, const char *text, size_t n) {
+int wsd_send(wsd *w, int client, const char *text, size_t n) {
     if (!w || !text) return -1;
     if (!n) n = strlen(text);
-    pthread_mutex_lock(&w->send_lock);
-    int r = w->client_fd >= 0 ? wsd_write_frame(w->client_fd, 0x1, text, n) : -1;
-    pthread_mutex_unlock(&w->send_lock);
+    int r = -1;
+    pthread_mutex_lock(&w->lock);
+    for (int i = 0; i < WSD_MAX_CLIENTS; i++) {
+        wsd_client *c = &w->c[i];
+        if (c->fd >= 0 && c->id == client && !c->doomed) {
+            wsd_queue(w, c, 0x1, text, n);
+            r = c->doomed ? -1 : 0;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&w->lock);
+    if (!r) wsd_wake(w);
     return r;
 }
 
-int wsd_connected(const wsd *w) {
-    return w && w->client_fd >= 0;
+int wsd_clients(wsd *w) {
+    if (!w) return 0;
+    int n = 0;
+    pthread_mutex_lock(&w->lock);
+    for (int i = 0; i < WSD_MAX_CLIENTS; i++) n += w->c[i].fd >= 0;
+    pthread_mutex_unlock(&w->lock);
+    return n;
 }
 
 void wsd_stop(wsd *w) {
     if (!w) return;
-    char b = 1;
-    ssize_t ignored = write(w->stop_pipe[1], &b, 1);
-    (void)ignored;
+    w->stopping = 1;
+    wsd_wake(w);
     pthread_join(w->thread, NULL);
-    close(w->stop_pipe[0]);
-    close(w->stop_pipe[1]);
+    close(w->wake[0]);
+    close(w->wake[1]);
     close(w->listen_fd);
-    pthread_mutex_destroy(&w->send_lock);
-    free(w->buf);
+    pthread_mutex_destroy(&w->lock);
     free(w);
 }
 

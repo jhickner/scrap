@@ -679,7 +679,6 @@ static void do_relay(struct session *s, const char *arg)
     } else if (relay_session() == s) {
         reply_note("relay already on in this tab");
     } else {
-        relay_stop();
         if (relay_start(s))
             workspace_republish();
         else

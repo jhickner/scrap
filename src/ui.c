@@ -171,6 +171,25 @@ void ui_init(void)
     load_theme(theme_path(ui_theme(), path, sizeof path) ? path : "");
 }
 
+unsigned ui_background(void)
+{
+    return background;
+}
+
+const char *ui_role_key(enum ui_role role, unsigned *fg, unsigned *wash, const char **attr)
+{
+    if ((int)role < 0 || role >= UI_RESET || !ROLES[role].key)
+        return NULL;
+    unsigned c = rgb[role];
+    int      t = ROLES[role].tint;
+    *fg = c;
+    *wash = t > 0 ? mix(R(c), R(background), t) << 16 | mix(G(c), G(background), t) << 8 |
+                        mix(B(c), B(background), t)
+                  : background;
+    *attr = ROLES[role].attr;
+    return ROLES[role].key;
+}
+
 const char *ui_style(enum ui_role role)
 {
     if (!use_color)

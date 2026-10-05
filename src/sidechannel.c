@@ -11,6 +11,7 @@
 
 #include "chrome.h"
 #include "md.h"
+#include "relay.h"
 #include "scrollback.h"
 #include "sessionfork.h"
 #include "sidechannelcmd.h"
@@ -452,6 +453,7 @@ static void emit(struct side *c, int status)
 
     stream_side(c->owner, c->question, answer, failed);
     sidechannel_show(c->owner, c->question, answer, failed);
+    relay_btw(c->owner, c->question, answer, failed);
 }
 
 void sidechannel_show(const struct session *owner, const char *question,

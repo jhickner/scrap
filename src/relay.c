@@ -16,15 +16,17 @@
 #define WSD_IMPLEMENTATION
 #include "vendor/wsd.h"
 #include "vendor/cJSON.h"
-#include "vendor/httpd.h"
 
 #include "app.h"
+#include "askblock.h"
 #include "bash.h"
 #include "chrome.h"
 #include "cmd.h"
 #include "frontend.h"
+#include "hud.h"
 #include "prompt.h"
 #include "session.h"
+#include "sessionswitch.h"
 #include "sessionview.h"
 #include "settings.h"
 #include "text.h"
@@ -35,32 +37,46 @@
 #include "viewport.h"
 #include "workspace.h"
 
-#define INBOX_MAX 32
-#define PORT_DEFAULT 8790
-#define HISTORY_BYTES 6000
-#define HISTORY_BATCH 4000
+#define PROTOCOL      2
+#define INBOX_MAX     256
+#define PORT_DEFAULT  8790
+#define CLIP          16000
+#define RESULT_CLIP   8000
+#define WINDOW        50
+#define OLDER_MAX     200
 #define UPLOAD_MAX    8
 #define MESSAGE_MAX   (64u << 20)
+#define QUEUE_MAX     (96u << 20)
+#define FILE_MAX      (32u << 20)
+#define DONE_MAX      64
+#define SENT_MAX      16
+#define OPEN_TOOLS    64
 
-enum { ITEM_LINE, ITEM_HELLO, ITEM_STOP, ITEM_MORE };
+struct item {
+    int    client;
+    cJSON *msg;
+};
 
-struct inbox_item {
+struct client {
+    int  id;
+    char uuid[64];
+};
+
+struct done {
+    char  key[160];
+    char *res;
+};
+
+struct sent {
+    char req[160];
     char *text;
-    int   kind;
-
-    char  tab_id[80];
-    int   tab;
 };
 
 static struct {
     struct session *s;
     wsd            *ws;
-    httpd          *files;
-    char            files_dir[4200];
-    char            files_base[160];
     char            upload_dir[64];
     int             active;
-    int             mirror;
     int             wake[2];
     char            label[64];
     char            token[128];
@@ -68,12 +84,32 @@ static struct {
     char            bind[64];
     int             draining;
     char            system_note[900];
+    char            server[40];
+
+    struct client   clients[WSD_MAX_CLIENTS];
+    long            seq;
+    int             binding;
+
+    cJSON          *entries;
+    long            next_id;
+    long            open_tools[OPEN_TOOLS];
+    int             nopen;
     int             repeat_task;
-    int             busy_sent;
     double          mirrored_turn;
-    char           *sent;
-    struct inbox_item inbox[INBOX_MAX];
-    int             inbox_head;
+    char            sid[128];
+    size_t          tcount;
+    char           *session_json;
+    char           *live_json;
+
+    struct askblock *ask;
+    long            ask_id;
+
+    struct sent     sent[SENT_MAX];
+    int             nsent;
+    struct done     done[DONE_MAX];
+    int             done_next;
+
+    struct item     inbox[INBOX_MAX];
     int             inbox_count;
     pthread_mutex_t inbox_lock;
 } rt = {
@@ -93,6 +129,8 @@ struct session *relay_session(void)
     return rt.s;
 }
 
+/* ---- inbox: wsd thread to main thread ---------------------------------- */
+
 static void wake_up(void)
 {
     if (rt.wake[1] >= 0) {
@@ -109,61 +147,64 @@ static void wake_drain(void)
         ;
 }
 
-static int inbox_push(char *text, int kind, const char *tab_id, int tab)
+static const char *op_of(const cJSON *msg)
 {
-    if (!text)
-        return 0;
+    const char *op = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "op"));
+    return op ? op : "";
+}
+
+/* Requests that change the session wait for the terminal to be idle; the
+ * rest run on arrival, also inside a running turn. */
+static int needs_idle(const cJSON *msg)
+{
+    const char *op = op_of(msg);
+    return !strcmp(op, "send") || !strcmp(op, "answer") || !strcmp(op, "open");
+}
+
+static int inbox_push(int client, cJSON *msg)
+{
     pthread_mutex_lock(&rt.inbox_lock);
     int ok = rt.inbox_count < INBOX_MAX;
-    if (ok) {
-        int at = (rt.inbox_head + rt.inbox_count) % INBOX_MAX;
-        rt.inbox[at].text = text;
-        rt.inbox[at].kind = kind;
-        snprintf(rt.inbox[at].tab_id, sizeof rt.inbox[at].tab_id, "%s",
-                 tab_id ? tab_id : "");
-        rt.inbox[at].tab = tab;
-        rt.inbox_count++;
-    }
+    if (ok)
+        rt.inbox[rt.inbox_count++] = (struct item){client, msg};
     pthread_mutex_unlock(&rt.inbox_lock);
     if (ok)
         wake_up();
-    else
-        free(text);
     return ok;
 }
 
-static int inbox_take(struct inbox_item *out, int all)
+static int inbox_take(struct item *out, int idle)
 {
     pthread_mutex_lock(&rt.inbox_lock);
-    struct inbox_item *it = &rt.inbox[rt.inbox_head];
-    int ok = rt.inbox_count > 0 &&
-             (all || it->kind == ITEM_HELLO || it->kind == ITEM_STOP || it->kind == ITEM_MORE);
-    if (ok) {
-        *out = *it;
-        rt.inbox_head = (rt.inbox_head + 1) % INBOX_MAX;
+    int at = -1;
+    for (int i = 0; i < rt.inbox_count && at < 0; i++)
+        if (idle || !needs_idle(rt.inbox[i].msg))
+            at = i;
+    if (at >= 0) {
+        *out = rt.inbox[at];
+        memmove(rt.inbox + at, rt.inbox + at + 1,
+                (size_t)(rt.inbox_count - at - 1) * sizeof rt.inbox[0]);
         rt.inbox_count--;
     }
     pthread_mutex_unlock(&rt.inbox_lock);
-    return ok;
+    return at >= 0;
 }
 
 static void inbox_clear(void)
 {
     pthread_mutex_lock(&rt.inbox_lock);
-    while (rt.inbox_count > 0) {
-        free(rt.inbox[rt.inbox_head].text);
-        rt.inbox[rt.inbox_head] = (struct inbox_item){0};
-        rt.inbox_head = (rt.inbox_head + 1) % INBOX_MAX;
-        rt.inbox_count--;
-    }
-    rt.inbox_head = 0;
+    for (int i = 0; i < rt.inbox_count; i++)
+        cJSON_Delete(rt.inbox[i].msg);
+    rt.inbox_count = 0;
     pthread_mutex_unlock(&rt.inbox_lock);
 }
 
 int relay_pending(void)
 {
     pthread_mutex_lock(&rt.inbox_lock);
-    int n = rt.inbox_count;
+    int n = 0;
+    for (int i = 0; i < rt.inbox_count; i++)
+        n += needs_idle(rt.inbox[i].msg);
     pthread_mutex_unlock(&rt.inbox_lock);
     return n;
 }
@@ -176,14 +217,14 @@ int relay_fds(int *out, int max)
     return 1;
 }
 
-static void send_json(cJSON *o)
+/* ---- output ------------------------------------------------------------- */
+
+static void send_to(int client, cJSON *o)
 {
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
-    if (!s)
-        return;
-    if (rt.ws)
-        wsd_send(rt.ws, s, 0);
+    if (s && rt.ws)
+        wsd_send(rt.ws, client, s, 0);
     free(s);
 }
 
@@ -194,74 +235,155 @@ static cJSON *frame(const char *t)
     return o;
 }
 
-static void send_text(const char *t, const char *text)
+static cJSON *res_ok(const char *id)
 {
-    if (!text || !*text)
-        return;
-    cJSON *o = frame(t);
-    cJSON_AddStringToObject(o, "text", text);
-    send_json(o);
+    cJSON *o = frame("res");
+    cJSON_AddStringToObject(o, "id", id ? id : "");
+    cJSON_AddBoolToObject(o, "ok", 1);
+    return o;
 }
 
-static void send_note(const char *text)  { send_text("note", text); }
-static void send_pre(const char *text)   { send_text("pre", text); }
-
-static void stamp_timing(cJSON *o)
+static cJSON *res_error(const char *id, const char *code, const char *msg)
 {
-    double now = now_seconds();
-    double queued = session_event_queued_at();
-    cJSON_AddNumberToObject(o, "ts", now);
-    cJSON_AddNumberToObject(o, "queue", queued > 0 ? now - queued : 0);
+    cJSON *o = frame("res");
+    cJSON_AddStringToObject(o, "id", id ? id : "");
+    cJSON_AddBoolToObject(o, "ok", 0);
+    cJSON_AddStringToObject(o, "code", code);
+    cJSON_AddStringToObject(o, "msg", msg);
+    return o;
 }
 
-static void send_reply(const char *text)
+static struct client *client_find(int id)
 {
-    if (!text || !*text)
-        return;
-    cJSON *o = frame("reply");
-    cJSON_AddStringToObject(o, "text", text);
-    stamp_timing(o);
-    send_json(o);
+    for (int i = 0; i < WSD_MAX_CLIENTS; i++)
+        if (rt.clients[i].id == id)
+            return &rt.clients[i];
+    return NULL;
 }
 
-static void send_idle(void)
+static void emit(cJSON *op)
 {
-    send_json(frame("idle"));
+    cJSON *o = frame("delta");
+    cJSON_AddNumberToObject(o, "seq", (double)++rt.seq);
+    cJSON *ops = cJSON_AddArrayToObject(o, "ops");
+    cJSON_AddItemToArray(ops, op);
+    char *s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    for (int i = 0; s && rt.ws && i < WSD_MAX_CLIENTS; i++)
+        if (rt.clients[i].id)
+            wsd_send(rt.ws, rt.clients[i].id, s, 0);
+    free(s);
 }
 
-static void send_busy(int on)
+static cJSON *op2(const char *name, cJSON *a)
 {
-    on = on ? 1 : 0;
-    if (rt.busy_sent == on)
-        return;
-    rt.busy_sent = on;
-    cJSON *o = frame("busy");
-    cJSON_AddBoolToObject(o, "on", on);
-    send_json(o);
+    cJSON *op = cJSON_CreateArray();
+    cJSON_AddItemToArray(op, cJSON_CreateString(name));
+    cJSON_AddItemToArray(op, a ? a : cJSON_CreateNull());
+    return op;
 }
 
-static void add_clipped(cJSON *o, const char *key, const char *text, size_t max)
+/* ---- entries ------------------------------------------------------------ */
+
+static cJSON *clipped_string(const char *text, size_t max, int *cut)
 {
     if (!text)
         text = "";
-    if (strlen(text) <= max) {
-        cJSON_AddStringToObject(o, key, text);
-        return;
-    }
-    char *cut = malloc(max + 2);
-    if (!cut)
-        return;
-    snprintf(cut, max + 2, "%.*s\u2026", (int)max, text);
-    cJSON_AddStringToObject(o, key, cut);
-    free(cut);
+    size_t n = strlen(text);
+    if (n <= max)
+        return cJSON_CreateString(text);
+    while (max > 0 && ((unsigned char)text[max] & 0xC0) == 0x80)
+        max--;
+    char *s = malloc(max + 1);
+    if (!s)
+        return cJSON_CreateString("");
+    memcpy(s, text, max);
+    s[max] = '\0';
+    cJSON *o = cJSON_CreateString(s);
+    free(s);
+    *cut = 1;
+    return o;
 }
 
+/* An entry as sent in a view or delta: long text fields clipped, with
+ * `clipped` set so the client can fetch the whole entry. */
+static cJSON *entry_out(const cJSON *e)
+{
+    cJSON *o = cJSON_CreateObject();
+    int    cut = 0;
+    const cJSON *f;
+    cJSON_ArrayForEach(f, e)
+    {
+        if (cJSON_IsString(f) && strlen(f->valuestring) > CLIP)
+            cJSON_AddItemToObject(o, f->string, clipped_string(f->valuestring, CLIP, &cut));
+        else
+            cJSON_AddItemToObject(o, f->string, cJSON_Duplicate(f, 1));
+    }
+    if (cut)
+        cJSON_AddBoolToObject(o, "clipped", 1);
+    return o;
+}
+
+static cJSON *entry_new(const char *kind, const char *text)
+{
+    cJSON *e = cJSON_CreateObject();
+    cJSON_AddNumberToObject(e, "id", (double)++rt.next_id);
+    cJSON_AddStringToObject(e, "kind", kind);
+    cJSON_AddNumberToObject(e, "ts", now_seconds());
+    if (text)
+        cJSON_AddStringToObject(e, "text", text);
+    return e;
+}
+
+static void entry_add(cJSON *e)
+{
+    cJSON_AddItemToArray(rt.entries, e);
+    emit(op2("add", entry_out(e)));
+}
+
+static cJSON *entry_find(long id, int *at)
+{
+    int i = 0;
+    cJSON *e;
+    cJSON_ArrayForEach(e, rt.entries)
+    {
+        if ((long)cJSON_GetNumberValue(cJSON_GetObjectItem(e, "id")) == id) {
+            if (at)
+                *at = i;
+            return e;
+        }
+        i++;
+    }
+    return NULL;
+}
+
+/* Merge fields into an entry and publish them. */
+static void entry_set(long id, cJSON *fields)
+{
+    cJSON *e = entry_find(id, NULL);
+    if (!e) {
+        cJSON_Delete(fields);
+        return;
+    }
+    cJSON *f;
+    cJSON_ArrayForEach(f, fields)
+    {
+        cJSON_DeleteItemFromObject(e, f->string);
+        cJSON_AddItemToObject(e, f->string, cJSON_Duplicate(f, 1));
+    }
+    cJSON *op = cJSON_CreateArray();
+    cJSON_AddItemToArray(op, cJSON_CreateString("set"));
+    cJSON_AddItemToArray(op, cJSON_CreateNumber((double)id));
+    cJSON_AddItemToArray(op, entry_out(fields));
+    cJSON_Delete(fields);
+    emit(op);
+}
+
+/* Absolute paths of the readable images a reply links as ![..](/abs/path). */
 static cJSON *image_list(const char *text)
 {
     cJSON *list = cJSON_CreateArray();
-    if (!rt.files || !text)
-        return list;
-    for (const char *p = text; (p = strstr(p, "![")) != NULL;) {
+    for (const char *p = text; p && (p = strstr(p, "![")) != NULL;) {
         const char *open = strstr(p, "](");
         if (!open)
             break;
@@ -272,119 +394,187 @@ static cJSON *image_list(const char *text)
             continue;
         char path[1024];
         snprintf(path, sizeof path, "%.*s", (int)(close - open), open);
-        struct stat st;
-        if (stat(path, &st) != 0 || access(path, R_OK) != 0)
-            continue;
-        unsigned long long h = 1469598103934665603ULL ^ (unsigned long long)st.st_mtime;
-        for (const char *c = path; *c; c++)
-            h = (h ^ (unsigned char)*c) * 1099511628211ULL;
-        const char *base = strrchr(path, '/');
-        base = base ? base + 1 : path;
-        char name[300], link[4600], url[5000];
-        snprintf(name, sizeof name, "%016llx-%s", h, base);
-        snprintf(link, sizeof link, "%s/%s", rt.files_dir, name);
-        if (symlink(path, link) != 0 && errno != EEXIST)
-            continue;
-        snprintf(url, sizeof url, "%s/%s", rt.files_base, name);
-        cJSON *it = cJSON_CreateObject();
-        cJSON_AddStringToObject(it, "url", url);
-        cJSON_AddStringToObject(it, "path", path);
-        cJSON_AddItemToArray(list, it);
+        if (access(path, R_OK) == 0)
+            cJSON_AddItemToArray(list, cJSON_CreateString(path));
         p = close;
     }
     return list;
 }
 
-static void send_images(const char *text)
+static cJSON *assistant_entry(const char *text)
 {
-    cJSON *list = image_list(text), *it;
-    cJSON_ArrayForEach(it, list)
-    {
-        cJSON *o = frame("image");
-        cJSON_AddStringToObject(o, "url", cJSON_GetStringValue(cJSON_GetObjectItem(it, "url")));
-        cJSON_AddStringToObject(o, "path", cJSON_GetStringValue(cJSON_GetObjectItem(it, "path")));
-        send_json(o);
-    }
-    cJSON_Delete(list);
+    cJSON *e = entry_new("assistant", text);
+    cJSON *images = image_list(text);
+    if (cJSON_GetArraySize(images))
+        cJSON_AddItemToObject(e, "images", images);
+    else
+        cJSON_Delete(images);
+    return e;
 }
 
-static size_t turn_bytes(const struct transcript_turn *t)
+static void entries_load(struct session *s)
 {
-    size_t u = t->user ? strlen(t->user) : 0, a = t->assistant ? strlen(t->assistant) : 0;
-    return (u < HISTORY_BYTES ? u : HISTORY_BYTES) + (a < HISTORY_BYTES ? a : HISTORY_BYTES);
-}
-
-static void send_history(struct session *s, long before)
-{
+    cJSON_Delete(rt.entries);
+    rt.entries = cJSON_CreateArray();
+    rt.nopen = 0;
     const struct transcript *t = session_transcript(s);
-    size_t end = t ? t->count : 0;
-    if (before >= 0 && (size_t)before < end)
-        end = (size_t)before;
-    size_t from = end, bytes = 0;
-    while (from > 0 && (from == end || bytes + turn_bytes(&t->turns[from - 1]) <= HISTORY_BATCH))
-        bytes += turn_bytes(&t->turns[--from]);
-    cJSON *o = frame("history");
-    cJSON_AddStringToObject(o, "id", session_id(s) ? session_id(s) : "");
-    cJSON_AddNumberToObject(o, "start", (double)from);
-    cJSON_AddBoolToObject(o, "older", before >= 0);
-    cJSON *turns = cJSON_AddArrayToObject(o, "turns");
-    for (size_t i = from; i < end; i++) {
-        cJSON *it = cJSON_CreateObject();
-        add_clipped(it, "user", t->turns[i].user, HISTORY_BYTES);
-        add_clipped(it, "assistant", t->turns[i].assistant, HISTORY_BYTES);
-        cJSON *images = image_list(t->turns[i].assistant);
-        if (cJSON_GetArraySize(images))
-            cJSON_AddItemToObject(it, "images", images);
-        else
-            cJSON_Delete(images);
-        if (t->turns[i].interrupted)
-            cJSON_AddBoolToObject(it, "stopped", 1);
-        cJSON_AddItemToArray(turns, it);
+    for (size_t i = 0; t && i < t->count; i++) {
+        const struct transcript_turn *turn = &t->turns[i];
+        if (turn->user && *turn->user)
+            cJSON_AddItemToArray(rt.entries, entry_new("user", turn->user));
+        if (turn->assistant && *turn->assistant)
+            cJSON_AddItemToArray(rt.entries, assistant_entry(turn->assistant));
+        if (turn->interrupted) {
+            cJSON *e = entry_new("end", NULL);
+            cJSON_AddBoolToObject(e, "stopped", 1);
+            cJSON_AddItemToArray(rt.entries, e);
+        }
     }
-    send_json(o);
-}
-
-static void send_view(void)
-{
-    struct session *s = relay_session();
-    if (s)
-        send_history(s, -1);
+    rt.tcount = t ? t->count : 0;
+    snprintf(rt.sid, sizeof rt.sid, "%s", session_id(s) ? session_id(s) : "");
     rt.mirrored_turn = 0;
-    rt.busy_sent = -1;
-    send_busy(session_busy(s));
+    rt.repeat_task = 0;
 }
 
-static void send_hello(void)
+/* ---- view --------------------------------------------------------------- */
+
+static cJSON *session_obj(struct session *s)
+{
+    cJSON *o = cJSON_CreateObject();
+    const char *id = session_id(s), *model = session_model_label(s);
+    cJSON_AddStringToObject(o, "id", id ? id : "");
+    cJSON_AddStringToObject(o, "title", session_title(s));
+    cJSON_AddStringToObject(o, "cwd", session_cwd(s));
+    cJSON_AddStringToObject(o, "backend", session_backend(s));
+    cJSON_AddStringToObject(o, "model", model ? model : "");
+    cJSON_AddStringToObject(o, "name", session_name(s));
+    cJSON_AddItemToObject(o, "hud", hud_rows(s));
+    return o;
+}
+
+static cJSON *live_obj(struct session *s)
+{
+    cJSON *o = cJSON_CreateObject();
+    int busy = session_busy(s);
+    cJSON_AddBoolToObject(o, "busy", busy);
+    if (busy && session_turn_started(s) > 0)
+        cJSON_AddNumberToObject(o, "started", session_turn_started(s));
+    int pct = session_context_percent(s);
+    if (pct > 0)
+        cJSON_AddNumberToObject(o, "context", pct);
+    cJSON *q = cJSON_AddArrayToObject(o, "queue");
+    int tab = workspace_index_of(s);
+    for (int i = 0; i < workspace_queued(tab); i++)
+        cJSON_AddItemToArray(q, cJSON_CreateString(workspace_pending_at(tab, i)));
+    return o;
+}
+
+static cJSON *ask_obj(void)
+{
+    if (!rt.ask)
+        return cJSON_CreateNull();
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddNumberToObject(o, "id", (double)rt.ask_id);
+    cJSON *qs = cJSON_AddArrayToObject(o, "questions");
+    for (int i = 0; i < rt.ask->n; i++) {
+        const struct askq *q = &rt.ask->q[i];
+        cJSON *jq = cJSON_CreateObject();
+        cJSON_AddStringToObject(jq, "text", q->text ? q->text : "");
+        cJSON *opts = cJSON_AddArrayToObject(jq, "options");
+        for (int k = 0; k < q->nopt; k++) {
+            cJSON *opt = cJSON_CreateObject();
+            cJSON_AddStringToObject(opt, "label", q->label[k] ? q->label[k] : "");
+            if (q->detail[k] && *q->detail[k])
+                cJSON_AddStringToObject(opt, "detail", q->detail[k]);
+            cJSON_AddItemToArray(opts, opt);
+        }
+        cJSON_AddItemToArray(qs, jq);
+    }
+    return o;
+}
+
+static cJSON *entries_before(int end, int limit)
+{
+    cJSON *list = cJSON_CreateArray();
+    int from = end - limit < 0 ? 0 : end - limit;
+    for (int i = from; i < end; i++)
+        cJSON_AddItemToArray(list, entry_out(cJSON_GetArrayItem(rt.entries, i)));
+    return list;
+}
+
+static void send_view(int client)
 {
     struct session *s = relay_session();
-    cJSON *o = frame("hello");
-    cJSON_AddStringToObject(o, "name", APP_NAME);
-    cJSON_AddStringToObject(o, "label", rt.label);
-    if (s) {
-        cJSON_AddStringToObject(o, "cwd", session_cwd(s));
-        cJSON_AddStringToObject(o, "title", session_title(s));
-        cJSON_AddStringToObject(o, "backend", session_backend(s));
-    }
-    send_json(o);
-    send_view();
+    cJSON *o = frame("view");
+    cJSON_AddNumberToObject(o, "seq", (double)rt.seq);
+    cJSON_AddNumberToObject(o, "binding", rt.binding);
+    cJSON_AddItemToObject(o, "session", session_obj(s));
+    int n = cJSON_GetArraySize(rt.entries);
+    cJSON_AddItemToObject(o, "entries", entries_before(n, WINDOW));
+    cJSON_AddBoolToObject(o, "older", n > WINDOW);
+    cJSON_AddItemToObject(o, "live", live_obj(s));
+    cJSON_AddItemToObject(o, "ask", ask_obj());
+    send_to(client, o);
 }
+
+static void send_view_all(void)
+{
+    for (int i = 0; i < WSD_MAX_CLIENTS; i++)
+        if (rt.clients[i].id)
+            send_view(rt.clients[i].id);
+}
+
+/* Publish `next` under `name` when it differs from what was last sent. */
+static void publish(const char *name, char **last, cJSON *next)
+{
+    char *s = cJSON_PrintUnformatted(next);
+    if (s && *last && !strcmp(s, *last)) {
+        free(s);
+        cJSON_Delete(next);
+        return;
+    }
+    free(*last);
+    *last = s;
+    emit(op2(name, next));
+}
+
+static void ask_set(struct askblock *b)
+{
+    if (!b && !rt.ask)
+        return;
+    askblock_free(rt.ask);
+    rt.ask = b;
+    if (b)
+        rt.ask_id++;
+    emit(op2("ask", ask_obj()));
+}
+
+static void rebind(void)
+{
+    struct session *s = relay_session();
+    entries_load(s);
+    askblock_free(rt.ask);
+    rt.ask = NULL;
+    rt.binding++;
+    free(rt.session_json);
+    free(rt.live_json);
+    rt.session_json = rt.live_json = NULL;
+    send_view_all();
+}
+
+/* ---- session events ----------------------------------------------------- */
 
 const char *relay_system_note(void)
 {
-    size_t n = snprintf(rt.system_note, sizeof rt.system_note,
+    snprintf(rt.system_note, sizeof rt.system_note,
         "## This session is also on a phone\n\n"
         "The user is at a terminal, but the same session is served to a phone "
-        "client over the relay, where replies show as chat messages. Markdown "
-        "renders; wide tables and long code listings do not. Keep answers short "
-        "and say the answer first.\n");
-
-    if (rt.files_base[0] && n < sizeof rt.system_note)
-        snprintf(rt.system_note + n, sizeof rt.system_note - n,
-            "\nA markdown image with an absolute local path, "
-            "![alt](/abs/path.png), is published as a link the phone can open; "
-            "the file has to be on this machine. That only sends it to them; it "
-            "does not show it to you.\n");
-
+        "app, where replies show as chat messages. Markdown renders; wide "
+        "tables and long code listings do not. Keep answers short and say the "
+        "answer first.\n\n"
+        "A markdown image with an absolute local path, ![alt](/abs/path.png), "
+        "is shown on the phone; the file has to be on this machine. That only "
+        "sends it to them; it does not show it to you.\n");
     return rt.system_note;
 }
 
@@ -397,28 +587,55 @@ static const char *short_path(const char *p)
     return p;
 }
 
-static void send_tool_line(const backend_event *ev)
+static void tool_entry(const backend_event *ev)
 {
-    char label[48], raw[600];
+    char label[48], arg[600];
     toolstyle_label(label, sizeof label, ev->name ? ev->name : "tool");
     cJSON *in = ev->input_json ? cJSON_Parse(ev->input_json) : NULL;
     const char *v = in ? view_tool_arg_value(in) : ev->arg;
     if (v && (!strcmp(label, "read") || !strcmp(label, "edit") ||
               !strcmp(label, "write") || !strcmp(label, "notebookedit")))
         v = short_path(v);
-    text_trunc(raw, sizeof raw, v ? v : "");
+    text_trunc(arg, sizeof arg, v ? v : "");
     cJSON_Delete(in);
-    cJSON *o = frame("tool");
-    cJSON_AddStringToObject(o, "name", label);
-    cJSON_AddStringToObject(o, "text", raw);
-    stamp_timing(o);
-    send_json(o);
+    cJSON *e = entry_new("tool", NULL);
+    cJSON_AddStringToObject(e, "name", label);
+    cJSON_AddStringToObject(e, "arg", arg);
+    if (ev->input_json) {
+        int cut = 0;
+        cJSON_AddItemToObject(e, "input", clipped_string(ev->input_json, RESULT_CLIP, &cut));
+    }
+    if (rt.nopen == OPEN_TOOLS) {
+        memmove(rt.open_tools, rt.open_tools + 1, (OPEN_TOOLS - 1) * sizeof rt.open_tools[0]);
+        rt.nopen--;
+    }
+    rt.open_tools[rt.nopen++] = (long)cJSON_GetNumberValue(cJSON_GetObjectItem(e, "id"));
+    entry_add(e);
+}
+
+/* Results carry no call id, so each one closes the oldest open tool call. */
+static void tool_result(const backend_event *ev)
+{
+    if (!rt.nopen)
+        return;
+    long id = rt.open_tools[0];
+    memmove(rt.open_tools, rt.open_tools + 1, (size_t)(--rt.nopen) * sizeof rt.open_tools[0]);
+    cJSON *f = cJSON_CreateObject();
+    int cut = 0;
+    cJSON_AddBoolToObject(f, "done", 1);
+    if (ev->text && *ev->text)
+        cJSON_AddItemToObject(f, "result", clipped_string(ev->text, RESULT_CLIP, &cut));
+    if (ev->diff && *ev->diff)
+        cJSON_AddItemToObject(f, "diff", clipped_string(ev->diff, RESULT_CLIP, &cut));
+    if (ev->failed)
+        cJSON_AddBoolToObject(f, "failed", 1);
+    entry_set(id, f);
 }
 
 static void on_event(void *ud, struct session *s, const backend_event *ev)
 {
     (void)ud;
-    if (!rt.active || !rt.mirror || s != relay_session())
+    if (!rt.active || s != relay_session())
         return;
     if (ev->parent && *ev->parent)
         return;
@@ -436,69 +653,146 @@ static void on_event(void *ud, struct session *s, const backend_event *ev)
 
     switch (ev->kind) {
     case BACKEND_EV_TOOL:
-        send_tool_line(ev);
+        tool_entry(ev);
+        break;
+    case BACKEND_EV_TOOL_RESULT:
+        tool_result(ev);
         break;
     case BACKEND_EV_ASSISTANT:
-        send_reply(ev->text);
-        send_images(ev->text);
+        if (ev->text && *ev->text)
+            entry_add(assistant_entry(ev->text));
+        break;
+    case BACKEND_EV_THINKING:
+        if (ev->text && *ev->text)
+            entry_add(entry_new("thinking", ev->text));
         break;
     case BACKEND_EV_WARNING:
-        send_note(ev->text);
+        if (ev->text && *ev->text)
+            entry_add(entry_new("note", ev->text));
         break;
     default:
         break;
     }
 }
 
+/* A started turn becomes a user entry. A prompt that contains a line the
+ * phone sent is tagged with that request's id. */
 static void mirror_prompt(struct session *s)
 {
-    if (!s || !rt.mirror || !session_busy(s))
+    if (!session_busy(s))
         return;
     double started = session_turn_started(s);
     if (started == rt.mirrored_turn)
         return;
     rt.mirrored_turn = started;
+    ask_set(NULL);
+    rt.nopen = 0;
     const char *p = session_prompt(s);
-    if (rt.sent && p && strstr(p, rt.sent)) {
-        free(rt.sent);
-        rt.sent = NULL;
+    if (!p || !*p)
         return;
+    cJSON *e = entry_new("user", p);
+    for (int i = 0; i < rt.nsent; i++) {
+        if (!strstr(p, rt.sent[i].text))
+            continue;
+        cJSON_AddStringToObject(e, "req", rt.sent[i].req);
+        free(rt.sent[i].text);
+        memmove(rt.sent + i, rt.sent + i + 1, (size_t)(rt.nsent - i - 1) * sizeof rt.sent[0]);
+        rt.nsent--;
+        break;
     }
-    send_text("user", p);
-}
-
-static void send_done(struct session *s)
-{
-    cJSON *o = frame("done");
-    int ok = !session_last_result(s)->is_error;
-    cJSON_AddBoolToObject(o, "ok", ok);
-    if (!ok) {
-        const char *why = session_last_error(s);
-        cJSON_AddStringToObject(o, "error", why ? why : "the turn failed");
-    } else if (session_last_interrupted(s)) {
-        cJSON_AddBoolToObject(o, "stopped", 1);
-    }
-    int pct = session_context_percent(s);
-    if (pct > 0)
-        cJSON_AddNumberToObject(o, "context", pct);
-    send_json(o);
+    entry_add(e);
 }
 
 void relay_turn_done(struct session *s)
 {
-    if (rt.active && rt.mirror && s == relay_session() &&
-        !workspace_queued(workspace_index_of(s)))
-        send_done(s);
+    if (!rt.active || s != relay_session())
+        return;
+    cJSON *e = entry_new("end", NULL);
+    double started = session_turn_started(s);
+    cJSON_AddNumberToObject(e, "secs", started > 0 ? now_seconds() - started : 0);
+    if (session_last_result(s)->is_error) {
+        const char *why = session_last_error(s);
+        cJSON_AddStringToObject(e, "text", why ? why : "the turn failed");
+        cJSON_AddBoolToObject(e, "failed", 1);
+    } else if (session_last_interrupted(s)) {
+        cJSON_AddBoolToObject(e, "stopped", 1);
+    }
+    entry_add(e);
+    if (!session_last_result(s)->is_error && !session_last_interrupted(s))
+        ask_set(askblock_parse(session_last_block(s)));
+    const struct transcript *t = session_transcript(s);
+    rt.tcount = t ? t->count : 0;
 }
 
-static void stop_turn(void)
+void relay_btw(const struct session *owner, const char *question,
+               const char *answer, int failed)
 {
-    session_interrupt(relay_session());
+    if (!rt.active || owner != relay_session())
+        return;
+    cJSON *e = entry_new("btw", question);
+    cJSON_AddStringToObject(e, "answer", answer ? answer : "");
+    if (failed)
+        cJSON_AddBoolToObject(e, "failed", 1);
+    entry_add(e);
 }
+
+/* A cleared or replaced conversation in the tab starts a new binding. */
+static void check_reset(struct session *s)
+{
+    const struct transcript *t = session_transcript(s);
+    size_t count = t ? t->count : 0;
+    const char *id = session_id(s) ? session_id(s) : "";
+    int replaced = rt.sid[0] && strcmp(rt.sid, id);
+    if (!rt.sid[0] && id[0])
+        snprintf(rt.sid, sizeof rt.sid, "%s", id);
+    if (replaced || count < rt.tcount)
+        rebind();
+    else
+        rt.tcount = count;
+}
+
+/* ---- requests ----------------------------------------------------------- */
+
+static void remember_sent(const char *req, const char *text)
+{
+    if (rt.nsent == SENT_MAX) {
+        free(rt.sent[0].text);
+        memmove(rt.sent, rt.sent + 1, (SENT_MAX - 1) * sizeof rt.sent[0]);
+        rt.nsent--;
+    }
+    snprintf(rt.sent[rt.nsent].req, sizeof rt.sent[0].req, "%s", req);
+    rt.sent[rt.nsent].text = strdup(text);
+    if (rt.sent[rt.nsent].text)
+        rt.nsent++;
+}
+
+static const char *done_find(const char *key)
+{
+    for (int i = 0; i < DONE_MAX; i++)
+        if (rt.done[i].res && !strcmp(rt.done[i].key, key))
+            return rt.done[i].res;
+    return NULL;
+}
+
+static void done_add(const char *key, const cJSON *res)
+{
+    struct done *d = &rt.done[rt.done_next];
+    rt.done_next = (rt.done_next + 1) % DONE_MAX;
+    free(d->res);
+    snprintf(d->key, sizeof d->key, "%s", key);
+    d->res = cJSON_PrintUnformatted(res);
+}
+
+struct submit_ctx {
+    const char *req;
+    const char *text;
+    cJSON      *res;
+};
 
 static void submit(struct session *s, void *ud)
 {
-    const char *line = ud;
+    struct submit_ctx *c = ud;
+    const char *line = c->text;
     int command = cmd_is_command(line);
     if (!cmd_self_echoes(line) && (command || !session_turn_running(s)))
         prompt_echo_message(line);
@@ -506,10 +800,10 @@ static void submit(struct session *s, void *ud)
     frontend_push(0);
     if (!command) {
         rt.repeat_task = 0;
-        free(rt.sent);
-        rt.sent = strdup(line);
+        remember_sent(c->req, line);
         cmd_submit(s, line);
         frontend_pop();
+        c->res = res_ok(c->req);
         return;
     }
     ui_sink_begin_tee();
@@ -518,71 +812,272 @@ static void submit(struct session *s, void *ud)
     char *shown = ui_plain(raw, 1);
     free(raw);
     frontend_pop();
-    if (r == CMD_QUIT)
-        send_note("the terminal owns this session; /quit there");
-    else if (shown && *shown)
-        send_pre(shown);
-    else
-        send_note("ok");
+    if (r == CMD_QUIT) {
+        c->res = res_error(c->req, "refused", "the terminal owns this session; /quit there");
+    } else {
+        c->res = res_ok(c->req);
+        cJSON_AddStringToObject(c->res, "out", shown ? shown : "");
+    }
     free(shown);
 }
 
-static void run_line(const struct inbox_item *it)
+static cJSON *run_line(const char *req, const char *text)
 {
     struct session *s = relay_session();
+    if (!text || !*text)
+        return res_error(req, "invalid", "empty line");
+    if (bash_is_command(text))
+        return res_error(req, "shell", "shell lines run at the terminal only");
+    struct submit_ctx c = {req, text, NULL};
+    workspace_render(workspace_index_of(s), submit, &c);
+    return c.res ? c.res : res_error(req, "failed", "not submitted");
+}
+
+static cJSON *do_answer(const char *req, const cJSON *msg)
+{
+    long id = (long)cJSON_GetNumberValue(cJSON_GetObjectItem(msg, "ask"));
+    if (!rt.ask || id != rt.ask_id)
+        return res_error(req, "stale", "that question is no longer open");
+    const cJSON *jc = cJSON_GetObjectItem(msg, "choice");
+    const cJSON *jt = cJSON_GetObjectItem(msg, "text");
+    int n = rt.ask->n;
+    int *choice = calloc((size_t)n + 1, sizeof *choice);
+    const char **text = calloc((size_t)n + 1, sizeof *text);
+    cJSON *res = NULL;
+    if (choice && text) {
+        for (int i = 0; i < n; i++) {
+            const cJSON *c = cJSON_GetArrayItem(jc, i);
+            choice[i] = cJSON_IsNumber(c) ? (int)c->valuedouble : -1;
+            text[i] = cJSON_GetStringValue(cJSON_GetArrayItem(jt, i));
+        }
+        char *line = askblock_answer(rt.ask, choice, text,
+                                     cJSON_GetStringValue(cJSON_GetObjectItem(msg, "reply")));
+        res = line && *line ? run_line(req, line) : res_error(req, "invalid", "no answer given");
+        free(line);
+    }
+    free(choice);
+    free(text);
+    return res ? res : res_error(req, "failed", "out of memory");
+}
+
+static cJSON *do_older(const char *req, const cJSON *msg)
+{
+    long before = (long)cJSON_GetNumberValue(cJSON_GetObjectItem(msg, "before"));
+    int  limit = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(msg, "limit"));
+    if (limit <= 0 || limit > OLDER_MAX)
+        limit = WINDOW;
+    int at = 0;
+    if (!entry_find(before, &at))
+        return res_error(req, "not_found", "no such entry");
+    cJSON *o = res_ok(req);
+    cJSON_AddItemToObject(o, "entries", entries_before(at, limit));
+    cJSON_AddBoolToObject(o, "older", at > limit);
+    return o;
+}
+
+static cJSON *do_entry(const char *req, const cJSON *msg)
+{
+    cJSON *e = entry_find((long)cJSON_GetNumberValue(cJSON_GetObjectItem(msg, "id")), NULL);
+    if (!e)
+        return res_error(req, "not_found", "no such entry");
+    cJSON *o = res_ok(req);
+    cJSON_AddItemToObject(o, "entry", cJSON_Duplicate(e, 1));
+    return o;
+}
+
+static cJSON *do_unqueue(const char *req, const cJSON *msg)
+{
+    const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "text"));
+    if (!text || !workspace_dequeue(workspace_index_of(relay_session()), text))
+        return res_error(req, "not_found", "not in the queue");
+    return res_ok(req);
+}
+
+static cJSON *do_sessions(const char *req)
+{
+    cJSON *rows = sessionswitch_rows(), *r;
+    cJSON_ArrayForEach(r, rows)
+    {
+        const cJSON *tab = cJSON_GetObjectItem(r, "tab");
+        if (cJSON_IsNumber(tab) && workspace_at((int)tab->valuedouble) == relay_session())
+            cJSON_AddBoolToObject(r, "relay", 1);
+    }
+    cJSON *o = res_ok(req);
+    cJSON_AddItemToObject(o, "rows", rows);
+    return o;
+}
+
+/* Bring a /sessions row into this window, as the picker does, and serve it. */
+static cJSON *do_open(const char *req, const cJSON *msg)
+{
+    const char *target = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "target"));
+    const cJSON *tab = cJSON_GetObjectItem(msg, "tab");
+    char why[256] = "";
+    int  at = cJSON_IsNumber(tab) ? (int)tab->valuedouble
+            : target && *target ? sessionswitch_yank(target, why, sizeof why) : -1;
+    struct session *s = at >= 0 && at < workspace_count() ? workspace_at(at) : NULL;
     if (!s)
-        return;
-    if (bash_is_command(it->text)) {
-        send_note("shell lines run at the terminal only");
-        return;
-    }
-    workspace_render(workspace_index_of(s), submit, it->text);
+        return res_error(req, "not_found", why[0] ? why : "no such session");
+    relay_start(s);
+    cJSON *o = res_ok(req);
+    cJSON_AddNumberToObject(o, "binding", rt.binding);
+    return o;
 }
 
-static void send_older(const struct inbox_item *it)
+static void hex_add(cJSON *o, const char *key, unsigned c)
 {
-    struct session *s = relay_session();
-    const char     *id = s ? session_id(s) : NULL;
-    if (id && !strcmp(id, it->tab_id))
-        send_history(s, it->tab);
+    char v[8];
+    snprintf(v, sizeof v, "#%06x", c & 0xffffff);
+    cJSON_AddStringToObject(o, key, v);
 }
 
-static void run_item(const struct inbox_item *it)
+/* The resolved theme: each role's colour, background wash and attribute. */
+static cJSON *theme_obj(void)
 {
-    switch (it->kind) {
-    case ITEM_HELLO:
-        send_hello();
-        return;
-    case ITEM_STOP:
-        stop_turn();
-        return;
-    case ITEM_MORE:
-        send_older(it);
-        return;
-    default:
-        run_line(it);
-        break;
+    cJSON *o = cJSON_CreateObject();
+    hex_add(o, "background", ui_background());
+    cJSON *roles = cJSON_AddObjectToObject(o, "roles");
+    for (int r = 0; r < UI_RESET; r++) {
+        unsigned    fg, wash;
+        const char *attr, *key = ui_role_key((enum ui_role)r, &fg, &wash, &attr);
+        if (!key)
+            continue;
+        cJSON *jr = cJSON_CreateObject();
+        hex_add(jr, "fg", fg);
+        if (wash != ui_background())
+            hex_add(jr, "wash", wash);
+        if (attr)
+            cJSON_AddStringToObject(jr, "style", !strcmp(attr, "1") ? "bold"
+                                               : !strcmp(attr, "3") ? "italic"
+                                               : !strcmp(attr, "4") ? "underline" : attr);
+        cJSON_AddItemToObject(roles, key, jr);
     }
-    send_idle();
+    return o;
+}
+
+static void hello(int client, const cJSON *msg)
+{
+    if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(msg, "v")) != PROTOCOL) {
+        cJSON *o = frame("error");
+        cJSON_AddStringToObject(o, "code", "version");
+        cJSON_AddNumberToObject(o, "v", PROTOCOL);
+        send_to(client, o);
+        return;
+    }
+    struct client *c = client_find(client);
+    if (!c)
+        c = client_find(0);
+    if (!c)
+        return;
+    c->id = client;
+    const char *uuid = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "client"));
+    snprintf(c->uuid, sizeof c->uuid, "%s", uuid ? uuid : "");
+    cJSON *o = frame("hello");
+    cJSON_AddNumberToObject(o, "v", PROTOCOL);
+    cJSON_AddStringToObject(o, "server", rt.server);
+    cJSON_AddStringToObject(o, "name", APP_NAME);
+    cJSON_AddItemToObject(o, "theme", theme_obj());
+    send_to(client, o);
+    send_view(client);
+}
+
+static void run_request(int client, const cJSON *msg)
+{
+    const char *req = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "id"));
+    const char *op = op_of(msg);
+    struct client *c = client_find(client);
+    if (!c) {
+        send_to(client, res_error(req, "hello", "send hello first"));
+        return;
+    }
+    const cJSON *jb = cJSON_GetObjectItem(msg, "binding");
+    int mutates = needs_idle(msg) || !strcmp(op, "unqueue");
+    if (mutates && cJSON_IsNumber(jb) && (int)jb->valuedouble != rt.binding) {
+        send_to(client, res_error(req, "stale", "the relay moved to another session"));
+        return;
+    }
+    char key[160];
+    snprintf(key, sizeof key, "%s\x1f%s", c->uuid, req);
+    if (mutates && c->uuid[0]) {
+        const char *prior = done_find(key);
+        if (prior) {
+            wsd_send(rt.ws, client, prior, 0);
+            return;
+        }
+    }
+
+    cJSON *res;
+    if (!strcmp(op, "send"))
+        res = run_line(req, cJSON_GetStringValue(cJSON_GetObjectItem(msg, "text")));
+    else if (!strcmp(op, "answer"))
+        res = do_answer(req, msg);
+    else if (!strcmp(op, "stop")) {
+        session_interrupt(relay_session());
+        res = res_ok(req);
+    } else if (!strcmp(op, "unqueue"))
+        res = do_unqueue(req, msg);
+    else if (!strcmp(op, "older"))
+        res = do_older(req, msg);
+    else if (!strcmp(op, "entry"))
+        res = do_entry(req, msg);
+    else if (!strcmp(op, "sessions"))
+        res = do_sessions(req);
+    else if (!strcmp(op, "open"))
+        res = do_open(req, msg);
+    else
+        res = res_error(req, "invalid", "unknown op");
+
+    cJSON *failed = cJSON_GetObjectItem(msg, "failed");
+    if (cJSON_GetArraySize(failed))
+        cJSON_AddItemToObject(res, "failed", cJSON_Duplicate(failed, 1));
+    if (mutates && c->uuid[0])
+        done_add(key, res);
+    send_to(client, res);
+}
+
+static void run_item(const struct item *it)
+{
+    const char *t = cJSON_GetStringValue(cJSON_GetObjectItem(it->msg, "t"));
+    if (!t)
+        return;
+    if (!strcmp(t, "hello"))
+        hello(it->client, it->msg);
+    else if (!strcmp(t, "gone")) {
+        struct client *c = client_find(it->client);
+        if (c)
+            *c = (struct client){0};
+    } else if (!strcmp(t, "req"))
+        run_request(it->client, it->msg);
 }
 
 void relay_poll(struct session *live)
 {
     if (!rt.active)
         return;
+    struct session *s = relay_session();
     if (!rt.draining) {
         rt.draining = 1;
         wake_drain();
-        struct inbox_item it;
+        struct item it;
         while (inbox_take(&it, !live && !chrome_modal_active())) {
             run_item(&it);
-            free(it.text);
+            cJSON_Delete(it.msg);
         }
         rt.draining = 0;
     }
-    mirror_prompt(relay_session());
-    send_busy(session_busy(relay_session()));
+    if (!live)
+        check_reset(s);
+    mirror_prompt(s);
+    static double hud_at;
+    double now = now_seconds();
+    if (!rt.session_json || now - hud_at >= 1) {
+        hud_at = now;
+        publish("session", &rt.session_json, session_obj(s));
+    }
+    publish("live", &rt.live_json, live_obj(s));
 }
+
+/* ---- wsd thread --------------------------------------------------------- */
 
 static size_t b64_decode(const char *in, unsigned char *out)
 {
@@ -628,52 +1123,137 @@ static int save_upload(const cJSON *f, char *path, size_t size)
     return ok;
 }
 
-static char *with_uploads(const char *text, const cJSON *files)
+/* Save a send's files and put their paths in front of its text. Files that
+ * could not be saved are listed in `failed`. */
+static void take_uploads(cJSON *msg)
 {
+    cJSON *files = cJSON_DetachItemFromObject(msg, "files");
+    if (!cJSON_GetArraySize(files)) {
+        cJSON_Delete(files);
+        return;
+    }
     char   paths[UPLOAD_MAX][200];
     int    n = 0;
+    cJSON *failed = cJSON_CreateArray();
     const cJSON *f;
     cJSON_ArrayForEach(f, files)
     {
         if (n < UPLOAD_MAX && save_upload(f, paths[n], sizeof paths[n]))
             n++;
+        else {
+            const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(f, "name"));
+            cJSON_AddItemToArray(failed, cJSON_CreateString(name ? name : "file"));
+        }
     }
+    cJSON_Delete(files);
+    if (cJSON_GetArraySize(failed))
+        cJSON_AddItemToObject(msg, "failed", failed);
+    else
+        cJSON_Delete(failed);
     if (!n)
-        return text && *text ? strdup(text) : NULL;
+        return;
+    const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "text"));
     size_t cap = (text ? strlen(text) : 0) + 64 + n * sizeof paths[0];
     char  *out = malloc(cap);
     if (!out)
-        return NULL;
+        return;
     size_t at = (size_t)snprintf(out, cap, "I sent %s:\n", n == 1 ? "a file" : "some files");
     for (int i = 0; i < n; i++)
         at += (size_t)snprintf(out + at, cap - at, "- %s\n", paths[i]);
     if (text && *text)
         snprintf(out + at, cap - at, "\n%s", text);
-    return out;
+    cJSON_DeleteItemFromObject(msg, "text");
+    cJSON_AddStringToObject(msg, "text", out);
+    free(out);
 }
 
-static void on_text(void *ud, const char *text, size_t n)
+static void send_file(int client, const char *req, const char *path)
+{
+    struct stat st;
+    FILE *f = NULL;
+    unsigned char *bytes = NULL;
+    char *b64 = NULL;
+    cJSON *o;
+    if (!path || stat(path, &st) != 0 || !S_ISREG(st.st_mode))
+        o = res_error(req, "not_found", "no such file");
+    else if ((size_t)st.st_size > FILE_MAX)
+        o = res_error(req, "too_large", "file over 32 MB");
+    else if (!(f = fopen(path, "rb")) ||
+             !(bytes = malloc((size_t)st.st_size + 1)) ||
+             fread(bytes, 1, (size_t)st.st_size, f) != (size_t)st.st_size ||
+             !(b64 = malloc(((size_t)st.st_size + 2) / 3 * 4 + 1)))
+        o = res_error(req, "unreadable", "could not read the file");
+    else {
+        wsd_b64(bytes, (size_t)st.st_size, b64);
+        o = res_ok(req);
+        const char *base = strrchr(path, '/');
+        cJSON_AddStringToObject(o, "name", base ? base + 1 : path);
+        cJSON_AddNumberToObject(o, "size", (double)st.st_size);
+        cJSON_AddStringToObject(o, "data", b64);
+    }
+    if (f)
+        fclose(f);
+    free(bytes);
+    free(b64);
+    char *s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (s)
+        wsd_send(rt.ws, client, s, 0);
+    free(s);
+}
+
+static void reply_error(int client, const char *req, const char *code, const char *msg)
+{
+    cJSON *o = res_error(req, code, msg);
+    char  *s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (s)
+        wsd_send(rt.ws, client, s, 0);
+    free(s);
+}
+
+static void on_text(void *ud, int client, const char *text, size_t n)
 {
     (void)ud;
     (void)n;
-    cJSON *o = cJSON_Parse(text);
-    if (!o)
+    cJSON *msg = cJSON_Parse(text);
+    const char *t = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "t"));
+    const char *req = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "id"));
+    if (!t || (strcmp(t, "hello") && strcmp(t, "req"))) {
+        reply_error(client, req, "invalid", "unknown frame");
+        cJSON_Delete(msg);
         return;
-    const char *t = cJSON_GetStringValue(cJSON_GetObjectItem(o, "t"));
-    const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(o, "text"));
-    const char *tab_id = cJSON_GetStringValue(cJSON_GetObjectItem(o, "id"));
-    if (!t)
-        ;
-    else if (!strcmp(t, "line"))
-        inbox_push(with_uploads(v, cJSON_GetObjectItem(o, "files")), ITEM_LINE, NULL, 0);
-    else if (!strcmp(t, "stop"))
-        inbox_push(strdup(""), ITEM_STOP, NULL, 0);
-    else if (!strcmp(t, "more"))
-        inbox_push(strdup(""), ITEM_MORE, tab_id, (int)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "before")));
-    else if (!strcmp(t, "hello"))
-        inbox_push(strdup(""), ITEM_HELLO, NULL, 0);
-    cJSON_Delete(o);
+    }
+    if (!strcmp(t, "req") && !req) {
+        reply_error(client, NULL, "invalid", "request without id");
+        cJSON_Delete(msg);
+        return;
+    }
+    if (!strcmp(op_of(msg), "file")) {
+        send_file(client, req, cJSON_GetStringValue(cJSON_GetObjectItem(msg, "path")));
+        cJSON_Delete(msg);
+        return;
+    }
+    if (!strcmp(op_of(msg), "send"))
+        take_uploads(msg);
+    if (!inbox_push(client, msg)) {
+        reply_error(client, req, "full", "too many requests waiting");
+        cJSON_Delete(msg);
+    }
 }
+
+static void on_state(void *ud, int client, int connected)
+{
+    (void)ud;
+    if (connected)
+        return;
+    cJSON *msg = cJSON_CreateObject();
+    cJSON_AddStringToObject(msg, "t", "gone");
+    if (!inbox_push(client, msg))
+        cJSON_Delete(msg);
+}
+
+/* ---- lifecycle ---------------------------------------------------------- */
 
 __attribute__((format(printf, 1, 2)))
 static void terminal_note(const char *fmt, ...)
@@ -689,45 +1269,40 @@ static void terminal_note(const char *fmt, ...)
     ui_flush();
 }
 
-static void files_start(void)
+static void uploads_remove(void)
 {
-    if (!path_config_subdir(rt.files_dir, sizeof rt.files_dir, "relay-files"))
+    if (!rt.upload_dir[0])
         return;
-    mkdir(rt.files_dir, 0700);
-    DIR *d = opendir(rt.files_dir);
+    DIR *d = opendir(rt.upload_dir);
     for (struct dirent *e; d && (e = readdir(d)) != NULL;) {
-        char        link[4600];
-        struct stat st;
-        snprintf(link, sizeof link, "%s/%s", rt.files_dir, e->d_name);
-        if (lstat(link, &st) == 0 && S_ISLNK(st.st_mode))
-            unlink(link);
+        char path[400];
+        if (e->d_name[0] == '.')
+            continue;
+        snprintf(path, sizeof path, "%s/%s", rt.upload_dir, e->d_name);
+        unlink(path);
     }
     if (d)
         closedir(d);
-    int port = atoi(cfg_get("files_port", "0"));
-    if (port <= 0)
-        port = rt.port + 1;
-    rt.files = httpd_start(rt.files_dir, rt.bind[0] ? rt.bind : NULL, port, rt.token);
-    if (!rt.files) {
-        terminal_note("relay: no file server on %s:%d (port taken?)", rt.bind[0] ? rt.bind : "*", port);
+    rmdir(rt.upload_dir);
+    rt.upload_dir[0] = '\0';
+}
+
+static void set_note(struct session *s, int on)
+{
+    if (!s)
         return;
-    }
-    snprintf(rt.files_base, sizeof rt.files_base, "http://%s:%d/%s",
-             rt.bind[0] ? rt.bind : "127.0.0.1", port, rt.token);
+    if (on)
+        session_set_system_extra(s, relay_system_note());
+    else
+        session_set_system_extra(s, tg_label() && tg_session() == s ? tg_system_note() : NULL);
 }
 
 static void cleanup(void)
 {
-    struct session *s = relay_session();
-    if (rt.upload_dir[0])
-        rmdir(rt.upload_dir);
-    rt.upload_dir[0] = '\0';
     rt.active = 0;
     wsd_stop(rt.ws);
     rt.ws = NULL;
-    httpd_stop(rt.files);
-    rt.files = NULL;
-    rt.files_base[0] = '\0';
+    uploads_remove();
     session_remove_listener(on_event, NULL);
     if (rt.wake[0] >= 0)
         close(rt.wake[0]);
@@ -735,21 +1310,37 @@ static void cleanup(void)
         close(rt.wake[1]);
     rt.wake[0] = rt.wake[1] = -1;
     inbox_clear();
-    if (s)
-        session_set_system_extra(s, tg_label() && tg_session() == s
-                                      ? tg_system_note() : NULL);
+    set_note(rt.s, 0);
     rt.s = NULL;
     rt.label[0] = '\0';
-    rt.repeat_task = 0;
-    rt.busy_sent = -1;
-    free(rt.sent);
-    rt.sent = NULL;
+    memset(rt.clients, 0, sizeof rt.clients);
+    cJSON_Delete(rt.entries);
+    rt.entries = NULL;
+    askblock_free(rt.ask);
+    rt.ask = NULL;
+    free(rt.session_json);
+    free(rt.live_json);
+    rt.session_json = rt.live_json = NULL;
+    for (int i = 0; i < rt.nsent; i++)
+        free(rt.sent[i].text);
+    rt.nsent = 0;
+    for (int i = 0; i < DONE_MAX; i++) {
+        free(rt.done[i].res);
+        rt.done[i] = (struct done){0};
+    }
 }
 
 int relay_start(struct session *s)
 {
-    if (rt.active)
-        return 0;
+    if (rt.active) {
+        if (s != rt.s) {
+            set_note(rt.s, 0);
+            rt.s = s;
+            set_note(s, 1);
+            rebind();
+        }
+        return 1;
+    }
     char cfgpath[4200];
     if (path_config_file(cfgpath, sizeof cfgpath, "relay"))
         settings_load(&cfg, cfgpath);
@@ -758,9 +1349,7 @@ int relay_start(struct session *s)
 
     const char *token = cfg_get("token", NULL);
     if (!token || strlen(token) < 16) {
-        char path[4200];
-        path_config_file(path, sizeof path, "relay");
-        fprintf(stderr, APP_NAME ": --relay needs `token` (16+ chars) in %s\n", path);
+        fprintf(stderr, APP_NAME ": relay needs `token` (16+ chars) in %s\n", cfgpath);
         return 0;
     }
     snprintf(rt.token, sizeof rt.token, "%s", token);
@@ -772,13 +1361,13 @@ int relay_start(struct session *s)
     if (!bind) {
         bind = wsd_tailscale_ip();
         if (!bind) {
-            fprintf(stderr, APP_NAME ": --relay: no tailscale address; set `bind` in the config\n");
+            fprintf(stderr, APP_NAME ": relay: no tailscale address; set `bind` in the config\n");
             return 0;
         }
     }
     snprintf(rt.bind, sizeof rt.bind, "%s", !strcmp(bind, "*") ? "" : bind);
-    rt.mirror = strcmp(cfg_get("mirror", "all"), "off") != 0;
     snprintf(rt.label, sizeof rt.label, "relay");
+    snprintf(rt.server, sizeof rt.server, "%lx-%lx", (long)getpid(), (long)time(NULL));
 
     if (pipe(rt.wake) != 0) {
         fprintf(stderr, APP_NAME ": relay wake pipe: %s\n", strerror(errno));
@@ -790,22 +1379,22 @@ int relay_start(struct session *s)
     }
 
     rt.s = s;
+    rt.seq = 0;
+    entries_load(s);
     session_add_listener(on_event, NULL);
-    rt.busy_sent = -1;
 
     snprintf(rt.upload_dir, sizeof rt.upload_dir, "/tmp/" APP_NAME "_relay_XXXXXX");
     if (!mkdtemp(rt.upload_dir))
         rt.upload_dir[0] = '\0';
     wsd_opts o = {.bind_ip = rt.bind, .port = rt.port, .token = rt.token,
-                  .max_message = MESSAGE_MAX};
-    rt.ws = wsd_start(&o, on_text, NULL, NULL);
+                  .max_message = MESSAGE_MAX, .max_queue = QUEUE_MAX};
+    rt.ws = wsd_start(&o, on_text, on_state, NULL);
     if (!rt.ws) {
         fprintf(stderr, APP_NAME ": relay: can't listen on %s:%d\n",
                 rt.bind[0] ? rt.bind : "*", rt.port);
         goto fail;
     }
-    files_start();
-    session_set_system_extra(s, relay_system_note());
+    set_note(s, 1);
     rt.active = 1;
     terminal_note("relay on ws://%s:%d", rt.bind[0] ? rt.bind : "*", rt.port);
     return 1;

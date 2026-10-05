@@ -14,6 +14,8 @@ void hud_refresh(const struct session *s);
 
 void hud_load(const cJSON *st);
 
+cJSON *hud_rows(const struct session *s);
+
 int  hud_restarted(void);
 
 

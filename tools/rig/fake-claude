@@ -81,6 +81,17 @@ def main():
                     reply = json.loads(sys.stdin.readline())
                     behavior = reply["response"]["response"]["behavior"]
                     text = ("allowed: " if behavior == "allow" else "denied: ") + text[5:]
+            elif text.startswith("tool: "):
+                cmd = text[6:]
+                ran = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                emit({"type": "assistant", "message": {"role": "assistant", "model": MODEL, "content": [
+                    {"type": "tool_use", "id": "tu-1", "name": "Bash", "input": {"command": cmd}}]}})
+                emit({"type": "user", "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "tu-1",
+                     "content": (ran.stdout + ran.stderr).strip()}]}})
+                text = "tool done"
+            elif text == "askme":
+                text = "Pick one.\n\n@ask\n1. Color?\n- red\n- blue"
             elif text.startswith("run: "):
                 ran = subprocess.run(text[5:], shell=True, capture_output=True, text=True)
                 text = "ran: " + (ran.stdout + ran.stderr).strip()

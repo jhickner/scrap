@@ -191,6 +191,27 @@ static void hud_fill(struct hud *h, const struct session *s)
     row_location(s, &h->row[2]);
 }
 
+cJSON *hud_rows(const struct session *s)
+{
+    struct hud h = {0};
+    hud_fill(&h, s);
+    cJSON *rows = cJSON_CreateArray();
+    for (int i = 0; i < HUD_ROWS; i++) {
+        cJSON *segs = cJSON_CreateArray();
+        for (int j = 0; j < h.row[i].n; j++) {
+            unsigned    fg, wash;
+            const char *attr, *key = ui_role_key(h.row[i].seg[j].role, &fg, &wash, &attr);
+            cJSON      *seg = cJSON_CreateObject();
+            cJSON_AddStringToObject(seg, "text", h.row[i].seg[j].text);
+            cJSON_AddStringToObject(seg, "role", key ? key : "body");
+            cJSON_AddItemToArray(segs, seg);
+        }
+        cJSON_AddItemToArray(rows, segs);
+        row_free(&h.row[i]);
+    }
+    return rows;
+}
+
 static void hud_render(void *ud, int cols)
 {
     const struct hud *h = ud;
