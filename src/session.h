@@ -124,6 +124,8 @@ const char *session_effort(const struct session *s);
 int session_can_set_effort(const struct session *s);
 
 int session_set_permission(struct session *s, const char *mode);
+int session_memory(const struct session *s);
+int session_set_memory(struct session *s, int on);
 const char *session_permission(const struct session *s);
 
 int         session_permission_count(void);

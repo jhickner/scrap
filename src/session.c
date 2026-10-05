@@ -105,6 +105,7 @@ struct session {
     int      customizations;
     int      no_browser_login;
     int      fork_session;
+    int      memory;
     int      fork_named;
     int      forked;
     char    *permission;
@@ -1079,6 +1080,7 @@ static Backend *agent(struct session *s)
     o.allow_customizations = s->customizations;
     o.permission_mode = s->permission;
     o.fork_session = s->fork_session;
+    o.memory = s->memory;
     o.no_browser_login = s->no_browser_login;
     o.chrome = settings_get_int(SETTING_CHROME, 0);
     o.plugin_dir = shunt_plugin_dir(s);
@@ -1417,6 +1419,10 @@ static int restart(struct session *s, const char *resume_id)
         !sessionload_path(s->backend, s->cwd, resume_id, path, sizeof path))
         resume_id = NULL;
 
+    if (s->memory && previous) {
+        retire(previous);
+        previous = NULL;
+    }
     Backend *b = agent(s);
     if (!b || !b->start(b, resume_id)) {
         if (b) {
@@ -1737,6 +1743,18 @@ int session_set_permission(struct session *s, const char *mode)
         return 1;
     }
     return swap_and_restart(s, &s->permission, mode);
+}
+
+int session_memory(const struct session *s) { return s->memory; }
+
+int session_set_memory(struct session *s, int on)
+{
+    int previous = s->memory;
+    s->memory = on;
+    if (!s->agent || restart(s, on ? NULL : (s->id[0] ? s->id : NULL)))
+        return 1;
+    s->memory = previous;
+    return 0;
 }
 
 void session_adopt_id(struct session *s, const char *id)
