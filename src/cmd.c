@@ -298,13 +298,15 @@ static void note_identity(const struct session *s)
     ui_flush();
 }
 
-static int can_pick(const char *usage)
+/* `remote`: the command takes the choice as its argument, so a captured list can be
+ * answered by rerunning it. */
+static int can_pick(const char *usage, int remote)
 {
     if (chrome_modal_active()) {
         reply_note("%s \xe2\x80\x94 a list is already open", usage);
         return 0;
     }
-    if (!frontend_has_keyboard()) {
+    if (!frontend_has_keyboard() && !(remote && pick_capturing())) {
         reply_note("%s \xe2\x80\x94 nothing here to pick from a list with", usage);
         return 0;
     }
@@ -336,7 +338,7 @@ static void do_model(struct session *s, const char *arg)
 {
     const char *chosen = arg;
     if (!chosen || !*chosen) {
-        if (!can_pick("/model <name>"))
+        if (!can_pick("/model <name>", 1))
             return;
         int count = 0, initial = 0;
         const struct pick_item *choices = model_choices(s, &count);
@@ -385,7 +387,7 @@ static void do_effort(struct session *s, const char *arg)
 
     const char *chosen = arg;
     if (!chosen || !*chosen) {
-        if (!can_pick("/effort <level>"))
+        if (!can_pick("/effort <level>", 1))
             return;
         int count = 0, initial = 0;
         const struct pick_item *choices = effort_choices(s, &count);
@@ -410,8 +412,17 @@ static void do_effort(struct session *s, const char *arg)
 static void do_backend(struct session *s, const char *arg)
 {
     if (!arg || !*arg) {
-        reply_note("/backend <claude|codex|grok|pi|grokbot|core>");
-        return;
+        if (!can_pick("/backend <claude|codex|grok|pi|grokbot|core>", 1))
+            return;
+        int count = 0, initial = 0;
+        const struct pick_item *choices = cmd_backend_choices(&count);
+        for (int i = 0; i < count; i++)
+            if (!strcmp(choices[i].label, session_backend(s)))
+                initial = i;
+        int index = pick_run("backend", choices, count, initial);
+        if (index < 0)
+            return;
+        arg = choices[index].label;
     }
     if (!known_backend(arg)) {
         reply_error("unknown backend '%s'", arg);
@@ -445,12 +456,12 @@ static void do_default(struct session *s, const char *arg)
 
     const char *chosen = arg;
     if (!chosen || !*chosen) {
-        if (!frontend_has_keyboard()) {
+        if (!frontend_has_keyboard() && !pick_capturing()) {
             reply_note("default backend is %s \xe2\x80\x94 /default <name> to change it",
                        cmd_default_backend());
             return;
         }
-        if (!can_pick("/default <name>"))
+        if (!can_pick("/default <name>", 1))
             return;
         int count = 0, initial = 0;
         const struct pick_item *choices = cmd_backend_choices(&count);
@@ -480,7 +491,7 @@ static void do_permission(struct session *s, const char *arg)
 
     const char *chosen = arg;
     if (!chosen || !*chosen) {
-        if (!can_pick("/permission <mode>"))
+        if (!can_pick("/permission <mode>", 1))
             return;
 
         int               count = session_permission_count();
@@ -627,7 +638,7 @@ static void do_theme(struct session *s, const char *arg)
     (void)s;
     char chosen[256];
     if (!arg || !*arg) {
-        if (!can_pick("/theme <name>") || !pick_theme(chosen, sizeof chosen))
+        if (!can_pick("/theme <name>", 1) || !pick_theme(chosen, sizeof chosen))
             return;
     } else {
         snprintf(chosen, sizeof chosen, "%s", arg);
@@ -1310,7 +1321,7 @@ static void do_help(struct session *s, const char *arg);
 static void do_settings(struct session *s, const char *arg)
 {
     (void)arg;
-    if (!can_pick("/settings"))
+    if (!can_pick("/settings", 0))
         return;
     settingsui_run(s);
 }
@@ -1319,7 +1330,7 @@ static void do_resume(struct session *s, const char *arg)
 {
     (void)arg;
 
-    if (!can_pick("/resume"))
+    if (!can_pick("/resume", 0))
         return;
     cmd_resume(s);
 }
@@ -1328,7 +1339,7 @@ static void do_sessions(struct session *s, const char *arg)
 {
     (void)s;
     (void)arg;
-    if (!can_pick("/sessions"))
+    if (!can_pick("/sessions", 0))
         return;
     sessionswitch_run();
 }

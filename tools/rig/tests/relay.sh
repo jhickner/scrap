@@ -54,7 +54,11 @@ $R relay $a '[
   {"t": "req", "op": "highlight", "lang": "py", "text": "def f(): pass", "id": "h1"},
   {"wait": "\"id\":\"h1\",\"ok\":true,\"runs\":\\[\\[\"def\",\"syntax_keyword\"\\]"},
   {"t": "req", "op": "highlight", "lang": "nope", "text": "x", "id": "h2"},
-  {"wait": "\"id\":\"h2\",\"ok\":true}"}
+  {"wait": "\"id\":\"h2\",\"ok\":true}"},
+  {"t": "req", "op": "send", "text": "/backend", "id": "p0"},
+  {"wait": "\"id\":\"p0\",\"ok\":true,\"pick\":\\{\"title\":\"backend\",\"command\":\"/backend\""},
+  {"t": "req", "op": "send", "text": "/permission", "id": "p1"},
+  {"wait": "\"id\":\"p1\",\"ok\":true,\"pick\":\\{\"title\":\"gate tool calls\",\"command\":\"/permission\",\"initial\":[0-9]+,\"items\":\\[\\{\"label\""}
 ]' >/dev/null
 $R idle $a
 

@@ -25,6 +25,7 @@
 #include "frontend.h"
 #include "highlight.h"
 #include "hud.h"
+#include "pick.h"
 #include "prompt.h"
 #include "session.h"
 #include "sessionswitch.h"
@@ -941,6 +942,26 @@ struct submit_ctx {
     cJSON      *res;
 };
 
+/* A list the command would have shown; the client answers with `command` and a label. */
+static cJSON *pick_obj(const struct pick_capture *p, const char *line)
+{
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "title", p->title);
+    char command[64];
+    snprintf(command, sizeof command, "%.*s", (int)strcspn(line, " \t\n"), line);
+    cJSON_AddStringToObject(o, "command", command);
+    cJSON_AddNumberToObject(o, "initial", p->initial);
+    cJSON *items = cJSON_AddArrayToObject(o, "items");
+    for (int i = 0; i < p->count; i++) {
+        cJSON *it = cJSON_CreateObject();
+        cJSON_AddStringToObject(it, "label", p->items[i].label);
+        if (p->items[i].detail && *p->items[i].detail)
+            cJSON_AddStringToObject(it, "detail", p->items[i].detail);
+        cJSON_AddItemToArray(items, it);
+    }
+    return o;
+}
+
 static void submit(struct session *s, void *ud)
 {
     struct submit_ctx *c = ud;
@@ -959,7 +980,10 @@ static void submit(struct session *s, void *ud)
         return;
     }
     ui_sink_begin_tee();
+    pick_capture_begin();
     enum cmd_result r = cmd_submit(s, line);
+    struct pick_capture pick;
+    int picked = pick_capture_end(&pick);
     char *raw = ui_sink_end();
     char *shown = ui_plain(raw, 1);
     free(raw);
@@ -968,9 +992,12 @@ static void submit(struct session *s, void *ud)
         c->res = res_error(c->req, "refused", "the terminal owns this session; /quit there");
     } else {
         c->res = res_ok(c->req);
-        if (shown && *shown)
+        if (picked)
+            cJSON_AddItemToObject(c->res, "pick", pick_obj(&pick, line));
+        else if (shown && *shown)
             entry_add(rt.cur, entry_new("note", shown));
     }
+    pick_capture_free(&pick);
     free(shown);
 }
 
