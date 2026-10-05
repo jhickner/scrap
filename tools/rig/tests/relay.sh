@@ -142,6 +142,19 @@ $R relay $a '[
   {"t": "req", "op": "open", "tab": 1, "id": "o3"},
   {"wait": "\"id\":\"o3\",\"ok\":true,\"binding\"", "secs": 15}
 ]' >/dev/null
+$R idle $a
+
+# a turn keeps its tool entries across switching away and back mid-turn
+$R relay $a '[
+  {"t": "req", "op": "send", "text": "tool: sleep 1; echo away"},
+  {"wait": "\"kind\":\"tool\""},
+  {"t": "req", "op": "open", "tab": 2, "id": "away"},
+  {"wait": "\"id\":\"away\",\"ok\":true"},
+  2.5,
+  {"t": "req", "op": "open", "tab": 1, "id": "back"},
+  {"wait": "\"t\":\"view\".*\"kind\":\"tool\".*sleep 1; echo away.*tool done"}
+]' >/dev/null
+
 $R send $a C-d
 sleep 1
 

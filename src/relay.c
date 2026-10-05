@@ -54,6 +54,7 @@
 #define SENT_MAX      16
 #define OPEN_TOOLS    64
 #define REPLAY_MAX    256
+#define LOGS_MAX      32
 
 struct item {
     int    client;
@@ -73,6 +74,18 @@ struct done {
 struct sent {
     char req[160];
     char *text;
+};
+
+/* A tab's entries, recorded whether or not it is the served session. */
+struct log {
+    struct session *s;
+    cJSON          *entries;
+    long            open_tools[OPEN_TOOLS];
+    int             nopen;
+    int             repeat_task;
+    double          mirrored_turn;
+    char            sid[128];
+    size_t          tcount;
 };
 
 static struct {
@@ -95,14 +108,9 @@ static struct {
     char           *replay[REPLAY_MAX];
     int             binding;
 
-    cJSON          *entries;
+    struct log      logs[LOGS_MAX];
+    struct log     *cur;
     long            next_id;
-    long            open_tools[OPEN_TOOLS];
-    int             nopen;
-    int             repeat_task;
-    double          mirrored_turn;
-    char            sid[128];
-    size_t          tcount;
     char           *session_json;
     char           *live_json;
 
@@ -365,17 +373,18 @@ static cJSON *entry_new(const char *kind, const char *text)
     return e;
 }
 
-static void entry_add(cJSON *e)
+static void entry_add(struct log *l, cJSON *e)
 {
-    cJSON_AddItemToArray(rt.entries, e);
-    emit(op2("add", entry_out(e, is_tool(e))));
+    cJSON_AddItemToArray(l->entries, e);
+    if (l == rt.cur)
+        emit(op2("add", entry_out(e, is_tool(e))));
 }
 
-static cJSON *entry_find(long id, int *at)
+static cJSON *entry_find(struct log *l, long id, int *at)
 {
     int i = 0;
     cJSON *e;
-    cJSON_ArrayForEach(e, rt.entries)
+    cJSON_ArrayForEach(e, l->entries)
     {
         if ((long)cJSON_GetNumberValue(cJSON_GetObjectItem(e, "id")) == id) {
             if (at)
@@ -388,9 +397,9 @@ static cJSON *entry_find(long id, int *at)
 }
 
 /* Merge fields into an entry and publish them. */
-static void entry_set(long id, cJSON *fields)
+static void entry_set(struct log *l, long id, cJSON *fields)
 {
-    cJSON *e = entry_find(id, NULL);
+    cJSON *e = entry_find(l, id, NULL);
     if (!e) {
         cJSON_Delete(fields);
         return;
@@ -400,6 +409,10 @@ static void entry_set(long id, cJSON *fields)
     {
         cJSON_DeleteItemFromObject(e, f->string);
         cJSON_AddItemToObject(e, f->string, cJSON_Duplicate(f, 1));
+    }
+    if (l != rt.cur) {
+        cJSON_Delete(fields);
+        return;
     }
     cJSON *op = cJSON_CreateArray();
     cJSON_AddItemToArray(op, cJSON_CreateString("set"));
@@ -443,30 +456,70 @@ static cJSON *assistant_entry(const char *text)
 }
 
 /* `keep` appends to the current entries, as a terminal keeps scrollback across /clear. */
-static void entries_load(struct session *s, int keep)
+static void entries_load(struct log *l, int keep)
 {
-    if (!keep || !rt.entries) {
-        cJSON_Delete(rt.entries);
-        rt.entries = cJSON_CreateArray();
+    struct session *s = l->s;
+    if (!keep || !l->entries) {
+        cJSON_Delete(l->entries);
+        l->entries = cJSON_CreateArray();
+    } else if (cJSON_GetArraySize(l->entries)) {
+        cJSON_AddItemToArray(l->entries, entry_new("note", "── new conversation ──"));
     }
-    rt.nopen = 0;
+    l->nopen = 0;
     const struct transcript *t = session_transcript(s);
     for (size_t i = 0; t && i < t->count; i++) {
         const struct transcript_turn *turn = &t->turns[i];
         if (turn->user && *turn->user)
-            cJSON_AddItemToArray(rt.entries, entry_new("user", turn->user));
+            cJSON_AddItemToArray(l->entries, entry_new("user", turn->user));
         if (turn->assistant && *turn->assistant)
-            cJSON_AddItemToArray(rt.entries, assistant_entry(turn->assistant));
+            cJSON_AddItemToArray(l->entries, assistant_entry(turn->assistant));
         if (turn->interrupted) {
             cJSON *e = entry_new("end", NULL);
             cJSON_AddBoolToObject(e, "stopped", 1);
-            cJSON_AddItemToArray(rt.entries, e);
+            cJSON_AddItemToArray(l->entries, e);
         }
     }
-    rt.tcount = t ? t->count : 0;
-    snprintf(rt.sid, sizeof rt.sid, "%s", session_id(s) ? session_id(s) : "");
-    rt.mirrored_turn = 0;
-    rt.repeat_task = 0;
+    l->tcount = t ? t->count : 0;
+    snprintf(l->sid, sizeof l->sid, "%s", session_id(s) ? session_id(s) : "");
+    l->mirrored_turn = 0;
+    l->repeat_task = 0;
+}
+
+static void mirror_prompt(struct log *l);
+
+static struct log *log_find(const struct session *s)
+{
+    for (int i = 0; s && i < LOGS_MAX; i++)
+        if (rt.logs[i].s == s)
+            return &rt.logs[i];
+    return NULL;
+}
+
+static void log_free(struct log *l)
+{
+    cJSON_Delete(l->entries);
+    *l = (struct log){0};
+}
+
+/* The session's log, started from its transcript the first time it is seen. */
+static struct log *log_for(struct session *s)
+{
+    struct log *l = log_find(s);
+    if (l || !s)
+        return l;
+    for (int i = 0; i < LOGS_MAX && !l; i++)
+        if (!rt.logs[i].s)
+            l = &rt.logs[i];
+    /* ponytail: evicts the first unserved log when full; LRU if 32 tabs is ever too few. */
+    for (int i = 0; i < LOGS_MAX && !l; i++)
+        if (&rt.logs[i] != rt.cur) {
+            l = &rt.logs[i];
+            log_free(l);
+        }
+    l->s = s;
+    entries_load(l, 0);
+    mirror_prompt(l);
+    return l;
 }
 
 /* ---- view --------------------------------------------------------------- */
@@ -514,6 +567,12 @@ static cJSON *live_obj(struct session *s)
         cJSON_AddStringToObject(e, "status", workspace_status(t));
         if (session_unseen(t))
             cJSON_AddBoolToObject(e, "unseen", 1);
+        if (session_ask_open(t) && !session_busy(t)) {
+            struct askblock *b = askblock_parse(session_last_block(t));
+            if (b)
+                cJSON_AddBoolToObject(e, "asking", 1);
+            askblock_free(b);
+        }
         int ctx = session_context_percent(t);
         if (ctx > 0)
             cJSON_AddNumberToObject(e, "context", ctx);
@@ -554,7 +613,7 @@ static cJSON *entries_before(int end, int limit)
     int from = end - limit < 0 ? 0 : end - limit;
     for (int i = from; i < end; i++)
     {
-        const cJSON *e = cJSON_GetArrayItem(rt.entries, i);
+        const cJSON *e = cJSON_GetArrayItem(rt.cur->entries, i);
         cJSON_AddItemToArray(list, entry_out(e, is_tool(e)));
     }
     return list;
@@ -567,7 +626,7 @@ static void send_view(int client)
     cJSON_AddNumberToObject(o, "seq", (double)rt.seq);
     cJSON_AddNumberToObject(o, "binding", rt.binding);
     cJSON_AddItemToObject(o, "session", session_obj(s));
-    int n = cJSON_GetArraySize(rt.entries);
+    int n = cJSON_GetArraySize(rt.cur->entries);
     cJSON_AddItemToObject(o, "entries", entries_before(n, WINDOW));
     cJSON_AddBoolToObject(o, "older", n > WINDOW);
     cJSON_AddItemToObject(o, "live", live_obj(s));
@@ -608,10 +667,8 @@ static void ask_set(struct askblock *b)
     emit(op2("ask", ask_obj()));
 }
 
-static void rebind(int keep)
+static void rebind(void)
 {
-    struct session *s = relay_session();
-    entries_load(s, keep);
     askblock_free(rt.ask);
     rt.ask = NULL;
     rt.binding++;
@@ -668,7 +725,7 @@ static cJSON *runs_of(const char *text, size_t len, const unsigned char *roles)
     return runs;
 }
 
-static void tool_entry(const backend_event *ev)
+static void tool_entry(struct log *l, const backend_event *ev)
 {
     char label[48], arg[600];
     toolstyle_label(label, sizeof label, ev->name ? ev->name : "tool");
@@ -693,21 +750,21 @@ static void tool_entry(const backend_event *ev)
         int cut = 0;
         cJSON_AddItemToObject(e, "input", clipped_string(ev->input_json, RESULT_CLIP, &cut));
     }
-    if (rt.nopen == OPEN_TOOLS) {
-        memmove(rt.open_tools, rt.open_tools + 1, (OPEN_TOOLS - 1) * sizeof rt.open_tools[0]);
-        rt.nopen--;
+    if (l->nopen == OPEN_TOOLS) {
+        memmove(l->open_tools, l->open_tools + 1, (OPEN_TOOLS - 1) * sizeof l->open_tools[0]);
+        l->nopen--;
     }
-    rt.open_tools[rt.nopen++] = (long)cJSON_GetNumberValue(cJSON_GetObjectItem(e, "id"));
-    entry_add(e);
+    l->open_tools[l->nopen++] = (long)cJSON_GetNumberValue(cJSON_GetObjectItem(e, "id"));
+    entry_add(l, e);
 }
 
 /* Results carry no call id, so each one closes the oldest open tool call. */
-static void tool_result(const backend_event *ev)
+static void tool_result(struct log *l, const backend_event *ev)
 {
-    if (!rt.nopen)
+    if (!l->nopen)
         return;
-    long id = rt.open_tools[0];
-    memmove(rt.open_tools, rt.open_tools + 1, (size_t)(--rt.nopen) * sizeof rt.open_tools[0]);
+    long id = l->open_tools[0];
+    memmove(l->open_tools, l->open_tools + 1, (size_t)(--l->nopen) * sizeof l->open_tools[0]);
     cJSON *f = cJSON_CreateObject();
     int cut = 0;
     cJSON_AddBoolToObject(f, "done", 1);
@@ -717,46 +774,46 @@ static void tool_result(const backend_event *ev)
         cJSON_AddItemToObject(f, "diff", clipped_string(ev->diff, RESULT_CLIP, &cut));
     if (ev->failed)
         cJSON_AddBoolToObject(f, "failed", 1);
-    entry_set(id, f);
+    entry_set(l, id, f);
 }
 
 static void on_event(void *ud, struct session *s, const backend_event *ev)
 {
     (void)ud;
-    if (!rt.active || s != relay_session())
+    if (!rt.active || (ev->parent && *ev->parent) || workspace_index_of(s) < 0)
         return;
-    if (ev->parent && *ev->parent)
-        return;
+    struct log *l = log_for(s);
+    mirror_prompt(l);
 
     if (ev->kind == BACKEND_EV_TASK) {
         if (session_task_repeat(s))
-            rt.repeat_task = 1;
+            l->repeat_task = 1;
         return;
     }
-    if (rt.repeat_task) {
+    if (l->repeat_task) {
         if (ev->kind == BACKEND_EV_ASSISTANT)
-            rt.repeat_task = 0;
+            l->repeat_task = 0;
         return;
     }
 
     switch (ev->kind) {
     case BACKEND_EV_TOOL:
-        tool_entry(ev);
+        tool_entry(l, ev);
         break;
     case BACKEND_EV_TOOL_RESULT:
-        tool_result(ev);
+        tool_result(l, ev);
         break;
     case BACKEND_EV_ASSISTANT:
         if (ev->text && *ev->text)
-            entry_add(assistant_entry(ev->text));
+            entry_add(l, assistant_entry(ev->text));
         break;
     case BACKEND_EV_THINKING:
         if (session_thinking(s) && ev->text && *ev->text)
-            entry_add(entry_new("thinking", ev->text));
+            entry_add(l, entry_new("thinking", ev->text));
         break;
     case BACKEND_EV_WARNING:
         if (ev->text && *ev->text)
-            entry_add(entry_new("note", ev->text));
+            entry_add(l, entry_new("note", ev->text));
         break;
     default:
         break;
@@ -765,21 +822,23 @@ static void on_event(void *ud, struct session *s, const backend_event *ev)
 
 /* A started turn becomes a user entry. A prompt that contains a line the
  * phone sent is tagged with that request's id. */
-static void mirror_prompt(struct session *s)
+static void mirror_prompt(struct log *l)
 {
+    struct session *s = l->s;
     if (!session_busy(s))
         return;
     double started = session_turn_started(s);
-    if (started == rt.mirrored_turn)
+    if (started == l->mirrored_turn)
         return;
-    rt.mirrored_turn = started;
-    ask_set(NULL);
-    rt.nopen = 0;
+    l->mirrored_turn = started;
+    if (l == rt.cur)
+        ask_set(NULL);
+    l->nopen = 0;
     const char *p = session_prompt(s);
     if (!p || !*p)
         return;
     cJSON *e = entry_new("user", p);
-    for (int i = 0; i < rt.nsent; i++) {
+    for (int i = 0; l == rt.cur && i < rt.nsent; i++) {
         if (!strstr(p, rt.sent[i].text))
             continue;
         cJSON_AddStringToObject(e, "req", rt.sent[i].req);
@@ -788,12 +847,13 @@ static void mirror_prompt(struct session *s)
         rt.nsent--;
         break;
     }
-    entry_add(e);
+    entry_add(l, e);
 }
 
 void relay_turn_done(struct session *s)
 {
-    if (!rt.active || s != relay_session())
+    struct log *l = rt.active && workspace_index_of(s) >= 0 ? log_for(s) : NULL;
+    if (!l)
         return;
     cJSON *e = entry_new("end", NULL);
     double started = session_turn_started(s);
@@ -805,38 +865,42 @@ void relay_turn_done(struct session *s)
     } else if (session_last_interrupted(s)) {
         cJSON_AddBoolToObject(e, "stopped", 1);
     }
-    entry_add(e);
-    if (!session_last_result(s)->is_error && !session_last_interrupted(s))
+    entry_add(l, e);
+    if (l == rt.cur && !session_last_result(s)->is_error && !session_last_interrupted(s))
         ask_set(askblock_parse(session_last_block(s)));
     const struct transcript *t = session_transcript(s);
-    rt.tcount = t ? t->count : 0;
+    l->tcount = t ? t->count : 0;
 }
 
 void relay_btw(const struct session *owner, const char *question,
                const char *answer, int failed)
 {
-    if (!rt.active || owner != relay_session())
+    struct log *l = rt.active ? log_find(owner) : NULL;
+    if (!l)
         return;
     cJSON *e = entry_new("btw", question);
     cJSON_AddStringToObject(e, "answer", answer ? answer : "");
     if (failed)
         cJSON_AddBoolToObject(e, "failed", 1);
-    entry_add(e);
+    entry_add(l, e);
 }
 
 /* A cleared or replaced conversation in the tab starts a new binding. */
-static void check_reset(struct session *s)
+static void check_reset(struct log *l)
 {
-    const struct transcript *t = session_transcript(s);
+    const struct transcript *t = session_transcript(l->s);
     size_t count = t ? t->count : 0;
-    const char *id = session_id(s) ? session_id(s) : "";
-    int replaced = rt.sid[0] && strcmp(rt.sid, id);
-    if (!rt.sid[0] && id[0])
-        snprintf(rt.sid, sizeof rt.sid, "%s", id);
-    if (replaced || count < rt.tcount)
-        rebind(1);
-    else
-        rt.tcount = count;
+    const char *id = session_id(l->s) ? session_id(l->s) : "";
+    int replaced = l->sid[0] && strcmp(l->sid, id);
+    if (!l->sid[0] && id[0])
+        snprintf(l->sid, sizeof l->sid, "%s", id);
+    if (replaced || count < l->tcount) {
+        entries_load(l, 1);
+        if (l == rt.cur)
+            rebind();
+    } else {
+        l->tcount = count;
+    }
 }
 
 /* ---- requests ----------------------------------------------------------- */
@@ -887,7 +951,7 @@ static void submit(struct session *s, void *ud)
 
     frontend_push(0);
     if (!command) {
-        rt.repeat_task = 0;
+        rt.cur->repeat_task = 0;
         remember_sent(c->req, line);
         cmd_submit(s, line);
         frontend_pop();
@@ -905,7 +969,7 @@ static void submit(struct session *s, void *ud)
     } else {
         c->res = res_ok(c->req);
         if (shown && *shown)
-            entry_add(entry_new("note", shown));
+            entry_add(rt.cur, entry_new("note", shown));
     }
     free(shown);
 }
@@ -916,7 +980,7 @@ void relay_banner(struct session *s)
         return;
     cJSON *e = entry_new("hud", NULL);
     cJSON_AddItemToObject(e, "hud", hud_rows(s));
-    entry_add(e);
+    entry_add(rt.cur, e);
 }
 
 static void blank(struct session *s, void *ud)
@@ -976,7 +1040,7 @@ static cJSON *do_older(const char *req, const cJSON *msg)
     if (limit <= 0 || limit > OLDER_MAX)
         limit = WINDOW;
     int at = 0;
-    if (!entry_find(before, &at))
+    if (!entry_find(rt.cur, before, &at))
         return res_error(req, "not_found", "no such entry");
     cJSON *o = res_ok(req);
     cJSON_AddItemToObject(o, "entries", entries_before(at, limit));
@@ -986,7 +1050,7 @@ static cJSON *do_older(const char *req, const cJSON *msg)
 
 static cJSON *do_entry(const char *req, const cJSON *msg)
 {
-    cJSON *e = entry_find((long)cJSON_GetNumberValue(cJSON_GetObjectItem(msg, "id")), NULL);
+    cJSON *e = entry_find(rt.cur, (long)cJSON_GetNumberValue(cJSON_GetObjectItem(msg, "id")), NULL);
     if (!e)
         return res_error(req, "not_found", "no such entry");
     cJSON *o = res_ok(req);
@@ -1267,9 +1331,13 @@ void relay_poll(struct session *live)
     struct session *s = relay_session();
     if (!rt.active || !s)
         return;
-    if (!live)
-        check_reset(s);
-    mirror_prompt(s);
+    for (int i = 0; i < workspace_count(); i++) {
+        struct log *l = log_for(workspace_at(i));
+        if (l && l->s != live)
+            check_reset(l);
+        if (l)
+            mirror_prompt(l);
+    }
     static double hud_at;
     double now = now_seconds();
     if (!rt.session_json || now - hud_at >= 1) {
@@ -1517,8 +1585,9 @@ static void cleanup(void)
     rt.s = NULL;
     rt.label[0] = '\0';
     memset(rt.clients, 0, sizeof rt.clients);
-    cJSON_Delete(rt.entries);
-    rt.entries = NULL;
+    for (int i = 0; i < LOGS_MAX; i++)
+        log_free(&rt.logs[i]);
+    rt.cur = NULL;
     replay_clear();
     askblock_free(rt.ask);
     rt.ask = NULL;
@@ -1541,7 +1610,8 @@ int relay_start(struct session *s)
             set_note(rt.s, 0);
             rt.s = s;
             set_note(s, 1);
-            rebind(0);
+            rt.cur = log_for(s);
+            rebind();
         }
         return 1;
     }
@@ -1585,7 +1655,7 @@ int relay_start(struct session *s)
     rt.s = s;
     rt.seq = 0;
     rt.replay_base = 0;
-    entries_load(s, 0);
+    rt.cur = log_for(s);
     session_add_listener(on_event, NULL);
 
     snprintf(rt.upload_dir, sizeof rt.upload_dir, "/tmp/" APP_NAME "_relay_XXXXXX");
@@ -1625,6 +1695,9 @@ void relay_forget_session(struct session *s)
 {
     if (s && s == rt.s)
         relay_stop();
+    struct log *l = log_find(s);
+    if (l)
+        log_free(l);
 }
 
 /* After a restart, serve the session the relay served once its tab is back. */
