@@ -243,6 +243,14 @@ static void serve_one(int fd)
     cJSON *last = cJSON_GetArrayItem(msgs, cJSON_GetArraySize(msgs) - 1);
     const char *role = cJSON_GetStringValue(cJSON_GetObjectItem(last, "role"));
     const char *content = cJSON_GetStringValue(cJSON_GetObjectItem(last, "content"));
+    char joined[8192] = "";
+    const cJSON *part;
+    cJSON_ArrayForEach(part, cJSON_GetObjectItem(last, "content")) {
+        const char *t = cJSON_GetStringValue(cJSON_GetObjectItem(part, "text"));
+        if (t)
+            strncat(joined, t, sizeof joined - strlen(joined) - 1);
+        content = joined;
+    }
     if (!content)
         content = "";
 
@@ -293,6 +301,9 @@ static void serve_one(int fd)
     cJSON_AddNumberToObject(usage, "prompt_tokens", (double)prompt);
     cJSON_AddNumberToObject(usage, "completion_tokens", 5);
     cJSON_AddNumberToObject(usage, "cost", 0.001);
+    cJSON *details = cJSON_AddObjectToObject(usage, "prompt_tokens_details");
+    cJSON_AddNumberToObject(details, "cached_tokens", 7);
+    cJSON_AddNumberToObject(details, "cache_write_tokens", 3);
     chunk(fd, u);
     send_all(fd, "data: [DONE]\n\n");
     cJSON_Delete(body);
@@ -468,6 +479,25 @@ int main(void)
     reply = ask(b, "read: sub/f.txt", &meta);
     CHECK(!last_failed && !strcmp(last_result, "alpha delta alpha\n"));
     free(reply);
+
+    reply = ask(b, "plain" BACKEND_CACHE_MARK "route", &meta);
+    CHECK(reply && !strcmp(reply, "echo: plainroute"));
+    CHECK(!strstr(get_file("last-request.json"), "cache_control"));
+    CHECK(meta.cache_read_tokens == 7 && meta.cache_creation_tokens == 3);
+    free(reply);
+    b->set_model(b, "fake/anthropic/echo");
+    reply = ask(b, "view" BACKEND_CACHE_MARK "step", &meta);
+    char *creq = get_file("last-request.json");
+    CHECK(strstr(creq, "{\"type\":\"text\",\"text\":\"view\",\"cache_control\":{\"type\":\"ephemeral\"}}"));
+    CHECK(strstr(creq, "{\"type\":\"text\",\"text\":\"step\",\"cache_control\":{\"type\":\"ephemeral\"}}"));
+    CHECK(!strstr(creq, BACKEND_CACHE_MARK));
+    free(reply);
+    reply = ask(b, "run: echo cached", &meta);
+    creq = get_file("last-request.json");
+    CHECK(strstr(creq, "\"role\":\"tool\""));
+    CHECK(strstr(creq, "{\"type\":\"text\",\"text\":\"cached\\n\",\"cache_control\":{\"type\":\"ephemeral\"}}"));
+    free(reply);
+    b->set_model(b, "fake/echo");
 
     b->set_effort(b, "high");
     reply = ask(b, "effort", &meta);
