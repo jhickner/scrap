@@ -32,7 +32,7 @@ $R idle $a
 
 # uploads
 $R relay $a '[{"t": "req", "op": "send", "text": "look", "files": [{"name": "a b.txt", "data": "aGVsbG8gZmlsZQ=="}]},
-  {"wait": "I sent a file:\\\\n- /tmp/scrap_relay_[^ ]*-a_b.txt\\\\n\\\\nlook", "secs": 5}]' >/dev/null
+  {"wait": "- /tmp/scrap_relay_[^ ]*-a_b.txt\\\\n\\\\nlook", "secs": 5}]' >/dev/null
 f=$($R snap $a | grep -o '/tmp/scrap_relay_[^ ]*-a_b.txt' | head -1)
 [ "$(cat "$f")" = "hello file" ] || { echo "relay: upload not saved: $f"; exit 1; }
 $R idle $a
@@ -122,6 +122,8 @@ $R relay $a '[
   {"t": "req", "op": "open", "tab": 1, "id": "o"},
   {"wait": "\"t\":\"view\".*\"binding\":2.*echo: second tab"},
   {"wait": "\"id\":\"o\",\"ok\":true,\"binding\":2"},
+  {"t": "req", "op": "sessions", "id": "ls2"},
+  {"wait": "\"id\":\"ls2\".*\"label\":\"▸ [^\"]*\",[^}]*\"tab\":1,\"relay\":true"},
   {"t": "req", "op": "open", "target": "@nobody", "id": "o2"},
   {"wait": "\"id\":\"o2\",\"ok\":false,\"code\":\"not_found\""},
   {"t": "req", "op": "new", "id": "n"},

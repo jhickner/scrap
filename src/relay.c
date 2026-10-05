@@ -415,10 +415,13 @@ static cJSON *assistant_entry(const char *text)
     return e;
 }
 
-static void entries_load(struct session *s)
+/* `keep` appends to the current entries, as a terminal keeps scrollback across /clear. */
+static void entries_load(struct session *s, int keep)
 {
-    cJSON_Delete(rt.entries);
-    rt.entries = cJSON_CreateArray();
+    if (!keep || !rt.entries) {
+        cJSON_Delete(rt.entries);
+        rt.entries = cJSON_CreateArray();
+    }
     rt.nopen = 0;
     const struct transcript *t = session_transcript(s);
     for (size_t i = 0; t && i < t->count; i++) {
@@ -574,10 +577,10 @@ static void ask_set(struct askblock *b)
     emit(op2("ask", ask_obj()));
 }
 
-static void rebind(void)
+static void rebind(int keep)
 {
     struct session *s = relay_session();
-    entries_load(s);
+    entries_load(s, keep);
     askblock_free(rt.ask);
     rt.ask = NULL;
     rt.binding++;
@@ -800,7 +803,7 @@ static void check_reset(struct session *s)
     if (!rt.sid[0] && id[0])
         snprintf(rt.sid, sizeof rt.sid, "%s", id);
     if (replaced || count < rt.tcount)
-        rebind();
+        rebind(1);
     else
         rt.tcount = count;
 }
@@ -870,7 +873,8 @@ static void submit(struct session *s, void *ud)
         c->res = res_error(c->req, "refused", "the terminal owns this session; /quit there");
     } else {
         c->res = res_ok(c->req);
-        cJSON_AddStringToObject(c->res, "out", shown ? shown : "");
+        if (shown && *shown)
+            entry_add(entry_new("note", shown));
     }
     free(shown);
 }
@@ -973,8 +977,19 @@ static cJSON *do_sessions(const char *req)
     cJSON_ArrayForEach(r, rows)
     {
         const cJSON *tab = cJSON_GetObjectItem(r, "tab");
-        if (cJSON_IsNumber(tab) && workspace_at((int)tab->valuedouble) == relay_session())
+        if (!cJSON_IsNumber(tab))
+            continue;
+        int here = workspace_at((int)tab->valuedouble) == relay_session();
+        if (here)
             cJSON_AddBoolToObject(r, "relay", 1);
+        /* The phone's current session is the relay's, not the terminal's visible tab. */
+        const char *label = cJSON_GetStringValue(cJSON_GetObjectItem(r, "label"));
+        const char *title = label ? strchr(label, ' ') : NULL;
+        if (title) {
+            char marked[512];
+            snprintf(marked, sizeof marked, "%s%s", here ? "\xe2\x96\xb8" : "\xe2\xa7\x89", title);
+            cJSON_ReplaceItemInObject(r, "label", cJSON_CreateString(marked));
+        }
     }
     cJSON *o = res_ok(req);
     cJSON_AddItemToObject(o, "rows", rows);
@@ -1291,7 +1306,8 @@ static void take_uploads(cJSON *msg)
     char  *out = malloc(cap);
     if (!out)
         return;
-    size_t at = (size_t)snprintf(out, cap, "I sent %s:\n", n == 1 ? "a file" : "some files");
+    size_t at = 0;
+    out[0] = '\0';
     for (int i = 0; i < n; i++)
         at += (size_t)snprintf(out + at, cap - at, "- %s\n", paths[i]);
     if (text && *text)
@@ -1471,7 +1487,7 @@ int relay_start(struct session *s)
             set_note(rt.s, 0);
             rt.s = s;
             set_note(s, 1);
-            rebind();
+            rebind(0);
         }
         return 1;
     }
@@ -1514,7 +1530,7 @@ int relay_start(struct session *s)
 
     rt.s = s;
     rt.seq = 0;
-    entries_load(s);
+    entries_load(s, 0);
     session_add_listener(on_event, NULL);
 
     snprintf(rt.upload_dir, sizeof rt.upload_dir, "/tmp/" APP_NAME "_relay_XXXXXX");
