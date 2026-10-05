@@ -707,16 +707,19 @@ static void side_drain(struct session *s)
 {
     cJSON *n;
     while (s->remote && (n = remote_side_take(s->agent))) {
-        sidechannel_show(s, cJSON_GetStringValue(cJSON_GetObjectItem(n, "question")),
-                         cJSON_GetStringValue(cJSON_GetObjectItem(n, "answer")),
-                         cJSON_IsTrue(cJSON_GetObjectItem(n, "failed")));
+        const char *question = cJSON_GetStringValue(cJSON_GetObjectItem(n, "question"));
+        const char *answer = cJSON_GetStringValue(cJSON_GetObjectItem(n, "answer"));
+        int failed = cJSON_IsTrue(cJSON_GetObjectItem(n, "failed"));
+        sidechannel_show(s, question, answer, failed);
+        relay_btw(s, question, answer, failed);
         cJSON_Delete(n);
     }
 }
 
 static void status_update_tick(struct session *s)
 {
-    if (!s || s->remote || s->status_open || (s != live && !stream_watched(s)))
+    if (!s || s->remote || s->status_open ||
+        (s != live && s != relay_session() && !stream_watched(s)))
         return;
     double since = s->status_at;
     if (!s->running) {
