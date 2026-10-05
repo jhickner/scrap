@@ -732,6 +732,62 @@ static int paste_into(struct view *v, const char *s, size_t n)
     return 1;
 }
 
+static struct {
+    int                 on;
+    int                 got;
+    struct pick_capture c;
+} cap;
+
+void pick_capture_begin(void)
+{
+    pick_capture_free(&cap.c);
+    cap.on = 1;
+    cap.got = 0;
+}
+
+int pick_capturing(void)
+{
+    return cap.on && !frontend_has_keyboard();
+}
+
+int pick_capture_end(struct pick_capture *out)
+{
+    int got = cap.got;
+    *out = cap.c;
+    cap.c = (struct pick_capture){0};
+    cap.on = cap.got = 0;
+    return got;
+}
+
+void pick_capture_free(struct pick_capture *c)
+{
+    for (int i = 0; c->items && i < c->count; i++) {
+        free((char *)c->items[i].label);
+        free((char *)c->items[i].detail);
+    }
+    free(c->items);
+    free(c->title);
+    *c = (struct pick_capture){0};
+}
+
+static void capture(const char *title, const struct pick_item *items, int count, int initial)
+{
+    pick_capture_free(&cap.c);
+    cap.c.items = calloc((size_t)count, sizeof *cap.c.items);
+    cap.c.title = strdup(title ? title : "");
+    if (!cap.c.items || !cap.c.title) {
+        pick_capture_free(&cap.c);
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        cap.c.items[i].label = strdup(items[i].label ? items[i].label : "");
+        cap.c.items[i].detail = items[i].detail ? strdup(items[i].detail) : NULL;
+    }
+    cap.c.count = count;
+    cap.c.initial = initial;
+    cap.got = 1;
+}
+
 static int run(const char *title, const struct pick_item *items, int count,
                int initial, const struct pick_live *live, const char *shortcuts,
                int *pressed, int filter, int slash)
@@ -740,6 +796,10 @@ static int run(const char *title, const struct pick_item *items, int count,
         *pressed = 0;
     if (count <= 0)
         return -1;
+    if (pick_capturing()) {
+        capture(title, items, count, initial);
+        return -1;
+    }
 
     if (!frontend_has_keyboard() || !tty_is_raw())
         return -1;

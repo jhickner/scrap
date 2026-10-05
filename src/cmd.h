@@ -2,6 +2,8 @@
 #ifndef CMD_H
 #define CMD_H
 
+#include <stddef.h>
+
 #include "vendor/repl.h"
 
 struct session;
@@ -44,5 +46,6 @@ int cmd_resume(struct session *s);
 int copy_to_clipboard(const char *text);
 
 void cmd_attach(const char *target);
+int  cmd_attach_tab(const char *target, char *why, size_t size);
 
 #endif

@@ -22,6 +22,7 @@
 
 #include "app.h"
 #include "bash.h"
+#include "chatnav.h"
 #include "cmd.h"
 #include "filelock.h"
 #include "frontend.h"
@@ -33,7 +34,7 @@
 #include "status.h"
 #include "text.h"
 #include "tg.h"
-#include "tgbridge.h"
+#include "workspace.h"
 #include "tty.h"
 #include "ui.h"
 #include "viewport.h"
@@ -52,7 +53,7 @@ struct outgoing {
 };
 
 static struct {
-    struct tgbridge bridge;
+    struct chatnav nav;
     int             active;
     char            handle[128];
     char            label[160];
@@ -124,7 +125,7 @@ static const char SEND_SCRIPT[] =
 
 static struct session *current_session(void)
 {
-    return tgbridge_session(&rt.bridge);
+    return chatnav_session(&rt.nav);
 }
 
 __attribute__((format(printf, 1, 2)))
@@ -652,7 +653,7 @@ static void bind_session(struct session *s, int active, void *ud)
     }
 }
 
-static void bridge_note(void *ud, const char *text)
+static void nav_note(void *ud, const char *text)
 {
     (void)ud;
     send_text(text);
@@ -686,14 +687,14 @@ void im_run_line(char *line)
     frontend_push(0);
 
     if (!current_session())
-        tgbridge_refocus(&rt.bridge);
+        chatnav_refocus(&rt.nav);
     if (!current_session()) {
         send_text("that session is gone; start a new one at the terminal");
         goto done;
     }
 
     if (bash_is_command(line)) {
-        tty_watch(tgbridge_workspace_fds, tgbridge_workspace_ready, NULL);
+        tty_watch(workspace_watch_fds, workspace_watch_ready, NULL);
         bash_run(line);
         tty_watch(NULL, NULL, NULL);
         gitinfo_forget();
@@ -773,11 +774,10 @@ int im_start(struct session *s)
     }
 
     char cfgpath[4200];
-    settings_load(&imcfg, path_config_file(cfgpath, sizeof cfgpath, "imessage") ? cfgpath : "");
+    int  have = path_config_file(cfgpath, sizeof cfgpath, "imessage");
+    settings_load(&imcfg, have ? cfgpath : "");
 
-    char lock[128];
-    snprintf(lock, sizeof lock, "/tmp/" APP_NAME "-%lu-imessage", (unsigned long)getuid());
-    owner_lock = filelock_acquire(lock, LOCK_EX | LOCK_NB);
+    owner_lock = have ? filelock_acquire(cfgpath, LOCK_EX | LOCK_NB) : -1;
     if (owner_lock < 0) {
         fail_note("imessage is already enabled by another scrap instance");
         return 0;
@@ -826,9 +826,9 @@ int im_start(struct session *s)
         rt.attach_dir[0] = '\0';
 
     snprintf(rt.label, sizeof rt.label, "imessage %s", rt.handle);
-    tgbridge_init(&rt.bridge, s, bind_session, NULL);
-    const struct tgbridge_output out = {.note = bridge_note};
-    tgbridge_set_output(&rt.bridge, &out);
+    chatnav_init(&rt.nav, s, bind_session, NULL);
+    const struct chatnav_output out = {.note = nav_note};
+    chatnav_set_output(&rt.nav, &out);
     session_set_system_extra(s, im_system_note());
     session_set_abort_hook(s, on_abort, s);
     session_add_listener(on_event, NULL);
@@ -879,7 +879,7 @@ static void im_cleanup(void)
     struct session *s = current_session();
     if (s)
         bind_session(s, 0, NULL);
-    tgbridge_forget(&rt.bridge, s);
+    chatnav_forget(&rt.nav, s);
     if (rt.kq >= 0)
         close(rt.kq);
     rt.kq = -1;
@@ -928,12 +928,12 @@ struct session *im_session(void)
 void im_refocus(void)
 {
     if (rt.active)
-        tgbridge_refocus(&rt.bridge);
+        chatnav_refocus(&rt.nav);
 }
 
 void im_forget_session(struct session *s)
 {
-    tgbridge_forget(&rt.bridge, s);
+    chatnav_forget(&rt.nav, s);
 }
 
 #else

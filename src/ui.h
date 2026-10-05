@@ -55,6 +55,9 @@ void ui_pad(int cells);
 
 const char *ui_style(enum ui_role role);
 
+unsigned    ui_background(void);
+const char *ui_role_key(enum ui_role role, unsigned *fg, unsigned *wash, const char **attr);
+
 void ui_row_sel(int on);
 
 int ui_color(void);

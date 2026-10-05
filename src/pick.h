@@ -9,6 +9,20 @@ struct pick_item {
 
 int pick_run(const char *title, const struct pick_item *items, int count, int initial);
 
+/* While capturing, a list opened without a keyboard is recorded instead of shown and
+ * the pick returns -1, so a remote client can choose and rerun the command with it. */
+struct pick_capture {
+    char             *title;
+    struct pick_item *items;
+    int               count;
+    int               initial;
+};
+
+void pick_capture_begin(void);
+int  pick_capturing(void);
+int  pick_capture_end(struct pick_capture *out);
+void pick_capture_free(struct pick_capture *c);
+
 int pick_run_filter(const char *title, const struct pick_item *items, int count, int initial);
 
 enum pick_search {

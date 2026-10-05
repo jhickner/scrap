@@ -101,14 +101,38 @@ static int index_of_id(const cJSON *target)
     return workspace_find_id(id);
 }
 
+static int index_of_target(const cJSON *target)
+{
+    int at = index_of_id(target);
+    if (at >= 0)
+        return at;
+    const char *t = target->valuestring, *name = t + (t[0] == '@');
+    size_t      n = strlen(t);
+    int         prefix = -1, titled = -1;
+    for (int i = 0; i < workspace_count(); i++) {
+        struct session *s = workspace_at(i);
+        const char     *mine = session_name(s), *remote = session_remote(s);
+        const char     *id = session_id(s), *title = session_title(s);
+        if ((mine && !strcmp(mine, name)) || (remote && !strcmp(remote, t)))
+            return i;
+        if (t[0] == '@')
+            continue;
+        if (prefix < 0 && id && !strncmp(id, t, n))
+            prefix = i;
+        if (titled < 0 && title && strcasestr(title, t))
+            titled = i;
+    }
+    return prefix >= 0 ? prefix : titled;
+}
+
 static void close_session(int fd, const cJSON *target)
 {
     if (!cJSON_IsString(target) || !target->valuestring || !*target->valuestring) {
-        reply_error(fd, "close takes a session id", NULL);
+        reply_error(fd, "close takes a session", NULL);
         return;
     }
     const char *id = target->valuestring;
-    int at = index_of_id(target);
+    int at = index_of_target(target);
     struct session *s = workspace_at(at);
     if (!s) {
         reply_error(fd, "no such session", id);
@@ -118,7 +142,7 @@ static void close_session(int fd, const cJSON *target)
         reply_error(fd, "session is in view", id);
         return;
     }
-    if (session_turn_running(s) || workspace_queued(at)) {
+    if (!session_remote(s) && (session_turn_running(s) || workspace_queued(at))) {
         reply_error(fd, "session is busy", id);
         return;
     }
@@ -284,7 +308,6 @@ int dispatch_spawn(const char *backend, const char *model, const char *effort, c
                    const char *title, const char *resume, const char *const *env,
                    const char *prompt)
 {
-    struct session *was = workspace_current();
     char here[4096];
     if (!cwd && getcwd(here, sizeof here))
         cwd = here;
@@ -300,10 +323,7 @@ int dispatch_spawn(const char *backend, const char *model, const char *effort, c
             session_set_naming(s, 0);
     }
     if (resume)
-        session_replay(workspace_at(at));
-
-    workspace_show(workspace_index_of(was));
-    at = workspace_index_of(workspace_at(at));
+        workspace_replay(at);
     if (prompt)
         dispatch_send(at, prompt);
     return at;
@@ -366,6 +386,17 @@ static void serve(int fd, const char *text)
     if (answer) {
         reply(fd, answer);
         free(answer);
+        cJSON_Delete(o);
+        return;
+    }
+
+    const char *tab = cJSON_GetStringValue(cJSON_GetObjectItem(o, "tab"));
+    if (tab) {
+        char why[600] = "";
+        if (cmd_attach_tab(tab, why, sizeof why) < 0)
+            reply_error(fd, why[0] ? why : "could not attach", NULL);
+        else
+            reply(fd, "{\"ok\": true}");
         cJSON_Delete(o);
         return;
     }

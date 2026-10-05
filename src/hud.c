@@ -26,7 +26,7 @@
 #define BRANCH "\xee\x82\xa0"
 
 #define SEG_MAX 8
-#define HUD_ROWS 3
+#define HUD_ROWS 4
 
 static const char *const logo[] = {
     UI_BAR " \xe2\x96\x84\xe2\x96\x80\xe2\x96\x80 \xe2\x96\x84\xe2\x96\x80\xe2\x96\x80 \xe2\x96\x88\xe2\x96\x80\xe2\x96\x84 \xe2\x96\x84\xe2\x96\x80\xe2\x96\x84 \xe2\x96\x88\xe2\x96\x80\xe2\x96\x84",
@@ -166,20 +166,23 @@ static void row_location(const struct session *s, struct row *r)
     if (g->dirty || g->untracked)
         row_add(r, UI_ERROR, " [%s%s]", g->dirty ? "!" : "",
                 g->untracked ? "?" : "");
+}
 
+static void row_tokens(const struct session *s, struct row *r)
+{
     long in = session_tokens_in(s), out = session_tokens_out(s);
     long cached = session_tokens_cached(s);
-    if (in > 0 || out > 0) {
-        char got[32], sent[32], hit[32];
-        text_humanize(in, got, sizeof got);
-        text_humanize(out, sent, sizeof sent);
-        text_humanize(cached, hit, sizeof hit);
-        if (cached > 0)
-            row_add(r, UI_DIM, " \xc2\xb7 %s in (%s cached) / %s out",
-                    got, hit, sent);
-        else
-            row_add(r, UI_DIM, " \xc2\xb7 %s in / %s out", got, sent);
-    }
+    if (in <= 0 && out <= 0)
+        return;
+    char got[32], sent[32], hit[32];
+    text_humanize(in, got, sizeof got);
+    text_humanize(out, sent, sizeof sent);
+    text_humanize(cached, hit, sizeof hit);
+    row_add(r, UI_BRAND, UI_BAR " ");
+    if (cached > 0)
+        row_add(r, UI_DIM, "%s in (%s cached) / %s out", got, hit, sent);
+    else
+        row_add(r, UI_DIM, "%s in / %s out", got, sent);
 }
 
 static void hud_fill(struct hud *h, const struct session *s)
@@ -189,6 +192,28 @@ static void hud_fill(struct hud *h, const struct session *s)
     row_name(s, &h->row[0]);
     row_identity(s, &h->row[1]);
     row_location(s, &h->row[2]);
+    row_tokens(s, &h->row[3]);
+}
+
+cJSON *hud_rows(const struct session *s)
+{
+    struct hud h = {0};
+    hud_fill(&h, s);
+    cJSON *rows = cJSON_CreateArray();
+    for (int i = 0; i < HUD_ROWS; i++) {
+        cJSON *segs = cJSON_CreateArray();
+        for (int j = 0; j < h.row[i].n; j++) {
+            unsigned    fg, wash;
+            const char *attr, *key = ui_role_key(h.row[i].seg[j].role, &fg, &wash, &attr);
+            cJSON      *seg = cJSON_CreateObject();
+            cJSON_AddStringToObject(seg, "text", h.row[i].seg[j].text);
+            cJSON_AddStringToObject(seg, "role", key ? key : "body");
+            cJSON_AddItemToArray(segs, seg);
+        }
+        cJSON_AddItemToArray(rows, segs);
+        row_free(&h.row[i]);
+    }
+    return rows;
 }
 
 static void hud_render(void *ud, int cols)

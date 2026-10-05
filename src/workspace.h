@@ -27,6 +27,7 @@ int  workspace_spawn_env(const char *backend, const char *model, const char *eff
 struct session *workspace_prepare(const char *backend, const char *model, const char *effort,
                                   const char *cwd, const char *id);
 
+int  workspace_insert(struct session *s);
 int  workspace_open(struct session *s);
 
 void workspace_show(int index);
@@ -36,6 +37,7 @@ void workspace_history_follow(void);
 void workspace_cycle(int delta);
 
 void workspace_render(int index, void (*fn)(struct session *s, void *ud), void *ud);
+void workspace_replay(int index);
 
 int  workspace_find_id(const char *id);
 
@@ -67,6 +69,8 @@ int  workspace_pump(void);
 int  workspace_pump_quiet(void);
 
 int  workspace_drain(void);
+int  workspace_watch_fds(void *ud, int *out, int max);
+void workspace_watch_ready(void *ud);
 int  workspace_busy(void);
 
 const char *workspace_status(const struct session *s);

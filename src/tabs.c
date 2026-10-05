@@ -139,7 +139,6 @@ int tabs_start(struct session *front)
 
 static void tabs_take(int at)
 {
-    struct session *front = workspace_current();
     struct session *s = pending_tabs[at].s;
 
     if (!session_start_wait(s)) {
@@ -147,12 +146,11 @@ static void tabs_take(int at)
         return;
     }
 
-    int index = workspace_open(s);
+    int index = workspace_insert(s);
     if (index < 0) {
         tabs_drop(at);
         return;
     }
-    workspace_show(workspace_index_of(front));
     workspace_render(index, replay_tab, pending_tabs[at].screen
                                             ? pending_tabs[at].screen : (void *)"");
     if (pending_tabs[at].screen)

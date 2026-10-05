@@ -410,12 +410,9 @@ static int machine_block(const struct row *found, int nfound, const char *machin
     return m;
 }
 
-static int layout(struct row *found, int nfound, struct row *out, unsigned char *heading)
+static int layout_machines(struct row *found, int nfound, struct row *out,
+                           unsigned char *heading, const cJSON *machines, int with_new)
 {
-    if (!remote_on())
-        return add_new(out, heading, group_rows(found, nfound, out, heading, MAX_ROWS), "");
-
-    cJSON *machines = survey ? tailnet_survey_result(survey, &survey_version, NULL) : NULL;
     const cJSON *m;
     const char  *self = tailnet_self_name();
     cJSON_ArrayForEach(m, machines)
@@ -428,7 +425,8 @@ static int layout(struct row *found, int nfound, struct row *out, unsigned char 
 
     int n = add_heading(out, heading, 0, SELF_MARK "%s%s", self && *self ? self : "this machine", "");
     n = machine_block(found, nfound, "", out, heading, n);
-    n = add_new(out, heading, n, "");
+    if (with_new)
+        n = add_new(out, heading, n, "");
     if (!machines)
         n = add_heading(out, heading, n, "%s%s", "tailscale status is unavailable", "");
     cJSON_ArrayForEach(m, machines)
@@ -444,11 +442,74 @@ static int layout(struct row *found, int nfound, struct row *out, unsigned char 
         else if (n == start)
             snprintf(out[start - 1].label, sizeof out[start - 1].label,
                      "%s \xc2\xb7 no live sessions", machine);
-        if (!*error)
+        if (!*error && with_new)
             n = add_new(out, heading, n, machine);
     }
+    return n;
+}
+
+static int layout(struct row *found, int nfound, struct row *out, unsigned char *heading)
+{
+    if (!remote_on())
+        return add_new(out, heading, group_rows(found, nfound, out, heading, MAX_ROWS), "");
+    cJSON *machines = survey ? tailnet_survey_result(survey, &survey_version, NULL) : NULL;
+    int    n = layout_machines(found, nfound, out, heading, machines, 1);
     cJSON_Delete(machines);
     return n;
+}
+
+cJSON *sessionswitch_rows(void)
+{
+    struct live_session *live = NULL;
+    int nlive = livelist_load(&live);
+    struct row *found = calloc(MAX_ROWS, sizeof *found);
+    struct row *rows = calloc(MAX_ROWS, sizeof *rows);
+    unsigned char *heading = calloc(MAX_ROWS, 1);
+    cJSON *list = cJSON_CreateArray();
+    if (found && rows && heading) {
+        int nfound = 0;
+        tab_rows(found, &nfound);
+        live_rows(found, &nfound, live, nlive);
+        int n;
+        if (remote_on()) {
+            hub_ensure();
+            struct tailnet_survey *sv = tailnet_survey_start();
+            tailnet_survey_wait(sv, 1000);
+            cJSON *machines = tailnet_survey_result(sv, NULL, NULL);
+            tailnet_survey_end(sv);
+            n = layout_machines(found, nfound, rows, heading, machines, 0);
+            cJSON_Delete(machines);
+        } else {
+            n = group_rows(found, nfound, rows, heading, MAX_ROWS);
+        }
+        for (int i = 0; i < n; i++) {
+            const struct row *r = &rows[i];
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddStringToObject(o, "kind", r->kind == ROW_HEAD     ? "head"
+                                               : r->kind == ROW_TAB    ? "tab"
+                                               : r->kind == ROW_REMOTE ? "remote" : "live");
+            cJSON_AddStringToObject(o, "label", r->label);
+            if (r->kind != ROW_HEAD) {
+                cJSON_AddStringToObject(o, "detail", r->detail);
+                cJSON_AddStringToObject(o, "target", r->target);
+                cJSON_AddStringToObject(o, "id", r->id);
+                if (r->when[0])
+                    cJSON_AddStringToObject(o, "when", r->when);
+                if (r->spin)
+                    cJSON_AddBoolToObject(o, "busy", 1);
+                if (r->mark[0])
+                    cJSON_AddBoolToObject(o, "error", 1);
+                if (r->kind == ROW_TAB)
+                    cJSON_AddNumberToObject(o, "tab", r->at);
+            }
+            cJSON_AddItemToArray(list, o);
+        }
+    }
+    free(found);
+    free(rows);
+    free(heading);
+    free(live);
+    return list;
 }
 
 static int survey_moved(void)
@@ -615,6 +676,51 @@ static void waiting(int waited_ms, void *ud)
     ui_flush();
 }
 
+static int take(const struct live_session *v, char *why, size_t size,
+                void (*wait)(int waited_ms, void *ud), void *ud)
+{
+    char screen[4400];
+    if (!handoff_ask(v->pid, v->id, screen, sizeof screen, wait, ud)) {
+        snprintf(why, size, "could not take the session");
+        return -1;
+    }
+    int at = workspace_spawn(v->backend, v->model, v->effort, v->cwd, v->id);
+    if (at < 0) {
+        unlink(screen);
+        snprintf(why, size, "could not open the session");
+        return -1;
+    }
+    struct stat st;
+    if (stat(screen, &st) == 0 && st.st_size > 0)
+        scrollback_restore(screen);
+    else
+        sessionload_into(workspace_current());
+    unlink(screen);
+    return at;
+}
+
+int sessionswitch_yank(const char *target, char *why, size_t size)
+{
+    struct live_session *v = NULL;
+    int                  n = livelist_load(&v), found = -1;
+    const char          *name = *target == '@' ? target + 1 : target;
+    for (int i = 0; i < n && found < 0; i++)
+        if (v[i].name[0] && !strcmp(v[i].name, name))
+            found = i;
+    for (int i = 0; i < n && found < 0 && *target != '@'; i++)
+        if (v[i].id[0] && !strncmp(v[i].id, target, strlen(target)))
+            found = i;
+    int at = -1;
+    if (found < 0)
+        snprintf(why, size, "no live session matches %s", target);
+    else if (v[found].mine && (at = workspace_find_id(v[found].id)) < 0)
+        snprintf(why, size, "%s is not a tab here", target);
+    else if (!v[found].mine)
+        at = take(&v[found], why, size, NULL, NULL);
+    free(v);
+    return at;
+}
+
 static void yank(const struct live_session *v)
 {
     ui_bar(ui_style(UI_DIM), "asking %s for the session\xe2\x80\xa6",
@@ -622,30 +728,14 @@ static void yank(const struct live_session *v)
     ui_put("\n");
     ui_flush();
 
-    char screen[4400];
+    char why[200];
     int said = 0;
-    if (!handoff_ask(v->pid, v->id, screen, sizeof screen, waiting, &said)) {
-        ui_error("could not take the session");
+    if (take(v, why, sizeof why, waiting, &said) < 0) {
+        ui_error("%s", why);
         ui_put("\n");
         ui_flush();
         return;
     }
-
-    int at = workspace_spawn(v->backend, v->model, v->effort, v->cwd, v->id);
-    if (at < 0) {
-        unlink(screen);
-        ui_error("could not open the session");
-        ui_put("\n");
-        ui_flush();
-        return;
-    }
-
-    struct stat st;
-    if (stat(screen, &st) == 0 && st.st_size > 0)
-        scrollback_restore(screen);
-    else
-        sessionload_into(workspace_current());
-    unlink(screen);
     ui_bar(ui_style(UI_DIM), "session is here \xc2\xb7 %s",
            v->title[0] ? v->title : v->backend);
     ui_put("\n");

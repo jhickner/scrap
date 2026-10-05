@@ -79,6 +79,7 @@ struct session {
     char    *last_reply;
     char    *failed_prompt;
     struct transcript transcript;
+    int      transcript_loaded;
     char    *last_block;
     int      turns;
     int      saved;
@@ -121,6 +122,7 @@ struct session {
     volatile double heard_at;
     volatile int    tool_open;
     int      interrupted;
+    int      ask_open;
     int      unseen;
     char     tail_bot[128];
     struct grokbottail_mark tail_mark;
@@ -705,16 +707,19 @@ static void side_drain(struct session *s)
 {
     cJSON *n;
     while (s->remote && (n = remote_side_take(s->agent))) {
-        sidechannel_show(s, cJSON_GetStringValue(cJSON_GetObjectItem(n, "question")),
-                         cJSON_GetStringValue(cJSON_GetObjectItem(n, "answer")),
-                         cJSON_IsTrue(cJSON_GetObjectItem(n, "failed")));
+        const char *question = cJSON_GetStringValue(cJSON_GetObjectItem(n, "question"));
+        const char *answer = cJSON_GetStringValue(cJSON_GetObjectItem(n, "answer"));
+        int failed = cJSON_IsTrue(cJSON_GetObjectItem(n, "failed"));
+        sidechannel_show(s, question, answer, failed);
+        relay_btw(s, question, answer, failed);
         cJSON_Delete(n);
     }
 }
 
 static void status_update_tick(struct session *s)
 {
-    if (!s || s->remote || s->status_open || (s != live && !stream_watched(s)))
+    if (!s || s->remote || s->status_open ||
+        (s != live && s != relay_session() && !stream_watched(s)))
         return;
     double since = s->status_at;
     if (!s->running) {
@@ -831,7 +836,7 @@ static int abort_check(void)
     int interrupt = session_poll_input();
     if (live && live->abort_hook)
         interrupt |= live->abort_hook(live->abort_ud);
-    interrupt |= relay_poll(live);
+    relay_poll(live);
     if (live && live->abort_request)
         interrupt = 1;
 
@@ -1198,9 +1203,21 @@ int session_switch_backend(struct session *s, const char *backend)
 
 void session_set_quiet(struct session *s, int quiet) { s->quiet = quiet; }
 
-const struct transcript *session_transcript(const struct session *s)
+const struct transcript *session_transcript(struct session *s)
 {
-    return s ? &s->transcript : NULL;
+    if (!s)
+        return NULL;
+    if (!s->transcript_loaded && !s->remote && s->id[0]) {
+        s->transcript_loaded = 1;
+        struct transcript disk = {0};
+        if (sessionload_fill(&disk, s->backend, s->cwd, s->id) > 0) {
+            transcript_free(&s->transcript);
+            s->transcript = disk;
+        } else {
+            transcript_free(&disk);
+        }
+    }
+    return &s->transcript;
 }
 
 int session_add_listener(session_listener_fn fn, void *ud)
@@ -1748,6 +1765,7 @@ static void reset_turns(struct session *s, int flags)
     if (flags & RESET_BLOCK)
         replace(&s->last_block, NULL);
     transcript_clear(&s->transcript);
+    s->transcript_loaded = 0;
 }
 
 int session_resume(struct session *s, const char *id)
@@ -2716,6 +2734,8 @@ const char *session_last_error(const struct session *s)
 }
 const char *session_last_reply(const struct session *s) { return s->last_reply; }
 const char *session_last_block(const struct session *s) { return s->last_block; }
+int session_ask_open(const struct session *s) { return s && s->ask_open; }
+void session_set_ask_open(struct session *s, int on) { if (s) s->ask_open = on; }
 const char *session_prompt(const struct session *s) { return s ? s->prompt : NULL; }
 double session_turn_started(const struct session *s) { return s ? s->started : 0; }
 const char *session_failed_prompt(const struct session *s)

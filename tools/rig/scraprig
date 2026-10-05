@@ -24,6 +24,10 @@ usage: scraprig <command> ...
   stream-put  name id line   send a line to the stream's stdin
   stream-wait name id regex [secs]   until the stream output matches (default 10s)
   stream-cat  name id        print the stream output
+  relay  name script         drive the instance's relay over WebSocket; script is a
+                             JSON list of frames to send, seconds to sleep, and
+                             {"wait": regex, "secs": n} steps that fail when no
+                             received frame matches in time
   net    name                print the instance's tailscale ip and port
   broker name                print the pid of the instance's scrap hub broker
   joblog name job regex [secs]   until the job's log matches (default 20s)
@@ -252,6 +256,11 @@ cli)
     env "SCRAP_CONFIG_DIR=$d/config" "AGENT_TABS_STATE_DIR=$d/tabs" "TMPDIR=$d/tmp" \
         "$(cat "$ROOT/$1/scrap")" "${@:2}" ;;
 stream) inst "${1:-}"; [ $# -eq 3 ] || usage; cmd_stream "$@" ;;
+relay)
+    inst "${1:-}"; [ $# -eq 2 ] || usage
+    f="$ROOT/$1/state/config/relay"
+    port=$(sed -n 's/^port *= *//p' "$f"); token=$(sed -n 's/^token *= *//p' "$f")
+    uv run -q --with websockets python "$RIG_HOME/relayclient.py" "$port" "$token" "$2" ;;
 stream-put)
     inst "${1:-}"; [ $# -eq 3 ] || usage
     [ -e "$ROOT/$1/streams/$2.in" ] || die "no stream '$2'"

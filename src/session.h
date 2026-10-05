@@ -240,12 +240,14 @@ static inline int scrap_argv(char **out, int max, unsigned what,
 int session_argv(const struct session *s, char **out, int max, unsigned what);
 const char *session_last_reply(const struct session *s);
 const char *session_last_block(const struct session *s);
+int  session_ask_open(const struct session *s);
+void session_set_ask_open(struct session *s, int on);
 
 const char *session_prompt(const struct session *s);
 double      session_turn_started(const struct session *s);
 
 double      session_event_queued_at(void);
-const struct transcript *session_transcript(const struct session *s);
+const struct transcript *session_transcript(struct session *s);
 const char *session_last_error(const struct session *s);
 int         session_last_interrupted(const struct session *s);
 

@@ -8,12 +8,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "app.h"
+#include "bridges.h"
 #include "chrome.h"
 #include "frontend.h"
 #include "hud.h"
-#include "relay.h"
 #include "models.h"
 #include "newsession.h"
 #include "pick.h"
@@ -31,6 +32,7 @@
 #include "sessionload.h"
 #include "sessionview.h"
 #include "viewport.h"
+#include "relay.h"
 #include "workspace.h"
 #include "vendor/agents/grokbot/grokbot.h"
 #include "sessionswitch.h"
@@ -38,7 +40,6 @@
 #include "settings.h"
 #include "settingsui.h"
 #include "text.h"
-#include "tg.h"
 #include "status.h"
 #include "instance.h"
 #include "ui.h"
@@ -297,13 +298,15 @@ static void note_identity(const struct session *s)
     ui_flush();
 }
 
-static int can_pick(const char *usage)
+/* `remote`: the command takes the choice as its argument, so a captured list can be
+ * answered by rerunning it. */
+static int can_pick(const char *usage, int remote)
 {
     if (chrome_modal_active()) {
         reply_note("%s \xe2\x80\x94 a list is already open", usage);
         return 0;
     }
-    if (!frontend_has_keyboard()) {
+    if (!frontend_has_keyboard() && !(remote && pick_capturing())) {
         reply_note("%s \xe2\x80\x94 nothing here to pick from a list with", usage);
         return 0;
     }
@@ -335,7 +338,7 @@ static void do_model(struct session *s, const char *arg)
 {
     const char *chosen = arg;
     if (!chosen || !*chosen) {
-        if (!can_pick("/model <name>"))
+        if (!can_pick("/model <name>", 1))
             return;
         int count = 0, initial = 0;
         const struct pick_item *choices = model_choices(s, &count);
@@ -384,7 +387,7 @@ static void do_effort(struct session *s, const char *arg)
 
     const char *chosen = arg;
     if (!chosen || !*chosen) {
-        if (!can_pick("/effort <level>"))
+        if (!can_pick("/effort <level>", 1))
             return;
         int count = 0, initial = 0;
         const struct pick_item *choices = effort_choices(s, &count);
@@ -409,8 +412,17 @@ static void do_effort(struct session *s, const char *arg)
 static void do_backend(struct session *s, const char *arg)
 {
     if (!arg || !*arg) {
-        reply_note("/backend <claude|codex|grok|pi|grokbot|core>");
-        return;
+        if (!can_pick("/backend <claude|codex|grok|pi|grokbot|core>", 1))
+            return;
+        int count = 0, initial = 0;
+        const struct pick_item *choices = cmd_backend_choices(&count);
+        for (int i = 0; i < count; i++)
+            if (!strcmp(choices[i].label, session_backend(s)))
+                initial = i;
+        int index = pick_run("backend", choices, count, initial);
+        if (index < 0)
+            return;
+        arg = choices[index].label;
     }
     if (!known_backend(arg)) {
         reply_error("unknown backend '%s'", arg);
@@ -444,12 +456,12 @@ static void do_default(struct session *s, const char *arg)
 
     const char *chosen = arg;
     if (!chosen || !*chosen) {
-        if (!frontend_has_keyboard()) {
+        if (!frontend_has_keyboard() && !pick_capturing()) {
             reply_note("default backend is %s \xe2\x80\x94 /default <name> to change it",
                        cmd_default_backend());
             return;
         }
-        if (!can_pick("/default <name>"))
+        if (!can_pick("/default <name>", 1))
             return;
         int count = 0, initial = 0;
         const struct pick_item *choices = cmd_backend_choices(&count);
@@ -479,7 +491,7 @@ static void do_permission(struct session *s, const char *arg)
 
     const char *chosen = arg;
     if (!chosen || !*chosen) {
-        if (!can_pick("/permission <mode>"))
+        if (!can_pick("/permission <mode>", 1))
             return;
 
         int               count = session_permission_count();
@@ -626,7 +638,7 @@ static void do_theme(struct session *s, const char *arg)
     (void)s;
     char chosen[256];
     if (!arg || !*arg) {
-        if (!can_pick("/theme <name>") || !pick_theme(chosen, sizeof chosen))
+        if (!can_pick("/theme <name>", 1) || !pick_theme(chosen, sizeof chosen))
             return;
     } else {
         snprintf(chosen, sizeof chosen, "%s", arg);
@@ -653,50 +665,48 @@ static void do_sticky(struct session *s, const char *arg)
     reply_note("floating prompt %s", on ? "on" : "off");
 }
 
-static void do_relay(struct session *s, const char *arg)
+static void toggle_bridge(const char *name, const char *arg)
 {
-    int current = relay_label() != NULL;
-    int on = toggle_arg(arg, "on", "off", current, "/relay");
+    char command[32];
+    snprintf(command, sizeof command, "/%s", name);
+    int on = toggle_arg(arg, "on", "off", bridges_wanted(name), command);
     if (on < 0)
         return;
-    if (on == current) {
-        reply_note("relay already %s", on ? "on" : "off");
+    char msg[300];
+    if (bridges_set(name, on, msg, sizeof msg))
+        reply_note("%s", msg);
+    else
+        reply_error("%s", msg);
+}
+
+static void do_relay(struct session *s, const char *arg)
+{
+    int on = toggle_arg(arg, "on", "off", relay_session() == s, "/relay");
+    if (on < 0)
         return;
-    }
-    if (on) {
+    if (!on) {
+        relay_stop();
+        reply_note("relay off");
+    } else if (relay_session() == s) {
+        reply_note("relay already on in this tab");
+    } else {
         if (relay_start(s))
             workspace_republish();
         else
-            reply_error("%s", relay_start_error() ? relay_start_error()
-                                                   : "could not enable relay");
-        return;
+            reply_error("could not start relay");
     }
-    relay_stop();
-    workspace_republish();
-    reply_note("relay off");
 }
 
 static void do_telegram(struct session *s, const char *arg)
 {
-    int current = tg_label() != NULL;
-    int on = toggle_arg(arg, "on", "off", current, "/telegram");
-    if (on < 0)
-        return;
-    if (on == current) {
-        reply_note("telegram already %s", on ? "on" : "off");
-        return;
-    }
-    if (on) {
-        if (tg_start(s))
-            workspace_republish();
-        else
-            reply_error("%s", tg_start_error() ? tg_start_error()
-                                                : "could not enable telegram");
-        return;
-    }
-    tg_stop();
-    workspace_republish();
-    reply_note("telegram off");
+    (void)s;
+    toggle_bridge("telegram", arg);
+}
+
+static void do_api(struct session *s, const char *arg)
+{
+    (void)s;
+    toggle_bridge("api", arg);
 }
 
 static void do_voice(struct session *s, const char *arg)
@@ -1227,25 +1237,34 @@ static void do_send(struct session *s, const char *arg)
     ui_flush();
 }
 
+int cmd_attach_tab(const char *target, char *why, size_t size)
+{
+    char        host[TAILNET_HOST_MAX];
+    const char *me = tailnet_self_name(), *local = tailnet_split(target, host, sizeof host);
+    if (!local)
+        return sessionswitch_yank(target, why, size);
+    if (me && !strcasecmp(host, me))
+        return sessionswitch_yank(local, why, size);
+    for (int i = 0; i < workspace_count(); i++) {
+        const char *remote = session_remote(workspace_at(i));
+        if (remote && !strcmp(remote, target))
+            return i;
+    }
+    int at = workspace_spawn_remote(target, why, size);
+    if (at >= 0)
+        workspace_replay(at);
+    return at;
+}
+
 void cmd_attach(const char *target)
 {
     char why[600];
-    int  at = -1;
-    for (int i = 0; i < workspace_count() && at < 0; i++) {
-        const char *remote = session_remote(workspace_at(i));
-        if (remote && !strcmp(remote, target))
-            at = i;
-    }
-    int fresh = at < 0;
-    if (fresh)
-        at = workspace_spawn_remote(target, why, sizeof why);
+    int  at = cmd_attach_tab(target, why, sizeof why);
     if (at < 0) {
         reply(1, "%s", why);
         return;
     }
     workspace_show(at);
-    if (fresh)
-        session_replay(workspace_at(at));
 }
 
 static void do_attach(struct session *s, const char *arg)
@@ -1302,7 +1321,7 @@ static void do_help(struct session *s, const char *arg);
 static void do_settings(struct session *s, const char *arg)
 {
     (void)arg;
-    if (!can_pick("/settings"))
+    if (!can_pick("/settings", 0))
         return;
     settingsui_run(s);
 }
@@ -1311,7 +1330,7 @@ static void do_resume(struct session *s, const char *arg)
 {
     (void)arg;
 
-    if (!can_pick("/resume"))
+    if (!can_pick("/resume", 0))
         return;
     cmd_resume(s);
 }
@@ -1320,7 +1339,7 @@ static void do_sessions(struct session *s, const char *arg)
 {
     (void)s;
     (void)arg;
-    if (!can_pick("/sessions"))
+    if (!can_pick("/sessions", 0))
         return;
     sessionswitch_run();
 }
@@ -1488,8 +1507,9 @@ static const struct cmd COMMANDS[] = {
      do_tools},
     {"/theme", "switch the colour theme", "[name]", CMD_LIVE, do_theme},
     {"/sticky", "float the prompt above the spinner", "[on|off]", CMD_LIVE, do_sticky},
-    {"/relay", "answer over the phone relay", "[on|off]", CMD_LIVE, do_relay},
+    {"/relay", "serve this tab over the phone relay", "[on|off]", CMD_LIVE, do_relay},
     {"/telegram", "answer over Telegram", "[on|off]", CMD_LIVE, do_telegram},
+    {"/api", "serve the HTTP API", "[on|off]", CMD_LIVE, do_api},
     {"/voice", "read replies aloud", "[on|off|volume N|rate N|complete on|off]", CMD_LIVE, do_voice},
     {"/image", "tallest an inline image may be drawn", "[rows]", CMD_LIVE, do_image},
     {"/permission", "how the CLI gates tool calls", "[mode]", 0, do_permission},

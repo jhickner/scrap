@@ -68,7 +68,7 @@ int workspace_spawn_remote(const char *target, char *why, size_t size)
         session_free(s);
         return -1;
     }
-    int at = workspace_open(s);
+    int at = workspace_insert(s);
     if (at < 0) {
         snprintf(why, size, "too many tabs");
         session_free(s);
@@ -186,7 +186,7 @@ static int slot_for(const struct session *s)
     return at;
 }
 
-int workspace_open(struct session *s)
+int workspace_insert(struct session *s)
 {
     if (!s || ntabs >= WORKSPACE_MAX)
         return -1;
@@ -204,8 +204,13 @@ int workspace_open(struct session *s)
     memset(&tabs[at], 0, sizeof tabs[at]);
     tabs[at].s = s;
     tabs[at].screen = screen;
-    if (at != cur)
-        workspace_show(at);
+    return at;
+}
+
+int workspace_open(struct session *s)
+{
+    int at = workspace_insert(s);
+    workspace_show(at);
     return at;
 }
 
@@ -233,7 +238,9 @@ struct session *workspace_prepare(const char *backend, const char *model, const 
 int workspace_spawn(const char *backend, const char *model, const char *effort,
                     const char *cwd, const char *id)
 {
-    return workspace_spawn_env(backend, model, effort, cwd, id, NULL);
+    int at = workspace_spawn_env(backend, model, effort, cwd, id, NULL);
+    workspace_show(at);
+    return at;
 }
 
 int workspace_spawn_env(const char *backend, const char *model, const char *effort,
@@ -249,7 +256,7 @@ int workspace_spawn_env(const char *backend, const char *model, const char *effo
         session_free(s);
         return -1;
     }
-    int at = workspace_open(s);
+    int at = workspace_insert(s);
     if (at < 0)
         session_free(s);
     return at;
@@ -323,7 +330,6 @@ void workspace_show(int index)
     view_collapse(session_compact(tabs[cur].s));
 
     tg_refocus();
-    relay_refocus();
     im_refocus();
     voice_refocus();
     workspace_log_active();
@@ -420,6 +426,17 @@ void workspace_render(int index, void (*fn)(struct session *s, void *ud), void *
     leave();
 }
 
+static void replay(struct session *s, void *ud)
+{
+    (void)ud;
+    session_replay(s);
+}
+
+void workspace_replay(int index)
+{
+    workspace_render(index, replay, NULL);
+}
+
 int workspace_find_id(const char *id)
 {
     if (!id || !*id)
@@ -486,8 +503,7 @@ static void drop(int index)
         spin_follow();
         viewport_forget();
         tg_refocus();
-        relay_refocus();
-    im_refocus();
+        im_refocus();
         voice_refocus();
     }
 }
@@ -612,6 +628,18 @@ int workspace_pump_quiet(void)
 int workspace_drain(void)
 {
     return pump(1, 0);
+}
+
+int workspace_watch_fds(void *ud, int *out, int max)
+{
+    (void)ud;
+    return workspace_fds(out, max);
+}
+
+void workspace_watch_ready(void *ud)
+{
+    (void)ud;
+    workspace_drain();
 }
 
 void workspace_settle(struct session *s)
@@ -794,7 +822,8 @@ int workspace_dequeue(int index, const char *line)
         return 0;
     struct tab *t = &tabs[index];
     for (int i = 0; i < t->npending; i++) {
-        if (strcmp(t->pending[i].line, line))
+        if (strcmp(t->pending[i].line, line) &&
+            (!t->pending[i].shown || strcmp(t->pending[i].shown, line)))
             continue;
         free(t->pending[i].line);
         free(t->pending[i].shown);

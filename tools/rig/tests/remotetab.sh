@@ -3,8 +3,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 R=./scraprig
 tailscale ip -4 >/dev/null 2>&1 || { echo "remotetab: skipped, no tailscale address"; exit 0; }
-me=$($R machine)
+me=mirror
 share=$(mktemp -d /tmp/scraprig-share.XXXXXX)
+printf 'port = %s\nbind = %s\ntailscale = %s\n' $((20000 + RANDOM % 20000)) "$(tailscale ip -4 | head -1)" "$(pwd)/fake-tailscale" > "$share/net"
 a=$($R start --fake --share "$share" --net)
 b=$($R start --fake --share "$share" --net)
 trap '$R stop $a 2>/dev/null || true; $R stop $b 2>/dev/null || true; rm -rf "$share"' EXIT

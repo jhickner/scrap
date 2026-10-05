@@ -53,6 +53,7 @@
 #include "im.h"
 #include "agentsync.h"
 #include "relay.h"
+#include "bridges.h"
 #include "api.h"
 #include "voice.h"
 #include "tty.h"
@@ -158,17 +159,17 @@ static void usage(void)
             "  -p text    --prompt: answer text and exit\n"
             "  -s         safe mode: skip skills, CLAUDE.md, MCP servers, hooks\n"
             "  --name x   session name (default: a generated one)\n"
-            "  --telegram also answer over Telegram, in the same session\n"
-            "  --relay    also answer a phone over WebSocket, in the same session\n"
+            "  --telegram turn on the Telegram bridge; one open window hosts it\n"
             "  --imessage also answer over iMessage, in the same session (config: ~/.config/scrap/imessage)\n"
-            "  --connect telegram|relay   the same thing, spelled out\n"
-            "  --api      serve the worker API (config: ~/.config/scrap/api)\n"
+            "  --connect telegram   the same thing, spelled out\n"
+            "  --api      turn on the worker API; one open window hosts it (config: ~/.config/scrap/api)\n"
             "  --state dir  keep config and state under dir instead of ~/.config/scrap\n"
             "  -r         --resume: pick a past conversation to continue\n"
             "  --session id  resume a specific conversation (used by the fork commands)\n"
             "  --fork     with --session: branch off it instead of writing back to it\n"
             "  --restore f  take over the screen from a restarting scrap (used by /restart)\n"
             "  --tabs f   reopen the sessions a restarting scrap was holding (used by /restart)\n"
+            "  --relay id  serve that session over the relay once it is open (used by /restart)\n"
             "  --instance x  reopen the tabs saved with /save x\n"
             "  --attach machine:@name   open a live session from another window or machine\n"
             "  -h         this help\n"
@@ -204,18 +205,6 @@ static int idle_fds(void *ud, int *out, int max)
     return n + tg_fds(out + n, max - n);
 }
 
-static int bash_fds(void *ud, int *out, int max)
-{
-    (void)ud;
-    return workspace_fds(out, max);
-}
-
-static void bash_ready(void *ud)
-{
-    (void)ud;
-    workspace_drain();
-}
-
 static void offer_project_trust(struct session *s)
 {
     if (!session_take_trust_request(s))
@@ -235,6 +224,7 @@ static int idle_render(void *ud)
 {
     (void)ud;
     tabs_admit(0);
+    relay_resume_poll();
     sidechannel_poll();
     sidechannel_tick();
     dispatch_poll();
@@ -245,6 +235,7 @@ static int idle_render(void *ud)
     voice_pending();
     relay_poll(NULL);
     api_poll();
+    bridges_tick();
     struct session *drew = session_set_drawing(workspace_current());
     image_poll();
     session_set_drawing(drew);
@@ -253,17 +244,12 @@ static int idle_render(void *ud)
     return busy;
 }
 
-static int relay_took;
 static int im_took;
 
 static char *chat_line(void *ud)
 {
     (void)ud;
-    char *line = relay_take_line();
-    relay_took = line != NULL;
-    if (line)
-        return line;
-    line = im_take_line();
+    char *line = im_take_line();
     im_took = line != NULL;
     if (line)
         return line;
@@ -310,7 +296,12 @@ static void side_tick(void *ud)
 static int idle_poll(void *ud)   { (void)ud; return 1; }
 static void replay(void *ud)      { (void)ud; session_replay(workspace_current()); }
 static void load_earlier(void)    { sessionload_earlier(workspace_current()); }
-static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
+static void blank_line(void *ud)
+{
+    (void)ud;
+    hud_print(workspace_current());
+    relay_banner(workspace_current());
+}
 static int clicked(void *ud, int row, int col)
 {
     int tab = tabbar_hit(row, col);
@@ -427,22 +418,34 @@ static void drop_asked(void)
 
 static int ask_ready(void)
 {
-    if (!asked)
-        return 0;
     struct session *s = workspace_current();
-    if (s != asked_by)
+    if (!session_ask_open(s))
         return 0;
     if (session_turn_running(s) || workspace_queued(workspace_index())) {
-        drop_asked();
+        session_set_ask_open(s, 0);
         return 0;
     }
-    return 1;
+    if (s != asked_by) {
+        drop_asked();
+        asked = askblock_parse(session_last_block(s));
+        asked_by = asked ? s : NULL;
+        if (!asked)
+            session_set_ask_open(s, 0);
+    }
+    return asked != NULL;
+}
+
+static int ask_interrupted(void)
+{
+    return handoff_wanted() || relay_pending();
 }
 
 static void ask_run_form(void)
 {
     enum askform_exit how;
+    chrome_modal_interrupt(ask_interrupted);
     char *answer = askform_run(asked, &how);
+    chrome_modal_interrupt(handoff_wanted);
     if (how == ASKFORM_NEW_TAB) {
         another(NULL);
         return;
@@ -451,6 +454,7 @@ static void ask_run_form(void)
         workspace_cycle(how == ASKFORM_NEXT_TAB ? 1 : -1);
         return;
     }
+    session_set_ask_open(asked_by, 0);
     drop_asked();
     if (answer && *answer) {
         prompt_echo_message(answer);
@@ -577,14 +581,11 @@ static char *serve_extra(const cJSON *o, int fd, int *kept)
 
 static void turn_done(struct session *s)
 {
-    if (s == workspace_current()) {
+    if (s == asked_by)
         drop_asked();
-        if (!session_last_result(s)->interrupted) {
-            asked = askblock_parse(session_last_block(s));
-            asked_by = asked ? s : NULL;
-        }
-    }
+    session_set_ask_open(s, !session_last_result(s)->interrupted);
     api_turn_done(s);
+    relay_turn_done(s);
     stream_turn_done(s);
     voice_turn_done(s);
     cmd_run_deferred(s);
@@ -598,6 +599,7 @@ static void turn_begin(struct session *s)
     voice_turn_begin(s);
     if (s == asked_by)
         drop_asked();
+    session_set_ask_open(s, 0);
     bash_drop_held();
     prompt_drop_held();
 }
@@ -639,7 +641,7 @@ int main(int argc, char **argv)
         return agentsync_main(argc - 1, argv + 1);
     if (argc > 1 && (!strcmp(argv[1], "ls") || !strcmp(argv[1], "read") ||
                      !strcmp(argv[1], "send") || !strcmp(argv[1], "open") ||
-                     !strcmp(argv[1], "attach")))
+                     !strcmp(argv[1], "attach") || !strcmp(argv[1], "yank") || !strcmp(argv[1], "close")))
         return intercom_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "hub"))
         return hub_main(argc - 1, argv + 1);
@@ -662,10 +664,10 @@ int main(int argc, char **argv)
         {"fork",    no_argument,       NULL, 'F'},
         {"restore", required_argument, NULL, 'R'},
         {"tabs",    required_argument, NULL, 'B'},
+        {"relay",   required_argument, NULL, 'L'},
         {"instance", required_argument, NULL, 'O'},
         {"attach",  required_argument, NULL, 'Y'},
         {"telegram", no_argument,      NULL, 'T'},
-        {"relay",    no_argument,      NULL, 'W'},
         {"imessage", no_argument,      NULL, 'I'},
         {"api",      no_argument,      NULL, 'A'},
         {"connect", required_argument, NULL, 'N'},
@@ -689,7 +691,6 @@ int main(int argc, char **argv)
     const char *state_arg = NULL;
     const char *prompt_arg = NULL;
     int telegram = 0;
-    int relay = 0;
     int imessage = 0;
     int api_on = 0;
     int pin_backend = 0;
@@ -712,21 +713,17 @@ int main(int argc, char **argv)
         case 'F': fork_session = 1; break;
         case 'R': restore_arg = optarg; break;
         case 'B': tabs_arg = optarg; break;
+        case 'L': relay_resume(optarg); break;
         case 'O': instance_arg = optarg; break;
         case 'Y': attach_arg = optarg; break;
         case 'T': telegram = 1; break;
-        case 'W': relay = 1; break;
         case 'I': imessage = 1; break;
         case 'A': api_on = 1; break;
         case 'X': state_arg = optarg; break;
         case 'V': printf(APP_NAME " %s\n", SCRAP_VERSION); return 0;
         case 'N':
-            if (!strcmp(optarg, "relay")) {
-                relay = 1;
-                break;
-            }
             if (strcmp(optarg, "telegram")) {
-                fprintf(stderr, APP_NAME ": --connect takes 'telegram' or 'relay'\n");
+                fprintf(stderr, APP_NAME ": --connect takes 'telegram'\n");
                 return 2;
             }
             telegram = 1;
@@ -740,10 +737,6 @@ int main(int argc, char **argv)
     }
 
     if (state_arg) {
-        if (telegram || relay || imessage || api_on) {
-            fprintf(stderr, APP_NAME ": --state does not combine with --telegram, --relay, --imessage, --api\n");
-            return 2;
-        }
         if (!state_enter(state_arg))
             return 1;
     }
@@ -851,9 +844,9 @@ int main(int argc, char **argv)
 
     int interactive = !prompt_arg;
 
-    if ((telegram || relay || imessage || api_on) && !interactive) {
+    if ((telegram || imessage || api_on) && !interactive) {
         fprintf(stderr, APP_NAME ": --%s takes no prompt\n",
-                telegram ? "telegram" : relay ? "relay" : imessage ? "imessage" : "api");
+                telegram ? "telegram" : imessage ? "imessage" : "api");
         return 2;
     }
 
@@ -909,15 +902,13 @@ int main(int argc, char **argv)
             session_set_remote(session, attach_arg);
     }
 
-    if (telegram && session && !tg_start(session))
-        telegram = 0;
-    if (relay && session && !relay_start(session))
-        relay = 0;
-    if (imessage && session && !im_start(session))
-        imessage = 0;
-    if (api_on && session && !api_start())
-        api_on = 0;
-    if (telegram || relay || imessage || api_on)
+    const char *wanted[] = {telegram ? "telegram" : NULL, api_on ? "api" : NULL};
+    for (int i = 0; i < 2 && session; i++) {
+        char msg[300];
+        if (wanted[i] && !bridges_set(wanted[i], 1, msg, sizeof msg))
+            fprintf(stderr, APP_NAME ": %s\n", msg);
+    }
+    if (imessage && session && im_start(session))
         workspace_republish();
 
     if (!session) {
@@ -1108,7 +1099,7 @@ int main(int argc, char **argv)
         }
 
         if (bash_is_command(line)) {
-            tty_watch(bash_fds, bash_ready, NULL);
+            tty_watch(workspace_watch_fds, workspace_watch_ready, NULL);
             bash_run(line);
             tty_watch(NULL, NULL, NULL);
             gitinfo_forget();
@@ -1118,10 +1109,7 @@ int main(int argc, char **argv)
         }
 
         if (prompt_line_was_external(prompt)) {
-            if (relay_took) {
-                workspace_settle(relay_session());
-                relay_run_line(line);
-            } else if (im_took) {
+            if (im_took) {
                 workspace_settle(im_session());
                 im_run_line(line);
             } else {
