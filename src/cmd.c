@@ -570,10 +570,30 @@ static void do_thinking(struct session *s, const char *arg)
     reply_note("reasoning %s", on ? "shown" : "hidden");
 }
 
+static void memory_view(struct session *s)
+{
+    char *view = session_memory_view(s);
+    if (!view) {
+        reply_note("memory is off");
+        return;
+    }
+    viewport_item_begin(VIEWPORT_ROWS(1, 1));
+    ui_esc(ui_style(UI_DIM));
+    ui_put(view);
+    ui_esc(ui_style(UI_RESET));
+    viewport_item_end();
+    ui_flush();
+    free(view);
+}
+
 static void do_memory(struct session *s, const char *arg)
 {
     if (strcmp(session_backend(s), "core") != 0) {
         ui_note("/memory only applies to core");
+        return;
+    }
+    if (arg && !strcmp(arg, "view")) {
+        memory_view(s);
         return;
     }
     int on = toggle_arg(arg, "on", "off", session_memory(s), "/memory");
@@ -585,6 +605,8 @@ static void do_memory(struct session *s, const char *arg)
         return;
     }
     reply_note("memory %s", on ? "on: one endless chat, rebuilt from memory each turn" : "off");
+    if (on)
+        memory_view(s);
 }
 
 static void do_tools(struct session *s, const char *arg)
@@ -1518,7 +1540,7 @@ static const struct cmd COMMANDS[] = {
     {"/cd", "move the conversation to another directory", "<path or zoxide query>", 0, do_cd},
     {"/btw", "answer this on the side, without waiting", "<prompt>",
      CMD_SELF_ECHOES | CMD_LIVE, do_btw},
-    {"/memory", "core: one endless chat rebuilt from OptChat memory each turn", "[on|off]", 0,
+    {"/memory", "core: one endless chat rebuilt from OptChat memory each turn", "[on|off|view]", 0,
      do_memory},
     {"/thinking", "show or hide the model's reasoning", "[on|off]", CMD_LIVE,
      do_thinking},

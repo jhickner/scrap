@@ -2540,6 +2540,11 @@ static void sa_set_event_cb(Backend *b, void (*cb)(void *ud, const backend_event
 
 static void sa_set_abort(Backend *b, int (*cb)(void)) { ((sa_agent *)b->ctx)->st.abort = cb; }
 
+static char *sa_memory_view(Backend *b) {
+    sa_agent *x = b->ctx;
+    return x->mem ? oc_render(x->mem, 0) : NULL;
+}
+
 static int sa_set_effort(Backend *b, const char *effort) {
     backend_set(&((sa_agent *)b->ctx)->st.effort, effort);
     return 1;
@@ -2604,6 +2609,7 @@ Backend *core_agent_open(const backend_opts *o) {
     b->set_event_cb = sa_set_event_cb;
     b->set_abort_check = sa_set_abort;
     b->session_id = sa_session_id;
+    b->memory_view = sa_memory_view;
     b->model = sa_model;
     b->effort = backend_stored_effort;
     b->auth_source = backend_none;

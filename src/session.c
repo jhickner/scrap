@@ -1747,6 +1747,11 @@ int session_set_permission(struct session *s, const char *mode)
 
 int session_memory(const struct session *s) { return s->memory; }
 
+char *session_memory_view(struct session *s)
+{
+    return s->agent && s->agent->memory_view ? s->agent->memory_view(s->agent) : NULL;
+}
+
 int session_set_memory(struct session *s, int on)
 {
     int previous = s->memory;
