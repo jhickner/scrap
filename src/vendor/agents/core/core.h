@@ -39,6 +39,7 @@ Backend *core_agent_open(const backend_opts *o);
 #include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <regex.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -52,6 +53,8 @@ Backend *core_agent_open(const backend_opts *o);
 #include <unistd.h>
 #include <curl/curl.h>
 #include "cJSON.h"
+#define OPTCHAT_IMPLEMENTATION
+#include "optchat.h"
 
 extern char **environ;
 
@@ -65,6 +68,7 @@ extern char **environ;
 #define SA_MODELS_MAX_AGE  (4 * 60 * 60)
 #define SA_HOOK_TIMEOUT_MS 60000
 #define SA_RETRIES         3
+#define SA_ECHO_CAP        30000
 
 static const char SA_DEFAULT_CONFIG[] =
     "{\n"
@@ -114,9 +118,26 @@ static const char SA_TOOLS[] =
     "\"required\":[\"command\"]}}}"
     "]";
 
-static const char SA_SYSTEM[] =
+static const char SA_MEMORY_TOOLS[] =
+    "["
+    "{\"type\":\"function\",\"function\":{\"name\":\"zoom\",\"description\":"
+    "\"Open the line id+n of the view into the two lines of n/2 under it; n = 1 gives the message whole.\","
+    "\"parameters\":{\"type\":\"object\",\"properties\":{"
+    "\"id\":{\"type\":\"integer\",\"description\":\"First message of the line\"},"
+    "\"n\":{\"type\":\"integer\",\"description\":\"Messages the line covers\"}},"
+    "\"required\":[\"id\",\"n\"]}}},"
+    "{\"type\":\"function\",\"function\":{\"name\":\"date\",\"description\":"
+    "\"The date and time of message id.\","
+    "\"parameters\":{\"type\":\"object\",\"properties\":{"
+    "\"id\":{\"type\":\"integer\",\"description\":\"Message id\"}},"
+    "\"required\":[\"id\"]}}}"
+    "]";
+
+static const char SA_ROLE[] =
     "You are an expert coding assistant running inside scrap, a terminal coding harness. "
-    "You help the user by reading files, running commands, editing code, and writing files.\n\n"
+    "You help the user by reading files, running commands, editing code, and writing files.\n\n";
+
+static const char SA_GUIDE[] =
     "Tools:\n"
     "- read: read file contents\n"
     "- bash: run shell commands (ls, rg, find, git, builds, tests)\n"
@@ -499,6 +520,12 @@ typedef struct {
     struct sa_mcp *mcp;
     int nmcp;
     long mcp_seq;
+    oc_mem *mem;
+    oc_compactor *compactor;
+    char compactor_model[256];
+    _Atomic int halting;
+    const _Atomic int *halt;
+    long timeout;
 } sa_agent;
 
 static void sa_warn(sa_agent *x, const char *text) {
@@ -616,7 +643,7 @@ static void sa_envp_free(char **envp) {
     free(envp);
 }
 
-static int sa_aborted(sa_agent *x) { return x->st.abort && x->st.abort(); }
+static int sa_aborted(sa_agent *x) { return (x->halt && *x->halt) || (x->st.abort && x->st.abort()); }
 
 static void sa_nonblock(int fd) { fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK); }
 
@@ -727,7 +754,7 @@ static void sa_close_file(sa_agent *x) {
 }
 
 static void sa_write_line(sa_agent *x, const cJSON *line) {
-    if (x->st.ephemeral) return;
+    if (x->st.ephemeral || x->mem) return;
     if (!x->fp) {
         char dir[4096];
         if (!core_agent_session_dir(x->st.cwd ? x->st.cwd : ".", dir, sizeof dir)) return;
@@ -753,8 +780,43 @@ static void sa_write_line(sa_agent *x, const cJSON *line) {
     free(s);
 }
 
+static void sa_echo(sa_agent *x, const char *text) {
+    size_t n = strlen(text), head = SA_ECHO_CAP / 2, tail = n - SA_ECHO_CAP / 2;
+    if (n <= SA_ECHO_CAP) { oc_append(x->mem, "echo", text); return; }
+    while (head && ((unsigned char)text[head] & 0xC0) == 0x80) head--;
+    while (tail < n && ((unsigned char)text[tail] & 0xC0) == 0x80) tail++;
+    sa_buf b = {0};
+    sa_put(&b, text, head);
+    sa_printf(&b, "\n[%zu bytes cut]\n", tail - head);
+    sa_put(&b, text + tail, n - tail);
+    oc_append(x->mem, "echo", sa_str(&b));
+    sa_free(&b);
+}
+
+static void sa_remember(sa_agent *x, const cJSON *line) {
+    const cJSON *m = cJSON_GetObjectItem(line, "message"), *block;
+    const char *role = sa_jstr(m, "role");
+    if (!role) return;
+    if (!strcmp(role, "tool")) { sa_echo(x, sa_jstr(m, "content") ? sa_jstr(m, "content") : ""); return; }
+    if (strcmp(role, "assistant")) return;
+    cJSON_ArrayForEach(block, cJSON_GetObjectItem(m, "content")) {
+        const char *kind = sa_jstr(block, "type");
+        if (kind && !strcmp(kind, "text")) {
+            oc_append(x->mem, "talk", sa_jstr(block, "text") ? sa_jstr(block, "text") : "");
+        } else if (kind && !strcmp(kind, "tool_use")) {
+            char *in = cJSON_PrintUnformatted(cJSON_GetObjectItem(block, "input"));
+            sa_buf b = {0};
+            sa_printf(&b, "%s %s", sa_jstr(block, "name") ? sa_jstr(block, "name") : "", in ? in : "{}");
+            oc_append(x->mem, "tool", sa_str(&b));
+            sa_free(&b);
+            free(in);
+        }
+    }
+}
+
 static void sa_store(sa_agent *x, cJSON *line) {
     sa_write_line(x, line);
+    if (x->mem) sa_remember(x, line);
     cJSON_AddItemToArray(x->msgs, line);
 }
 
@@ -1093,11 +1155,17 @@ static void sa_skills_in(const char *dir, sa_buf *out, int *any) {
 static void sa_build_system(sa_agent *x) {
     sa_buf b = {0};
     if (!x->st.disable_tools) {
-        sa_puts(&b, SA_SYSTEM);
-        char date[64];
-        time_t now = time(NULL);
-        strftime(date, sizeof date, "%Y-%m-%d", localtime(&now));
-        sa_printf(&b, "\n\nDate: %s\nWorking directory: %s", date, x->st.cwd ? x->st.cwd : ".");
+        if (x->st.memory) sa_printf(&b, "%s\n\n%s\n\n", OC_MASTER, OC_VIEW_DOC);
+        else sa_puts(&b, SA_ROLE);
+        sa_puts(&b, SA_GUIDE);
+        sa_puts(&b, "\n\n");
+        if (!x->st.memory) {
+            char date[64];
+            time_t now = time(NULL);
+            strftime(date, sizeof date, "%Y-%m-%d", localtime(&now));
+            sa_printf(&b, "Date: %s\n", date);
+        }
+        sa_printf(&b, "Working directory: %s", x->st.cwd ? x->st.cwd : ".");
         if (!x->st.ephemeral) {
             sa_context_files(x, &b);
             int any = 0;
@@ -1597,6 +1665,11 @@ static char *sa_body(sa_agent *x, int upto, const char *extra_user, int tools) {
     cJSON_AddItemToObject(root, "messages", msgs);
     if (!x->st.disable_tools) {
         cJSON *defs = cJSON_Parse(SA_TOOLS);
+        if (x->mem) {
+            cJSON *more = cJSON_Parse(SA_MEMORY_TOOLS), *t;
+            while ((t = cJSON_DetachItemFromArray(more, 0))) cJSON_AddItemToArray(defs, t);
+            cJSON_Delete(more);
+        }
         sa_mcp_tools(x, defs);
         cJSON_AddItemToObject(root, "tools", defs);
         if (!tools) cJSON_AddStringToObject(root, "tool_choice", "none");
@@ -1797,6 +1870,7 @@ static long sa_http(sa_agent *x, const char *body, sa_resp *r, int *interrupted)
     curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 30L);
     curl_easy_setopt(c, CURLOPT_LOW_SPEED_LIMIT, 1L);
     curl_easy_setopt(c, CURLOPT_LOW_SPEED_TIME, 600L);
+    if (x->timeout) curl_easy_setopt(c, CURLOPT_TIMEOUT, x->timeout);
     CURLM *m = curl_multi_init();
     curl_multi_add_handle(m, c);
     int running = 1;
@@ -2132,10 +2206,21 @@ static void sa_run_call(sa_agent *x, sa_call *call, int *interrupted) {
             failed = sa_tool_edit(x, input, &out);
         } else if (!strcmp(name, "bash")) {
             failed = sa_tool_bash(x, input, &out, interrupted);
+        } else if (x->mem && !strcmp(name, "zoom")) {
+            char *z = oc_zoom(x->mem, (long)sa_jnum(input, "id"), (long)sa_jnum(input, "n"));
+            sa_puts(&out, z);
+            failed = !strncmp(z, "No line", 7);
+            free(z);
+        } else if (x->mem && !strcmp(name, "date")) {
+            const char *d = oc_date(x->mem, (long)sa_jnum(input, "id"));
+            if (d) sa_puts(&out, d);
+            else sa_printf(&out, "No message %ld.", (long)sa_jnum(input, "id"));
+            failed = !d;
         } else if ((tool = sa_mcp_find(x, name, &server))) {
             failed = sa_mcp_call(x, server, tool, input, &out, interrupted);
         } else {
-            sa_printf(&out, "unknown tool '%s'; the tools are read, write, edit, bash", name);
+            sa_printf(&out, "unknown tool '%s'; the tools are read, write, edit, bash%s", name,
+                      x->mem ? ", zoom, date" : "");
             for (int i = 0; i < x->nmcp; i++) {
                 char full[512];
                 const cJSON *t;
@@ -2219,6 +2304,27 @@ static cJSON *sa_assistant_line(sa_agent *x, sa_resp *r, int with_calls) {
 
 static int sa_start(Backend *b, const char *resume);
 
+static int sa_settle_abort(void *ud) { return sa_aborted(ud); }
+
+static int sa_memory_turn(sa_agent *x, const char *user, const sa_buf *reminder) {
+    if (!oc_settled(x->mem)) sa_warn(x, "waiting for memory summaries");
+    if (!oc_settle(x->mem, sa_settle_abort, x)) {
+        char why[512];
+        if (x->compactor && oc_compactor_error(x->compactor, why, sizeof why)) sa_warn(x, why);
+        oc_append(x->mem, "user", user);
+        return 0;
+    }
+    char *view = oc_render(x->mem, 1);
+    oc_append(x->mem, "user", user);
+    sa_buf b = {0};
+    sa_printf(&b, "%s\n" BACKEND_CACHE_MARK "%s", view, user);
+    if (reminder->n) sa_printf(&b, "\n\n%s", sa_str(reminder));
+    cJSON_AddItemToArray(x->msgs, sa_user_line(sa_str(&b), 0));
+    sa_free(&b);
+    free(view);
+    return 1;
+}
+
 static char *sa_ask_ex(Backend *b, const char *user, backend_result *meta) {
     sa_agent *x = b->ctx;
     backend_result res = {0};
@@ -2234,6 +2340,7 @@ static char *sa_ask_ex(Backend *b, const char *user, backend_result *meta) {
         return NULL;
     }
 
+    sa_buf reminder = {0};
     if (!x->st.ephemeral && !x->st.disable_tools) {
         sa_buf ctx = {0}, reason = {0};
         cJSON *p = sa_payload();
@@ -2246,28 +2353,32 @@ static char *sa_ask_ex(Backend *b, const char *user, backend_result *meta) {
             if (meta) { meta->is_error = 1; snprintf(meta->subtype, sizeof meta->subtype, "error"); }
             return NULL;
         }
-        if (ctx.n) {
-            sa_buf wrapped = {0};
-            sa_printf(&wrapped, "<system-reminder>\n%s</system-reminder>", sa_str(&ctx));
-            sa_store(x, sa_user_line(sa_str(&wrapped), 1));
-            sa_free(&wrapped);
-        }
+        if (ctx.n) sa_printf(&reminder, "<system-reminder>\n%s</system-reminder>", sa_str(&ctx));
         sa_free(&ctx);
         sa_free(&reason);
     }
-    sa_store(x, sa_user_line(user ? user : "", 0));
+    if (x->mem) {
+        if (!sa_memory_turn(x, user ? user : "", &reminder)) {
+            res.interrupted = 1;
+            snprintf(res.subtype, sizeof res.subtype, "interrupted");
+        }
+    } else {
+        if (reminder.n) sa_store(x, sa_user_line(sa_str(&reminder), 1));
+        sa_store(x, sa_user_line(user ? user : "", 0));
+    }
+    sa_free(&reminder);
 
     long max_steps = (long)sa_jnum(x->config, "max_steps");
     char *reply = NULL;
     int stop_hook_active = 0;
-    for (long step = 1;; step++) {
+    for (long step = 1; !res.interrupted; step++) {
         if (max_steps > 0 && step > max_steps) {
             snprintf(res.subtype, sizeof res.subtype, "error_max_turns");
             res.is_error = 1;
             snprintf(x->err, sizeof x->err, "stopped after %ld model requests (max_steps)", max_steps);
             break;
         }
-        sa_maybe_compact(x);
+        if (!x->mem) sa_maybe_compact(x);
         char *body = sa_body(x, cJSON_GetArraySize(x->msgs), NULL, 1);
         sa_resp r = { .x = x, .emit = 1 };
         int interrupted = 0;
@@ -2326,6 +2437,10 @@ static char *sa_ask_ex(Backend *b, const char *user, backend_result *meta) {
             break;
         }
     }
+    if (x->mem) {
+        cJSON_Delete(x->msgs);
+        x->msgs = cJSON_CreateArray();
+    }
     backend_flush(&x->st);
     res.cost_usd = x->cost;
     res.context_tokens = x->ctx_tokens;
@@ -2351,6 +2466,34 @@ static void sa_teardown(sa_agent *x) {
 
 static void sa_curl_init(void) { curl_global_init(CURL_GLOBAL_DEFAULT); }
 
+static Backend *sa_compactor_open(void *ud, const char *system) {
+    sa_agent *x = ud;
+    backend_opts o = { .name = "core", .model = x->compactor_model, .effort = OC_COMPACT_EFFORT,
+                       .system = system, .ephemeral = 1, .disable_tools = 1 };
+    Backend *b = core_agent_open(&o);
+    if (b) {
+        sa_agent *h = b->ctx;
+        h->halt = &x->halting;
+        h->timeout = OC_TIMEOUT_S;
+    }
+    return b;
+}
+
+static int sa_memory_open(sa_agent *x) {
+    char dir[4096], chat[4200];
+    if (!core_agent_config_dir(dir, sizeof dir)) {
+        snprintf(x->err, sizeof x->err, "no config directory (HOME unset)");
+        return 0;
+    }
+    snprintf(chat, sizeof chat, "%s/chat", dir);
+    x->mem = oc_open(chat, 0, 0, x->err, sizeof x->err);
+    if (!x->mem) return 0;
+    const char *model = sa_jstr(x->config, "compactor_model");
+    snprintf(x->compactor_model, sizeof x->compactor_model, "%s", model ? model : OC_COMPACT_MODEL);
+    x->compactor = oc_compactor_start(x->mem, 0, sa_compactor_open, x);
+    return 1;
+}
+
 static int sa_start(Backend *b, const char *resume) {
     sa_agent *x = b->ctx;
     static pthread_once_t once = PTHREAD_ONCE_INIT;
@@ -2365,8 +2508,9 @@ static int sa_start(Backend *b, const char *resume) {
     x->hooks = (x->st.ephemeral || x->st.disable_tools) ? NULL : sa_hooks_load();
     sa_route_free(&x->route);
     if (!sa_route_resolve(x)) return 0;
+    if (x->st.memory && !x->mem && !sa_memory_open(x)) return 0;
     sa_mcp_load(x);
-    if (resume && *resume) {
+    if (resume && *resume && !x->mem) {
         if (!sa_load(x, resume, x->st.fork_session)) return 0;
     } else {
         sa_new_id(x->id, sizeof x->id);
@@ -2409,7 +2553,7 @@ static void sa_usage(Backend *b, long *tokens, long *window) {
 
 static const char *sa_session_id(Backend *b) {
     sa_agent *x = b->ctx;
-    return x->st.ephemeral || !x->id[0] ? NULL : x->id;
+    return x->st.ephemeral || x->mem || !x->id[0] ? NULL : x->id;
 }
 
 static const char *sa_model(Backend *b) {
@@ -2424,6 +2568,9 @@ static const char *sa_error(Backend *b) {
 
 static void sa_close(Backend *b) {
     sa_agent *x = b->ctx;
+    x->halting = 1;
+    oc_compactor_stop(x->compactor);
+    oc_close(x->mem);
     sa_close_file(x);
     cJSON_Delete(x->msgs);
     cJSON_Delete(x->config);

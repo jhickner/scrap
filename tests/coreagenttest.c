@@ -230,16 +230,18 @@ static void serve_one(int fd)
         free(req);
         return;
     }
+    cJSON *body = cJSON_Parse(req + body_at);
+    cJSON *msgs = cJSON_GetObjectItem(body, "messages");
+    const char *sys = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(msgs, 0), "content"));
     char path[512];
-    snprintf(path, sizeof path, "%s/last-request.json", dir);
+    snprintf(path, sizeof path, "%s/%s", dir,
+             sys && !strncmp(sys, "You write the memory", 20) ? "compactor-request.json" : "last-request.json");
     FILE *f = fopen(path, "w");
     if (f) {
         fputs(req + body_at, f);
         fclose(f);
     }
 
-    cJSON *body = cJSON_Parse(req + body_at);
-    cJSON *msgs = cJSON_GetObjectItem(body, "messages");
     cJSON *last = cJSON_GetArrayItem(msgs, cJSON_GetArraySize(msgs) - 1);
     const char *role = cJSON_GetStringValue(cJSON_GetObjectItem(last, "role"));
     const char *content = cJSON_GetStringValue(cJSON_GetObjectItem(last, "content"));
@@ -253,6 +255,8 @@ static void serve_one(int fd)
     }
     if (!content)
         content = "";
+    if (!strncmp(content, "<chat>", 6) && strstr(content, "</chat>\n"))
+        content = strstr(content, "</chat>\n") + 8;
 
     send_all(fd, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n");
     delta(fd, "reasoning", "hmm");
@@ -277,6 +281,10 @@ static void serve_one(int fd)
     } else if (!strncmp(content, "write: ", 7)) {
         split_args(content + 7, WRITE, 2, args, sizeof args);
         tool_call(fd, "write", args);
+    } else if (!strncmp(content, "tool: ", 6) && strchr(content, '|')) {
+        char name[64];
+        snprintf(name, sizeof name, "%.*s", (int)(strchr(content, '|') - content - 6), content + 6);
+        tool_call(fd, name, strchr(content, '|') + 1);
     } else if (!strncmp(content, "mcp: ", 5)) {
         char name[128];
         const char *bar = strchr(content, '|');
@@ -286,6 +294,8 @@ static void serve_one(int fd)
         tool_call(fd, name, args);
     } else if (!strncmp(content, "Summarize the conversation", 26)) {
         delta(fd, "content", "SUMMARY");
+    } else if (strstr(content, "Compress this message") && strstr(content, "hang-compactor")) {
+        sleep(8);
     } else if (!strcmp(content, "slow")) {
         delta(fd, "content", "partial");
         sleep(5);
@@ -418,6 +428,112 @@ static char *ask(Backend *b, const char *text, backend_result *meta)
     return b->ask_ex(b, text, meta);
 }
 
+static cJSON *request_messages(cJSON **req)
+{
+    *req = cJSON_Parse(get_file("last-request.json"));
+    return cJSON_GetObjectItem(*req, "messages");
+}
+
+static const char *msg_text(cJSON *msgs, int i)
+{
+    return cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(msgs, i), "content"));
+}
+
+static void memory_test(void)
+{
+    backend_opts o = {.name = "core", .model = "fake/echo", .cwd = dir, .memory = 1};
+    Backend *b = backend_open_ex(&o);
+    b->set_event_cb(b, on_event, NULL);
+    b->set_abort_check(b, should_abort);
+    CHECK(b->start(b, NULL));
+    CHECK(!b->session_id(b));
+    backend_result meta;
+    cJSON *req;
+
+    char *reply = ask(b, "first", &meta);
+    CHECK(reply && !strcmp(reply, "echo: first"));
+    free(reply);
+    cJSON *msgs = request_messages(&req);
+    CHECK(cJSON_GetArraySize(msgs) == 2);
+    char *sys = strdup(msg_text(msgs, 0) ? msg_text(msgs, 0) : "");
+    CHECK(!strstr(sys, "Date:") && strstr(sys, "zoom(id, n)") && strstr(sys, "project rule 42"));
+    CHECK(msg_text(msgs, 1) && !strcmp(msg_text(msgs, 1), "<chat>\n</chat>\nfirst"));
+    CHECK(strstr(get_file("last-request.json"), "\"name\":\"zoom\"") &&
+          strstr(get_file("last-request.json"), "\"name\":\"date\""));
+    cJSON_Delete(req);
+
+    reply = ask(b, "second", &meta);
+    free(reply);
+    msgs = request_messages(&req);
+    CHECK(cJSON_GetArraySize(msgs) == 2);
+    CHECK(msg_text(msgs, 0) && !strcmp(msg_text(msgs, 0), sys));
+    CHECK(msg_text(msgs, 1) &&
+          !strcmp(msg_text(msgs, 1), "<chat>\n0+1|user: first\n1+1|talk: echo: first\n</chat>\nsecond"));
+    cJSON_Delete(req);
+    free(sys);
+
+    reply = ask(b, "run: head -c 40000 /dev/zero | tr '\\0' x", &meta);
+    free(reply);
+    msgs = request_messages(&req);
+    CHECK(cJSON_GetArraySize(msgs) == 4);
+    CHECK(strlen(last_result) > 4000);
+    cJSON_Delete(req);
+
+    reply = ask(b, "tool: zoom|{\"id\":0,\"n\":1}", &meta);
+    CHECK(!strcmp(last_tool, "zoom") && !last_failed && !strcmp(last_result, "0+0|user: first"));
+    free(reply);
+    msgs = request_messages(&req);
+    CHECK(strstr(msg_text(msgs, 1), "6+1|echo: ") && !strstr(msg_text(msgs, 1), "not summarized"));
+    cJSON_Delete(req);
+    CHECK(strstr(get_file("compactor-request.json"), "You write the memory of scrap"));
+
+    reply = ask(b, "tool: date|{\"id\":0}", &meta);
+    CHECK(!strcmp(last_tool, "date") && !last_failed && !strncmp(last_result, "20", 2) &&
+          strchr(last_result, 'T'));
+    free(reply);
+    reply = ask(b, "tool: zoom|{\"id\":1,\"n\":2}", &meta);
+    CHECK(last_failed && !strcmp(last_result, "No line 1+2."));
+    free(reply);
+
+    b->set_model(b, "fake/anthropic/echo");
+    reply = ask(b, "blocks", &meta);
+    CHECK(reply && !strcmp(reply, "echo: blocks"));
+    free(reply);
+    CHECK(strstr(get_file("last-request.json"),
+                 "{\"type\":\"text\",\"text\":\"blocks\",\"cache_control\":{\"type\":\"ephemeral\"}}"));
+    char hang[700];
+    snprintf(hang, sizeof hang, "hang-compactor %0600d", 0);
+    reply = ask(b, hang, &meta);
+    free(reply);
+    time_t t0 = time(NULL);
+    b->close(b);
+    CHECK(time(NULL) - t0 < 5);
+
+    char cmd[600];
+    snprintf(cmd, sizeof cmd, "cat %s/agent/chat/main/*.jsonl > %s/log.jsonl", dir, dir);
+    CHECK(system(cmd) == 0);
+    char *log = strdup(get_file("log.jsonl")), kinds[512] = "";
+    CHECK(!strstr(log, "hmm"));
+    for (char *line = strtok(log, "\n"); line; line = strtok(NULL, "\n")) {
+        cJSON *j = cJSON_Parse(line);
+        const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(j, "kind"));
+        const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(j, "text"));
+        strncat(kinds, kind ? kind : "?", sizeof kinds - strlen(kinds) - 2);
+        strcat(kinds, " ");
+        if (kind && !strcmp(kind, "echo") && text && strlen(text) > 1000)
+            CHECK(strlen(text) < 30100 && strstr(text, "bytes cut]"));
+        if (kind && !strcmp(kind, "tool") && text && strstr(text, "head -c"))
+            CHECK(strstr(text, "bash {\"command\":\"head") == text);
+        cJSON_Delete(j);
+    }
+    CHECK(!strcmp(kinds, "user talk user talk user tool echo talk user tool echo talk user tool echo talk "
+                         "user tool echo talk user talk user talk "));
+    if (strcmp(kinds, "user talk user talk user tool echo talk user tool echo talk user tool echo talk "
+                      "user tool echo talk user talk user talk "))
+        fprintf(stderr, "kinds: %s\n", kinds);
+    free(log);
+}
+
 int main(void)
 {
     snprintf(dir, sizeof dir, "/tmp/coreagenttest.%d", (int)getpid());
@@ -432,7 +548,7 @@ int main(void)
     snprintf(config, sizeof config,
              "{\"default\":\"fake/echo\",\"providers\":{\"fake\":{\"base_url\":"
              "\"http://127.0.0.1:%d/v1\",\"effort\":\"openai\",\"list\":false,"
-             "\"models\":{\"echo\":{\"context\":20000}}}}}",
+             "\"models\":{\"echo\":{\"context\":20000}}}},\"compactor_model\":\"fake/echo\"}",
              port);
     put_file("agent/providers.json", config);
     put_file("hooks.json",
@@ -574,6 +690,8 @@ int main(void)
     CHECK(last_failed && strstr(last_result, "mcp__fake__fail"));
     free(reply);
     b->close(b);
+
+    memory_test();
 
     kill(server, SIGKILL);
     waitpid(server, NULL, 0);

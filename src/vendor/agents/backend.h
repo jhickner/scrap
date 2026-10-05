@@ -49,6 +49,7 @@ typedef struct {
     int chrome;                 /* claude: --chrome, Claude in Chrome browser tools */
     const char *plugin_dir;     /* claude: --plugin-dir, one plugin for this session.
                                    Needs allow_customizations for its hooks to run */
+    int memory;                 /* core: OptChat memory, one endless chat in agent/chat */
 } backend_opts;
 
 /* One interesting event from a turn's stream. Only the fields a kind documents
@@ -274,6 +275,7 @@ typedef struct {
     int   allow_customizations, ephemeral, disable_tools, fork_session;
     int   no_browser_login;
     int   chrome;
+    int   memory;
     char *plugin_dir;
     void (*on_event)(void *ud, const backend_event *ev);
     void *event_ud;
@@ -316,6 +318,7 @@ static void backend_state_init(backend_state *st, const backend_opts *o) {
     st->fork_session = o->fork_session;
     st->no_browser_login = o->no_browser_login;
     st->chrome = o->chrome;
+    st->memory = o->memory;
     st->plugin_dir = o->plugin_dir ? strdup(o->plugin_dir) : NULL;
 }
 

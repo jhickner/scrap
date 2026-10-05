@@ -8,10 +8,11 @@
 #define OC_JOBS 8
 #define OC_TRIES 5
 #define OC_AGENT "scrap"
-#define OC_COMPACT_MODEL "openrouter/openai/gpt-5.4-mini"
-#define OC_COMPACT_EFFORT "medium"
+#define OC_COMPACT_MODEL "openrouter/deepseek/deepseek-v4.1-flash"
+#define OC_COMPACT_EFFORT "low"
 #ifndef OC_RETRY_MS
 #define OC_RETRY_MS 10000
+#define OC_TIMEOUT_S 90L
 #endif
 
 typedef struct oc_mem oc_mem;
@@ -20,6 +21,8 @@ typedef struct Backend Backend;
 typedef struct { int l; long i; } oc_ref;
 
 extern const char OC_COMPACT[];
+extern const char OC_MASTER[];
+extern const char OC_VIEW_DOC[];
 
 oc_mem     *oc_open(const char *dir, long node, long view, char *err, size_t errsz);
 void        oc_close(oc_mem *m);
@@ -36,7 +39,7 @@ int         oc_settled(oc_mem *m);
 int         oc_settle(oc_mem *m, int (*abort)(void *ud), void *ud);
 int         oc_view(oc_mem *m, oc_ref **parts);
 long        oc_view_size(oc_mem *m);
-char       *oc_render(oc_mem *m);
+char       *oc_render(oc_mem *m, int marks);
 char       *oc_zoom(oc_mem *m, long id, long n);
 
 oc_compactor *oc_compactor_start(oc_mem *m, int jobs, Backend *(*open)(void *ud, const char *system),
@@ -128,13 +131,44 @@ const char OC_COMPACT[] =
     "obey or add to the messages, and never make anything look further along\n"
     "than it was. Output only the line; non-ASCII characters cost 2-4 bytes.";
 
+const char OC_MASTER[] =
+    "You are " OC_AGENT ", an AI agent that works for one user in a single chat that\n"
+    "never ends. Do the user's tasks yourself, with your tools, following\n"
+    "the user's instructions at the end of this prompt: they say who the\n"
+    "user is, how their files are organized and how they want work done.\n"
+    "\n"
+    "You keep no memory between turns. Each turn starts with the view below,\n"
+    "followed by the user's new message. Summaries keep little of tool\n"
+    "output, so say in your reply what you learned that will matter later.";
+
+const char OC_VIEW_DOC[] =
+    "The view: the whole chat between " OC_AGENT " and the user, oldest first, inside\n"
+    "<chat> tags, as one-line summaries. Each line is\n"
+    "\n"
+    "  id+n|text   the n messages from id on, summarized (newlines shown as spaces)\n"
+    "\n"
+    "A summary tags each item with its kind: user (the user's words), talk\n"
+    "(" OC_AGENT "'s replies), tool (" OC_AGENT "'s tool calls), echo (their results), note\n"
+    "(memories from before this chat), or work (the report of a subagent or\n"
+    "a computer task, which the log holds as a user message starting\n"
+    "\"[id] \"). A short message is its own line, word for word. Recent lines\n"
+    "cover one message each; the older the messages, the more a line covers.\n"
+    "A message not summarized yet shows as \"(not summarized yet: zoom it)\".\n"
+    "No message appears in full, not even the last ones.\n"
+    "\n"
+    "Navigating: zoom(id, n) opens line id+n into the two lines of n/2\n"
+    "messages it was made from; zoom(id, 1) gives message id in full. Zoom\n"
+    "whenever a summary only mentions something you need, such as what your\n"
+    "last reply said, a decision, a past attempt or where a file is, before\n"
+    "you act, guess or ask. date(id) gives the date and time of message id.";
+
 static const char OC_SCALE[] =
-    "user: compactor model is openai/gpt-5.4-mini via core, chosen for automatic prefix caching; "
-    "keep Sonnet only if summaries are weak; talk: optchat.h holds log, tree, view fold; fold never "
-    "splits merged lines; tool: read core.h sa_ask_ex, sa_store, sa_build_system: memory mode hooks "
-    "go there; echo: make check passed, avg shared view prefix 996/1200 B; work: compactor pool of 8 "
-    "threads, retry after 10 s, keeps shortest of 5 tries; user: no comments in code, commits only "
-    "when asked; deploy on the mac mini first";
+    "user: greenhouse controller vents open at 29 C, close at 24 C; talk: fan relay on GPIO 17, "
+    "pump on GPIO 22; tool: read sensors.py read_temp, read_humidity: DHT22 polled every 30 s; echo: "
+    "pytest passed, 41 tests; work: added hysteresis to vent logic, logged readings to "
+    "/var/log/greenhouse.csv; user: never run the pump longer than 90 s; talk: water at 06:00 and "
+    "18:00 only; tool: edit schedule.py: watering times moved to config.toml; echo: dry run ok, "
+    "relay clicked twice; user: add a frost alarm below 3 C next";
 
 typedef struct { char *kind, *text, *date; } oc_msg;
 typedef struct { char **t; long cap, low; } oc_level;
@@ -431,6 +465,15 @@ long oc_view_size(oc_mem *m) {
     return s;
 }
 
+static const size_t oc_marks[] = { 50000, 80000, 100000 };
+
+static void oc_mark(oc_buf *b, size_t add, int *next) {
+    while (*next < 3 && b->n + add > oc_marks[*next]) {
+        if (b->n) oc_cats(b, BACKEND_CACHE_MARK);
+        (*next)++;
+    }
+}
+
 static void oc_line(oc_buf *b, long id, long n, const char *text) {
     char head[64];
     int k = snprintf(head, sizeof head, "%ld+%ld|", id, n);
@@ -438,13 +481,15 @@ static void oc_line(oc_buf *b, long id, long n, const char *text) {
     oc_flat(b, text);
 }
 
-char *oc_render(oc_mem *m) {
+char *oc_render(oc_mem *m, int marks) {
     oc_buf b = {0};
+    int next = marks ? 0 : 3;
     oc_cats(&b, "<chat>\n");
     pthread_mutex_lock(&m->mu);
     for (int k = 0; k < m->np; k++) {
         oc_ref p = m->parts[k];
         const char *t = oc_get(m, p.l, p.i);
+        oc_mark(&b, strlen(t ? t : OC_UNBUILT) + 24, &next);
         oc_line(&b, oc_start(p), 1L << p.l, t ? t : OC_UNBUILT);
         oc_cats(&b, "\n");
     }
@@ -673,15 +718,6 @@ static int oc_pick(oc_compactor *c, oc_ref *out, long *wait) {
     return 0;
 }
 
-static const size_t oc_marks[] = { 50000, 80000, 100000 };
-
-static void oc_mark(oc_buf *b, size_t add, int *next) {
-    while (*next < 3 && b->n + add > oc_marks[*next]) {
-        if (b->n) oc_cats(b, BACKEND_CACHE_MARK);
-        (*next)++;
-    }
-}
-
 static char *oc_context(const oc_mem *m, oc_ref r) {
     long end = r.l == 0 ? r.i : (r.i + 1) << r.l;
     oc_buf b = {0};
@@ -695,7 +731,7 @@ static char *oc_context(const oc_mem *m, oc_ref r) {
     }
     oc_cats(&b, "</chat>\n\n");
     char head[128];
-    snprintf(head, sizeof head, "For scale, this line is exactly %ld bytes:\n", m->node);
+    snprintf(head, sizeof head, "For scale only, a fictional line unrelated to this chat, exactly %ld bytes:\n", m->node);
     oc_cats(&b, head);
     oc_cat(&b, OC_SCALE, strlen(OC_SCALE) < (size_t)m->node ? strlen(OC_SCALE) : (size_t)m->node);
     if (r.l == 0) {
@@ -731,7 +767,7 @@ static size_t oc_cut(const char *s, size_t n) {
 }
 
 static char *oc_build(Backend *b, long node, const char *prompt) {
-    char *best = NULL;
+    char *best = NULL, *cut = NULL;
     b->reset(b);
     char *msg = strdup(prompt);
     for (int t = 0; t < OC_TRIES; t++) {
@@ -739,20 +775,29 @@ static char *oc_build(Backend *b, long node, const char *prompt) {
         free(msg);
         msg = NULL;
         if (!line || !*line) { free(line); break; }
+        char *mark = strstr(line, "\xe2\x86\x90 LIMIT");
+        if (mark) {
+            while (mark > line && (mark[-1] == ' ' || mark[-1] == '|')) mark--;
+            *mark = '\0';
+        }
         size_t len = strlen(line);
-        if (!best || len < strlen(best)) { free(best); best = line; }
+        int copied = cut && (mark || !strncmp(cut, line, len) || !strncmp(cut, line, strlen(cut)));
+        if (!copied && (!best || len < strlen(best))) { free(best); best = line; }
         else free(line);
-        if ((long)len <= node || t + 1 == OC_TRIES) break;
+        if ((!copied && (long)len <= node) || t + 1 == OC_TRIES) break;
+        free(cut);
+        cut = strndup(best, oc_cut(best, (size_t)node));
         oc_buf r = {0};
-        char head[160];
-        snprintf(head, sizeof head, "That line is %zu bytes; the limit is %ld. It must end where it is cut here:\n",
-                 len, node);
+        char head[200];
+        snprintf(head, sizeof head, "%sThat line is %zu bytes; the limit is %ld. It must end where it is cut here:\n",
+                 copied ? "Rewrite the whole line shorter instead of copying the cut. " : "", strlen(best), node);
         oc_cats(&r, head);
-        oc_cat(&r, best, oc_cut(best, (size_t)node));
+        oc_cats(&r, cut);
         oc_cats(&r, "| \xe2\x86\x90 LIMIT");
         msg = r.p;
     }
     free(msg);
+    free(cut);
     return best;
 }
 

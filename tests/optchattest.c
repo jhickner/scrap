@@ -85,7 +85,7 @@ static char *fake_ask(Backend *b, const char *user)
     fids     += strstr(user, "+1|") != NULL;
     fretries += retry;
     fmerges  += strstr(user, "Merge these two lines") != NULL;
-    fscale   += !retry && strstr(user, "For scale, this line is exactly 64 bytes:\nuser: compactor") != NULL;
+    fscale   += !retry && strstr(user, "For scale only, a fictional line unrelated to this chat, exactly 64 bytes:\nuser: greenhouse") != NULL;
     pthread_mutex_unlock(&fmu);
     if (n == 7)
         return NULL;
@@ -208,11 +208,56 @@ static void marks_test(void)
     }
     CHECK(count == 3);
     free(ctx);
+    char *view = oc_render(m, 1), *plain = oc_render(m, 0);
+    count = 0;
+    for (char *p = view; (p = strstr(p, BACKEND_CACHE_MARK)); p++, count++)
+        CHECK(p[-1] == '\n' && (size_t)(p - view) <= limits[count]);
+    CHECK(count == 3 && !strstr(plain, BACKEND_CACHE_MARK));
+    free(view);
+    free(plain);
     oc_close(m);
     char cmd[600];
     snprintf(cmd, sizeof cmd, "rm -rf %s", dir);
     if (system(cmd))
         failures++;
+}
+
+static const char *script[4];
+static int         nscript;
+static char        sent[4][2048];
+
+static char *script_ask(Backend *b, const char *user)
+{
+    (void)b;
+    snprintf(sent[nscript], sizeof sent[nscript], "%s", user);
+    return strdup(script[nscript++]);
+}
+
+static void copy_test(void)
+{
+    Backend b = { .ask = script_ask, .reset = fake_reset };
+    char    longline[NODE + 40], cut[NODE + 1];
+    memset(longline, 'k', sizeof longline - 1);
+    longline[sizeof longline - 1] = '\0';
+    memcpy(cut, longline, NODE);
+    cut[NODE - 3] = '\0';
+    script[0] = longline;
+    script[1] = cut;
+    script[2] = "short line";
+    char *line = oc_build(&b, NODE, "prompt");
+    CHECK(nscript == 3);
+    CHECK(line && !strcmp(line, "short line"));
+    CHECK(strstr(sent[2], "instead of copying the cut"));
+    free(line);
+
+    char marked[NODE + 20];
+    snprintf(marked, sizeof marked, "%.*s| \xe2\x86\x90 LIMIT", NODE - 20, longline);
+    nscript = 0;
+    script[1] = marked;
+    line = oc_build(&b, NODE, "prompt");
+    CHECK(nscript == 3);
+    CHECK(line && !strcmp(line, "short line"));
+    free(line);
 }
 
 int main(void)
@@ -241,7 +286,7 @@ int main(void)
     CHECK(oc_append(m, "echo", longmsg) == 2);
     CHECK(!oc_node(m, 0, 2));
     CHECK(!oc_settled(m));
-    char *v = oc_render(m);
+    char *v = oc_render(m, 0);
     CHECK(strstr(v, "2+1|(not summarized yet: zoom it)"));
     free(v);
     oc_ref due[4];
@@ -278,7 +323,7 @@ int main(void)
         tiles(m);
         free(old);
 
-        char *cur = oc_render(m);
+        char *cur = oc_render(m, 0);
         if (prev && i > 1000) {
             shared += common(prev, cur);
             renders++;
@@ -320,6 +365,7 @@ int main(void)
         failures++;
     compactor_test();
     marks_test();
+    copy_test();
     CHECK(strlen(OC_SCALE) == OC_NODE);
     if (failures)
         fprintf(stderr, "%d failure(s)\n", failures);
