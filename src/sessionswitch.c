@@ -615,6 +615,51 @@ static void waiting(int waited_ms, void *ud)
     ui_flush();
 }
 
+static int take(const struct live_session *v, char *why, size_t size,
+                void (*wait)(int waited_ms, void *ud), void *ud)
+{
+    char screen[4400];
+    if (!handoff_ask(v->pid, v->id, screen, sizeof screen, wait, ud)) {
+        snprintf(why, size, "could not take the session");
+        return -1;
+    }
+    int at = workspace_spawn(v->backend, v->model, v->effort, v->cwd, v->id);
+    if (at < 0) {
+        unlink(screen);
+        snprintf(why, size, "could not open the session");
+        return -1;
+    }
+    struct stat st;
+    if (stat(screen, &st) == 0 && st.st_size > 0)
+        scrollback_restore(screen);
+    else
+        sessionload_into(workspace_current());
+    unlink(screen);
+    return at;
+}
+
+int sessionswitch_yank(const char *target, char *why, size_t size)
+{
+    struct live_session *v = NULL;
+    int                  n = livelist_load(&v), found = -1;
+    const char          *name = *target == '@' ? target + 1 : target;
+    for (int i = 0; i < n && found < 0; i++)
+        if (v[i].name[0] && !strcmp(v[i].name, name))
+            found = i;
+    for (int i = 0; i < n && found < 0 && *target != '@'; i++)
+        if (v[i].id[0] && !strncmp(v[i].id, target, strlen(target)))
+            found = i;
+    int at = -1;
+    if (found < 0)
+        snprintf(why, size, "no live session matches %s", target);
+    else if (v[found].mine && (at = workspace_find_id(v[found].id)) < 0)
+        snprintf(why, size, "%s is not a tab here", target);
+    else if (!v[found].mine)
+        at = take(&v[found], why, size, NULL, NULL);
+    free(v);
+    return at;
+}
+
 static void yank(const struct live_session *v)
 {
     ui_bar(ui_style(UI_DIM), "asking %s for the session\xe2\x80\xa6",
@@ -622,30 +667,14 @@ static void yank(const struct live_session *v)
     ui_put("\n");
     ui_flush();
 
-    char screen[4400];
+    char why[200];
     int said = 0;
-    if (!handoff_ask(v->pid, v->id, screen, sizeof screen, waiting, &said)) {
-        ui_error("could not take the session");
+    if (take(v, why, sizeof why, waiting, &said) < 0) {
+        ui_error("%s", why);
         ui_put("\n");
         ui_flush();
         return;
     }
-
-    int at = workspace_spawn(v->backend, v->model, v->effort, v->cwd, v->id);
-    if (at < 0) {
-        unlink(screen);
-        ui_error("could not open the session");
-        ui_put("\n");
-        ui_flush();
-        return;
-    }
-
-    struct stat st;
-    if (stat(screen, &st) == 0 && st.st_size > 0)
-        scrollback_restore(screen);
-    else
-        sessionload_into(workspace_current());
-    unlink(screen);
     ui_bar(ui_style(UI_DIM), "session is here \xc2\xb7 %s",
            v->title[0] ? v->title : v->backend);
     ui_put("\n");

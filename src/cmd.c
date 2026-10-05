@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "app.h"
 #include "bridges.h"
@@ -1214,6 +1215,12 @@ static void do_send(struct session *s, const char *arg)
 
 int cmd_attach_tab(const char *target, char *why, size_t size)
 {
+    char        host[TAILNET_HOST_MAX];
+    const char *me = tailnet_self_name(), *local = tailnet_split(target, host, sizeof host);
+    if (!local)
+        return sessionswitch_yank(target, why, size);
+    if (me && !strcasecmp(host, me))
+        return sessionswitch_yank(local, why, size);
     for (int i = 0; i < workspace_count(); i++) {
         const char *remote = session_remote(workspace_at(i));
         if (remote && !strcmp(remote, target))
