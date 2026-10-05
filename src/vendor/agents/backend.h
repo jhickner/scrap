@@ -132,6 +132,8 @@ typedef struct {
 #define BACKEND_CAP_LIVE_EFFORT 4u /* set_effort() preserves the process   */
 #define BACKEND_CAP_TASKS       8u /* reports BACKEND_EV_TASK per subagent  */
 
+enum { BACKEND_AGENT_DECLINED = -1, BACKEND_AGENT_FAILED, BACKEND_AGENT_DONE, BACKEND_AGENT_INTERRUPTED };
+
 struct Backend {
     unsigned caps;
 
@@ -200,6 +202,15 @@ struct Backend {
     void (*set_permission_cb)(Backend *b,
                               int (*cb)(void *ud, const backend_permission *req),
                               void *ud);
+
+    /* Host for subagents: the agent hands the host a child backend and its
+     * task to run where it can be watched, such as a tab, and blocks until the
+     * first turn ends. The host returns a BACKEND_AGENT_* status and owns the
+     * child, unless it returns BACKEND_AGENT_DECLINED. *report is malloc'd or
+     * NULL. Called on the turn thread. NULL for drivers without subagents. */
+    void (*set_agent_host)(Backend *b,
+                           int (*host)(void *ud, Backend *child, const char *task, char **report),
+                           void *ud);
 
     /* Some agents run turns between sends — a finished background task wakes
      * the model with no prompt. idle_fd() is an fd that becomes readable when

@@ -8,7 +8,7 @@ usage() {
     cat >&2 <<'EOF'
 usage: scraprig <command> ...
 
-  start  [-n name] [-s COLSxROWS] [--fake] [--fixture file] [--share dir] [--net [--port N]]
+  start  [-n name] [-s COLSxROWS] [--fake] [--openai] [--fixture file] [--share dir] [--net [--port N]]
          [--scrap path] [-- scrap args]
          start scrap; prints the instance name. --share dir: instances started
          with the same dir share live sessions, dispatch, chains, and
@@ -72,12 +72,13 @@ fail_snap() {
 }
 
 cmd_start() {
-    local name="" size="100x30" fake=0 fixture="" share="" net=0 port="" scrap="$RIG_HOME/../../scrap"
+    local name="" size="100x30" fake=0 openai=0 fixture="" share="" net=0 port="" scrap="$RIG_HOME/../../scrap"
     while [ $# -gt 0 ]; do
         case "$1" in
         -n) name="$2"; shift 2 ;;
         -s) size="$2"; shift 2 ;;
         --fake) fake=1; shift ;;
+        --openai) openai=1; shift ;;
         --fixture) fixture="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; fake=1; shift 2 ;;
         --share) share="$2"; shift 2 ;;
         --net) net=1; shift ;;
@@ -113,6 +114,15 @@ cmd_start() {
         printf 'port = %s\nbind = %s\n' "${port:-$((20000 + RANDOM % 20000))}" "$ip" > "$conf/net"
     elif [ "$net" = 0 ] && [ ! -s "$conf/net" ]; then
         echo 'broker = off' > "$conf/net"
+    fi
+    if [ "$openai" = 1 ]; then
+        local i
+        nohup "$RIG_HOME/fake-openai" "$dir/openai.port" >/dev/null 2>&1 &
+        for ((i = 0; i < 50; i++)); do [ -s "$dir/openai.port" ] && break; sleep 0.1; done
+        [ -s "$dir/openai.port" ] || { rm -rf "$dir"; die "fake-openai did not start"; }
+        mkdir -p "$conf/agent"
+        printf '{"default":"fake/echo","providers":{"fake":{"base_url":"http://127.0.0.1:%s/v1","list":false,"models":{"echo":{"context":20000}}}},"compactor_backend":"core","compactor_model":"fake/echo"}\n' \
+            "$(cat "$dir/openai.port")" > "$conf/agent/providers.json"
     fi
     local path="$PATH"
     if [ "$fake" = 1 ]; then

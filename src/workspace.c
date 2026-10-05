@@ -568,11 +568,47 @@ static void settle_finished(int index, int hold)
     send_next(index, hold);
 }
 
+#ifndef WORKSPACE_AGENT_IDLE_S
+#define WORKSPACE_AGENT_IDLE_S 600
+#endif
+
+static void open_agents(void)
+{
+    struct agent_job *j;
+    while ((j = session_agent_take())) {
+        struct session *s = session_agent_open(j);
+        if (!s)
+            continue;
+        int at = workspace_insert(s);
+        if (at < 0) {
+            session_agent_fail(s, "no free tab for the subagent");
+            session_free(s);
+            continue;
+        }
+        session_set_unseen(s, 1);
+        if (!workspace_send(at, session_agent_task(s), NULL)) {
+            session_agent_fail(s, "could not start the subagent");
+            workspace_close(at);
+        }
+    }
+}
+
+static void close_idle_agents(void)
+{
+    for (int i = 0; i < ntabs; i++)
+        if (i != cur && !tabs[i].npending &&
+            session_agent_idle(tabs[i].s) >= WORKSPACE_AGENT_IDLE_S) {
+            workspace_close(i);
+            return;
+        }
+}
+
 static int pump(int hold, int screen)
 {
     int busy = 0;
 
     hold = hold || chrome_modal_active();
+    open_agents();
     for (int i = 0; i < ntabs; i++) {
         struct session *s = tabs[i].s;
         int running = session_turn_running(s);
@@ -590,6 +626,7 @@ static int pump(int hold, int screen)
         if (i != cur && session_permission_pending(s))
             session_set_unseen(s, 1);
 
+        session_agent_poll(s);
         if (running && !session_turn_running(s)) {
             tabs[i].finished = 1;
             if (i != cur)
@@ -601,6 +638,7 @@ static int pump(int hold, int screen)
     }
 
     if (screen) {
+        close_idle_agents();
         if (ntabs) {
             status_set_note(session_title(tabs[cur].s));
             status_sticky_busy(session_busy(tabs[cur].s));

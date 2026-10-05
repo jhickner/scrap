@@ -148,9 +148,9 @@ static const char SA_DELEGATE[] =
     "only its report enters the view. Do work of one or two tool calls yourself.\n\n";
 
 static const char SA_SUBAGENT[] =
-    "You are a subagent of " OC_AGENT ". The view is " OC_AGENT "'s chat; the message after it "
-    "is your task from " OC_AGENT ", not from the user. Nobody answers questions: do the task, "
-    "then reply with a report for " OC_AGENT ": what you did, what you found and what is left. "
+    "You are a subagent of " OC_AGENT ". The view is " OC_AGENT "'s chat; the first message after "
+    "it is your task from " OC_AGENT ", and later ones come from the user. Do not stop to ask: do "
+    "the task, then reply with a report for " OC_AGENT ": what you did, what you found and what is left. "
     "Your steps are not kept, so the report must hold everything that matters.\n\n";
 
 static const char SA_ROLE[] =
@@ -547,6 +547,8 @@ typedef struct {
     const _Atomic int *halt;
     long timeout;
     int sub;
+    int (*agent_host)(void *ud, Backend *child, const char *task, char **report);
+    void *agent_ud;
 } sa_agent;
 
 static void sa_warn(sa_agent *x, const char *text) {
@@ -2215,8 +2217,17 @@ static int sa_tool_agent(sa_agent *x, const cJSON *input, sa_buf *out, int *inte
     sa_agent *c = b->ctx;
     c->sub = 1;
     c->mem = x->mem;
-    c->halt = x->halt;
+    oc_retain(x->mem);
     c->st.abort = x->st.abort;
+    char *report = NULL;
+    int status = x->agent_host ? x->agent_host(x->agent_ud, b, task, &report) : BACKEND_AGENT_DECLINED;
+    if (status != BACKEND_AGENT_DECLINED) {
+        if (status == BACKEND_AGENT_INTERRUPTED) *interrupted = 1;
+        if (report && *report) sa_puts(out, report);
+        else sa_puts(out, status == BACKEND_AGENT_INTERRUPTED ? "subagent interrupted" : "subagent failed: no report");
+        free(report);
+        return status != BACKEND_AGENT_DONE;
+    }
     backend_result res;
     char *reply = sa_ask_ex(b, task, &res);
     int failed = !reply || res.is_error || res.interrupted;
@@ -2621,6 +2632,13 @@ static void sa_set_event_cb(Backend *b, void (*cb)(void *ud, const backend_event
 
 static void sa_set_abort(Backend *b, int (*cb)(void)) { ((sa_agent *)b->ctx)->st.abort = cb; }
 
+static void sa_set_agent_host(Backend *b, int (*host)(void *ud, Backend *child, const char *task, char **report),
+                              void *ud) {
+    sa_agent *x = b->ctx;
+    x->agent_host = host;
+    x->agent_ud = ud;
+}
+
 static char *sa_memory_view(Backend *b) {
     sa_agent *x = b->ctx;
     return x->mem ? oc_render(x->mem, 0) : NULL;
@@ -2656,7 +2674,8 @@ static void sa_close(Backend *b) {
     sa_agent *x = b->ctx;
     x->halting = 1;
     oc_compactor_stop(x->compactor);
-    if (!x->sub) oc_close(x->mem);
+    if (x->sub) oc_release(x->mem);
+    else oc_close(x->mem);
     sa_close_file(x);
     cJSON_Delete(x->msgs);
     cJSON_Delete(x->config);
@@ -2689,6 +2708,7 @@ Backend *core_agent_open(const backend_opts *o) {
     b->set_permission = backend_set_permission_none;
     b->set_event_cb = sa_set_event_cb;
     b->set_abort_check = sa_set_abort;
+    b->set_agent_host = sa_set_agent_host;
     b->session_id = sa_session_id;
     b->memory_view = sa_memory_view;
     b->model = sa_model;

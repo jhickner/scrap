@@ -33,6 +33,10 @@ tools/rig/scraprig stop $n
   `pvsay` on its PATH is `tools/rig/fake-pvsay`: it appends its argv and stdin
   to `/tmp/scraprig/<name>/pvsay.log` and sleeps 30s, so `/voice on` speaks
   nothing aloud.
+- `--openai` runs `tools/rig/fake-openai`, a chat-completions server for the
+  core backend, and points `agent/providers.json` at it as `fake/echo`. It
+  echoes each prompt; `run: CMD` becomes a bash call and `spawn: TASK` an
+  agent call. Start scrap with `-- -b core -m fake/echo`.
 - `--share dir` gives instances started with the same dir one set of live
   sessions, dispatch requests, and session names, so they can reach each
   other with `scrap send`.

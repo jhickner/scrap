@@ -138,6 +138,9 @@ struct session {
     int             start_ok;
     volatile int    finished;
     volatile int    abort_request;
+    struct agent_job *job;
+    int             subagent;
+    double          idle_at;
     char           *perm_question;
     volatile int    perm_state;
     int             perm_allow;
@@ -930,6 +933,7 @@ void session_free(struct session *s)
         s->running = 0;
         free(s->reply);
     }
+    session_agent_fail(s, "the subagent's tab was closed");
     queue_drop(s);
     pthread_mutex_destroy(&s->lock);
     for (int i = 0; i < 2; i++)
@@ -1067,6 +1071,186 @@ const backend_result *session_last_result(const struct session *s)
     return &s->last_result;
 }
 
+struct agent_job {
+    struct agent_job *next;
+    Backend          *child;
+    char             *task, *cwd, *model, *effort;
+    char             *report;
+    int               status, taken, abandoned, refs;
+};
+
+#define AGENT_PENDING (-2)
+
+static pthread_mutex_t   job_mu   = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t    job_cond = PTHREAD_COND_INITIALIZER;
+static struct agent_job *jobs;
+
+static void job_unref(struct agent_job *j)
+{
+    if (--j->refs)
+        return;
+    free(j->task);
+    free(j->cwd);
+    free(j->model);
+    free(j->effort);
+    free(j->report);
+    free(j);
+}
+
+static void job_unlink(struct agent_job *j)
+{
+    for (struct agent_job **p = &jobs; *p; p = &(*p)->next)
+        if (*p == j) {
+            *p = j->next;
+            return;
+        }
+}
+
+static void wake_write(struct session *s);
+static void claim_name(struct session *s);
+
+static int host_agent(void *ud, Backend *child, const char *task, char **report)
+{
+    struct session   *s = ud;
+    struct agent_job *j = calloc(1, sizeof *j);
+    if (!j)
+        return BACKEND_AGENT_DECLINED;
+    j->child  = child;
+    j->task   = strdup(task);
+    j->cwd    = s->cwd ? strdup(s->cwd) : NULL;
+    j->model  = s->model ? strdup(s->model) : NULL;
+    j->effort = s->effort ? strdup(s->effort) : NULL;
+    j->status = AGENT_PENDING;
+    j->refs   = 2;
+
+    pthread_mutex_lock(&job_mu);
+    j->next = jobs;
+    jobs    = j;
+    pthread_mutex_unlock(&job_mu);
+    wake_write(s);
+
+    pthread_mutex_lock(&job_mu);
+    while (j->status == AGENT_PENDING && !s->abort_request) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 100 * 1000000L;
+        if (ts.tv_nsec >= 1000000000L) {
+            ts.tv_sec++;
+            ts.tv_nsec -= 1000000000L;
+        }
+        pthread_cond_timedwait(&job_cond, &job_mu, &ts);
+    }
+    int status = j->status;
+    Backend *orphan = NULL;
+    if (status == AGENT_PENDING) {
+        status       = BACKEND_AGENT_INTERRUPTED;
+        j->abandoned = 1;
+        if (!j->taken) {
+            job_unlink(j);
+            orphan = child;
+            j->refs--;
+        }
+    }
+    *report   = j->report;
+    j->report = NULL;
+    job_unref(j);
+    pthread_mutex_unlock(&job_mu);
+    if (orphan)
+        orphan->close(orphan);
+    return status;
+}
+
+struct agent_job *session_agent_take(void)
+{
+    pthread_mutex_lock(&job_mu);
+    struct agent_job *j = jobs;
+    if (j) {
+        jobs     = j->next;
+        j->taken = 1;
+    }
+    pthread_mutex_unlock(&job_mu);
+    return j;
+}
+
+static void job_finish(struct agent_job *j, int status, const char *report)
+{
+    pthread_mutex_lock(&job_mu);
+    if (j->status == AGENT_PENDING && !j->abandoned) {
+        j->status = status;
+        j->report = report ? strdup(report) : NULL;
+    }
+    job_unref(j);
+    pthread_cond_broadcast(&job_cond);
+    pthread_mutex_unlock(&job_mu);
+}
+
+struct session *session_agent_open(struct agent_job *j)
+{
+    struct session *s = session_new("core", j->cwd, j->model, j->effort);
+    if (!s) {
+        j->child->close(j->child);
+        job_finish(j, BACKEND_AGENT_FAILED, "could not open a tab for the subagent");
+        return NULL;
+    }
+    s->agent       = j->child;
+    s->job         = j;
+    s->subagent    = 1;
+    s->skip_naming = 1;
+    s->agent->set_event_cb(s->agent, on_event, s);
+    s->agent->set_abort_check(s->agent, abort_check);
+    claim_name(s);
+    snprintf(s->title, sizeof s->title, "agent: %.100s", j->task);
+    for (char *c = s->title; *c; c++)
+        if (*c == '\n' || *c == '\t')
+            *c = ' ';
+    publish(s, "finished");
+    return s;
+}
+
+const char *session_agent_task(const struct session *s)
+{
+    return s && s->job ? s->job->task : NULL;
+}
+
+void session_agent_fail(struct session *s, const char *why)
+{
+    if (!s || !s->job)
+        return;
+    job_finish(s->job, BACKEND_AGENT_FAILED, why);
+    s->job = NULL;
+}
+
+void session_agent_poll(struct session *s)
+{
+    if (!s || !s->subagent)
+        return;
+    if (s->running) {
+        s->idle_at = 0;
+        int abandoned;
+        pthread_mutex_lock(&job_mu);
+        abandoned = s->job && s->job->abandoned;
+        pthread_mutex_unlock(&job_mu);
+        if (abandoned && !s->abort_request)
+            session_interrupt(s);
+        return;
+    }
+    if (s->job) {
+        const backend_result *m = &s->last_result;
+        int status = m->interrupted ? BACKEND_AGENT_INTERRUPTED
+                     : m->is_error || !s->last_reply ? BACKEND_AGENT_FAILED
+                                                     : BACKEND_AGENT_DONE;
+        job_finish(s->job, status, s->last_reply);
+        s->job = NULL;
+    }
+    if (!s->idle_at)
+        s->idle_at = now_seconds();
+}
+
+double session_agent_idle(const struct session *s)
+{
+    return s && s->subagent && !s->running && s->idle_at ? now_seconds() - s->idle_at : -1;
+}
+
 static Backend *agent(struct session *s)
 {
     if (s->agent)
@@ -1095,6 +1279,8 @@ static Backend *agent(struct session *s)
         s->agent->set_abort_check(s->agent, abort_check);
         if (s->agent->set_permission_cb)
             s->agent->set_permission_cb(s->agent, on_permission, s);
+        if (s->agent->set_agent_host)
+            s->agent->set_agent_host(s->agent, host_agent, s);
     }
     return s->agent;
 }

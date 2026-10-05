@@ -126,6 +126,14 @@ int session_can_set_effort(const struct session *s);
 int session_set_permission(struct session *s, const char *mode);
 int session_memory(const struct session *s);
 int session_set_memory(struct session *s, int on);
+
+struct agent_job;
+struct agent_job *session_agent_take(void);
+struct session   *session_agent_open(struct agent_job *j);
+const char       *session_agent_task(const struct session *s);
+void              session_agent_fail(struct session *s, const char *why);
+void              session_agent_poll(struct session *s);
+double            session_agent_idle(const struct session *s);
 char *session_memory_view(struct session *s);
 const char *session_permission(const struct session *s);
 

@@ -104,6 +104,12 @@ const char *session_permission_name(int index) { (void)index; return "bypass"; }
 int session_permission_default(void) { return 0; }
 int session_unseen(const struct session *s) { (void)s; return 0; }
 void session_set_unseen(struct session *s, int on) { (void)s; (void)on; }
+struct agent_job *session_agent_take(void) { return NULL; }
+struct session *session_agent_open(struct agent_job *j) { (void)j; return NULL; }
+const char *session_agent_task(const struct session *s) { (void)s; return NULL; }
+void session_agent_fail(struct session *s, const char *why) { (void)s; (void)why; }
+void session_agent_poll(struct session *s) { (void)s; }
+double session_agent_idle(const struct session *s) { (void)s; return -1; }
 void session_set_customizations(struct session *s, int on) { (void)s; (void)on; }
 void session_set_thinking(struct session *s, int on) { (void)s; (void)on; }
 void session_set_compact(struct session *s, int on) { (void)s; (void)on; }

@@ -27,6 +27,8 @@ extern const char OC_VIEW_DOC[];
 
 oc_mem     *oc_open(const char *dir, long node, long view, char *err, size_t errsz);
 void        oc_close(oc_mem *m);
+void        oc_retain(oc_mem *m);
+void        oc_release(oc_mem *m);
 long        oc_count(oc_mem *m);
 int         oc_skipped(oc_mem *m);
 long        oc_append(oc_mem *m, const char *kind, const char *text);
@@ -177,7 +179,7 @@ typedef struct { char **t; long cap, low; } oc_level;
 struct oc_mem {
     char            dir[4096];
     long            node, view;
-    int             lock, skipped;
+    int             lock, skipped, refs, compactors;
     oc_msg         *msgs;
     long            n, cap;
     oc_level        lev[OC_LEVELS];
@@ -440,7 +442,7 @@ static void oc_deadline(struct timespec *ts, long ms) {
 int oc_settle(oc_mem *m, int (*abort)(void *ud), void *ud) {
     pthread_mutex_lock(&m->mu);
     int ok = 1;
-    while (oc_first(m) != m->n) {
+    while (oc_first(m) != m->n && m->compactors) {
         if (abort && abort(ud)) { ok = 0; break; }
         struct timespec ts;
         oc_deadline(&ts, 50);
@@ -614,6 +616,7 @@ oc_mem *oc_open(const char *dir, long node, long view, char *err, size_t errsz) 
     m->node = node > 0 ? node : OC_NODE;
     m->view = view > 0 ? view : OC_VIEW;
     m->lock = -1;
+    m->refs = 1;
     pthread_mutex_init(&m->mu, NULL);
     pthread_cond_init(&m->cond, NULL);
     char path[4200];
@@ -649,9 +652,27 @@ oc_mem *oc_open(const char *dir, long node, long view, char *err, size_t errsz) 
     return m;
 }
 
+void oc_retain(oc_mem *m) {
+    pthread_mutex_lock(&m->mu);
+    m->refs++;
+    pthread_mutex_unlock(&m->mu);
+}
+
 void oc_close(oc_mem *m) {
     if (!m) return;
+    pthread_mutex_lock(&m->mu);
     if (m->lock >= 0) close(m->lock);
+    m->lock = -1;
+    pthread_mutex_unlock(&m->mu);
+    oc_release(m);
+}
+
+void oc_release(oc_mem *m) {
+    if (!m) return;
+    pthread_mutex_lock(&m->mu);
+    int last = --m->refs == 0;
+    pthread_mutex_unlock(&m->mu);
+    if (!last) return;
     for (long i = 0; i < m->n; i++) {
         free(m->msgs[i].kind);
         free(m->msgs[i].text);
@@ -870,6 +891,9 @@ oc_compactor *oc_compactor_start(oc_mem *m, int jobs, Backend *(*open)(void *ud,
         oc_compactor_stop(c);
         return NULL;
     }
+    pthread_mutex_lock(&m->mu);
+    m->compactors++;
+    pthread_mutex_unlock(&m->mu);
     return c;
 }
 
@@ -877,6 +901,7 @@ void oc_compactor_stop(oc_compactor *c) {
     if (!c) return;
     pthread_mutex_lock(&c->m->mu);
     c->stop = 1;
+    if (c->jobs) c->m->compactors--;
     pthread_cond_broadcast(&c->m->cond);
     pthread_mutex_unlock(&c->m->mu);
     for (int k = 0; k < c->jobs; k++) pthread_join(c->threads[k], NULL);
