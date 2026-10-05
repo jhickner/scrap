@@ -10,6 +10,7 @@
 
 #include "app.h"
 #include "hud.h"
+#include "relay.h"
 #include "session.h"
 #include "sessionfork.h"
 #include "tabs.h"
@@ -183,7 +184,7 @@ int restart_exec(struct session *s)
     wanted = 0;
     pool_used = 0;
 
-    char *argv[28];
+    char *argv[30];
     int   n = 0;
     argv[n++] = (char *)sessionfork_program();
     n += session_argv(s, argv + n, SESSION_ARGV_MAX,
@@ -208,6 +209,17 @@ int restart_exec(struct session *s)
     }
 
     hud_restarted();
+
+    struct session *served = relay_session();
+    const char     *rid = served ? session_id(served) : NULL;
+    if (rid && *rid) {
+        char *arg = arg_copy(rid);
+        if (arg) {
+            argv[n++] = "--relay";
+            argv[n++] = arg;
+            argv[n] = NULL;
+        }
+    }
 
     char tabs[4096];
     if (tabs_path(tabs, sizeof tabs) && tabs_dump(s, tabs)) {

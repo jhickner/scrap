@@ -14,6 +14,8 @@ int relay_pending(void);
 
 struct session *relay_session(void);
 void relay_forget_session(struct session *s);
+void relay_resume(const char *id);
+void relay_resume_poll(void);
 
 void relay_poll(struct session *live);
 void relay_banner(struct session *s);

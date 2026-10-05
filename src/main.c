@@ -169,6 +169,7 @@ static void usage(void)
             "  --fork     with --session: branch off it instead of writing back to it\n"
             "  --restore f  take over the screen from a restarting scrap (used by /restart)\n"
             "  --tabs f   reopen the sessions a restarting scrap was holding (used by /restart)\n"
+            "  --relay id  serve that session over the relay once it is open (used by /restart)\n"
             "  --instance x  reopen the tabs saved with /save x\n"
             "  --attach machine:@name   open a live session from another window or machine\n"
             "  -h         this help\n"
@@ -223,6 +224,7 @@ static int idle_render(void *ud)
 {
     (void)ud;
     tabs_admit(0);
+    relay_resume_poll();
     sidechannel_poll();
     sidechannel_tick();
     dispatch_poll();
@@ -662,6 +664,7 @@ int main(int argc, char **argv)
         {"fork",    no_argument,       NULL, 'F'},
         {"restore", required_argument, NULL, 'R'},
         {"tabs",    required_argument, NULL, 'B'},
+        {"relay",   required_argument, NULL, 'L'},
         {"instance", required_argument, NULL, 'O'},
         {"attach",  required_argument, NULL, 'Y'},
         {"telegram", no_argument,      NULL, 'T'},
@@ -710,6 +713,7 @@ int main(int argc, char **argv)
         case 'F': fork_session = 1; break;
         case 'R': restore_arg = optarg; break;
         case 'B': tabs_arg = optarg; break;
+        case 'L': relay_resume(optarg); break;
         case 'O': instance_arg = optarg; break;
         case 'Y': attach_arg = optarg; break;
         case 'T': telegram = 1; break;

@@ -36,6 +36,7 @@
 #include "toolstyle.h"
 #include "ui.h"
 #include "viewport.h"
+#include "tabs.h"
 #include "workspace.h"
 
 #define PROTOCOL      2
@@ -160,7 +161,7 @@ static int needs_idle(const cJSON *msg)
 {
     const char *op = op_of(msg);
     return !strcmp(op, "send") || !strcmp(op, "answer") || !strcmp(op, "open") ||
-           !strcmp(op, "new");
+           !strcmp(op, "new") || !strcmp(op, "close");
 }
 
 static int inbox_push(int client, cJSON *msg)
@@ -716,7 +717,7 @@ static void on_event(void *ud, struct session *s, const backend_event *ev)
             entry_add(assistant_entry(ev->text));
         break;
     case BACKEND_EV_THINKING:
-        if (ev->text && *ev->text)
+        if (session_thinking(s) && ev->text && *ev->text)
             entry_add(entry_new("thinking", ev->text));
         break;
     case BACKEND_EV_WARNING:
@@ -980,6 +981,27 @@ static cJSON *do_sessions(const char *req)
     return o;
 }
 
+/* Close a tab of this window. Closing the served tab moves the relay to a neighbour first,
+ * since a closed relay session stops the relay. */
+static cJSON *do_close(const char *req, const cJSON *msg)
+{
+    const cJSON *tab = cJSON_GetObjectItem(msg, "tab");
+    int at = cJSON_IsNumber(tab) ? (int)tab->valuedouble : -1;
+    if (at < 0 || at >= workspace_count())
+        return res_error(req, "not_found", "no such tab");
+    if (workspace_count() == 1)
+        return res_error(req, "refused", "that is the only tab; /quit at the terminal");
+    struct session *s = workspace_at(at);
+    if (s == relay_session())
+        relay_start(workspace_at(at ? at - 1 : 1));
+    if (session_turn_running(s))
+        session_interrupt(s);
+    workspace_close(at);
+    cJSON *o = res_ok(req);
+    cJSON_AddNumberToObject(o, "binding", rt.binding);
+    return o;
+}
+
 /* Bring a /sessions row into this window, as the picker does, and serve it. */
 static cJSON *do_open(const char *req, const cJSON *msg)
 {
@@ -1129,6 +1151,8 @@ static void run_request(int client, const cJSON *msg)
         res = do_open(req, msg);
     else if (!strcmp(op, "new"))
         res = do_new(req);
+    else if (!strcmp(op, "close"))
+        res = do_close(req, msg);
     else if (!strcmp(op, "highlight"))
         res = do_highlight(req, msg);
     else
@@ -1161,7 +1185,6 @@ void relay_poll(struct session *live)
 {
     if (!rt.active)
         return;
-    struct session *s = relay_session();
     if (!rt.draining) {
         rt.draining = 1;
         wake_drain();
@@ -1172,6 +1195,10 @@ void relay_poll(struct session *live)
         }
         rt.draining = 0;
     }
+    /* Requests can close or move the served session, so read it after them. */
+    struct session *s = relay_session();
+    if (!rt.active || !s)
+        return;
     if (!live)
         check_reset(s);
     mirror_prompt(s);
@@ -1527,4 +1554,26 @@ void relay_forget_session(struct session *s)
 {
     if (s && s == rt.s)
         relay_stop();
+}
+
+/* After a restart, serve the session the relay served once its tab is back. */
+static char resume_id[128];
+
+void relay_resume(const char *id)
+{
+    snprintf(resume_id, sizeof resume_id, "%s", id ? id : "");
+}
+
+void relay_resume_poll(void)
+{
+    if (!resume_id[0])
+        return;
+    int at = workspace_find_id(resume_id);
+    if (at >= 0) {
+        resume_id[0] = '\0';
+        if (relay_start(workspace_at(at)))
+            workspace_republish();
+    } else if (!tabs_pending()) {
+        resume_id[0] = '\0';
+    }
 }
