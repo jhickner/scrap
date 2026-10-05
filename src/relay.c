@@ -39,10 +39,10 @@
 #define INBOX_MAX 32
 #define MENU_MAX  16
 #define PORT_DEFAULT 8790
-#define HISTORY_TURNS 6
 #define HISTORY_BYTES 6000
+#define HISTORY_BATCH 4000
 
-enum { ITEM_LINE, ITEM_PICK, ITEM_HELLO, ITEM_STOP };
+enum { ITEM_LINE, ITEM_PICK, ITEM_HELLO, ITEM_STOP, ITEM_MORE };
 
 struct inbox_item {
     char *text;
@@ -136,7 +136,7 @@ static int inbox_take(struct inbox_item *out, int all)
     pthread_mutex_lock(&rt.inbox_lock);
     struct inbox_item *it = &rt.inbox[rt.inbox_head];
     int ok = rt.inbox_count > 0 &&
-             (all || it->kind == ITEM_HELLO || it->kind == ITEM_STOP);
+             (all || it->kind == ITEM_HELLO || it->kind == ITEM_STOP || it->kind == ITEM_MORE);
     if (ok) {
         *out = *it;
         rt.inbox_head = (rt.inbox_head + 1) % INBOX_MAX;
@@ -307,13 +307,27 @@ static void send_images(const char *text)
     cJSON_Delete(list);
 }
 
-static void send_history(struct session *s)
+static size_t turn_bytes(const struct transcript_turn *t)
+{
+    size_t u = t->user ? strlen(t->user) : 0, a = t->assistant ? strlen(t->assistant) : 0;
+    return (u < HISTORY_BYTES ? u : HISTORY_BYTES) + (a < HISTORY_BYTES ? a : HISTORY_BYTES);
+}
+
+static void send_history(struct session *s, long before)
 {
     const struct transcript *t = session_transcript(s);
+    size_t end = t ? t->count : 0;
+    if (before >= 0 && (size_t)before < end)
+        end = (size_t)before;
+    size_t from = end, bytes = 0;
+    while (from > 0 && (from == end || bytes + turn_bytes(&t->turns[from - 1]) <= HISTORY_BATCH))
+        bytes += turn_bytes(&t->turns[--from]);
     cJSON *o = frame("history");
+    cJSON_AddStringToObject(o, "id", session_id(s) ? session_id(s) : "");
+    cJSON_AddNumberToObject(o, "start", (double)from);
+    cJSON_AddBoolToObject(o, "older", before >= 0);
     cJSON *turns = cJSON_AddArrayToObject(o, "turns");
-    size_t from = t && t->count > HISTORY_TURNS ? t->count - HISTORY_TURNS : 0;
-    for (size_t i = from; t && i < t->count; i++) {
+    for (size_t i = from; i < end; i++) {
         cJSON *it = cJSON_CreateObject();
         add_clipped(it, "user", t->turns[i].user, HISTORY_BYTES);
         add_clipped(it, "assistant", t->turns[i].assistant, HISTORY_BYTES);
@@ -414,8 +428,9 @@ static void send_view(void)
 {
     struct session *s = relay_session();
     if (s)
-        send_history(s);
+        send_history(s, -1);
     send_tabs(1);
+    rt.mirrored_turn = 0;
     rt.busy_sent = -1;
     send_busy(session_busy(s));
 }
@@ -743,6 +758,14 @@ static void run_line(const struct inbox_item *it)
     workspace_render(workspace_index_of(s), submit, it->text);
 }
 
+static void send_older(const struct inbox_item *it)
+{
+    struct session *s = relay_session();
+    const char     *id = s ? session_id(s) : NULL;
+    if (id && !strcmp(id, it->tab_id))
+        send_history(s, it->tab);
+}
+
 static void run_item(const struct inbox_item *it)
 {
     switch (it->kind) {
@@ -751,6 +774,9 @@ static void run_item(const struct inbox_item *it)
         return;
     case ITEM_STOP:
         stop_turn();
+        return;
+    case ITEM_MORE:
+        send_older(it);
         return;
     case ITEM_PICK:
         run_pick(it->text);
@@ -802,6 +828,8 @@ static void on_text(void *ud, const char *text, size_t n)
         inbox_push(strdup(payload), ITEM_PICK, NULL, 0);
     else if (!strcmp(t, "stop"))
         inbox_push(strdup(""), ITEM_STOP, NULL, 0);
+    else if (!strcmp(t, "more"))
+        inbox_push(strdup(""), ITEM_MORE, tab_id, (int)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "before")));
     else if (!strcmp(t, "hello"))
         inbox_push(strdup(""), ITEM_HELLO, NULL, 0);
     cJSON_Delete(o);

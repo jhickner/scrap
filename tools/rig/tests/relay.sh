@@ -15,4 +15,6 @@ $R relay $a '[
   {"t": "pick", "payload": "#0"}, {"wait": "\"index\":1,[^}]*\"current\":true", "secs": 0.5},
   {"t": "line", "text": "while two runs", "tab": 1}, {"wait": "echo: while two runs", "secs": 2}
 ]' >/dev/null
+$R say $a 'run: sleep 3; echo late'
+$R relay $a '[{"wait": "\"t\":\"user\",\"text\":\"run: sleep 3; echo late\"", "secs": 2}]' >/dev/null
 echo "relay: ok"
