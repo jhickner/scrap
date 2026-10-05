@@ -468,6 +468,28 @@ static cJSON *live_obj(struct session *s)
     int tab = workspace_index_of(s);
     for (int i = 0; i < workspace_queued(tab); i++)
         cJSON_AddItemToArray(q, cJSON_CreateString(workspace_pending_at(tab, i)));
+    /* The window's tabs, as the terminal's tab box shows them. */
+    cJSON *tabs = cJSON_AddArrayToObject(o, "tabs");
+    for (int i = 0; i < workspace_count(); i++) {
+        const struct session *t = workspace_at(i);
+        char at[256];
+        const char *name = at;
+        if (session_remote(t) || session_name(t)[0])
+            session_address(t, at, sizeof at);
+        else
+            name = session_title(t) ? session_title(t) : "";
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "name", name);
+        cJSON_AddStringToObject(e, "status", workspace_status(t));
+        if (session_unseen(t))
+            cJSON_AddBoolToObject(e, "unseen", 1);
+        int ctx = session_context_percent(t);
+        if (ctx > 0)
+            cJSON_AddNumberToObject(e, "context", ctx);
+        if (t == s)
+            cJSON_AddBoolToObject(e, "here", 1);
+        cJSON_AddItemToArray(tabs, e);
+    }
     return o;
 }
 
