@@ -294,7 +294,12 @@ static void side_tick(void *ud)
 static int idle_poll(void *ud)   { (void)ud; return 1; }
 static void replay(void *ud)      { (void)ud; session_replay(workspace_current()); }
 static void load_earlier(void)    { sessionload_earlier(workspace_current()); }
-static void blank_line(void *ud)  { (void)ud; hud_print(workspace_current()); }
+static void blank_line(void *ud)
+{
+    (void)ud;
+    hud_print(workspace_current());
+    relay_banner(workspace_current());
+}
 static int clicked(void *ud, int row, int col)
 {
     int tab = tabbar_hit(row, col);

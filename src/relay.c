@@ -23,6 +23,7 @@
 #include "chrome.h"
 #include "cmd.h"
 #include "frontend.h"
+#include "highlight.h"
 #include "hud.h"
 #include "prompt.h"
 #include "session.h"
@@ -158,7 +159,8 @@ static const char *op_of(const cJSON *msg)
 static int needs_idle(const cJSON *msg)
 {
     const char *op = op_of(msg);
-    return !strcmp(op, "send") || !strcmp(op, "answer") || !strcmp(op, "open");
+    return !strcmp(op, "send") || !strcmp(op, "answer") || !strcmp(op, "open") ||
+           !strcmp(op, "new");
 }
 
 static int inbox_push(int client, cJSON *msg)
@@ -587,6 +589,28 @@ static const char *short_path(const char *p)
     return p;
 }
 
+/* Highlighter roles as [[text, role], ...]; role is null where the default applies. */
+static cJSON *runs_of(const char *text, size_t len, const unsigned char *roles)
+{
+    cJSON *runs = cJSON_CreateArray();
+    for (size_t i = 0; i < len;) {
+        size_t j = i;
+        while (j < len && roles[j] == roles[i])
+            j++;
+        char *piece = strndup(text + i, j - i);
+        const char *key = roles[i] == UI_RESET ? NULL
+                        : ui_role_key((enum ui_role)roles[i], &(unsigned){0}, &(unsigned){0},
+                                      &(const char *){NULL});
+        cJSON *run = cJSON_CreateArray();
+        cJSON_AddItemToArray(run, cJSON_CreateString(piece ? piece : ""));
+        cJSON_AddItemToArray(run, key ? cJSON_CreateString(key) : cJSON_CreateNull());
+        cJSON_AddItemToArray(runs, run);
+        free(piece);
+        i = j;
+    }
+    return runs;
+}
+
 static void tool_entry(const backend_event *ev)
 {
     char label[48], arg[600];
@@ -601,6 +625,13 @@ static void tool_entry(const backend_event *ev)
     cJSON *e = entry_new("tool", NULL);
     cJSON_AddStringToObject(e, "name", label);
     cJSON_AddStringToObject(e, "arg", arg);
+    size_t len = strlen(arg);
+    unsigned char *roles = toolstyle_is_shell(label) && len ? malloc(len) : NULL;
+    if (roles) {
+        highlight_shell(arg, len, roles);
+        cJSON_AddItemToObject(e, "runs", runs_of(arg, len, roles));
+        free(roles);
+    }
     if (ev->input_json) {
         int cut = 0;
         cJSON_AddItemToObject(e, "input", clipped_string(ev->input_json, RESULT_CLIP, &cut));
@@ -821,11 +852,31 @@ static void submit(struct session *s, void *ud)
     free(shown);
 }
 
+void relay_banner(struct session *s)
+{
+    if (!rt.active || !s || s != relay_session())
+        return;
+    cJSON *e = entry_new("hud", NULL);
+    cJSON_AddItemToObject(e, "hud", hud_rows(s));
+    entry_add(e);
+}
+
+static void blank(struct session *s, void *ud)
+{
+    (void)ud;
+    hud_print(s);
+}
+
 static cJSON *run_line(const char *req, const char *text)
 {
     struct session *s = relay_session();
-    if (!text || !*text)
-        return res_error(req, "invalid", "empty line");
+    if (!text)
+        return res_error(req, "invalid", "no text");
+    if (!*text) {
+        workspace_render(workspace_index_of(s), blank, NULL);
+        relay_banner(s);
+        return res_ok(req);
+    }
     if (bash_is_command(text))
         return res_error(req, "shell", "shell lines run at the terminal only");
     struct submit_ctx c = {req, text, NULL};
@@ -921,6 +972,36 @@ static cJSON *do_open(const char *req, const cJSON *msg)
     relay_start(s);
     cJSON *o = res_ok(req);
     cJSON_AddNumberToObject(o, "binding", rt.binding);
+    return o;
+}
+
+/* A new tab like the relay's session, served in its place. */
+static cJSON *do_new(const char *req)
+{
+    struct session *cur = relay_session();
+    if (!cur)
+        return res_error(req, "not_found", "no session");
+    int at = workspace_spawn(session_backend(cur), session_model_label(cur), session_effort(cur),
+                             session_cwd(cur), NULL);
+    if (at < 0)
+        return res_error(req, "failed", "could not start a session");
+    relay_start(workspace_at(at));
+    cJSON *o = res_ok(req);
+    cJSON_AddNumberToObject(o, "binding", rt.binding);
+    return o;
+}
+
+/* Code block highlighting as md.c does it; no runs for an unknown language. */
+static cJSON *do_highlight(const char *req, const cJSON *msg)
+{
+    const char *lang = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "lang"));
+    const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "text"));
+    cJSON *o = res_ok(req);
+    size_t len = text ? strlen(text) : 0;
+    unsigned char *roles = lang && len ? malloc(len) : NULL;
+    if (roles && highlight_code(lang, text, len, roles))
+        cJSON_AddItemToObject(o, "runs", runs_of(text, len, roles));
+    free(roles);
     return o;
 }
 
@@ -1024,6 +1105,10 @@ static void run_request(int client, const cJSON *msg)
         res = do_sessions(req);
     else if (!strcmp(op, "open"))
         res = do_open(req, msg);
+    else if (!strcmp(op, "new"))
+        res = do_new(req);
+    else if (!strcmp(op, "highlight"))
+        res = do_highlight(req, msg);
     else
         res = res_error(req, "invalid", "unknown op");
 

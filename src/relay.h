@@ -16,6 +16,7 @@ struct session *relay_session(void);
 void relay_forget_session(struct session *s);
 
 void relay_poll(struct session *live);
+void relay_banner(struct session *s);
 void relay_turn_done(struct session *s);
 void relay_btw(const struct session *owner, const char *question,
                const char *answer, int failed);

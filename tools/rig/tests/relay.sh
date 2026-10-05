@@ -40,14 +40,21 @@ $R idle $a
 # tool call with its result patched in; file request
 $R relay $a '[
   {"t": "req", "op": "send", "text": "tool: echo hi"},
-  {"wait": "\"kind\":\"tool\".*\"name\":\"bash\""},
+  {"wait": "\"kind\":\"tool\".*\"name\":\"bash\".*\"runs\":\\[\\[\"echo\",\"syntax_command\"\\]"},
   {"wait": "\\[\"set\",[0-9]+,\\{\"done\":true,\"result\":\"hi\"\\}\\]"},
   {"wait": "tool done"},
   {"check": true},
   {"t": "req", "op": "file", "path": "'"$f"'", "id": "f1"},
   {"wait": "\"id\":\"f1\",\"ok\":true.*\"data\":\"aGVsbG8gZmlsZQ==\""},
   {"t": "req", "op": "file", "path": "/nonexistent", "id": "f2"},
-  {"wait": "\"id\":\"f2\",\"ok\":false,\"code\":\"not_found\""}
+  {"wait": "\"id\":\"f2\",\"ok\":false,\"code\":\"not_found\""},
+  {"t": "req", "op": "send", "text": "", "id": "b1"},
+  {"wait": "\"kind\":\"hud\".*\"hud\":\\[\\[\\{\"text\":\"▌ \""},
+  {"wait": "\"id\":\"b1\",\"ok\":true"},
+  {"t": "req", "op": "highlight", "lang": "py", "text": "def f(): pass", "id": "h1"},
+  {"wait": "\"id\":\"h1\",\"ok\":true,\"runs\":\\[\\[\"def\",\"syntax_keyword\"\\]"},
+  {"t": "req", "op": "highlight", "lang": "nope", "text": "x", "id": "h2"},
+  {"wait": "\"id\":\"h2\",\"ok\":true}"}
 ]' >/dev/null
 $R idle $a
 
@@ -116,8 +123,14 @@ $R relay $a '[
   {"wait": "\"t\":\"view\".*\"binding\":2.*echo: second tab"},
   {"wait": "\"id\":\"o\",\"ok\":true,\"binding\":2"},
   {"t": "req", "op": "open", "target": "@nobody", "id": "o2"},
-  {"wait": "\"id\":\"o2\",\"ok\":false,\"code\":\"not_found\""}
+  {"wait": "\"id\":\"o2\",\"ok\":false,\"code\":\"not_found\""},
+  {"t": "req", "op": "new", "id": "n"},
+  {"wait": "\"id\":\"n\",\"ok\":true,\"binding\"", "secs": 15},
+  {"t": "req", "op": "open", "tab": 1, "id": "o3"},
+  {"wait": "\"id\":\"o3\",\"ok\":true,\"binding\"", "secs": 15}
 ]' >/dev/null
+$R send $a C-d
+sleep 1
 
 $R send $a C-d
 $R wait $a 'echo: second tab' >/dev/null && sleep 1
