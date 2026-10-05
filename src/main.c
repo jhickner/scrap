@@ -411,16 +411,21 @@ static void drop_asked(void)
 
 static int ask_ready(void)
 {
-    if (!asked)
-        return 0;
     struct session *s = workspace_current();
-    if (s != asked_by)
+    if (!session_ask_open(s))
         return 0;
     if (session_turn_running(s) || workspace_queued(workspace_index())) {
-        drop_asked();
+        session_set_ask_open(s, 0);
         return 0;
     }
-    return 1;
+    if (s != asked_by) {
+        drop_asked();
+        asked = askblock_parse(session_last_block(s));
+        asked_by = asked ? s : NULL;
+        if (!asked)
+            session_set_ask_open(s, 0);
+    }
+    return asked != NULL;
 }
 
 static int ask_interrupted(void)
@@ -442,6 +447,7 @@ static void ask_run_form(void)
         workspace_cycle(how == ASKFORM_NEXT_TAB ? 1 : -1);
         return;
     }
+    session_set_ask_open(asked_by, 0);
     drop_asked();
     if (answer && *answer) {
         prompt_echo_message(answer);
@@ -568,13 +574,9 @@ static char *serve_extra(const cJSON *o, int fd, int *kept)
 
 static void turn_done(struct session *s)
 {
-    if (s == workspace_current()) {
+    if (s == asked_by)
         drop_asked();
-        if (!session_last_result(s)->interrupted) {
-            asked = askblock_parse(session_last_block(s));
-            asked_by = asked ? s : NULL;
-        }
-    }
+    session_set_ask_open(s, !session_last_result(s)->interrupted);
     api_turn_done(s);
     relay_turn_done(s);
     stream_turn_done(s);
@@ -590,6 +592,7 @@ static void turn_begin(struct session *s)
     voice_turn_begin(s);
     if (s == asked_by)
         drop_asked();
+    session_set_ask_open(s, 0);
     bash_drop_held();
     prompt_drop_held();
 }

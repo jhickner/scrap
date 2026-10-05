@@ -122,6 +122,7 @@ struct session {
     volatile double heard_at;
     volatile int    tool_open;
     int      interrupted;
+    int      ask_open;
     int      unseen;
     char     tail_bot[128];
     struct grokbottail_mark tail_mark;
@@ -2730,6 +2731,8 @@ const char *session_last_error(const struct session *s)
 }
 const char *session_last_reply(const struct session *s) { return s->last_reply; }
 const char *session_last_block(const struct session *s) { return s->last_block; }
+int session_ask_open(const struct session *s) { return s && s->ask_open; }
+void session_set_ask_open(struct session *s, int on) { if (s) s->ask_open = on; }
 const char *session_prompt(const struct session *s) { return s ? s->prompt : NULL; }
 double session_turn_started(const struct session *s) { return s ? s->started : 0; }
 const char *session_failed_prompt(const struct session *s)
