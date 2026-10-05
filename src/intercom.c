@@ -240,6 +240,8 @@ char *intercom_note(const char *name)
         "means this directory; QUERY also searches transcript text.\n"
         "- `scrap read TARGET [-n TURNS] [--bytes N]` prints a session's recent turns.\n"
         "- `scrap send TARGET TEXT` sends a message to a live session.\n"
+        "- `scrap send @%s /COMMAND` runs a scrap command such as /clear on this session "
+        "once the current turn ends; only this session can do this to itself.\n"
         "- `scrap open TARGET` resumes a past session in a new tab.\n"
         "- `scrap yank TARGET...` moves live sessions from other windows into this window as tabs.\n"
         "- `scrap attach --tab machine:@name` opens a session on another machine as a tab "
@@ -253,7 +255,7 @@ char *intercom_note(const char *name)
         "To coordinate with a live session: `scrap ls --live --cwd .`, then `scrap read "
         "@name`, then `scrap send @name ...`. To recover old context: `scrap ls QUERY`, then "
         "`scrap read TARGET`.",
-        name);
+        name, name);
 }
 
 int intercom_complete(void *ctx, const char *token, ReplCandidate *out, int max)
@@ -827,6 +829,19 @@ static void self_name(char *out, size_t size)
     free(id);
 }
 
+/* A local sender's session id, so a session sending to itself can run commands. */
+static void add_self_id(cJSON *o)
+{
+    const char *file = getenv("MUX_SESSION_FILE");
+    char       *id = file && *file ? text_slurp(file, 4096, NULL) : NULL;
+    if (id) {
+        text_chomp(id);
+        if (*id)
+            cJSON_AddStringToObject(o, "from_id", id);
+    }
+    free(id);
+}
+
 static char *spill(const char *text)
 {
     char dir[4200], path[4400];
@@ -867,6 +882,8 @@ int intercom_deliver(const char *host, const char *from, const char *target, con
             cJSON_AddStringToObject(o, "from", from);
         if (host && *host)
             cJSON_AddStringToObject(o, "host", host);
+        else
+            add_self_id(o);
         if (request(e->pid, o, reply, sizeof reply)) {
             cJSON      *r = cJSON_Parse(reply);
             const char *error = cJSON_GetStringValue(cJSON_GetObjectItem(r, "error"));
