@@ -8,7 +8,8 @@
 #define OC_JOBS 8
 #define OC_TRIES 5
 #define OC_AGENT "scrap"
-#define OC_COMPACT_MODEL "openrouter/deepseek/deepseek-v4.1-flash"
+#define OC_COMPACT_BACKEND "claude"
+#define OC_COMPACT_MODEL "claude-sonnet-5-5"
 #define OC_COMPACT_EFFORT "low"
 #ifndef OC_RETRY_MS
 #define OC_RETRY_MS 10000

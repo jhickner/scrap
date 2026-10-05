@@ -266,6 +266,7 @@ void claude_stop(claude_client *c);
 #include <pthread.h>
 #include <stdatomic.h>
 #include <sys/wait.h>
+#include <time.h>
 #include "cJSON.h"
 
 #define CLAUDE_ERR_MAX 4096
@@ -280,6 +281,9 @@ void claude_stop(claude_client *c);
  * and sends anyway. Generous, because the silence is usually the model running
  * a slow tool; the fallback is only the misalignment this already avoided. */
 #define CL_STRAY_QUIET_TICKS (60000 / CL_TICK_MS)
+
+/* How long an interrupted turn may run on before the CLI is killed. */
+#define CL_INTERRUPT_GRACE_MS 10000
 
 /* How long a task notification has to produce the turn it announces before the
  * client decides none is coming. Only the CLI's own dispatch latency, so short. */
@@ -1334,6 +1338,7 @@ static char *cl_send(claude_client *c, const char *user_text, int content_block)
      * send's answer, so the loop reads past them. */
     char *result = NULL;
     int interrupted = 0, quiet = 0;
+    struct timespec kill_at = {0};
     for (;;) {
         /* Abort mid-turn: ask the CLI to abandon the turn, then keep reading to
          * its result event so the stream stays aligned for the next send. */
@@ -1341,6 +1346,18 @@ static char *cl_send(claude_client *c, const char *user_text, int content_block)
             interrupted = 1;
             claude_interrupt(c);
             if (c->meta) c->meta->interrupted = 1;
+            clock_gettime(CLOCK_MONOTONIC, &kill_at);
+            kill_at.tv_sec += CL_INTERRUPT_GRACE_MS / 1000;
+        }
+        if (interrupted == 1) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            if (now.tv_sec > kill_at.tv_sec || (now.tv_sec == kill_at.tv_sec && now.tv_nsec >= kill_at.tv_nsec)) {
+                interrupted = 2;
+                snprintf(c->stall, sizeof c->stall, "the CLI did not end the turn within %d seconds of an interrupt",
+                         CL_INTERRUPT_GRACE_MS / 1000);
+                kill(c->pid, SIGKILL);
+            }
         }
         /* The abort predicate doubles as a UI tick, and a caller that echoes
          * typing from it cannot answer a keystroke sooner than this timeout, so

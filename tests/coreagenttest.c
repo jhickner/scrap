@@ -548,7 +548,7 @@ int main(void)
     snprintf(config, sizeof config,
              "{\"default\":\"fake/echo\",\"providers\":{\"fake\":{\"base_url\":"
              "\"http://127.0.0.1:%d/v1\",\"effort\":\"openai\",\"list\":false,"
-             "\"models\":{\"echo\":{\"context\":20000}}}},\"compactor_model\":\"fake/echo\"}",
+             "\"models\":{\"echo\":{\"context\":20000}}}},\"compactor_backend\":\"core\",\"compactor_model\":\"fake/echo\"}",
              port);
     put_file("agent/providers.json", config);
     put_file("hooks.json",

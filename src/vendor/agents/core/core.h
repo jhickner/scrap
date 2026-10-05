@@ -522,7 +522,7 @@ typedef struct {
     long mcp_seq;
     oc_mem *mem;
     oc_compactor *compactor;
-    char compactor_model[256];
+    char compactor_backend[32], compactor_model[256];
     _Atomic int halting;
     const _Atomic int *halt;
     long timeout;
@@ -2466,10 +2466,35 @@ static void sa_teardown(sa_agent *x) {
 
 static void sa_curl_init(void) { curl_global_init(CURL_GLOBAL_DEFAULT); }
 
+static _Thread_local _Atomic int *sa_compactor_halt;
+static _Thread_local long sa_compactor_deadline;
+static _Thread_local char *(*sa_compactor_ask)(Backend *b, const char *user);
+
+static int sa_compactor_aborted(void) {
+    return (sa_compactor_halt && *sa_compactor_halt) || (sa_compactor_deadline && sa_now_ms() > sa_compactor_deadline);
+}
+
+static char *sa_compactor_timed_ask(Backend *b, const char *user) {
+    sa_compactor_deadline = sa_now_ms() + OC_TIMEOUT_S * 1000;
+    char *r = sa_compactor_ask(b, user);
+    sa_compactor_deadline = 0;
+    return r;
+}
+
 static Backend *sa_compactor_open(void *ud, const char *system) {
     sa_agent *x = ud;
-    backend_opts o = { .name = "core", .model = x->compactor_model, .effort = OC_COMPACT_EFFORT,
+    backend_opts o = { .name = x->compactor_backend, .model = x->compactor_model, .effort = OC_COMPACT_EFFORT,
                        .system = system, .ephemeral = 1, .disable_tools = 1 };
+    if (strcmp(o.name, "core")) {
+        Backend *b = backend_open_ex(&o);
+        sa_compactor_halt = &x->halting;
+        if (b) {
+            b->set_abort_check(b, sa_compactor_aborted);
+            sa_compactor_ask = b->ask;
+            b->ask = sa_compactor_timed_ask;
+        }
+        return b;
+    }
     Backend *b = core_agent_open(&o);
     if (b) {
         sa_agent *h = b->ctx;
@@ -2488,7 +2513,8 @@ static int sa_memory_open(sa_agent *x) {
     snprintf(chat, sizeof chat, "%s/chat", dir);
     x->mem = oc_open(chat, 0, 0, x->err, sizeof x->err);
     if (!x->mem) return 0;
-    const char *model = sa_jstr(x->config, "compactor_model");
+    const char *backend = sa_jstr(x->config, "compactor_backend"), *model = sa_jstr(x->config, "compactor_model");
+    snprintf(x->compactor_backend, sizeof x->compactor_backend, "%s", backend ? backend : OC_COMPACT_BACKEND);
     snprintf(x->compactor_model, sizeof x->compactor_model, "%s", model ? model : OC_COMPACT_MODEL);
     x->compactor = oc_compactor_start(x->mem, 0, sa_compactor_open, x);
     return 1;
