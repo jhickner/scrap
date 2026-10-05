@@ -46,6 +46,7 @@ static void fail(const char *what)
 }
 
 const char *cmd_default_backend(void) { return "claude"; }
+int cmd_is_command(const char *line) { (void)line; return 0; }
 void        prompt_echo_message(const char *text)
 {
     echo_n++;
@@ -130,6 +131,10 @@ const char *session_name(const struct session *s)
     return "";
 }
 void session_replay(struct session *s) { (void)s; }
+const char *session_title(const struct session *s) { (void)s; return ""; }
+const char *session_remote(const struct session *s) { (void)s; return NULL; }
+void workspace_replay(int index) { (void)index; }
+int cmd_attach_tab(const char *target, char *why, size_t size) { (void)target; (void)why; (void)size; return -1; }
 int session_set_name(struct session *s, const char *name)
 {
     (void)s;
@@ -364,7 +369,7 @@ int main(void)
     poll_once();
     if (close_n)
         fail("a slot is not an address for close");
-    expect_res(dir, "slot-close", "close takes a session id", "a slot close is an error");
+    expect_res(dir, "slot-close", "close takes a session", "a slot close is an error");
 
     reset_case();
     drop_req(dir, "unknown-close", "{\"close\":\"sess-nope\"}");

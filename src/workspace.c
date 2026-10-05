@@ -693,6 +693,16 @@ static void send_next(int index, int hold)
         t->pending[i - 1] = t->pending[i];
     t->npending--;
 
+    if (cmd_is_command(p.line)) {
+        enter_held(index, hold);
+        cmd_submit(t->s, p.line);
+        leave();
+        free(p.line);
+        free(p.shown);
+        send_next(index, hold);
+        return;
+    }
+
     enter_held(index, hold);
     sticky_set(index, p.shown ? p.shown : p.line);
 
@@ -722,6 +732,13 @@ int workspace_send(int index, const char *line, const char *shown)
             return 0;
         }
         t->pending[t->npending++] = p;
+        return 1;
+    }
+
+    if (cmd_is_command(line)) {
+        enter(index);
+        cmd_submit(t->s, line);
+        leave();
         return 1;
     }
 

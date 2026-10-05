@@ -223,6 +223,10 @@ static void send_session(int fd, const cJSON *o, const cJSON *send)
         reply_error(fd, "too many messages to this session in the last minute", id);
         return;
     }
+    /* A session sending a command to itself runs it, e.g. /clear once its turn ends. */
+    const char *from_id = field(o, "from_id"), *own = session_id(workspace_at(at));
+    if (!host && from_id && own && !strcmp(from_id, own) && cmd_is_command(line))
+        sender = NULL;
     char *framed = sender ? text_dsprintf("[from %s] %s", from, line) : NULL;
     char *shown = sender ? text_dsprintf("from %s: %s", from, line) : NULL;
     int   sent = sender ? framed && shown && deliver(at, framed, shown) : dispatch_send(at, line);

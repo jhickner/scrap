@@ -43,6 +43,8 @@ void relay_forget_session(struct session *s) { (void)s; }
 void im_refocus(void) {}
 void im_forget_session(struct session *s) { (void)s; }
 void cmd_forget_session(struct session *s) { (void)s; }
+int cmd_is_command(const char *line) { (void)line; return 0; }
+enum cmd_result cmd_submit(struct session *s, const char *line) { (void)s; (void)line; return CMD_NOT_A_COMMAND; }
 void view_collapse(int on) { (void)on; }
 
 static int failures;
@@ -148,6 +150,8 @@ int session_turn_pump(struct session *s)
     return 1;
 }
 void session_turn_wait(struct session *s) { (void)s; }
+void session_replay(struct session *s) { (void)s; }
+const char *session_permission_pending(struct session *s) { (void)s; return NULL; }
 int session_idle_pump(struct session *s) { (void)s; return 0; }
 int session_wake_fd(const struct session *s) { (void)s; return -1; }
 int session_idle_fd(const struct session *s) { (void)s; return -1; }
