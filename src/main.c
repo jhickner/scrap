@@ -160,9 +160,8 @@ static void usage(void)
             "  -s         safe mode: skip skills, CLAUDE.md, MCP servers, hooks\n"
             "  --name x   session name (default: a generated one)\n"
             "  --telegram turn on the Telegram bridge; one open window hosts it\n"
-            "  --relay    turn on the WebSocket phone relay; one open window hosts it\n"
             "  --imessage also answer over iMessage, in the same session (config: ~/.config/scrap/imessage)\n"
-            "  --connect telegram|relay   the same thing, spelled out\n"
+            "  --connect telegram   the same thing, spelled out\n"
             "  --api      turn on the worker API; one open window hosts it (config: ~/.config/scrap/api)\n"
             "  --state dir  keep config and state under dir instead of ~/.config/scrap\n"
             "  -r         --resume: pick a past conversation to continue\n"
@@ -658,7 +657,6 @@ int main(int argc, char **argv)
         {"instance", required_argument, NULL, 'O'},
         {"attach",  required_argument, NULL, 'Y'},
         {"telegram", no_argument,      NULL, 'T'},
-        {"relay",    no_argument,      NULL, 'W'},
         {"imessage", no_argument,      NULL, 'I'},
         {"api",      no_argument,      NULL, 'A'},
         {"connect", required_argument, NULL, 'N'},
@@ -682,7 +680,6 @@ int main(int argc, char **argv)
     const char *state_arg = NULL;
     const char *prompt_arg = NULL;
     int telegram = 0;
-    int relay = 0;
     int imessage = 0;
     int api_on = 0;
     int pin_backend = 0;
@@ -708,18 +705,13 @@ int main(int argc, char **argv)
         case 'O': instance_arg = optarg; break;
         case 'Y': attach_arg = optarg; break;
         case 'T': telegram = 1; break;
-        case 'W': relay = 1; break;
         case 'I': imessage = 1; break;
         case 'A': api_on = 1; break;
         case 'X': state_arg = optarg; break;
         case 'V': printf(APP_NAME " %s\n", SCRAP_VERSION); return 0;
         case 'N':
-            if (!strcmp(optarg, "relay")) {
-                relay = 1;
-                break;
-            }
             if (strcmp(optarg, "telegram")) {
-                fprintf(stderr, APP_NAME ": --connect takes 'telegram' or 'relay'\n");
+                fprintf(stderr, APP_NAME ": --connect takes 'telegram'\n");
                 return 2;
             }
             telegram = 1;
@@ -840,9 +832,9 @@ int main(int argc, char **argv)
 
     int interactive = !prompt_arg;
 
-    if ((telegram || relay || imessage || api_on) && !interactive) {
+    if ((telegram || imessage || api_on) && !interactive) {
         fprintf(stderr, APP_NAME ": --%s takes no prompt\n",
-                telegram ? "telegram" : relay ? "relay" : imessage ? "imessage" : "api");
+                telegram ? "telegram" : imessage ? "imessage" : "api");
         return 2;
     }
 
@@ -898,9 +890,8 @@ int main(int argc, char **argv)
             session_set_remote(session, attach_arg);
     }
 
-    const char *wanted[] = {telegram ? "telegram" : NULL, relay ? "relay" : NULL,
-                            api_on ? "api" : NULL};
-    for (int i = 0; i < 3 && session; i++) {
+    const char *wanted[] = {telegram ? "telegram" : NULL, api_on ? "api" : NULL};
+    for (int i = 0; i < 2 && session; i++) {
         char msg[300];
         if (wanted[i] && !bridges_set(wanted[i], 1, msg, sizeof msg))
             fprintf(stderr, APP_NAME ": %s\n", msg);

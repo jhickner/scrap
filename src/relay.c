@@ -20,11 +20,9 @@
 
 #include "app.h"
 #include "bash.h"
-#include "chatnav.h"
 #include "chrome.h"
 #include "cmd.h"
 #include "frontend.h"
-#include "livelist.h"
 #include "prompt.h"
 #include "session.h"
 #include "sessionview.h"
@@ -38,14 +36,13 @@
 #include "workspace.h"
 
 #define INBOX_MAX 32
-#define MENU_MAX  16
 #define PORT_DEFAULT 8790
 #define HISTORY_BYTES 6000
 #define HISTORY_BATCH 4000
 #define UPLOAD_MAX    8
 #define MESSAGE_MAX   (64u << 20)
 
-enum { ITEM_LINE, ITEM_PICK, ITEM_HELLO, ITEM_STOP, ITEM_MORE };
+enum { ITEM_LINE, ITEM_HELLO, ITEM_STOP, ITEM_MORE };
 
 struct inbox_item {
     char *text;
@@ -56,7 +53,7 @@ struct inbox_item {
 };
 
 static struct {
-    struct chatnav nav;
+    struct session *s;
     wsd            *ws;
     httpd          *files;
     char            files_dir[4200];
@@ -93,7 +90,7 @@ static const char *cfg_get(const char *key, const char *dflt)
 
 struct session *relay_session(void)
 {
-    return chatnav_session(&rt.nav);
+    return rt.s;
 }
 
 static void wake_up(void)
@@ -347,93 +344,11 @@ static void send_history(struct session *s, long before)
     send_json(o);
 }
 
-static int attached_here(const char *target)
-{
-    for (int i = 0; i < workspace_count(); i++) {
-        const char *remote = session_remote(workspace_at(i));
-        if (remote && !strcmp(remote, target))
-            return 1;
-    }
-    return 0;
-}
-
-static cJSON *other_windows(void)
-{
-    static cJSON  *cached;
-    static time_t  at;
-    time_t         now = time(NULL);
-    if (cached && now == at)
-        return cJSON_Duplicate(cached, 1);
-    cJSON_Delete(cached);
-    cached = cJSON_CreateArray();
-    at = now;
-    struct live_session *v = NULL;
-    int                  n = livelist_load(&v);
-    for (int i = 0; i < n; i++) {
-        if (v[i].pid == (long)getpid() || (!v[i].name[0] && !v[i].id[0]))
-            continue;
-        char target[200];
-        snprintf(target, sizeof target, "%s%s", v[i].name[0] ? "@" : "",
-                 v[i].name[0] ? v[i].name : v[i].id);
-        if (attached_here(target))
-            continue;
-        cJSON *it = cJSON_CreateObject();
-        cJSON_AddStringToObject(it, "target", target);
-        if (v[i].name[0])
-            cJSON_AddStringToObject(it, "name", v[i].name);
-        cJSON_AddStringToObject(it, "label",
-                                v[i].title[0] ? v[i].title : chatnav_dir_name(v[i].cwd));
-        cJSON_AddStringToObject(it, "cwd", v[i].cwd);
-        cJSON_AddBoolToObject(it, "busy", !strcmp(v[i].status, "working"));
-        cJSON_AddBoolToObject(it, "unseen", v[i].unseen != 0);
-        cJSON_AddItemToArray(cached, it);
-    }
-    free(v);
-    return cJSON_Duplicate(cached, 1);
-}
-
-static void send_tabs(int force)
-{
-    static char *sent;
-    cJSON *o = frame("tabs");
-    cJSON *items = cJSON_AddArrayToObject(o, "items");
-    int n = workspace_count();
-    for (int i = 0; i < n; i++) {
-        struct session *s = workspace_at(i);
-        const char *title = session_title(s);
-        if (!title || !*title)
-            title = chatnav_dir_name(session_cwd(s));
-        cJSON *it = cJSON_CreateObject();
-        cJSON_AddNumberToObject(it, "index", i + 1);
-        cJSON_AddStringToObject(it, "id", session_id(s) ? session_id(s) : "");
-        cJSON_AddStringToObject(it, "label", title);
-        if (session_name(s) && *session_name(s))
-            cJSON_AddStringToObject(it, "name", session_name(s));
-        cJSON_AddStringToObject(it, "cwd", session_cwd(s));
-        cJSON_AddBoolToObject(it, "current", s == relay_session());
-        cJSON_AddBoolToObject(it, "busy", session_busy(s));
-        cJSON_AddBoolToObject(it, "unseen", session_unseen(s));
-        cJSON_AddItemToArray(items, it);
-    }
-    cJSON_AddItemToObject(o, "others", other_windows());
-    char *now = cJSON_PrintUnformatted(o);
-    cJSON_Delete(o);
-    if (!now || (!force && sent && !strcmp(now, sent))) {
-        free(now);
-        return;
-    }
-    if (rt.ws)
-        wsd_send(rt.ws, now, 0);
-    free(sent);
-    sent = now;
-}
-
 static void send_view(void)
 {
     struct session *s = relay_session();
     if (s)
         send_history(s, -1);
-    send_tabs(1);
     rt.mirrored_turn = 0;
     rt.busy_sent = -1;
     send_busy(session_busy(s));
@@ -471,44 +386,6 @@ const char *relay_system_note(void)
             "does not show it to you.\n");
 
     return rt.system_note;
-}
-
-static cJSON *menu_items;
-static char   menu_kind[16];
-
-static void nav_menu_begin(void *ud, const char *kind)
-{
-    (void)ud;
-    snprintf(menu_kind, sizeof menu_kind, "%s", kind);
-    cJSON_Delete(menu_items);
-    menu_items = cJSON_CreateArray();
-}
-
-static void nav_menu_add(void *ud, const char *label, const char *payload)
-{
-    (void)ud;
-    cJSON *it = cJSON_CreateObject();
-    cJSON_AddStringToObject(it, "label", label);
-    cJSON_AddStringToObject(it, "payload", payload ? payload : "");
-    cJSON_AddItemToArray(menu_items, it);
-}
-
-static void nav_menu_send(void *ud, const char *title, int per_row)
-{
-    (void)ud;
-    (void)per_row;
-    cJSON *o = frame("menu");
-    cJSON_AddStringToObject(o, "kind", menu_kind);
-    cJSON_AddStringToObject(o, "title", title ? title : "");
-    cJSON_AddItemToObject(o, "items", menu_items ? menu_items : cJSON_CreateArray());
-    menu_items = NULL;
-    send_json(o);
-}
-
-static void nav_note(void *ud, const char *text)
-{
-    (void)ud;
-    send_note(text);
 }
 
 static const char *short_path(const char *p)
@@ -619,93 +496,6 @@ static void stop_turn(void)
     session_interrupt(relay_session());
 }
 
-static void open_or_switch(const char *id)
-{
-    int at = workspace_find_id(id);
-    if (at >= 0)
-        chatnav_cmd_switch(&rt.nav, at);
-    else
-        chatnav_cmd_open(&rt.nav, NULL, id);
-}
-
-static const char *arg_of(const char *line, const char *cmd)
-{
-    size_t n = strlen(cmd);
-    if (strncmp(line, cmd, n) || (line[n] && line[n] != ' '))
-        return NULL;
-    const char *arg = line + n;
-    while (*arg == ' ')
-        arg++;
-    return arg;
-}
-
-static int nav_command(const char *line)
-{
-    const char *arg;
-    if (!strcmp(line, "/tabs") || !strcmp(line, "/tab") || !strcmp(line, "/sessions")) {
-        chatnav_send_tabs(&rt.nav, MENU_MAX);
-        return 1;
-    }
-    if ((arg = arg_of(line, "/tab")) != NULL) {
-        chatnav_cmd_switch(&rt.nav, atoi(arg) - 1);
-        return 1;
-    }
-    if ((arg = arg_of(line, "/open")) != NULL) {
-        chatnav_cmd_open(&rt.nav, *arg ? arg : NULL, NULL);
-        return 1;
-    }
-    if ((arg = arg_of(line, "/close")) != NULL) {
-        chatnav_cmd_close(&rt.nav, *arg ? atoi(arg) - 1 : workspace_index());
-        return 1;
-    }
-    if ((arg = arg_of(line, "/resume")) != NULL) {
-        if (*arg)
-            open_or_switch(arg);
-        else
-            chatnav_send_resume(&rt.nav, MENU_MAX);
-        return 1;
-    }
-    if ((arg = arg_of(line, "/attach")) != NULL && *arg) {
-        char why[600];
-        int  at = cmd_attach_tab(arg, why, sizeof why);
-        if (at < 0)
-            send_note(why);
-        else
-            chatnav_cmd_switch(&rt.nav, at);
-        return 1;
-    }
-    if (!strcmp(line, "/stop")) {
-        stop_turn();
-        return 1;
-    }
-    return 0;
-}
-
-static void run_pick(const char *payload)
-{
-    if (!strcmp(payload, "new"))
-        chatnav_cmd_open(&rt.nav, NULL, NULL);
-    else if (!strcmp(payload, "resume"))
-        chatnav_send_resume(&rt.nav, MENU_MAX);
-    else if (!strcmp(payload, "back"))
-        chatnav_send_tabs(&rt.nav, MENU_MAX);
-    else if (*payload == '#')
-        chatnav_cmd_switch(&rt.nav, chatnav_tab_from_payload(payload));
-    else if (strcmp(payload, "cancel"))
-        open_or_switch(payload);
-}
-
-static int stamped_tab(const struct inbox_item *it)
-{
-    if (it->tab_id[0]) {
-        int at = workspace_find_id(it->tab_id);
-        return at >= 0 ? at : -2;
-    }
-    if (it->tab >= 1)
-        return it->tab <= workspace_count() ? it->tab - 1 : -2;
-    return -1;
-}
-
 static void submit(struct session *s, void *ud)
 {
     const char *line = ud;
@@ -739,21 +529,8 @@ static void submit(struct session *s, void *ud)
 
 static void run_line(const struct inbox_item *it)
 {
-    int at = stamped_tab(it);
-    if (at == -2) {
-        send_note("that conversation is gone; the tab list has moved");
-        return;
-    }
-    if (at >= 0 && workspace_at(at) != relay_session())
-        chatnav_switch(&rt.nav, at);
-    if (!relay_session())
-        chatnav_refocus(&rt.nav);
     struct session *s = relay_session();
-    if (!s) {
-        send_note("that session is gone — start a new one at the terminal");
-        return;
-    }
-    if (nav_command(it->text))
+    if (!s)
         return;
     if (bash_is_command(it->text)) {
         send_note("shell lines run at the terminal only");
@@ -782,9 +559,6 @@ static void run_item(const struct inbox_item *it)
     case ITEM_MORE:
         send_older(it);
         return;
-    case ITEM_PICK:
-        run_pick(it->text);
-        break;
     default:
         run_line(it);
         break;
@@ -808,7 +582,6 @@ void relay_poll(struct session *live)
     }
     mirror_prompt(relay_session());
     send_busy(session_busy(relay_session()));
-    send_tabs(0);
 }
 
 static size_t b64_decode(const char *in, unsigned char *out)
@@ -888,16 +661,11 @@ static void on_text(void *ud, const char *text, size_t n)
         return;
     const char *t = cJSON_GetStringValue(cJSON_GetObjectItem(o, "t"));
     const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(o, "text"));
-    const char *payload = cJSON_GetStringValue(cJSON_GetObjectItem(o, "payload"));
     const char *tab_id = cJSON_GetStringValue(cJSON_GetObjectItem(o, "id"));
-    cJSON *tab = cJSON_GetObjectItem(o, "tab");
-    int at = cJSON_IsNumber(tab) ? (int)cJSON_GetNumberValue(tab) : 0;
     if (!t)
         ;
     else if (!strcmp(t, "line"))
-        inbox_push(with_uploads(v, cJSON_GetObjectItem(o, "files")), ITEM_LINE, tab_id, at);
-    else if (!strcmp(t, "pick") && payload)
-        inbox_push(strdup(payload), ITEM_PICK, NULL, 0);
+        inbox_push(with_uploads(v, cJSON_GetObjectItem(o, "files")), ITEM_LINE, NULL, 0);
     else if (!strcmp(t, "stop"))
         inbox_push(strdup(""), ITEM_STOP, NULL, 0);
     else if (!strcmp(t, "more"))
@@ -905,14 +673,6 @@ static void on_text(void *ud, const char *text, size_t n)
     else if (!strcmp(t, "hello"))
         inbox_push(strdup(""), ITEM_HELLO, NULL, 0);
     cJSON_Delete(o);
-}
-
-static void bind_session(struct session *s, int active, void *ud)
-{
-    (void)ud;
-    session_set_system_extra(s, active ? relay_system_note() : NULL);
-    if (active)
-        send_view();
 }
 
 __attribute__((format(printf, 1, 2)))
@@ -978,9 +738,7 @@ static void cleanup(void)
     if (s)
         session_set_system_extra(s, tg_label() && tg_session() == s
                                       ? tg_system_note() : NULL);
-    cJSON_Delete(menu_items);
-    menu_items = NULL;
-    chatnav_forget(&rt.nav, s);
+    rt.s = NULL;
     rt.label[0] = '\0';
     rt.repeat_task = 0;
     rt.busy_sent = -1;
@@ -1031,14 +789,7 @@ int relay_start(struct session *s)
         fcntl(rt.wake[i], F_SETFD, FD_CLOEXEC);
     }
 
-    chatnav_init(&rt.nav, s, bind_session, NULL);
-    const struct chatnav_output out = {
-        .note = nav_note,
-        .menu_begin = nav_menu_begin,
-        .menu_add = nav_menu_add,
-        .menu_send = nav_menu_send,
-    };
-    chatnav_set_output(&rt.nav, &out);
+    rt.s = s;
     session_add_listener(on_event, NULL);
     rt.busy_sent = -1;
 
@@ -1076,15 +827,8 @@ const char *relay_label(void)
     return rt.active ? rt.label : NULL;
 }
 
-void relay_refocus(void)
-{
-    if (rt.active && !chatnav_session(&rt.nav))
-        chatnav_refocus(&rt.nav);
-}
-
 void relay_forget_session(struct session *s)
 {
-    chatnav_forget(&rt.nav, s);
-    if (workspace_current() != s)
-        relay_refocus();
+    if (s && s == rt.s)
+        relay_stop();
 }

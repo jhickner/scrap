@@ -6,7 +6,6 @@
 
 #include "api.h"
 #include "filelock.h"
-#include "relay.h"
 #include "settings.h"
 #include "text.h"
 #include "tg.h"
@@ -23,7 +22,6 @@ struct bridge {
 };
 
 static int tg_running(void)    { return tg_label() != NULL; }
-static int relay_running(void) { return relay_label() != NULL; }
 
 static int api_begin(struct session *s)
 {
@@ -33,7 +31,6 @@ static int api_begin(struct session *s)
 
 static struct bridge bridges[] = {
     {"telegram", tg_running, tg_start, tg_stop, tg_start_error, -1, 0},
-    {"relay", relay_running, relay_start, relay_stop, NULL, -1, 0},
     {"api", api_active, api_begin, api_stop, NULL, -1, 0},
 };
 

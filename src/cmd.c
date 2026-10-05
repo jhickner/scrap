@@ -32,6 +32,7 @@
 #include "sessionload.h"
 #include "sessionview.h"
 #include "viewport.h"
+#include "relay.h"
 #include "workspace.h"
 #include "vendor/agents/grokbot/grokbot.h"
 #include "sessionswitch.h"
@@ -669,8 +670,21 @@ static void toggle_bridge(const char *name, const char *arg)
 
 static void do_relay(struct session *s, const char *arg)
 {
-    (void)s;
-    toggle_bridge("relay", arg);
+    int on = toggle_arg(arg, "on", "off", relay_session() == s, "/relay");
+    if (on < 0)
+        return;
+    if (!on) {
+        relay_stop();
+        reply_note("relay off");
+    } else if (relay_session() == s) {
+        reply_note("relay already on in this tab");
+    } else {
+        relay_stop();
+        if (relay_start(s))
+            workspace_republish();
+        else
+            reply_error("could not start relay");
+    }
 }
 
 static void do_telegram(struct session *s, const char *arg)
@@ -1483,7 +1497,7 @@ static const struct cmd COMMANDS[] = {
      do_tools},
     {"/theme", "switch the colour theme", "[name]", CMD_LIVE, do_theme},
     {"/sticky", "float the prompt above the spinner", "[on|off]", CMD_LIVE, do_sticky},
-    {"/relay", "answer over the phone relay", "[on|off]", CMD_LIVE, do_relay},
+    {"/relay", "serve this tab over the phone relay", "[on|off]", CMD_LIVE, do_relay},
     {"/telegram", "answer over Telegram", "[on|off]", CMD_LIVE, do_telegram},
     {"/api", "serve the HTTP API", "[on|off]", CMD_LIVE, do_api},
     {"/voice", "read replies aloud", "[on|off|volume N|rate N|complete on|off]", CMD_LIVE, do_voice},

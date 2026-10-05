@@ -330,7 +330,6 @@ void workspace_show(int index)
     view_collapse(session_compact(tabs[cur].s));
 
     tg_refocus();
-    relay_refocus();
     im_refocus();
     voice_refocus();
     workspace_log_active();
@@ -504,8 +503,7 @@ static void drop(int index)
         spin_follow();
         viewport_forget();
         tg_refocus();
-        relay_refocus();
-    im_refocus();
+        im_refocus();
         voice_refocus();
     }
 }

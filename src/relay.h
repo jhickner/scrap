@@ -13,7 +13,6 @@ int relay_fds(int *out, int max);
 int relay_pending(void);
 
 struct session *relay_session(void);
-void relay_refocus(void);
 void relay_forget_session(struct session *s);
 
 void relay_poll(struct session *live);
