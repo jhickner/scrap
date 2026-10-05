@@ -424,10 +424,17 @@ static int ask_ready(void)
     return 1;
 }
 
+static int ask_interrupted(void)
+{
+    return handoff_wanted() || relay_pending();
+}
+
 static void ask_run_form(void)
 {
     enum askform_exit how;
+    chrome_modal_interrupt(ask_interrupted);
     char *answer = askform_run(asked, &how);
+    chrome_modal_interrupt(handoff_wanted);
     if (how == ASKFORM_NEW_TAB) {
         another(NULL);
         return;
