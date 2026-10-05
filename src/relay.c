@@ -28,7 +28,9 @@
 #include "cmd.h"
 #include "frontend.h"
 #include "highlight.h"
+#include "hub.h"
 #include "hud.h"
+#include "memnote.h"
 #include "pick.h"
 #include "prompt.h"
 #include "session.h"
@@ -57,6 +59,8 @@
 #define FILE_MAX      (32u << 20)
 #define MEM_MAX       (8u << 20)
 #define MEM_TIMEOUT   15
+#define NOTE_TIMEOUT  120
+#define NOTES_MAX     32
 #define DONE_MAX      64
 #define SENT_MAX      16
 #define OPEN_TOOLS    64
@@ -1555,62 +1559,13 @@ static cJSON *mem_run(const char *req, const cJSON *msg)
         for (int i = 0; i < n; i++)
             argv[a++] = cJSON_GetArrayItem(args, i)->valuestring;
 
-    int fds[2];
-    if (pipe(fds) != 0) {
-        free(argv);
-        return res_error(req, "failed", "pipe");
-    }
-    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
-    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
-    posix_spawn_file_actions_t acts;
-    posix_spawn_file_actions_init(&acts);
-    posix_spawn_file_actions_adddup2(&acts, fds[1], STDOUT_FILENO);
-    if (attachment)
-        posix_spawn_file_actions_addopen(&acts, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
-    else
-        posix_spawn_file_actions_adddup2(&acts, fds[1], STDERR_FILENO);
-    posix_spawn_file_actions_addopen(&acts, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
-    posix_spawnattr_t attr;
-    posix_spawnattr_init(&attr);
-    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
-    posix_spawnattr_setpgroup(&attr, 0);
-    pid_t pid;
-    int   spawned = posix_spawnp(&pid, argv[0], &acts, &attr, argv, environ) == 0;
-    posix_spawnattr_destroy(&attr);
-    posix_spawn_file_actions_destroy(&acts);
-    close(fds[1]);
+    size_t got;
+    int    status;
+    char  *buf = memnote_capture(argv, attachment != NULL, cap, MEM_TIMEOUT, &got, &status);
+    int    timed_out = buf && status == -1;
     free(argv);
-
-    char  *buf = spawned ? malloc(cap + 1) : NULL;
-    size_t got = 0;
-    int    timed_out = 0;
-    time_t until = time(NULL) + MEM_TIMEOUT;
-    while (buf && got < cap) {
-        struct pollfd p = {.fd = fds[0], .events = POLLIN};
-        int           left = (int)(until - time(NULL));
-        int           r = left > 0 ? poll(&p, 1, left * 1000) : 0;
-        if (r < 0 && errno == EINTR)
-            continue;
-        if (r == 0) {
-            kill(-pid, SIGKILL);
-            timed_out = 1;
-            break;
-        }
-        ssize_t k = read(fds[0], buf + got, cap - got);
-        if (k < 0 && errno == EINTR)
-            continue;
-        if (k <= 0)
-            break;
-        got += (size_t)k;
-    }
-    close(fds[0]);
-    int status = -1;
-    if (spawned)
-        while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
-            ;
     if (!buf)
         return res_error(req, "failed", "could not run mem");
-    buf[got] = '\0';
 
     if (attachment) {
         int    clean = !timed_out && got < cap && WIFEXITED(status) && WEXITSTATUS(status) == 0;
@@ -1656,6 +1611,123 @@ static void send_mem(int client, const char *req, const cJSON *msg)
     free(s);
 }
 
+static void reply_error(int client, const char *req, const char *code, const char *msg);
+
+/* Dictated notes by the phone's note id. A resend after a reconnect is answered with the
+ * first run's result, or when that run finishes, instead of saving a second record. */
+struct note {
+    char  id[64];
+    char  req[64];
+    int   client;
+    int   running;
+    int   ok;
+    char *out;
+};
+
+static struct note     notes[NOTES_MAX];
+static int             notes_next;
+static pthread_mutex_t notes_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void note_reply(struct note *n)
+{
+    cJSON *o;
+    cJSON *rec = n->ok ? cJSON_Parse(n->out) : NULL;
+    if (rec) {
+        o = res_ok(n->req);
+        cJSON_AddItemToObject(o, "mem", rec);
+    } else
+        o = res_error(n->req, "failed", n->out && *n->out ? n->out : "could not save the note");
+    char *s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    if (s)
+        wsd_send(rt.ws, n->client, s, 0);
+    free(s);
+}
+
+struct note_job {
+    struct note *slot;
+    char        *text;
+};
+
+static void *note_run(void *arg)
+{
+    struct note_job *job = arg;
+    char             exe[4096];
+    size_t           len;
+    int              status = -1;
+    char            *out = NULL;
+    if (hub_self_path(exe, sizeof exe)) {
+        char *argv[] = {exe, "note", job->text, NULL};
+        out = memnote_capture(argv, 1, MEM_MAX, NOTE_TIMEOUT, &len, &status);
+    }
+    if (out && status == -1) {
+        free(out);
+        out = strdup("note timed out");
+    }
+    if (out)
+        text_chomp(out);
+    pthread_mutex_lock(&notes_lock);
+    struct note *n = job->slot;
+    n->running = 0;
+    n->ok = out && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    n->out = out ? out : strdup("could not run " APP_NAME " note");
+    note_reply(n);
+    pthread_mutex_unlock(&notes_lock);
+    free(job->text);
+    free(job);
+    return NULL;
+}
+
+static void send_note(int client, const char *req, const cJSON *msg)
+{
+    const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "note"));
+    const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(msg, "text"));
+    if (!id || !*id || strlen(id) >= sizeof notes[0].id || !text || !*text || strlen(req) >= sizeof notes[0].req) {
+        reply_error(client, req, "invalid", "note needs note and text");
+        return;
+    }
+    pthread_mutex_lock(&notes_lock);
+    struct note *n = NULL;
+    for (int i = 0; i < NOTES_MAX && !n; i++)
+        if (!strcmp(notes[i].id, id))
+            n = &notes[i];
+    if (n) {
+        snprintf(n->req, sizeof n->req, "%s", req);
+        n->client = client;
+        if (!n->running)
+            note_reply(n);
+        pthread_mutex_unlock(&notes_lock);
+        return;
+    }
+    for (int i = 0; i < NOTES_MAX && !n; i++, notes_next = (notes_next + 1) % NOTES_MAX)
+        if (!notes[notes_next].running)
+            n = &notes[notes_next];
+    struct note_job *job = n ? malloc(sizeof *job) : NULL;
+    pthread_t        th;
+    if (job && (job->text = strdup(text))) {
+        free(n->out);
+        *n = (struct note){.client = client, .running = 1};
+        snprintf(n->id, sizeof n->id, "%s", id);
+        snprintf(n->req, sizeof n->req, "%s", req);
+        job->slot = n;
+        if (pthread_create(&th, NULL, note_run, job) == 0)
+            pthread_detach(th);
+        else {
+            n->running = 0;
+            n->id[0] = '\0';
+            free(job->text);
+            free(job);
+            job = NULL;
+        }
+    } else {
+        free(job);
+        job = NULL;
+    }
+    pthread_mutex_unlock(&notes_lock);
+    if (!job)
+        reply_error(client, req, "full", "too many notes in flight");
+}
+
 static void reply_error(int client, const char *req, const char *code, const char *msg)
 {
     cJSON *o = res_error(req, code, msg);
@@ -1685,6 +1757,11 @@ static void on_text(void *ud, int client, const char *text, size_t n)
     }
     if (!strcmp(op_of(msg), "file")) {
         send_file(client, req, cJSON_GetStringValue(cJSON_GetObjectItem(msg, "path")));
+        cJSON_Delete(msg);
+        return;
+    }
+    if (!strcmp(op_of(msg), "note")) {
+        send_note(client, req, msg);
         cJSON_Delete(msg);
         return;
     }

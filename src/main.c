@@ -40,6 +40,7 @@
 #include "hub.h"
 #include "instance.h"
 #include "job.h"
+#include "memnote.h"
 #include "sessionpresent.h"
 #include "sessionswitch.h"
 #include "sessionview.h"
@@ -647,6 +648,8 @@ int main(int argc, char **argv)
         return hub_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "job"))
         return job_main(argc - 1, argv + 1);
+    if (argc > 1 && !strcmp(argv[1], "note"))
+        return memnote_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "version")) {
         printf(APP_NAME " %s\n", SCRAP_VERSION);
         return 0;
