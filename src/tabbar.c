@@ -13,6 +13,7 @@
 #include "workspace.h"
 
 #define NAME_CELLS 14
+#define STATUS_CELLS 32
 #define BUTTON_W   4
 
 #define CHECK "\xe2\x9c\x93"
@@ -53,6 +54,8 @@ static unsigned digest(void)
         h = h * 16777619u + (unsigned)meter_step(s);
         for (const char *p = name ? name : ""; *p; p++)
             h = h * 16777619u + (unsigned char)*p;
+        for (const char *p = session_title(s) ? session_title(s) : ""; *p; p++)
+            h = h * 16777619u + (unsigned char)*p;
     }
     return h;
 }
@@ -91,29 +94,39 @@ static const char *mark(const struct session *s, enum ui_role *role)
     return NULL;
 }
 
-static void name_of(const struct session *s, char *out, size_t size)
+static void fit_cells(const char *text, size_t cells, char *out, size_t size)
 {
-    char        at[256];
-    const char *name = at;
-
-    if (session_remote(s) || session_name(s)[0])
-        session_address(s, at, sizeof at);
-    else
-        name = session_title(s) ? session_title(s) : "";
-
-    size_t len = strlen(name);
-    size_t fit = ui_fit_visible(name, len, NAME_CELLS);
+    size_t len = strlen(text);
+    size_t fit = ui_fit_visible(text, len, cells);
     if (fit == len) {
-        snprintf(out, size, "%s", name);
+        snprintf(out, size, "%s", text);
         return;
     }
-    fit = ui_fit_visible(name, len, NAME_CELLS - 1);
-    snprintf(out, size, "%.*s\xe2\x80\xa6", (int)fit, name);
+    fit = ui_fit_visible(text, len, cells - 1);
+    snprintf(out, size, "%.*s\xe2\x80\xa6", (int)fit, text);
+}
+
+static void name_of(const struct session *s, char *out, size_t size, char *status,
+                    size_t status_size)
+{
+    char        at[256];
+    const char *title = session_title(s) ? session_title(s) : "";
+
+    status[0] = '\0';
+    if (session_remote(s) || session_name(s)[0]) {
+        session_address(s, at, sizeof at);
+        fit_cells(at, NAME_CELLS, out, size);
+        if (strcmp(title, at) && strcmp(title, at + 1))
+            fit_cells(title, STATUS_CELLS, status, status_size);
+    } else {
+        fit_cells(title, NAME_CELLS, out, size);
+    }
 }
 
 struct tab {
     int          index;
     char         name[256];
+    char         status[256];
     const char  *glyph;
     const char  *meter;
     int          step;
@@ -154,6 +167,11 @@ static void paint_row(void *ud, int line, int w)
                 ui_esc(ui_style(UI_ERROR));
             ui_put(t->meter);
         }
+        if (t->status[0]) {
+            ui_esc(ui_style(UI_DIM));
+            ui_put(" ");
+            ui_put(t->status);
+        }
         ui_pad(w - 2 - t->cells);
     } else if (at == ntabs) {
         ui_put("\xe2\x95\xb0");
@@ -192,12 +210,13 @@ void tabbar_cover(char **rows, int n, int cols)
         const struct session *s = workspace_at(i);
 
         t->index = i;
-        name_of(s, t->name, sizeof t->name);
+        name_of(s, t->name, sizeof t->name, t->status, sizeof t->status);
         t->role = UI_DIM;
         t->glyph = mark(s, &t->role);
         t->step = meter_step(s);
         t->meter = t->step ? METER[t->step] : NULL;
-        t->cells = (int)ui_cells(t->name) + (t->meter ? 2 : 0) + (t->glyph ? 2 : 0);
+        t->cells = (int)ui_cells(t->name) + (t->meter ? 2 : 0) + (t->glyph ? 2 : 0) +
+                   (t->status[0] ? 1 + (int)ui_cells(t->status) : 0);
         if (t->cells > widest)
             widest = t->cells;
     }
