@@ -118,6 +118,14 @@ void view_keep_tool_call(const char *name, const char *arg, int collapses)
     (void)collapses;
 }
 
+void view_keep_tool_call_bg(const char *name, const char *arg, int collapses, int background)
+{
+    (void)name;
+    (void)arg;
+    (void)collapses;
+    (void)background;
+}
+
 void view_keep_break(void) {}
 
 void view_keep_output(const char *text, enum ui_role role, int error)

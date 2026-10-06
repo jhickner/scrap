@@ -240,7 +240,7 @@ void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
         }
         if (!nested)
             p->call_open = 1;
-        view_keep_tool_call(name, arg, collapses);
+        view_keep_tool_call_bg(name, arg, collapses, toolstyle_background(ev->input_json));
 
         char path[4096];
         if (!collapses && view_tool_path(ev->input_json, cwd, path, sizeof path))

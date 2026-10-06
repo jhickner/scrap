@@ -59,6 +59,7 @@ struct keep {
     enum ui_role   role;
     int            error;
     int            collapses;
+    int            background;
     int            nested;
     char          *label;
     char          *row;
@@ -76,7 +77,8 @@ static void keep_free(void *ud)
 }
 
 static void cluster_paint(const char *line, const unsigned char *spans);
-static void tool_tag(const char *name, char *out, size_t size);
+static void tool_tag(const char *name, int background, char *out, size_t size);
+static void tool_call(const char *name, const char *arg, int background);
 static unsigned char *row_spans(const char *name, const char *row, size_t prefix);
 static int cluster_budget(void);
 static void view_activity(const char *marker, const char *text, enum ui_role role);
@@ -110,10 +112,11 @@ static size_t row_prefix(const char *row)
     return row[n] ? n + 2 : n;
 }
 
-static void call_row(const char *name, const char *arg, char *out, size_t size)
+static void call_row(const char *name, const char *arg, int background, char *out,
+                     size_t size)
 {
     char tag[64];
-    tool_tag(name, tag, sizeof tag);
+    tool_tag(name, background, tag, sizeof tag);
 
     char flat[4096];
     text_one_line(arg ? arg : "", flat, sizeof flat);
@@ -142,7 +145,7 @@ static void call_collapsed(const struct keep *k)
     char own[4096];
     const char *row = k->row;
     if (!row) {
-        call_row(k->a, k->b, own, sizeof own);
+        call_row(k->a, k->b, k->background, own, sizeof own);
         row = own;
     }
 
@@ -176,7 +179,7 @@ static void keep_render(void *ud, int cols)
 
     switch (k->kind) {
     case KEEP_ACTIVITY: view_activity(k->a, k->b, k->role);              break;
-    case KEEP_CALL:     view_tool_call(k->a, k->b);                      break;
+    case KEEP_CALL:     tool_call(k->a, k->b, k->background);            break;
     case KEEP_OUTPUT:
         if (k->error)
             view_tool_error(k->a);
@@ -233,6 +236,7 @@ static char *keep_encode(void *ud)
     cJSON_AddNumberToObject(o, "role", k->role);
     cJSON_AddNumberToObject(o, "error", k->error);
     cJSON_AddNumberToObject(o, "collapses", k->collapses);
+    cJSON_AddNumberToObject(o, "background", k->background);
     if (k->nested) {
         cJSON_AddNumberToObject(o, "nested", k->nested);
         if (k->label)
@@ -310,6 +314,7 @@ void view_keep_load(const cJSON *st)
     k->role = (enum ui_role)scrollback_int(st, "role");
     k->error = scrollback_int(st, "error");
     k->collapses = scrollback_int(st, "collapses");
+    k->background = scrollback_int(st, "background");
     if (!k->a || !k->b) {
         keep_free(k);
         return;
@@ -333,9 +338,15 @@ void view_keep_activity(const char *marker, const char *text, enum ui_role role)
 
 void view_keep_tool_call(const char *name, const char *arg, int collapses)
 {
+    view_keep_tool_call_bg(name, arg, collapses, 0);
+}
+
+void view_keep_tool_call_bg(const char *name, const char *arg, int collapses, int background)
+{
     struct keep *k = keep_new(KEEP_CALL);
     if (!k)
         return;
+    k->background = background;
     k->a = strdup(name ? name : "?");
     k->b = strdup(arg ? arg : "");
     k->collapses = collapses;
@@ -409,6 +420,7 @@ static void restate_item(unsigned mark, const char *kind, void *ud, void *ctx)
 
     char row[4096];
     if (as_row && c->head && c->head->collapses == k->collapses &&
+        c->head->background == k->background &&
         strcmp(c->head->a, k->a) == 0 &&
         call_row_extend(c->head->row, k->b, row, sizeof row)) {
         row_set(c->head, c->head_mark, row);
@@ -423,7 +435,7 @@ static void restate_item(unsigned mark, const char *kind, void *ud, void *ctx)
         viewport_item_stale(mark);
 
     if (as_row) {
-        call_row(k->a, k->b, row, sizeof row);
+        call_row(k->a, k->b, k->background, row, sizeof row);
         row_set(k, mark, row);
         c->head = k;
         c->head_mark = mark;
@@ -573,12 +585,17 @@ static void view_activity(const char *marker, const char *text, enum ui_role rol
     ui_wrap_paint(text, &w);
 }
 
-static void tool_tag(const char *name, char *out, size_t size)
+static void tool_tag(const char *name, int background, char *out, size_t size)
 {
     size_t t = 0;
+    size_t mark = background ? 4 : 0;
     out[t++] = '[';
-    for (const char *p = name; *p && t + 2 < size; p++)
+    for (const char *p = name; *p && t + 2 + mark < size; p++)
         out[t++] = (*p >= 'A' && *p <= 'Z') ? (char)(*p + 32) : *p;
+    if (background) {
+        memcpy(out + t, " \xe2\x86\x97", 4);
+        t += 4;
+    }
     out[t++] = ']';
     out[t] = '\0';
 }
@@ -596,10 +613,12 @@ static unsigned char *shell_spans(const char *name, const char *text, size_t len
     return spans;
 }
 
-void view_tool_call(const char *name, const char *arg)
+void view_tool_call(const char *name, const char *arg) { tool_call(name, arg, 0); }
+
+static void tool_call(const char *name, const char *arg, int background)
 {
     char tag[64];
-    tool_tag(name, tag, sizeof tag);
+    tool_tag(name, background, tag, sizeof tag);
 
     int indent = TOOL_INDENT + nest + (int)ui_cells(tag) + 1;
     int columns = ui_columns();

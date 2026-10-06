@@ -404,3 +404,16 @@ int toolstyle_collapses(const char *name, const char *input_json, const char *ar
     free(owned);
     return reads;
 }
+
+int toolstyle_background(const char *input_json)
+{
+    if (!input_json || (!strstr(input_json, "background") && !strstr(input_json, "block_until_ms")))
+        return 0;
+    cJSON *in = cJSON_Parse(input_json);
+    cJSON *wait = cJSON_GetObjectItem(in, "block_until_ms");
+    int    on = cJSON_IsTrue(cJSON_GetObjectItem(in, "run_in_background")) ||
+             cJSON_IsTrue(cJSON_GetObjectItem(in, "background")) ||
+             (cJSON_IsNumber(wait) && wait->valuedouble == 0);
+    cJSON_Delete(in);
+    return on;
+}
