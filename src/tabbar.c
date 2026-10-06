@@ -49,6 +49,7 @@ static unsigned digest(void)
         for (const char *p = workspace_status(s); *p; p++)
             h = h * 16777619u + (unsigned char)*p;
         h = h * 16777619u + (unsigned)(session_unseen(s) ? 1 : 0);
+        h = h * 16777619u + (unsigned)session_in_turn(s);
         h = h * 16777619u + (unsigned)meter_step(s);
         for (const char *p = name ? name : ""; *p; p++)
             h = h * 16777619u + (unsigned char)*p;
@@ -61,7 +62,7 @@ static unsigned painted;
 static int spin_due(void)
 {
     for (int i = 0; i < workspace_count(); i++)
-        if (!strcmp(workspace_status(workspace_at(i)), "working"))
+        if (session_in_turn(workspace_at(i)))
             return (now_seconds() - frame_at) * 1000.0 >= SPIN_FRAME_MS;
     return 0;
 }
@@ -75,7 +76,7 @@ static const char *mark(const struct session *s, enum ui_role *role)
 {
     const char *status = workspace_status(s);
 
-    if (!strcmp(status, "working")) {
+    if (session_in_turn(s)) {
         *role = UI_SPIN;
         return spin_glyph(frame);
     }

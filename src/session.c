@@ -2511,6 +2511,13 @@ void session_republish(const struct session *s)
         publish(s, session_busy(s) ? "working" : "finished");
 }
 
+int session_in_turn(const struct session *s)
+{
+    if (!s)
+        return 0;
+    return s->running || (s->agent && s->agent->turn_open && s->agent->turn_open(s->agent));
+}
+
 int session_busy(const struct session *s)
 {
     if (!s)

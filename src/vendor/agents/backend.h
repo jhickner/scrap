@@ -226,6 +226,8 @@ struct Backend {
     int  (*busy)(Backend *b);
     /* Unanswered task notifications to resend after a process restart, or NULL. */
     const char *(*wake_owed)(Backend *b);
+    /* Whether a turn the agent started for itself is open between sends. */
+    int  (*turn_open)(Backend *b);
 
     /* NULL until known, or when the driver never reports it. */
     const char *(*session_id)(Backend *b);
@@ -623,6 +625,11 @@ static int backend_claude_busy(Backend *b) {
     return x->client ? claude_background_tasks(x->client) : 0;
 }
 
+static int backend_claude_turn_open(Backend *b) {
+    backend_claude *x = b->ctx;
+    return x->client ? claude_turn_open(x->client) : 0;
+}
+
 static const char *backend_claude_wake_owed(Backend *b) {
     backend_claude *x = b->ctx;
     return x->client ? claude_wake_owed(x->client) : NULL;
@@ -685,6 +692,7 @@ static Backend *backend_claude_open(const backend_opts *o) {
     b->idle_pump = backend_claude_idle_pump;
     b->busy = backend_claude_busy;
     b->wake_owed = backend_claude_wake_owed;
+    b->turn_open = backend_claude_turn_open;
     b->session_id = backend_claude_session_id;
     b->model = backend_claude_model;
     b->effort = backend_claude_effort;
@@ -1084,6 +1092,11 @@ static int backend_grok_busy(Backend *b) {
     return x->client ? grok_background_tasks(x->client) : 0;
 }
 
+static int backend_grok_turn_open(Backend *b) {
+    backend_grok *x = b->ctx;
+    return x->client ? grok_turn_open(x->client) : 0;
+}
+
 static const char *backend_grok_wake_owed(Backend *b) {
     backend_grok *x = b->ctx;
     return x->client ? grok_wake_owed(x->client) : NULL;
@@ -1172,6 +1185,7 @@ static Backend *backend_grok_open(const backend_opts *o) {
     b->idle_pump = backend_grok_idle_pump;
     b->busy = backend_grok_busy;
     b->wake_owed = backend_grok_wake_owed;
+    b->turn_open = backend_grok_turn_open;
     b->session_id = backend_grok_session_id;
     b->model = backend_grok_model;
     b->effort = backend_grok_effort;

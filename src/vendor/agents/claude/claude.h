@@ -214,6 +214,9 @@ int claude_background_tasks(claude_client *c);
  * still answers them. */
 const char *claude_wake_owed(claude_client *c);
 
+/* Whether a turn the CLI started for itself is open between sends. */
+int claude_turn_open(claude_client *c);
+
 /* Ask the CLI to abandon the in-flight turn (the Agent SDK's interrupt control
  * request). The turn still ends with a result event, so the stream stays usable
  * for the next send. Returns nonzero on success. */
@@ -1340,6 +1343,8 @@ int claude_idle_pump(claude_client *c) {
 int claude_background_tasks(claude_client *c) { return c ? c->bg_tasks : 0; }
 
 const char *claude_wake_owed(claude_client *c) { return c ? c->owed : NULL; }
+
+int claude_turn_open(claude_client *c) { return c ? c->turn_open : 0; }
 
 static char *cl_send(claude_client *c, const char *user_text, int content_block) {
     if (!c || !user_text) return NULL;

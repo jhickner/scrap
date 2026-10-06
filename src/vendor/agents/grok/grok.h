@@ -156,6 +156,9 @@ int grok_background_tasks(grok_client *c);
  * the process can send this to the resumed session so the model still answers. */
 const char *grok_wake_owed(grok_client *c);
 
+/* Whether a turn grok started for itself is open between sends. */
+int grok_turn_open(grok_client *c);
+
 /* Ask the agent to abandon the in-flight turn (ACP session/cancel). The turn
  * still ends with a prompt response, so the stream stays usable for the next
  * send. Returns nonzero on success. */
@@ -916,6 +919,8 @@ static void gk_turn_closed(grok_client *c) {
 }
 
 const char *grok_wake_owed(grok_client *c) { return c ? c->owed : NULL; }
+
+int grok_turn_open(grok_client *c) { return c ? c->turn_open : 0; }
 
 /* Subagent and background-command lifecycle, from the _x.ai notifications. */
 static void gk_task_update(grok_client *c, cJSON *u) {

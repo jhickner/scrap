@@ -86,6 +86,7 @@ void session_turn_wait(struct session *s);
 void session_interrupt(struct session *s);
 
 int  session_busy(const struct session *s);
+int  session_in_turn(const struct session *s);
 
 void session_set_unseen(struct session *s, int on);
 

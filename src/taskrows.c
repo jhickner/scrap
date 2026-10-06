@@ -127,7 +127,7 @@ void taskrows_paint(int cols)
         for (int p = 0; p < pad; p++)
             ui_put(" ");
         ui_esc(ui_style(UI_RESET));
-        ui_esc(ui_style(UI_ACCENT));
+        ui_esc(ui_style(UI_SPIN));
         ui_put(took);
         ui_esc(ui_style(UI_RESET));
     }
