@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include "session.h"
+#include "highlight.h"
 #include "status.h"
 #include "tasks.h"
 #include "text.h"
@@ -104,7 +105,7 @@ void taskrows_paint(int cols)
             ui_esc(ui_style(UI_ERROR));
             ui_put("\xc3\x97");
         } else {
-            ui_esc(ui_style(UI_DIM));
+            ui_esc(ui_style(UI_SPIN));
             ui_put(spin_glyph((int)frame));
         }
         ui_esc(ui_style(UI_RESET));
@@ -114,10 +115,19 @@ void taskrows_paint(int cols)
         for (size_t w = ui_cells(kind[i]); w < kind_w + 2; w++)
             ui_put(" ");
         size_t fit = room > 0 ? ui_fit_bytes(line, (size_t)room) : 0;
-        ui_putn(line, fit);
+        if (what == a->cmd) {
+            unsigned char roles[sizeof line];
+            highlight_shell(line, strlen(line), roles);
+            ui_put_spans(line, fit, roles, UI_RESET);
+            ui_esc(ui_style(UI_RESET));
+        } else {
+            ui_putn(line, fit);
+        }
         int pad = room > 0 ? room - (int)ui_cells_n(line, fit) + 2 : 1;
         for (int p = 0; p < pad; p++)
             ui_put(" ");
+        ui_esc(ui_style(UI_RESET));
+        ui_esc(ui_style(UI_ACCENT));
         ui_put(took);
         ui_esc(ui_style(UI_RESET));
     }
