@@ -681,7 +681,8 @@ int image_show(const char *path, int indent)
     return ok;
 }
 
-uint32_t image_load(const char *path, int cols_box, int rows_box, int *cols, int *rows)
+static uint32_t load_as(uint32_t id, const char *path, int cols_box, int rows_box,
+                        int *cols, int *rows)
 {
     if (!image_available() || !path || !*path || cols_box < 1 || rows_box < 1)
         return 0;
@@ -709,12 +710,24 @@ uint32_t image_load(const char *path, int cols_box, int rows_box, int *cols, int
         }
     }
 
-    uint32_t id = full_id();
     int img_w = 0, img_h = 0;
     if (!transmit(path, id, px_w, px_h, &img_w, &img_h))
         return 0;
 
     image_fill(img_w, img_h, cw, ch, cols_box, rows_box, cols, rows);
+    return id;
+}
+
+uint32_t image_load(const char *path, int cols_box, int rows_box, int *cols, int *rows)
+{
+    return load_as(full_id(), path, cols_box, rows_box, cols, rows);
+}
+
+uint32_t image_thumb(const char *path, int cols_box, int rows_box, int *cols, int *rows)
+{
+    uint32_t id = load_as(next_id(), path, cols_box, rows_box, cols, rows);
+    if (id)
+        kg_virtual_place(id, *cols, *rows);
     return id;
 }
 

@@ -32,7 +32,9 @@ tools/rig/scraprig stop $n
   output, as a Bash tool call would; `scrap` on its PATH is the built binary.
   `pvsay` on its PATH is `tools/rig/fake-pvsay`: it appends its argv and stdin
   to `/tmp/scraprig/<name>/pvsay.log` and sleeps 30s, so `/voice on` speaks
-  nothing aloud.
+  nothing aloud. `mem` is `tools/rig/fake-mem`: seeded `personal` and `work`
+  stores kept in `/tmp/scraprig/<name>/mem.json`, so `/mem` never touches the
+  real store.
 - `--share dir` gives instances started with the same dir one set of live
   sessions, dispatch requests, and session names, so they can reach each
   other with `scrap send`.

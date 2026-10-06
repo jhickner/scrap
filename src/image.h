@@ -31,6 +31,8 @@ int         image_index_of(uint32_t id);
 
 uint32_t image_load(const char *path, int cols_box, int rows_box, int *cols, int *rows);
 
+uint32_t image_thumb(const char *path, int cols_box, int rows_box, int *cols, int *rows);
+
 void image_place(uint32_t id, int indent, int cols, int rows);
 
 void image_drop(uint32_t id);

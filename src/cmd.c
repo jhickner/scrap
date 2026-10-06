@@ -15,6 +15,7 @@
 #include "chrome.h"
 #include "frontend.h"
 #include "hud.h"
+#include "memui.h"
 #include "models.h"
 #include "newsession.h"
 #include "pick.h"
@@ -1472,6 +1473,15 @@ static void do_sessions(struct session *s, const char *arg)
     sessionswitch_run();
 }
 
+static void do_mem(struct session *s, const char *arg)
+{
+    (void)s;
+    (void)arg;
+    if (!can_pick("/mem", 0))
+        return;
+    memui_run();
+}
+
 static void do_status(struct session *s, const char *arg)
 {
     (void)arg;
@@ -1649,6 +1659,7 @@ static const struct cmd COMMANDS[] = {
     {"/resume", "resume a past conversation", NULL, 0, do_resume},
     {"/sessions", "sessions in every window, and on other tailnet machines", NULL,
      CMD_LIVE, do_sessions},
+    {"/mem", "browse and edit the mem store", NULL, CMD_LIVE, do_mem},
     {"/fork", "fork into a new tab, tmux split, or tmux window",
      "[tab|horizontal|vertical|window]", CMD_LIVE, do_fork},
     {"/split", "open a shell split in this directory", "[h|v|w]", 0, do_split},

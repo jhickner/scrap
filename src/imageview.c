@@ -19,6 +19,7 @@ static const char HINT[] =
     "\xe2\x86\x90\xe2\x86\x92 step  \xc2\xb7  x close";
 
 struct view {
+    const char *const *paths;
     int         n;
     int         at;
     uint32_t    id;
@@ -26,7 +27,10 @@ struct view {
     int         box_cols, box_rows;
 };
 
-static const char *shot_path(const struct view *v) { return image_path_at(v->at); }
+static const char *shot_path(const struct view *v)
+{
+    return v->paths ? v->paths[v->at] : image_path_at(v->at);
+}
 
 static const char *shot_name(const struct view *v)
 {
@@ -97,11 +101,17 @@ static void step(struct view *v, int delta)
 
 int imageview_open(int at)
 {
+    return imageview_open_paths(NULL, image_count(), at);
+}
+
+int imageview_open_paths(const char *const *paths, int n, int at)
+{
     if (!frontend_has_keyboard() || !tty_is_raw())
         return 0;
 
     struct view v = {0};
-    v.n = image_count();
+    v.paths = paths;
+    v.n = n;
     v.at = at;
     if (v.at < 0 || v.at >= v.n)
         return 0;
