@@ -28,6 +28,7 @@ struct item {
     int    borrowed;
     int    hcols;
     int    hrows;
+    int    open;
     unsigned id;
     const char        *kind;
     viewport_encode_fn encode;
@@ -66,6 +67,7 @@ static struct open_frame open_stack[OPEN_DEPTH];
 static int open_depth;
 
 static int in_render;
+static struct item *rendering;
 
 static char **chrome_rows;
 static int    chrome_n, chrome_cap;
@@ -347,6 +349,43 @@ void viewport_repad(void)
     }
     dirty = 1;
     layout_changed();
+}
+
+#define FOLD_LINK "scrap-fold:"
+
+int viewport_fold_open(void)
+{
+    return rendering && rendering->open;
+}
+
+void viewport_fold_button(void)
+{
+    unsigned id = rendering ? rendering->id : open_wrapped && open_reflow ? next_id : 0;
+    if (!id)
+        return;
+    char link[64];
+    snprintf(link, sizeof link, "\x1b]8;;" FOLD_LINK "%u\x1b\\", id);
+    ui_esc(ui_style(UI_ACCENT));
+    ui_esc(link);
+    ui_put(viewport_fold_open() ? "hide" : "show all");
+    ui_esc("\x1b]8;;\x1b\\");
+    ui_esc(ui_style(UI_RESET));
+}
+
+int viewport_fold_click(int row, int col)
+{
+    char *url = viewport_link_at(row, col);
+    if (!url)
+        return 0;
+    struct item *it = NULL;
+    if (!strncmp(url, FOLD_LINK, strlen(FOLD_LINK)))
+        it = item_by_mark((unsigned)strtoul(url + strlen(FOLD_LINK), NULL, 10));
+    free(url);
+    if (!it)
+        return 0;
+    it->open = !it->open;
+    viewport_item_update(it->id);
+    return 1;
 }
 
 void viewport_item_update(unsigned mark)
@@ -982,7 +1021,9 @@ static void item_rows(struct item *it, int W)
         return;
     ui_capture_begin(W);
     in_render++;
+    rendering = it;
     it->render(it->ud, W);
+    rendering = NULL;
     in_render--;
     char *painted = ui_capture_end();
     rows_set(it, painted ? painted : "", W);

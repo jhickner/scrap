@@ -7,6 +7,7 @@
 
 #include "ui.h"
 #include "text.h"
+#include "viewport.h"
 
 #define MAX_BYTES  (1u << 20)
 #define MAX_ROWS   16
@@ -342,14 +343,15 @@ int filediff_render_patch(const char *patch)
     if (!lines_split(&lines, patch, strlen(patch)))
         return 0;
 
-    int in_hunk = 0, rows = 0, changed = 0, dropped = 0;
+    int max = viewport_fold_open() ? lines.count : MAX_ROWS;
+    int in_hunk = 0, rows = 0, changed = 0, dropped = 0, folded = 0;
     for (int i = 0; i < lines.count; i++) {
         const char *p = lines.p[i];
         size_t n = lines.n[i];
 
         if (n >= 7 && memcmp(p, "@@file ", 7) == 0) {
             in_hunk = 0;
-            if (rows < MAX_ROWS) {
+            if (rows < max) {
                 char path[1024];
                 diff_text(p + 7, n - 7, path, sizeof path);
                 print_note(path);
@@ -357,7 +359,7 @@ int filediff_render_patch(const char *patch)
             continue;
         }
         if (n >= 2 && p[0] == '@' && p[1] == '@') {
-            if (in_hunk && rows > 0 && rows < MAX_ROWS)
+            if (in_hunk && rows > 0 && rows < max)
                 print_note("\xe2\x8b\xae");
             in_hunk = 1;
             continue;
@@ -367,7 +369,8 @@ int filediff_render_patch(const char *patch)
 
         if (p[0] == '+' || p[0] == '-')
             changed++;
-        if (rows >= MAX_ROWS) {
+        if (rows >= max) {
+            folded = 1;
             if (p[0] == '+' || p[0] == '-')
                 dropped++;
             continue;
@@ -378,11 +381,16 @@ int filediff_render_patch(const char *patch)
     }
     lines_free(&lines);
 
-    if (dropped > 0) {
-        char note[64];
-        snprintf(note, sizeof note, "+%d more line%s", dropped,
-                 dropped == 1 ? "" : "s");
-        print_note(note);
+    char note[64] = "";
+    if (dropped > 0)
+        snprintf(note, sizeof note, "+%d more line%s  ", dropped, dropped == 1 ? "" : "s");
+    if (folded || rows > MAX_ROWS) {
+        ui_put("    ");
+        ui_esc(ui_style(UI_DIM));
+        ui_put(note);
+        ui_esc(ui_style(UI_RESET));
+        viewport_fold_button();
+        ui_put("\n");
     }
     return changed > 0;
 }

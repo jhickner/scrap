@@ -361,8 +361,18 @@ struct echo_item {
 
 static void echo_paint(const struct echo_item *e)
 {
-    struct ui_wrap w = bar_wrap(queued_budget(ui_columns()), e->role, e->cap, NULL);
+    size_t budget = queued_budget(ui_columns());
+    int    open = viewport_fold_open();
+    int    folds = e->cap > 0 && painted_rows(e->text, budget, e->cap + 1, NULL) > e->cap;
+    struct ui_wrap w = bar_wrap(budget, e->role, open ? 0 : e->cap, NULL);
     ui_wrap_paint(e->text, &w);
+    if (!folds)
+        return;
+    ui_esc(ui_style(e->role));
+    ui_put(UI_BAR " ");
+    ui_esc(ui_style(UI_RESET));
+    viewport_fold_button();
+    ui_put("\n");
 }
 
 static int echo_pad_after(const struct echo_item *e)

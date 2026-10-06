@@ -319,7 +319,7 @@ static int clicked(void *ud, int row, int col)
             workspace_show(tab);
         return 1;
     }
-    if (imageview_click(row, col) || docview_click(row, col))
+    if (imageview_click(row, col) || docview_click(row, col) || viewport_fold_click(row, col))
         return 1;
     char *cmd = md_command_at(row, col);
     if (cmd)

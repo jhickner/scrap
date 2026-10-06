@@ -624,10 +624,19 @@ void view_tool_call(const char *name, const char *arg)
     w.budget = (size_t)budget;
     w.indent = indent;
     w.role = UI_RESET;
-    w.max_rows = TOOL_CALL_ROWS;
+    w.max_rows = TOOL_CALL_ROWS + 1;
+    w.measure = 1;
+    int folds = ui_wrap_paint(arg, &w) > TOOL_CALL_ROWS;
+    w.measure = 0;
+    w.max_rows = viewport_fold_open() ? 0 : TOOL_CALL_ROWS;
     w.spans = spans;
     ui_wrap_paint(arg, &w);
     free(spans);
+    if (folds) {
+        ui_pad(indent);
+        viewport_fold_button();
+        ui_put("\n");
+    }
 }
 
 static unsigned char *row_spans(const char *name, const char *row, size_t prefix)
@@ -718,14 +727,30 @@ static void preview_elision(int lines)
         return;
     nest_pad(PREVIEW_INDENT);
     ui_esc(ui_style(UI_DIM));
-    ui_printf("+%d line%s", lines, lines == 1 ? "" : "s");
+    ui_printf("+%d line%s  ", lines, lines == 1 ? "" : "s");
     ui_esc(ui_style(UI_RESET));
+    viewport_fold_button();
     ui_put("\n");
+}
+
+static int preview_open(const char *text, enum ui_role role)
+{
+    if (!viewport_fold_open())
+        return 0;
+    struct ui_wrap w = {0};
+    w.budget = (size_t)preview_budget();
+    w.first_indent = w.indent = PREVIEW_INDENT + nest;
+    w.role = role;
+    ui_wrap_paint(text, &w);
+    nest_pad(PREVIEW_INDENT);
+    viewport_fold_button();
+    ui_put("\n");
+    return 1;
 }
 
 void view_tool_error(const char *text)
 {
-    if (!text || !*text)
+    if (!text || !*text || preview_open(text, UI_ERROR))
         return;
 
     const char *head = NULL;
@@ -770,7 +795,7 @@ void view_tool_error(const char *text)
 
 static void view_tool_output(const char *text, enum ui_role role)
 {
-    if (!text || !*text)
+    if (!text || !*text || preview_open(text, role))
         return;
 
     int columns = ui_columns();
@@ -814,11 +839,5 @@ static void view_tool_output(const char *text, enum ui_role role)
             remaining++;
     if (*p && shown >= TOOL_PREVIEW_ROWS)
         remaining++;
-    if (remaining > 0) {
-        ui_put("    ");
-        ui_esc(ui_style(UI_DIM));
-        ui_printf("+%d line%s", remaining, remaining == 1 ? "" : "s");
-        ui_esc(ui_style(UI_RESET));
-        ui_put("\n");
-    }
+    preview_elision(remaining);
 }
