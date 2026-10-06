@@ -27,4 +27,4 @@
   /clear-history  start a fresh conversation and clear the scrollback
   /handoff  write a handoff for review, then continue from it in a fresh conversation
   /autohandoff  hand off to a fresh conversation when context reaches a percent
-  /model  switch model
+  /autobackend  switch to the next backend below the quota limit
