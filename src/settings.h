@@ -54,6 +54,7 @@
 #define SETTING_NAME_BADGE "name_badge"
 
 #define SETTING_STAMP "stamp"
+#define SETTING_STAMP_CHECK "stamp_check"
 
 #define SETTING_AUTO_HANDOFF "auto_handoff"
 #define SETTING_AUTO_BACKEND "auto_backend"

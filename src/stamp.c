@@ -274,7 +274,9 @@ void stamp_show(void)
 {
     if (!settings_get_int(SETTING_STAMP, 1))
         return;
-    phrase = PHRASES[arc4random_uniform(sizeof PHRASES / sizeof PHRASES[0])];
+    phrase = settings_get_int(SETTING_STAMP_CHECK, 0)
+                 ? "*"
+                 : PHRASES[arc4random_uniform(sizeof PHRASES / sizeof PHRASES[0])];
     viewport_touch();
 }
 
