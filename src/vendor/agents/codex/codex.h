@@ -761,10 +761,10 @@ static int cx_open_thread_once(codex_client *c, const char *resume, int note) {
     cJSON_AddStringToObject(p, "approvalPolicy", "never");
     cJSON_AddStringToObject(p, "sandbox", c->sandbox);
     cJSON_AddBoolToObject(p, "experimentalRawEvents", 1);
-    if (resume && *resume) {
+    if (resume && *resume)
         cJSON_AddStringToObject(p, "threadId", resume);
-    } else {
-        if (c->model) cJSON_AddStringToObject(p, "model", c->model);
+    if (c->model) cJSON_AddStringToObject(p, "model", c->model);
+    if (!(resume && *resume)) {
         if (c->sys) cJSON_AddStringToObject(p, "developerInstructions", c->sys);
         if (c->ephemeral) cJSON_AddBoolToObject(p, "ephemeral", 1);
     }
