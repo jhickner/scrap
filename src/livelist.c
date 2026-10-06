@@ -170,9 +170,9 @@ void livelist_channels(char *out, int size)
     memmove(out, out + (*out == ' '), strlen(out + (*out == ' ')) + 1);
 }
 
-void livelist_publish(const struct session *s, const char *status)
+void livelist_publish(const struct session *s, const char *state)
 {
-    if (!publishing || !s || !status)
+    if (!publishing || !s || !state)
         return;
     int slot = slot_of(s);
     if (slot < 0)
@@ -210,7 +210,7 @@ void livelist_publish(const struct session *s, const char *status)
         parent_of(id, up, sizeof up);
     cJSON_AddStringToObject(rec, "parent", up);
     cJSON_AddStringToObject(rec, "title", name);
-    cJSON_AddStringToObject(rec, "status", status);
+    cJSON_AddStringToObject(rec, "state", state);
     char channels[48];
     livelist_channels(channels, sizeof channels);
     cJSON_AddStringToObject(rec, "channels", channels);
@@ -343,7 +343,7 @@ static int load_dir(const char *where, int live, struct live_session **out)
             chain_find(v->id, v->chain, sizeof v->chain);
         copy_str(v->parent, sizeof v->parent, rec, "parent");
         copy_str(v->title, sizeof v->title, rec, "title");
-        copy_str(v->status, sizeof v->status, rec, "status");
+        copy_str(v->state, sizeof v->state, rec, "state");
         copy_str(v->channels, sizeof v->channels, rec, "channels");
         v->unseen = (int)number(rec, "unseen");
         copy_str(v->pane, sizeof v->pane, rec, "pane");

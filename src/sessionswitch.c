@@ -159,7 +159,7 @@ static void fill_live(struct row *r, const struct live_session *v)
              models_short_name(v->backend, v->label[0] ? v->label : v->model),
              v->name[0] ? " @" : "", v->name);
     snprintf(r->when, sizeof r->when, "%s", when);
-    row_status(r, v->status);
+    row_status(r, v->state);
 }
 
 static void live_rows(struct row *rows, int *n, const struct live_session *live, int count)
@@ -221,7 +221,7 @@ static void remote_rows(struct row *rows, int *n, const cJSON *m)
         r.ts = cJSON_IsNumber(ts) ? (long)ts->valuedouble : 0;
         if (r.ts)
             text_ago(r.ts, 1, r.when, sizeof r.when);
-        row_status(&r, jstr(o, "status"));
+        row_status(&r, jstr(o, "state"));
         rows[(*n)++] = r;
     }
 }

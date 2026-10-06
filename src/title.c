@@ -3,19 +3,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
-#include "app.h"
 #include "kvlog.h"
-#include "vendor/agents/backend.h"
 #include "text.h"
 
-#define CLAUDE_TITLE_MODEL "claude-haiku-4-5-20251001"
 #define TITLE_MAX   80
-
-#define EXCERPT     1200
 
 int title_lookup(const char *id, char *out, size_t size)
 {
@@ -70,64 +62,4 @@ int title_set(const char *id, const char *name)
         return 0;
     write_cache(id, text);
     return 1;
-}
-
-static void ask_and_cache(const char *id, const char *backend, const char *model,
-                          const char *cwd, const char *prompt, const char *reply)
-{
-    char text[2 * EXCERPT + 256];
-    snprintf(text, sizeof text,
-             "Name this conversation in 3 to 6 words: what it is about, in sentence case, "
-             "no quotes and no final period. Reply with the title alone.\n\n"
-             "Asked:\n%.*s\n\nAnswered:\n%.*s\n",
-             EXCERPT, prompt ? prompt : "", EXCERPT, reply ? reply : "");
-
-    backend_opts o = {0};
-    o.name = backend;
-    o.model = (!backend || strcmp(backend, "claude") == 0) ? CLAUDE_TITLE_MODEL : model;
-    o.cwd = cwd;
-    o.system = "Name the conversation without using tools.";
-    o.session_name = APP_NAME " title helper";
-    o.ephemeral = 1;
-    o.disable_tools = 1;
-    Backend *b = backend_open_ex(&o);
-    if (!b)
-        return;
-    char *answer = b->ask(b, text);
-    if (answer && tidy(answer))
-        write_cache(id, answer);
-    free(answer);
-    b->close(b);
-}
-
-void title_request(const char *id, const char *backend, const char *model,
-                   const char *cwd, const char *prompt, const char *reply)
-{
-    if (!id || !*id)
-        return;
-
-    pid_t pid = fork();
-    if (pid < 0)
-        return;
-    if (pid == 0) {
-        if (fork() == 0) {
-            setsid();
-            int null = open("/dev/null", O_RDWR);
-            if (null >= 0) {
-                dup2(null, STDIN_FILENO);
-                dup2(null, STDOUT_FILENO);
-                dup2(null, STDERR_FILENO);
-                if (null > STDERR_FILENO)
-                    close(null);
-            }
-
-            for (int fd = getdtablesize() - 1; fd > STDERR_FILENO; fd--)
-                close(fd);
-
-            ask_and_cache(id, backend, model, cwd, prompt, reply);
-        }
-        _exit(0);
-    }
-    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
-        ;
 }

@@ -327,8 +327,7 @@ int dispatch_spawn(const char *backend, const char *model, const char *effort, c
         char name[81];
         struct session *s = workspace_at(at);
         snprintf(name, sizeof name, "%s", title);
-        if (session_rename(s, name) == SESSION_RENAME_OK)
-            session_set_naming(s, 0);
+        session_rename(s, name);
     }
     if (resume)
         workspace_replay(at);

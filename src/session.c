@@ -72,12 +72,8 @@ struct session {
     int      quota_failed;
     int      autobackend_due;
     char     title[128];
-    char     stale_title[128];
     char     held_title[128];
-    int      announce_title;
-    int      retitle;
-    int      named;
-    double   named_at;
+    double   title_polled;
     char    *prompt;
     char    *last_reply;
     char    *failed_prompt;
@@ -104,7 +100,6 @@ struct session {
     void    *observer_ud;
     int    (*abort_hook)(void *ud);
     void    *abort_ud;
-    int      skip_naming;
     int      thinking;
     int      compact;
     int      resetting;
@@ -588,21 +583,12 @@ static void usage_poll(struct session *s)
 static int adopt_title(struct session *s)
 {
     char found[sizeof s->title];
-    if (!title_lookup(s->id, found, sizeof found))
+    if (!title_lookup(s->id, found, sizeof found) || !strcmp(found, s->title))
         return 0;
-    if (s->stale_title[0] && !strcmp(found, s->stale_title))
-        return 0;
-    s->stale_title[0] = '\0';
     snprintf(s->title, sizeof s->title, "%s", found);
-    status_set_note(s->title);
+    if (s == live)
+        status_set_note(s->title);
     publish(s, s->idle_busy ? "working" : "finished");
-    if (s->announce_title) {
-        s->announce_title = 0;
-        viewport_item_begin(VIEWPORT_ROWS(1, 1));
-        ui_note("renamed to %s", s->title);
-        viewport_item_end();
-        ui_flush();
-    }
     return 1;
 }
 
@@ -618,33 +604,10 @@ static void name_poll(struct session *s)
         set_id(s, id);
     }
 
-    if (s->id[0] && s->held_title[0]) {
-        title_set(s->id, s->held_title);
-        s->held_title[0] = '\0';
-        s->named = 1;
-        s->retitle = 0;
-        adopt_title(s);
-    }
-
-    if (s->title[0])
-        return;
-
-    if (!s->named) {
-        if (s->skip_naming || !s->prompt)
-            return;
-        const char *model = s->resolved && *s->resolved ? s->resolved : s->model;
-        title_request(s->id, s->backend, model, s->cwd, s->prompt, s->last_reply);
-        s->named = 1;
-        s->retitle = 0;
-        s->named_at = now_seconds();
-        return;
-    }
-
     double now = now_seconds();
-    if (now - s->named_at < 1.0)
+    if (now - s->title_polled < 1.0)
         return;
-    s->named_at = now;
-
+    s->title_polled = now;
     adopt_title(s);
 }
 
@@ -660,8 +623,6 @@ const char *session_rename_error(enum session_rename why)
     case SESSION_RENAME_NO_STORE:
         return "the name would not stay written — check ~/.config/" APP_NAME
                "/titles";
-    case SESSION_RENAME_NO_SOURCE:
-        return "nothing to name it from yet — the model names it from a turn";
     case SESSION_RENAME_OK:
         break;
     }
@@ -673,44 +634,22 @@ enum session_rename session_rename(struct session *s, const char *name)
     if (!s)
         return SESSION_RENAME_NO_ID;
 
-    if (!s->id[0] && name && *name) {
+    if (!s->id[0]) {
         if (!title_clean(name, s->held_title, sizeof s->held_title))
             return SESSION_RENAME_BAD_NAME;
         snprintf(s->title, sizeof s->title, "%s", s->held_title);
-        s->stale_title[0] = '\0';
-        s->named = 1;
-        s->retitle = 0;
-        status_set_note(s->title);
+        if (s == live)
+            status_set_note(s->title);
         publish(s, s->idle_busy ? "working" : "finished");
         return SESSION_RENAME_OK;
     }
 
-    if (!s->id[0])
-        return SESSION_RENAME_NO_ID;
-
-    if (name && *name) {
-        if (!title_set(s->id, name))
-            return SESSION_RENAME_BAD_NAME;
-        s->stale_title[0] = '\0';
-        if (!adopt_title(s))
-            return SESSION_RENAME_NO_STORE;
-        s->named = 1;
-        s->retitle = 0;
-        return SESSION_RENAME_OK;
-    }
-
-    if (!s->prompt)
-        return SESSION_RENAME_NO_SOURCE;
-
-    const char *model = s->resolved && *s->resolved ? s->resolved : s->model;
-    title_request(s->id, s->backend, model, s->cwd, s->prompt, s->last_reply);
-    snprintf(s->stale_title, sizeof s->stale_title, "%s", s->title);
-    s->title[0] = '\0';
-    s->named = 1;
-    s->retitle = 0;
-    s->named_at = now_seconds();
-    s->announce_title = 1;
-    status_set_note(NULL);
+    char found[sizeof s->title];
+    if (!title_set(s->id, name))
+        return SESSION_RENAME_BAD_NAME;
+    if (!title_lookup(s->id, found, sizeof found))
+        return SESSION_RENAME_NO_STORE;
+    adopt_title(s);
     return SESSION_RENAME_OK;
 }
 
@@ -1365,8 +1304,6 @@ void session_set_abort_hook(struct session *s, int (*fn)(void *ud), void *ud)
     s->abort_ud = ud;
 }
 
-void session_set_naming(struct session *s, int on) { s->skip_naming = !on; }
-
 void session_set_thinking(struct session *s, int on) { s->thinking = on; }
 
 int session_thinking(const struct session *s) { return s->thinking; }
@@ -1450,16 +1387,10 @@ static void set_id(struct session *s, const char *id)
         if (s->held_title[0]) {
             title_set(s->id, s->held_title);
             s->held_title[0] = '\0';
-            s->named = 1;
-            s->retitle = 0;
         } else {
             s->title[0] = '\0';
-            s->stale_title[0] = '\0';
-            s->announce_title = 0;
-            s->named = 0;
         }
-        if (!s->retitle)
-            title_lookup(s->id, s->title, sizeof s->title);
+        title_lookup(s->id, s->title, sizeof s->title);
         if (!s->remote && s->context_tokens <= 0) {
             long tokens, window;
             if (sessionload_context(s->backend, s->cwd, s->id, &tokens, &window)) {
@@ -1902,11 +1833,7 @@ static void started_over(struct session *s)
 {
     reset_turns(s, RESET_BLOCK | RESET_WORKDIR);
     s->title[0] = '\0';
-    s->stale_title[0] = '\0';
     s->held_title[0] = '\0';
-    s->announce_title = 0;
-    s->retitle = 1;
-    s->named = 0;
     s->autohandoff = AUTOHANDOFF_IDLE;
     status_set_note(NULL);
 
@@ -2005,11 +1932,7 @@ int session_clear(struct session *s)
     tasks_reset(&s->tasks, s->backend);
 
     s->title[0] = '\0';
-    s->stale_title[0] = '\0';
     s->held_title[0] = '\0';
-    s->announce_title = 0;
-    s->retitle = 1;
-    s->named = 0;
     status_set_note(NULL);
 
     const char *id = s->agent->session_id(s->agent);
@@ -2041,17 +1964,6 @@ int session_history_file(const struct session *s, char *out, size_t size)
     if (access(out, F_OK) != 0 && history_file(s->name, legacy, sizeof legacy))
         rename(legacy, out);
     return 1;
-}
-
-static void update_title(struct session *s)
-{
-    if (!s->id[0] || s->title[0])
-        return;
-    if (!s->named) {
-        name_poll(s);
-        return;
-    }
-    adopt_title(s);
 }
 
 static int dir_alive(const char *path)
@@ -2370,7 +2282,7 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     gitinfo_forget();
 
     if (!s->remote) {
-        update_title(s);
+        adopt_title(s);
         remember_model(s);
         remember_window(s);
     }

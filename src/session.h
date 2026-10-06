@@ -42,8 +42,6 @@ void session_rate_limit(struct session *s, backend_rate_limit *out);
 
 void session_set_abort_hook(struct session *s, int (*fn)(void *ud), void *ud);
 
-void session_set_naming(struct session *s, int on);
-
 void session_set_thinking(struct session *s, int on);
 int  session_thinking(const struct session *s);
 
@@ -159,7 +157,6 @@ enum session_rename {
     SESSION_RENAME_NO_ID,
     SESSION_RENAME_BAD_NAME,
     SESSION_RENAME_NO_STORE,
-    SESSION_RENAME_NO_SOURCE,
 };
 
 enum session_rename session_rename(struct session *s, const char *name);

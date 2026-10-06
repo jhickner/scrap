@@ -664,7 +664,7 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "sync"))
         return agentsync_main(argc - 1, argv + 1);
     if (argc > 1 && (!strcmp(argv[1], "ls") || !strcmp(argv[1], "read") ||
-                     !strcmp(argv[1], "send") || !strcmp(argv[1], "open") || !strcmp(argv[1], "new") ||
+                     !strcmp(argv[1], "send") || !strcmp(argv[1], "status") || !strcmp(argv[1], "open") || !strcmp(argv[1], "new") ||
                      !strcmp(argv[1], "attach") || !strcmp(argv[1], "yank") || !strcmp(argv[1], "close")))
         return intercom_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "hub"))
@@ -951,7 +951,6 @@ int main(int argc, char **argv)
             return 1;
         }
         session_set_quiet(session, 1);
-        session_set_naming(session, 0);
         int ok = session_turn(session, prompt_arg);
         session_free(session);
         return ok ? 0 : 1;

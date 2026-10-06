@@ -15,7 +15,6 @@
 
 struct session {
     char title[128];
-    int  skip_naming;
 };
 
 static struct session spawned;
@@ -23,7 +22,6 @@ static struct session current_tab;
 static int            spawn_at = 1;
 static int            spawned_n;
 static int            renamed;
-static int            naming_calls;
 static int            turn_running;
 static int            render_n;
 static int            send_n;
@@ -164,18 +162,10 @@ enum session_rename session_rename(struct session *s, const char *name)
     return SESSION_RENAME_OK;
 }
 
-void session_set_naming(struct session *s, int on)
-{
-    naming_calls++;
-    if (s)
-        s->skip_naming = !on;
-}
-
 static void reset_case(void)
 {
     spawned_n = 0;
     renamed = 0;
-    naming_calls = 0;
     turn_running = 0;
     render_n = 0;
     send_n = 0;
@@ -282,8 +272,6 @@ int main(void)
         fail("spawn fields");
     if (renamed != 1 || strcmp(last_title, "name dispatched worker tabs"))
         fail("title is the session name");
-    if (naming_calls != 1 || !spawned.skip_naming)
-        fail("dispatched title is not auto-replaced");
     if (render_n != 1 || echo_n != 1 || strcmp(last_echo, "do the thing"))
         fail("spawn echoes the prompt");
     if (read_res(dir, "titled"))
@@ -302,7 +290,7 @@ int main(void)
     poll_once();
     if (spawned_n != 1)
         fail("spawn without title");
-    if (renamed || naming_calls)
+    if (renamed)
         fail("omitted title leaves auto-titling");
     expect_res(dir, "plain", "\"session\":\"sess-1\"", "known id replies at once");
 
@@ -311,7 +299,7 @@ int main(void)
     poll_once();
     if (spawned_n != 1)
         fail("spawn with empty title");
-    if (renamed || naming_calls)
+    if (renamed)
         fail("empty title is ignored");
 
     reset_case();

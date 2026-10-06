@@ -1313,16 +1313,13 @@ static void do_split(struct session *s, const char *arg)
 
 static void do_rename(struct session *s, const char *arg)
 {
-    int named = arg && *arg;
-    enum session_rename why = session_rename(s, named ? arg : NULL);
+    enum session_rename why = session_rename(s, arg);
 
     viewport_item_begin(VIEWPORT_ROWS(1, 1));
     if (why != SESSION_RENAME_OK)
         ui_error("%s", session_rename_error(why));
-    else if (named)
-        ui_note("renamed to %s", session_title(s));
     else
-        ui_note("naming this session again");
+        ui_note("renamed to %s", session_title(s));
     viewport_item_end();
     ui_flush();
 }
@@ -1659,8 +1656,7 @@ static const struct cmd COMMANDS[] = {
     {"/session", "show this session's info and totals", NULL, CMD_LIVE, do_session},
     {"/tokenomics", "token and cache breakdown for this session, per turn", NULL,
      CMD_LIVE, do_tokenomics},
-    {"/title", "set this session's title, or ask the model to title it again", "[title]",
-     0, do_rename},
+    {"/title", "set this session's title", "title", 0, do_rename},
     {"/name", "show or set this session's @name for scrap send", "[name]", 0, do_name},
     {"/send", "send a message to another session", "@name text", CMD_LIVE_ARG, do_send},
     {"/attach", "open a live session from another window or machine in a tab", "machine:@name", 0,
