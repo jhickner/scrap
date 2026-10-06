@@ -899,8 +899,8 @@ static void gk_task_update(grok_client *c, cJSON *u) {
         gk_task(c, gk_str(u, "subagent_id"), st ? st : "completed",
                 gk_str(u, "output"), NULL, "local_agent", NULL);
     } else if (!strcmp(su, "task_backgrounded")) {
-        const char *d = gk_str(u, "description");
-        gk_task(c, gk_str(u, "task_id"), "running", d ? d : gk_str(u, "command"),
+        const char *cmd = gk_str(u, "command");
+        gk_task(c, gk_str(u, "task_id"), "running", cmd ? cmd : gk_str(u, "description"),
                 NULL, "local_bash", gk_str(u, "tool_call_id"));
     } else if (!strcmp(su, "task_completed")) {
         cJSON *t = cJSON_GetObjectItem(u, "task_snapshot");

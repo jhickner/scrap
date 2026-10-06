@@ -294,7 +294,7 @@ void tasks_duration(char *out, size_t size, long secs)
         snprintf(out, size, "%ldh%02ldm", secs / 3600, (secs % 3600) / 60);
 }
 
-static void task_kind(const struct task *a, char *out, size_t size)
+void tasks_kind(const struct task *a, char *out, size_t size)
 {
     static const char *const names[][2] = {
         {"local_bash", "bash"},         {"local_agent", "agent"},
@@ -328,7 +328,7 @@ void tasks_line(const struct task *a, char *out, size_t size, size_t *cmd_at, si
     if (tasks_done(a))
         tasks_duration(took, sizeof took, (long)(a->ended - a->started));
     text_one_line(a->cmd[0] ? a->cmd : a->desc[0] ? a->desc : a->id, what, sizeof what);
-    task_kind(a, kind, sizeof kind);
+    tasks_kind(a, kind, sizeof kind);
     snprintf(head, sizeof head, "[%s %s] ", kind, a->status);
     snprintf(out, size, "%s%s%s%s", head, what, took[0] ? " in " : "", took);
     size_t at = strlen(head), len = strlen(out);

@@ -7,6 +7,7 @@
 #include "prompt.h"
 #include "sidechannel.h"
 #include "status.h"
+#include "taskrows.h"
 #include "tty.h"
 #include "ui.h"
 #include "viewport.h"
@@ -284,10 +285,11 @@ void chrome_paint(void)
 
     int input_rows = prompt_input_rows(bound, cols);
     int gap = chrome_gap();
+    int task_rows = taskrows_count();
 
     struct heights h = above_measure(cols);
     struct above a = {1, 1, 1, 1};
-    fit_above(&a, &h, tty_rows() - 1 - input_rows - spinning - gap);
+    fit_above(&a, &h, tty_rows() - 1 - input_rows - spinning - gap - task_rows);
 
     block_begin();
     block_fill(0);
@@ -344,6 +346,8 @@ void chrome_paint(void)
     int caret_row = 0, caret_col = -1;
     int first = ui_sink_rows();
     prompt_paint_input(bound, input_rows, &caret_row, &caret_col);
+    if (task_rows)
+        taskrows_paint(cols);
 
     block_end(first + caret_row, caret_col);
 }

@@ -57,4 +57,6 @@ void tasks_line(const struct task *a, char *out, size_t size, size_t *cmd_at, si
 
 void tasks_duration(char *out, size_t size, long secs);
 
+void tasks_kind(const struct task *a, char *out, size_t size);
+
 #endif
