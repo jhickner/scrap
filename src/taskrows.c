@@ -10,12 +10,68 @@
 #include "tasks.h"
 #include "text.h"
 #include "ui.h"
+#include "viewport.h"
 #include "workspace.h"
 
 #define ROWS_MAX  5
 #define DONE_SECS 2
 
+#define CMD_INDENT 6
+
 static long painted_sig = -1;
+static char open_id[40];
+static struct {
+    int  line;
+    char id[40];
+} hits[64];
+static int nhits;
+
+static int is_open(const struct task *a)
+{
+    return a->cmd[0] && !strcmp(a->id, open_id);
+}
+
+static int cmd_rows(const struct task *a, int cols)
+{
+    if (!is_open(a))
+        return 0;
+    struct ui_wrap w = {0};
+    w.budget = (size_t)(cols - 1 - CMD_INDENT > 1 ? cols - 1 - CMD_INDENT : 1);
+    w.measure = 1;
+    return ui_wrap_paint(a->cmd, &w);
+}
+
+static void hit(const struct task *a)
+{
+    if (!a->cmd[0] || nhits >= (int)(sizeof hits / sizeof hits[0]))
+        return;
+    hits[nhits].line = ui_sink_rows();
+    snprintf(hits[nhits].id, sizeof hits[nhits].id, "%s", a->id);
+    nhits++;
+}
+
+static void paint_cmd(const struct task *a, int cols)
+{
+    size_t        len = strlen(a->cmd);
+    size_t        budget = (size_t)(cols - 1 - CMD_INDENT > 1 ? cols - 1 - CMD_INDENT : 1);
+    unsigned char roles[sizeof a->cmd];
+    const char   *p = a->cmd;
+    size_t        n = len;
+
+    highlight_shell(a->cmd, len, roles);
+    while (n) {
+        size_t skip = 0;
+        size_t row = ui_wrap_row(p, n, budget, &skip, NULL);
+        ui_put("\n");
+        hit(a);
+        for (int i = 0; i < CMD_INDENT; i++)
+            ui_put(" ");
+        ui_put_spans(p, row, roles + (p - a->cmd), UI_RESET);
+        ui_esc(ui_style(UI_RESET));
+        p += row + skip;
+        n -= row + skip < n ? row + skip : n;
+    }
+}
 
 static int shown(const struct task *a, time_t now)
 {
@@ -42,12 +98,32 @@ static int collect(const struct task **out, int max, int *total)
     return n;
 }
 
-int taskrows_count(void)
+int taskrows_count(int cols)
 {
     const struct task *v[ROWS_MAX];
     int                total;
     int                n = collect(v, ROWS_MAX, &total);
-    return n + (total > n);
+    int                rows = n + (total > n);
+    for (int i = 0; i < n; i++)
+        rows += cmd_rows(v[i], cols);
+    return rows;
+}
+
+int taskrows_click(int row)
+{
+    int top = viewport_chrome_top();
+    if (top < 0)
+        return 0;
+    for (int i = 0; i < nhits; i++) {
+        if (hits[i].line != row - 1 - top)
+            continue;
+        if (!strcmp(open_id, hits[i].id))
+            open_id[0] = '\0';
+        else
+            snprintf(open_id, sizeof open_id, "%s", hits[i].id);
+        return 1;
+    }
+    return 0;
 }
 
 static long signature(int rows)
@@ -60,7 +136,7 @@ static long signature(int rows)
 
 int taskrows_stale(void)
 {
-    int rows = taskrows_count();
+    int rows = taskrows_count(ui_columns());
     return (rows || painted_sig > 0) && signature(rows) != painted_sig;
 }
 
@@ -74,7 +150,8 @@ void taskrows_paint(int cols)
     char               kind[ROWS_MAX][96];
     size_t             kind_w = 0;
 
-    painted_sig = signature(n + (total > n));
+    painted_sig = signature(taskrows_count(cols));
+    nhits = 0;
     for (int i = 0; i < n; i++) {
         tasks_kind(v[i], kind[i], sizeof kind[i]);
         if (ui_cells(kind[i]) > kind_w)
@@ -97,7 +174,9 @@ void taskrows_paint(int cols)
         int left = 4 + (int)kind_w + 2;
         int room = cols - 1 - left - (int)strlen(took) - 2;
 
-        ui_put("\n  ");
+        ui_put("\n");
+        hit(a);
+        ui_put("  ");
         if (done && !strcmp(a->status, "completed")) {
             ui_esc(ui_style(UI_OK));
             ui_put("\xe2\x9c\x93");
@@ -130,6 +209,8 @@ void taskrows_paint(int cols)
         ui_esc(ui_style(UI_SPIN));
         ui_put(took);
         ui_esc(ui_style(UI_RESET));
+        if (is_open(a))
+            paint_cmd(a, cols);
     }
     if (total > n) {
         char more[32];

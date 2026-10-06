@@ -21,6 +21,7 @@
 #include "hud.h"
 #include "stamp.h"
 #include "tabbar.h"
+#include "taskrows.h"
 #include "image.h"
 #include "docview.h"
 #include "stream.h"
@@ -324,6 +325,10 @@ static int clicked(void *ud, int row, int col)
     }
     if (imageview_click(row, col) || docview_click(row, col) || viewport_fold_click(row, col))
         return 1;
+    if (taskrows_click(row)) {
+        chrome_paint();
+        return 1;
+    }
     char *cmd = md_command_at(row, col);
     if (cmd)
         prompt_set_line(ud, cmd);

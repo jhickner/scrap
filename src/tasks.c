@@ -221,7 +221,7 @@ static void note_shell(struct tasktab *t, const backend_event *ev)
     if (cmd && *cmd) {
         int i = t->shell_next++ % TASKS_MAX;
         snprintf(t->shell[i].id, sizeof t->shell[i].id, "%s", ev->id);
-        text_one_line(cmd, t->shell[i].cmd, sizeof t->shell[i].cmd);
+        snprintf(t->shell[i].cmd, sizeof t->shell[i].cmd, "%s", cmd);
     }
     cJSON_Delete(in);
 }

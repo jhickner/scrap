@@ -285,7 +285,7 @@ void chrome_paint(void)
 
     int input_rows = prompt_input_rows(bound, cols);
     int gap = chrome_gap();
-    int task_rows = taskrows_count();
+    int task_rows = taskrows_count(cols);
 
     struct heights h = above_measure(cols);
     struct above a = {1, 1, 1, 1};
