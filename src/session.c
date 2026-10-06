@@ -506,12 +506,17 @@ void session_set_typeahead(session_key_fn fn, void *ud)
 
 static void set_id(struct session *s, const char *id);
 
+void session_rate_limit(const struct session *s, backend_rate_limit *out)
+{
+    memset(out, 0, sizeof *out);
+    if (s && s->agent && s->agent->rate_limit)
+        s->agent->rate_limit(s->agent, out);
+}
+
 static void usage_poll(struct session *s)
 {
-    if (!s || !s->agent || !s->agent->rate_limit)
-        return;
-    backend_rate_limit limit = {0};
-    s->agent->rate_limit(s->agent, &limit);
+    backend_rate_limit limit;
+    session_rate_limit(s, &limit);
     if (limit.available) {
         agenttabs_usage(s, limit.used_percent, limit.resets_at, limit.window_minutes);
         apicore_usage(session_backend(s), &limit);
@@ -2128,8 +2133,8 @@ int session_autobackend(struct session *s)
             current = i;
     if (current < 0)
         return 0;
-    backend_rate_limit limit = {0};
-    s->agent->rate_limit(s->agent, &limit);
+    backend_rate_limit limit;
+    session_rate_limit(s, &limit);
     if (!failed && (!limit.available || limit.used_percent < at ||
         (limit.resets_at > 0 && limit.resets_at <= (long)time(NULL))))
         return 0;
