@@ -981,6 +981,14 @@ static void backend_grok_event(void *ud, const grok_event *e) {
         backend_emit(&x->st, &ev);
         return;
     }
+    case GROK_EV_TASK: {
+        backend_event ev = { .kind = BACKEND_EV_TASK, .id = e->id, .name = e->name,
+                             .text = e->text, .arg = e->arg,
+                             .task_type = e->task_type, .parent = e->parent };
+        backend_flush(&x->st);
+        backend_emit(&x->st, &ev);
+        return;
+    }
     }
 }
 
@@ -1055,6 +1063,19 @@ static void backend_grok_set_abort(Backend *b, int (*cb)(void)) {
     if (x->client) grok_set_abort_check(x->client, cb);
 }
 
+static int backend_grok_idle_fd(Backend *b) {
+    backend_grok *x = b->ctx;
+    return x->client ? grok_idle_fd(x->client) : -1;
+}
+static int backend_grok_idle_pump(Backend *b) {
+    backend_grok *x = b->ctx;
+    return x->client ? grok_idle_pump(x->client) : 0;
+}
+static int backend_grok_busy(Backend *b) {
+    backend_grok *x = b->ctx;
+    return x->client ? grok_background_tasks(x->client) : 0;
+}
+
 static const char *backend_grok_session_id(Backend *b) {
     backend_grok *x = b->ctx;
     return x->client ? grok_session_id(x->client) : NULL;
@@ -1121,7 +1142,8 @@ static Backend *backend_grok_open(const backend_opts *o) {
     if (!x || !b) { free(x); free(b); return NULL; }
     backend_state_init(&x->st, o);
     b->ctx = x;
-    b->caps = BACKEND_CAP_RESUME | BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT;
+    b->caps = BACKEND_CAP_RESUME | BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT |
+              BACKEND_CAP_TASKS;
     b->ask = backend_grok_ask;
     b->reset = backend_grok_reset;
     b->close = backend_grok_close;
@@ -1133,6 +1155,9 @@ static Backend *backend_grok_open(const backend_opts *o) {
     b->set_permission = backend_set_permission_none;
     b->set_event_cb = backend_grok_set_event_cb;
     b->set_abort_check = backend_grok_set_abort;
+    b->idle_fd = backend_grok_idle_fd;
+    b->idle_pump = backend_grok_idle_pump;
+    b->busy = backend_grok_busy;
     b->session_id = backend_grok_session_id;
     b->model = backend_grok_model;
     b->effort = backend_grok_effort;

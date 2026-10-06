@@ -232,6 +232,8 @@ static void render_event(struct session *s, const backend_event *ev)
         !(ev->parent && *ev->parent))
         replace(&s->last_block, ev->text);
 
+    if (s->agent && s->agent->caps & BACKEND_CAP_TASKS)
+        s->tasks.lifecycle = 1;
     s->task_change = tasks_note(&s->tasks, ev, &s->task_repeat);
     if (s->task_change && !tasks_done(s->task_change))
         s->stall_told = 0;

@@ -115,6 +115,9 @@ typedef enum {
     GROK_EV_TOOL,        /* name + input_json: a tool the model invoked        */
     GROK_EV_TOOL_RESULT, /* text: the tool's output; failed: status was failed */
     GROK_EV_CWD,         /* text: the directory the session works in now       */
+    GROK_EV_TASK,        /* id, name (status), text (description or result),
+                            arg (subagent type), task_type: a background
+                            subagent or command, which outlives its turn     */
 } grok_event_kind;
 
 typedef struct {
@@ -123,6 +126,10 @@ typedef struct {
     const char *name;       /* tool name, for TOOL               */
     const char *input_json; /* tool input as compact JSON, TOOL  */
     const char *diff;       /* TOOL_RESULT: patch the edit applied, or NULL */
+    const char *id;         /* TASK: grok's task or subagent id  */
+    const char *arg;        /* TASK: subagent type, or NULL      */
+    const char *task_type;  /* TASK: local_bash or local_agent   */
+    const char *parent;     /* TASK: the tool call that started it, or NULL */
     int failed;             /* TOOL_RESULT: status was "failed"  */
 } grok_event;
 
@@ -131,6 +138,18 @@ typedef struct {
 void grok_set_event_cb(grok_client *c,
                        void (*cb)(void *ud, const grok_event *ev),
                        void *ud);
+
+/* Grok runs turns between sends: a finished background task wakes the model
+ * with no prompt. grok_idle_fd() is readable when the CLI has written anything
+ * (-1 before the session exists); grok_idle_pump() consumes it without
+ * blocking, reporting events through the callback, and returns nonzero while
+ * such a turn is open or background work is still running. Only call these
+ * with no grok_send in flight. */
+int grok_idle_fd(grok_client *c);
+int grok_idle_pump(grok_client *c);
+
+/* Background subagents and commands still running. */
+int grok_background_tasks(grok_client *c);
 
 /* Ask the agent to abandon the in-flight turn (ACP session/cancel). The turn
  * still ends with a prompt response, so the stream stays usable for the next
@@ -172,6 +191,7 @@ void grok_stop(grok_client *c);
 
 #define GK_TOOL_CAP 64
 #define GK_TOOL_ID  80
+#define GK_TASK_CAP 32
 
 /* The line-up the handshake advertises: two models today, four efforts each. */
 #define GK_MODEL_CAP  8
@@ -235,6 +255,10 @@ struct grok_client {
     char *tool_diff[GK_TOOL_CAP];     /* patch an edit reported, per call     */
     char  tool_name[GK_TOOL_CAP][64]; /* name resolved across split updates */
     int   n_tools;
+    char  task_id[GK_TASK_CAP][64];   /* background work seen running       */
+    int   task_running[GK_TASK_CAP];
+    int   n_tasks;
+    int   turn_open;          /* a turn grok started itself is running      */
 };
 
 void grok_set_verbose(grok_client *c, int on) { if (c) c->verbose = on; }
@@ -295,7 +319,8 @@ static void gk_emit(grok_client *c, const grok_event *ev) {
             ev->kind == GROK_EV_THINKING    ? "thinking"  :
             ev->kind == GROK_EV_TOOL        ? "tool"      :
             ev->kind == GROK_EV_TOOL_RESULT ? "tool-result" :
-            ev->kind == GROK_EV_CWD         ? "cwd"         : "?";
+            ev->kind == GROK_EV_CWD         ? "cwd"         :
+            ev->kind == GROK_EV_TASK        ? "task"        : "?";
         const char *text = ev->text ? ev->text : ev->name ? ev->name : "";
         fprintf(stderr, "  [%s] %.400s%s\n", kind, text, strlen(text) > 400 ? " ..." : "");
     }
@@ -835,6 +860,59 @@ static void gk_tool_update(grok_client *c, cJSON *u) {
     free(input);
 }
 
+/* Track one task's state and report it. A table that is full of running work
+ * still reports, it just stops counting toward grok_background_tasks. */
+static void gk_task(grok_client *c, const char *id, const char *status,
+                    const char *text, const char *arg, const char *type,
+                    const char *parent) {
+    if (!id || !*id || !status) return;
+    int i = 0;
+    while (i < c->n_tasks && strcmp(c->task_id[i], id)) i++;
+    if (i == c->n_tasks) {
+        if (i == GK_TASK_CAP)
+            for (i = 0; i < GK_TASK_CAP && c->task_running[i]; i++) {}
+        else
+            c->n_tasks++;
+        if (i < GK_TASK_CAP) snprintf(c->task_id[i], sizeof c->task_id[i], "%s", id);
+    }
+    if (i < GK_TASK_CAP) c->task_running[i] = !strcmp(status, "running");
+    grok_event ev = { .kind = GROK_EV_TASK, .id = id, .name = status, .text = text,
+                      .arg = arg, .task_type = type, .parent = parent };
+    gk_emit(c, &ev);
+}
+
+int grok_background_tasks(grok_client *c) {
+    int n = 0;
+    for (int i = 0; c && i < c->n_tasks; i++) n += c->task_running[i];
+    return n;
+}
+
+/* Subagent and background-command lifecycle, from the _x.ai notifications. */
+static void gk_task_update(grok_client *c, cJSON *u) {
+    const char *su = gk_str(u, "sessionUpdate");
+    if (!su) return;
+    if (!strcmp(su, "subagent_spawned")) {
+        gk_task(c, gk_str(u, "subagent_id"), "running", gk_str(u, "description"),
+                gk_str(u, "subagent_type"), "local_agent", NULL);
+    } else if (!strcmp(su, "subagent_finished")) {
+        const char *st = gk_str(u, "status");
+        gk_task(c, gk_str(u, "subagent_id"), st ? st : "completed",
+                gk_str(u, "output"), NULL, "local_agent", NULL);
+    } else if (!strcmp(su, "task_backgrounded")) {
+        const char *d = gk_str(u, "description");
+        gk_task(c, gk_str(u, "task_id"), "running", d ? d : gk_str(u, "command"),
+                NULL, "local_bash", gk_str(u, "tool_call_id"));
+    } else if (!strcmp(su, "task_completed")) {
+        cJSON *t = cJSON_GetObjectItem(u, "task_snapshot");
+        cJSON *code = cJSON_GetObjectItem(t, "exit_code");
+        const char *st = cJSON_IsTrue(cJSON_GetObjectItem(t, "explicitly_killed")) ? "killed"
+                       : cJSON_IsNumber(code) && code->valueint == 0 ? "completed" : "failed";
+        gk_task(c, gk_str(t, "task_id"), st, NULL, NULL, "local_bash", NULL);
+    } else if (!strcmp(su, "turn_completed")) {
+        c->turn_open = 0;
+    }
+}
+
 /* Answer an agent->client request so the turn never blocks. Permission
  * requests are approved (or cancelled, if we already sent session/cancel). */
 static void gk_answer_request(grok_client *c, cJSON *req, cJSON *id) {
@@ -891,6 +969,27 @@ static int gk_handle(grok_client *c, cJSON *ev, int want_id, char **acc, int *ok
                 snprintf(c->live_cwd, sizeof c->live_cwd, "%s", dir);
                 grok_event e = { .kind = GROK_EV_CWD, .text = c->live_cwd };
                 gk_emit(c, &e);
+            }
+            return 0;
+        }
+        if (!strcmp(method->valuestring, "_x.ai/session_notification") ||
+            !strcmp(method->valuestring, "_x.ai/task_backgrounded") ||
+            !strcmp(method->valuestring, "_x.ai/task_completed")) {
+            cJSON *params = cJSON_GetObjectItem(ev, "params");
+            const char *sid = params ? gk_str(params, "sessionId") : NULL;
+            if (c->session_id[0] && sid && strcmp(sid, c->session_id) != 0)
+                return 0;
+            gk_task_update(c, params ? cJSON_GetObjectItem(params, "update") : NULL);
+            return 0;
+        }
+        if (strcmp(method->valuestring, "_x.ai/queue/changed") == 0) {
+            cJSON *params = cJSON_GetObjectItem(ev, "params");
+            const char *sid = params ? gk_str(params, "sessionId") : NULL;
+            if (!c->session_id[0] || (sid && strcmp(sid, c->session_id) != 0))
+                return 0;
+            if (gk_str(params, "runningPromptId") && !c->turn_open) {
+                c->turn_open = 1;
+                c->tools_since_text = 0;
             }
             return 0;
         }
@@ -1119,9 +1218,26 @@ static void gk_capture_models(grok_client *c, cJSON *res) {
  * Accumulates assistant text into *acc when non-NULL. Returns 1 on a successful
  * result, 0 on error/EOF. `allow_cancel` sends session/cancel the first time
  * the abort predicate fires (or was latched during the handshake). */
+/* Append one read of the child's stdout to the line buffer. Returns 0 on EOF,
+ * error or allocation failure. */
+static int gk_fill(grok_client *c) {
+    char tmp[8192];
+    ssize_t r = read(c->out_fd, tmp, sizeof tmp);
+    if (r <= 0) return 0;
+    if (c->len + (size_t)r + 1 > c->cap) {
+        size_t nc = (c->len + (size_t)r + 1) * 2;
+        char *nb = realloc(c->buf, nc);
+        if (!nb) return 0;
+        c->buf = nb; c->cap = nc;
+    }
+    memcpy(c->buf + c->len, tmp, (size_t)r);
+    c->len += (size_t)r;
+    c->buf[c->len] = '\0';
+    return 1;
+}
+
 static int gk_await(grok_client *c, int want_id, char **acc,
                     char *sid_out, size_t sid_sz, int allow_cancel) {
-    char tmp[8192];
     int sent_cancel = 0;
     for (;;) {
         if (c->abort && c->abort())
@@ -1138,18 +1254,7 @@ static int gk_await(grok_client *c, int want_id, char **acc,
         if (pr < 0) { if (errno == EINTR) continue; c->len = 0; return 0; }
         if (pfds[1].revents) gk_drain_stderr(c);
         if (!(pfds[0].revents & (POLLIN | POLLHUP))) continue;
-        ssize_t r = read(c->out_fd, tmp, sizeof tmp);
-        if (r <= 0) { c->len = 0; return 0; }
-
-        if (c->len + (size_t)r + 1 > c->cap) {
-            size_t nc = (c->len + (size_t)r + 1) * 2;
-            char *nb = realloc(c->buf, nc);
-            if (!nb) { c->len = 0; return 0; }
-            c->buf = nb; c->cap = nc;
-        }
-        memcpy(c->buf + c->len, tmp, (size_t)r);
-        c->len += (size_t)r;
-        c->buf[c->len] = '\0';
+        if (!gk_fill(c)) { c->len = 0; return 0; }
 
         char *start = c->buf, *nl;
         while ((nl = memchr(start, '\n', c->len - (size_t)(start - c->buf)))) {
@@ -1479,6 +1584,7 @@ char *grok_send_ex(grok_client *c, const char *user_text, grok_result *meta) {
     c->meta = NULL;
     c->cancelling = 0;
     c->abort_latched = 0;
+    c->turn_open = 0;
     if (!ok) { free(acc); return NULL; }
     gk_read_billing(c);
     return acc ? acc : strdup("");
@@ -1486,6 +1592,36 @@ char *grok_send_ex(grok_client *c, const char *user_text, grok_result *meta) {
 
 char *grok_send(grok_client *c, const char *user_text) {
     return grok_send_ex(c, user_text, NULL);
+}
+
+int grok_idle_fd(grok_client *c) {
+    return c && c->pid > 0 && c->session_id[0] ? c->out_fd : -1;
+}
+
+int grok_idle_pump(grok_client *c) {
+    if (grok_idle_fd(c) < 0) return 0;
+    int was_open = c->turn_open;
+    for (int i = 0; i < 16; i++) {
+        struct pollfd p = { c->out_fd, POLLIN, 0 };
+        if (poll(&p, 1, 0) <= 0 || !(p.revents & (POLLIN | POLLHUP))) break;
+        if (!gk_fill(c)) { c->len = 0; break; }
+        char *start = c->buf, *nl;
+        while ((nl = memchr(start, '\n', c->len - (size_t)(start - c->buf)))) {
+            *nl = '\0';
+            cJSON *ev = cJSON_Parse(start);
+            if (ev) {
+                int ok = 0;
+                if (!was_open && c->turn_open) { gk_reset_tools(c); was_open = 1; }
+                gk_handle(c, ev, -1, NULL, &ok);
+                cJSON_Delete(ev);
+            }
+            start = nl + 1;
+        }
+        size_t consumed = (size_t)(start - c->buf);
+        if (consumed) { memmove(c->buf, start, c->len - consumed); c->len -= consumed; }
+    }
+    gk_drain_stderr(c);
+    return c->turn_open || grok_background_tasks(c) > 0;
 }
 
 /* Poll for the child's exit for up to `ms`. Returns nonzero once reaped. */
