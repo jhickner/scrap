@@ -239,7 +239,11 @@ char *intercom_note(const char *name)
         "- `scrap ls [--live] [--cwd DIR] [QUERY]` lists sessions, newest first; `--cwd .` "
         "means this directory; QUERY also searches transcript text.\n"
         "- `scrap read TARGET [-n TURNS] [--bytes N]` prints a session's recent turns.\n"
-        "- `scrap send TARGET TEXT` sends a message to a live session.\n"
+        "- `scrap send TARGET TEXT` sends a message to a live session; it waits until the "
+        "session's current turn ends.\n"
+        "- `scrap send --interrupt TARGET TEXT` stops the session's current turn and delivers "
+        "the message now. Use it only when the message changes what that session should be "
+        "doing right now.\n"
         "- `scrap send @%s /COMMAND` runs a scrap command such as /clear on this session "
         "once the current turn ends; only this session can do this to itself.\n"
         "- `scrap open TARGET` resumes a past session in a new tab.\n"
@@ -859,7 +863,7 @@ static char *spill(const char *text)
 }
 
 int intercom_deliver(const char *host, const char *from, const char *target, const char *text,
-                     char *msg, size_t size)
+                     int interrupt, char *msg, size_t size)
 {
     struct entries l = {0};
     char           cwd[4096];
@@ -880,6 +884,8 @@ int intercom_deliver(const char *host, const char *from, const char *target, con
             cJSON_AddStringToObject(o, "name", e->name);
         if (from && *from)
             cJSON_AddStringToObject(o, "from", from);
+        if (interrupt)
+            cJSON_AddBoolToObject(o, "interrupt", 1);
         if (host && *host)
             cJSON_AddStringToObject(o, "host", host);
         else
@@ -902,20 +908,25 @@ int intercom_deliver(const char *host, const char *from, const char *target, con
     return rc;
 }
 
-int intercom_send(const char *from, const char *target, const char *text, char *msg,
-                  size_t size)
+int intercom_send(const char *from, const char *target, const char *text, int interrupt,
+                  char *msg, size_t size)
 {
     char        host[TAILNET_HOST_MAX];
     const char *local, *name = route(target, host, sizeof host, &local);
     if (name)
-        return tailnet_send(host, from, name, text, msg, size);
-    return intercom_deliver(NULL, from, local, text, msg, size);
+        return tailnet_send(host, from, name, text, interrupt, msg, size);
+    return intercom_deliver(NULL, from, local, text, interrupt, msg, size);
 }
 
 static int cmd_send(int argc, char **argv)
 {
+    int interrupt = argc > 1 && !strcmp(argv[1], "--interrupt");
+    if (interrupt) {
+        argv++;
+        argc--;
+    }
     if (argc < 3) {
-        fprintf(stderr, "usage: scrap send TARGET TEXT\n");
+        fprintf(stderr, "usage: scrap send [--interrupt] TARGET TEXT\n");
         return 2;
     }
     size_t len = 0;
@@ -932,7 +943,7 @@ static int cmd_send(int argc, char **argv)
 
     char me[INTERCOM_NAME_MAX], msg[1200];
     self_name(me, sizeof me);
-    int rc = intercom_send(me, argv[1], text, msg, sizeof msg);
+    int rc = intercom_send(me, argv[1], text, interrupt, msg, sizeof msg);
     if (rc)
         fprintf(stderr, "scrap: %s\n", msg);
     else

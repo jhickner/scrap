@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, re, subprocess, sys, time, uuid
+import json, os, re, select, subprocess, sys, time, uuid
 
 SESSION = "fake-%d" % os.getpid()
 NOTES = 0
@@ -47,6 +47,25 @@ def prompt_text(msg):
     if isinstance(content, str):
         return content
     return "".join(b.get("text", "") for b in content if b.get("type") == "text")
+
+
+def run(cmd):
+    proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True)
+    while proc.poll() is None:
+        if not select.select([sys.stdin], [], [], 0.1)[0]:
+            continue
+        line = sys.stdin.readline()
+        if not line:
+            proc.wait()
+            break
+        msg = json.loads(line)
+        if msg.get("request", {}).get("subtype") == "interrupt":
+            proc.kill()
+            emit({"type": "control_response", "response": {
+                "subtype": "success", "request_id": msg.get("request_id"), "response": {}}})
+            return "interrupted: " + cmd
+    return "ran: " + proc.stdout.read().strip()
 
 
 def main():
@@ -115,8 +134,7 @@ def main():
             elif text == "askme":
                 text = "Pick one.\n\n@ask\n1. Color?\n- red\n- blue"
             elif text.startswith("run: "):
-                ran = subprocess.run(text[5:], shell=True, capture_output=True, text=True)
-                text = "ran: " + (ran.stdout + ran.stderr).strip()
+                text = run(text[5:])
             else:
                 text = "echo: " + text
             canned = bool(turns)

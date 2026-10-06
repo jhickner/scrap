@@ -525,7 +525,7 @@ static void send_to(const char *target)
     if (text && *text) {
         struct session *here = workspace_current();
         char            msg[1200];
-        if (intercom_send(here ? session_name(here) : NULL, target, text, msg, sizeof msg))
+        if (intercom_send(here ? session_name(here) : NULL, target, text, 0, msg, sizeof msg))
             ui_error("%s", msg);
         else
             ui_note("%s", msg);

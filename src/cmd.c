@@ -1324,7 +1324,7 @@ static void do_send(struct session *s, const char *arg)
         char msg[1200];
         if (!*text)
             ui_error("usage: /send @name text");
-        else if (intercom_send(session_name(s), target, text, msg, sizeof msg))
+        else if (intercom_send(session_name(s), target, text, 0, msg, sizeof msg))
             ui_error("%s", msg);
         else
             ui_note("%s", msg);

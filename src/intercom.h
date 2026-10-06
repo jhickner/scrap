@@ -23,11 +23,11 @@ char *intercom_note(const char *name);
 
 int intercom_complete(void *ctx, const char *token, ReplCandidate *out, int max);
 
-int intercom_send(const char *from, const char *target, const char *text, char *msg,
-                  size_t size);
+int intercom_send(const char *from, const char *target, const char *text, int interrupt,
+                  char *msg, size_t size);
 
 int intercom_deliver(const char *host, const char *from, const char *target, const char *text,
-                     char *msg, size_t size);
+                     int interrupt, char *msg, size_t size);
 
 char *intercom_read(const char *target, long turns, long bytes, char *msg, size_t size);
 
