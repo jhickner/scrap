@@ -69,3 +69,5 @@ tools/rig/scraprig stop $n
 
 ## Rules
 - don't write comments. any you do write will be stripped during `make`
+- all features should support all backends, not just claude, etc. unless that
+backend is not able to support the feature
