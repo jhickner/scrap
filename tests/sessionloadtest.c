@@ -88,9 +88,11 @@ void view_keep_tool_call(const char *name, const char *arg, int collapses)
         tools++;
 }
 
-void view_keep_tool_call_bg(const char *name, const char *arg, int collapses, int background)
+void view_keep_tool_call_bg(const char *name, const char *arg, int collapses, int background,
+                            const char *call)
 {
     (void)background;
+    (void)call;
     view_keep_tool_call(name, arg, collapses);
 }
 

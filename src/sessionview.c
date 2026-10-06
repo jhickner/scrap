@@ -63,6 +63,7 @@ struct keep {
     int            nested;
     char          *label;
     char          *row;
+    char          *call;
 };
 
 static void keep_free(void *ud)
@@ -73,6 +74,7 @@ static void keep_free(void *ud)
     free(k->spans);
     free(k->label);
     free(k->row);
+    free(k->call);
     free(k);
 }
 
@@ -338,10 +340,11 @@ void view_keep_activity(const char *marker, const char *text, enum ui_role role)
 
 void view_keep_tool_call(const char *name, const char *arg, int collapses)
 {
-    view_keep_tool_call_bg(name, arg, collapses, 0);
+    view_keep_tool_call_bg(name, arg, collapses, 0, NULL);
 }
 
-void view_keep_tool_call_bg(const char *name, const char *arg, int collapses, int background)
+void view_keep_tool_call_bg(const char *name, const char *arg, int collapses, int background,
+                            const char *call)
 {
     struct keep *k = keep_new(KEEP_CALL);
     if (!k)
@@ -350,7 +353,28 @@ void view_keep_tool_call_bg(const char *name, const char *arg, int collapses, in
     k->a = strdup(name ? name : "?");
     k->b = strdup(arg ? arg : "");
     k->collapses = collapses;
+    k->call = call && *call ? strdup(call) : NULL;
     keep(k);
+}
+
+static void background_item(unsigned mark, const char *kind, void *ud, void *ctx)
+{
+    struct keep *k = ud;
+    if (!ud || !kind || strcmp(kind, VIEW_KEEP_KIND) != 0 || k->kind != KEEP_CALL ||
+        !k->call || strcmp(k->call, ctx) != 0 || k->background)
+        return;
+    k->background = 1;
+    free(k->row);
+    k->row = NULL;
+    viewport_item_stale(mark);
+}
+
+void view_keep_background(const char *call)
+{
+    if (!call || !*call)
+        return;
+    viewport_scan(0, background_item, (void *)call);
+    restate(0, 0);
 }
 
 void view_keep_break(void) { view_state()->run_start = 0; }

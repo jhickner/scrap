@@ -28,7 +28,10 @@ void view_keep_nest(int on, const char *label);
 void view_keep_activity(const char *marker, const char *text, enum ui_role role);
 
 void view_keep_tool_call(const char *name, const char *arg, int collapses);
-void view_keep_tool_call_bg(const char *name, const char *arg, int collapses, int background);
+void view_keep_tool_call_bg(const char *name, const char *arg, int collapses, int background,
+                            const char *call);
+
+void view_keep_background(const char *call);
 
 void view_keep_break(void);
 

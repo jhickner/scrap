@@ -118,13 +118,17 @@ void view_keep_tool_call(const char *name, const char *arg, int collapses)
     (void)collapses;
 }
 
-void view_keep_tool_call_bg(const char *name, const char *arg, int collapses, int background)
+void view_keep_tool_call_bg(const char *name, const char *arg, int collapses, int background,
+                            const char *call)
 {
     (void)name;
     (void)arg;
     (void)collapses;
     (void)background;
+    (void)call;
 }
+
+void view_keep_background(const char *call) { (void)call; }
 
 void view_keep_break(void) {}
 

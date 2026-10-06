@@ -174,6 +174,8 @@ typedef struct {
                                subagent produced the message, and on TASK the
                                tool_use that started the task. NULL otherwise */
     int failed;             /* TOOL_RESULT: the tool reported is_error */
+    int backgrounded;       /* TASK: a foreground command moved to the
+                               background; parent is its tool call */
 } claude_event;
 
 /* Register a callback invoked for each interesting stream event during a turn.
@@ -320,6 +322,7 @@ struct claude_client {
     int   notified;           /* task notifications still owed a turn each     */
     char *owed;               /* those notifications' text until a turn ends   */
     int   bg_tasks;           /* background tasks the CLI last reported open   */
+    struct { char id[32], call[64]; } fg[8]; /* foreground bash tasks, unreported */
     claude_rate_limit rate_limit; /* latest rate_limit_event reading           */
     int   awaiting;           /* a send is out and has not been given its turn */
     int   turn_mine;          /* the open turn answers this client's send      */
@@ -915,6 +918,15 @@ static void cl_answer_permission(claude_client *c, cJSON *ev) {
     cl_write_json(c, msg);
 }
 
+/* The slot holding foreground task id, or -1. An empty id finds a free
+ * slot, reusing the first when all are taken. */
+static int cl_foreground(claude_client *c, const char *id) {
+    if (!id) return -1;
+    for (int i = 0; i < 8; i++)
+        if (!strcmp(c->fg[i].id, id)) return i;
+    return *id ? -1 : 0;
+}
+
 /* Parse one JSONL event line. If it is the turn's `result`, return its text
  * (malloc'd) via *out and return 1. Otherwise return 0. */
 static int cl_handle_line(claude_client *c, const char *line, char **out) {
@@ -944,7 +956,33 @@ static int cl_handle_line(claude_client *c, const char *line, char **out) {
             cJSON *patch = cJSON_GetObjectItem(ev, "patch");
             claude_event out = {.kind = CLAUDE_EV_TASK};
             out.id = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "task_id"));
-            out.name = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "status"));
+            /* The CLI reports foreground bash as a task too. It is the open
+             * tool call, so it is reported only once it moves to the
+             * background, as a task starting then. */
+            int fg = cl_foreground(c, out.id);
+            const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "task_type"));
+            if (!strcmp(sub, "task_started") && out.id && type && !strcmp(type, "local_bash") &&
+                cJSON_IsFalse(cJSON_GetObjectItem(ev, "is_backgrounded"))) {
+                if (fg < 0) fg = cl_foreground(c, "");
+                const char *call = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "tool_use_id"));
+                snprintf(c->fg[fg].id, sizeof c->fg[fg].id, "%s", out.id);
+                snprintf(c->fg[fg].call, sizeof c->fg[fg].call, "%s", call ? call : "");
+                out.id = NULL;
+            } else if (fg >= 0) {
+                if (cJSON_IsTrue(cJSON_GetObjectItem(patch, "is_backgrounded"))) {
+                    out.backgrounded = 1;
+                    out.name = "running";
+                    out.task_type = "local_bash";
+                    out.parent = c->fg[fg].call;
+                    c->fg[fg].id[0] = '\0';
+                } else {
+                    if (!strcmp(sub, "task_notification"))
+                        c->fg[fg].id[0] = '\0';
+                    out.id = NULL;
+                }
+            }
+            if (!out.name)
+                out.name = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "status"));
             if (!out.name && patch)
                 out.name = cJSON_GetStringValue(cJSON_GetObjectItem(patch, "status"));
             if (!out.name)
@@ -952,8 +990,10 @@ static int cl_handle_line(claude_client *c, const char *line, char **out) {
             out.arg = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "subagent_type"));
             if (!out.arg)
                 out.arg = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "workflow_name"));
-            out.task_type = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "task_type"));
-            out.parent = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "tool_use_id"));
+            if (!out.task_type)
+                out.task_type = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "task_type"));
+            if (!out.parent)
+                out.parent = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "tool_use_id"));
             out.text = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "description"));
             if (!out.text)
                 out.text = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "summary"));

@@ -4,6 +4,7 @@ import json, os, re, select, subprocess, sys, time, uuid
 SESSION = "fake-%d" % os.getpid()
 NOTES = 0
 CHAIN = 0
+CALLS = 0
 MODEL = sys.argv[sys.argv.index("--model") + 1] if "--model" in sys.argv else "fake"
 
 
@@ -50,6 +51,23 @@ def prompt_text(msg):
 
 
 def run(cmd):
+    global CALLS
+    CALLS += 1
+    call, task = "tu-%d" % CALLS, "bash-%d" % CALLS
+    emit({"type": "assistant", "message": {"role": "assistant", "model": MODEL, "content": [
+        {"type": "tool_use", "id": call, "name": "Bash", "input": {"command": cmd}}]}})
+    emit({"type": "system", "subtype": "task_started", "task_id": task, "tool_use_id": call,
+          "description": cmd, "is_backgrounded": False, "task_type": "local_bash"})
+    out, status = bash(cmd)
+    emit({"type": "system", "subtype": "task_notification", "task_id": task,
+          "tool_use_id": call, "status": status, "output_file": "", "summary": cmd})
+    emit({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": call, "content": out,
+         "is_error": status != "completed"}]}})
+    return out
+
+
+def bash(cmd):
     proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True)
     while proc.poll() is None:
@@ -64,8 +82,8 @@ def run(cmd):
             proc.kill()
             emit({"type": "control_response", "response": {
                 "subtype": "success", "request_id": msg.get("request_id"), "response": {}}})
-            return "interrupted: " + cmd
-    return "ran: " + proc.stdout.read().strip()
+            return "interrupted: " + cmd, "killed"
+    return proc.stdout.read().strip(), "completed"
 
 
 def main():
@@ -95,7 +113,7 @@ def main():
             if text.startswith("quota-error") or text.startswith("other-error"):
                 error = "You've hit your session limit · resets 3:45pm" if text.startswith("quota-error") else "connection failed"
                 if "wait" in text:
-                    run("sleep 2")
+                    bash("sleep 2")
                 emit({"type": "result", "subtype": "error_during_execution", "is_error": True,
                       "result": error})
                 continue
@@ -104,7 +122,7 @@ def main():
                 emit({"type": "rate_limit_event", "rate_limit_info": {
                     "rateLimitType": "five_hour", "utilization": used / 100,
                     "resetsAt": 2000000000}})
-                text = run("sleep 2") if "wait" in text else "quota %d" % used
+                text = "ran: " + bash("sleep 2")[0] if "wait" in text else "quota %d" % used
             elif text.startswith("ask: "):
                 if "--permission-prompt-tool" not in sys.argv:
                     text = "denied: no permission prompt tool"
@@ -116,13 +134,7 @@ def main():
                     behavior = reply["response"]["response"]["behavior"]
                     text = ("allowed: " if behavior == "allow" else "denied: ") + text[5:]
             elif text.startswith("tool: "):
-                cmd = text[6:]
-                ran = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-                emit({"type": "assistant", "message": {"role": "assistant", "model": MODEL, "content": [
-                    {"type": "tool_use", "id": "tu-1", "name": "Bash", "input": {"command": cmd}}]}})
-                emit({"type": "user", "message": {"role": "user", "content": [
-                    {"type": "tool_result", "tool_use_id": "tu-1",
-                     "content": (ran.stdout + ran.stderr).strip()}]}})
+                run(text[6:])
                 text = "tool done"
             elif "auto-handoff threshold" in text:
                 path = re.search(r"Save it to (\S+), make no other changes", text).group(1)
@@ -147,7 +159,8 @@ def main():
             elif text == "askme":
                 text = "Pick one.\n\n@ask\n1. Color?\n- red\n- blue"
             elif text.startswith("run: "):
-                text = run(text[5:])
+                out = run(text[5:])
+                text = out if out.startswith("interrupted: ") else "ran: " + out
             else:
                 text = "echo: " + text
             canned = bool(turns)

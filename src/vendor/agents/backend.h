@@ -90,6 +90,8 @@ typedef struct {
                                up the same stream. NULL for the session's own,
                                and for drivers that do not say                  */
     int failed;             /* TOOL_RESULT: the tool did not succeed            */
+    int backgrounded;       /* TASK: a foreground call moved to the background;
+                               parent is that call                              */
 } backend_event;
 
 /* Accounting for one turn, zeroed before each. Token counts are that turn's;
@@ -422,7 +424,7 @@ static void backend_claude_event(void *ud, const claude_event *e) {
     backend_event ev = { .text = e->text, .name = e->name, .input_json = e->input_json,
                          .arg = e->arg, .id = e->id, .parent = e->parent,
                          .task_type = e->task_type,
-                         .failed = e->failed };
+                         .failed = e->failed, .backgrounded = e->backgrounded };
     switch (e->kind) {
     case CLAUDE_EV_ASSISTANT:   ev.kind = BACKEND_EV_ASSISTANT;   break;
     case CLAUDE_EV_THINKING:    ev.kind = BACKEND_EV_THINKING;    break;
