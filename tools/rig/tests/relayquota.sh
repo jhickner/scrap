@@ -17,7 +17,7 @@ $R relay $n '[
   {"reconnect":true},
   {"wait":"\"t\":\"view\".*\"used_percent\":100"},
   {"t":"req","op":"new"},
-  {"wait":"\"t\":\"view\".*\"quota\":null"},
+  {"wait":"\"t\":\"view\".*\"used_percent\":100"},
   {"check":true},
   {"t":"req","op":"open","tab":0},
   {"wait":"\"t\":\"view\".*\"used_percent\":100"},
