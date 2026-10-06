@@ -115,7 +115,7 @@ static void name_of(const struct session *s, char *out, size_t size, char *statu
     status[0] = '\0';
     if (session_remote(s) || session_name(s)[0]) {
         session_address(s, at, sizeof at);
-        fit_cells(at, NAME_CELLS, out, size);
+        snprintf(out, size, "%s", at);
         if (strcmp(title, at) && strcmp(title, at + 1))
             fit_cells(title, STATUS_CELLS, status, status_size);
     } else {
