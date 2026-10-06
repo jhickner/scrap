@@ -904,6 +904,49 @@ static void check_prepend_pad(struct screen *s)
         fail("a prepended item's pad_after is kept at the seam");
 }
 
+static void fold_render(void *ud, int cols)
+{
+    (void)ud;
+    (void)cols;
+    ui_put("FOLD header\n");
+    if (viewport_fold_open())
+        ui_put("FOLD detail\n");
+    viewport_fold_enable();
+}
+
+static void check_fold_click(struct screen *s)
+{
+    viewport_clear();
+    set_size(80, 24);
+    viewport_item_begin(&(struct viewport_entry){.render = fold_render, .reflow = 1});
+    fold_render(NULL, 80);
+    viewport_item_end();
+    chrome("CHROME", NULL);
+    refresh(s, 80, 24);
+    int row = row_with(s, "FOLD header");
+    if (row < 0 || !viewport_fold_click(row + 1, 4))
+        fail("clicking folded content opens it");
+    redraw(s);
+    row = row_with(s, "FOLD detail");
+    if (row < 0 || !viewport_fold_click(row + 1, 8))
+        fail("clicking expanded content closes it");
+    redraw(s);
+    if (row_with(s, "FOLD detail") >= 0)
+        fail("folded detail is hidden again");
+    if (viewport_fold_click(1, 1) || viewport_fold_click(row_with(s, "CHROME") + 1, 1))
+        fail("blank space and chrome do not toggle folds");
+    for (int i = 0; i < 30; i++)
+        say("later");
+    viewport_scroll(25);
+    refresh(s, 40, 24);
+    row = row_with(s, "FOLD header");
+    if (row < 0 || !viewport_fold_click(row + 1, 4))
+        fail("fold content remains clickable after scrolling and resizing");
+    redraw(s);
+    if (row_with(s, "FOLD detail") < 0)
+        fail("scrolled fold opens");
+}
+
 int main(void)
 {
     set_size(80, 24);
@@ -929,6 +972,7 @@ int main(void)
     struct screen s;
     screen_init(&s, 24, 80);
 
+    check_fold_click(&s);
     check_tail(&s);
     check_bottom_up(&s);
     check_restore_keeps_chrome(&s);

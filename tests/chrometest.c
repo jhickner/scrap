@@ -129,6 +129,18 @@ static void check_queued(struct prompt *p, struct screen *s)
     }
     if (row_of(s, "\xe2\x80\xa6") < 0)
         fail("a queued line that was cut short says so");
+    tty_event click = {.key = TK_MOUSE_DOWN, .row = first + 1, .col = 4};
+    prompt_live_key(p, &click);
+    repaint(s);
+    first = row_of(s, "QFIRST");
+    second = row_of(s, "QSECOND");
+    if (second - first <= QUEUED_LINES + 1)
+        fail("clicking a queued input expands its text");
+    click.row = first + 1;
+    prompt_live_key(p, &click);
+    repaint(s);
+    if (row_of(s, "QSECOND") - row_of(s, "QFIRST") != QUEUED_LINES + 1)
+        fail("clicking an expanded queued input collapses it");
 }
 
 static void check_confirmation(const char *input, int quit, int expected)

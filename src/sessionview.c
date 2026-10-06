@@ -651,11 +651,8 @@ static void tool_call(const char *name, const char *arg, int background)
     w.spans = spans;
     ui_wrap_paint(arg, &w);
     free(spans);
-    if (folds) {
-        ui_pad(indent);
-        viewport_fold_button();
-        ui_put("\n");
-    }
+    if (folds)
+        viewport_fold_enable();
 }
 
 static unsigned char *row_spans(const char *name, const char *row, size_t prefix)
@@ -746,9 +743,9 @@ static void preview_elision(int lines)
         return;
     nest_pad(PREVIEW_INDENT);
     ui_esc(ui_style(UI_DIM));
-    ui_printf("+%d line%s  ", lines, lines == 1 ? "" : "s");
+    ui_printf("+%d line%s", lines, lines == 1 ? "" : "s");
     ui_esc(ui_style(UI_RESET));
-    viewport_fold_button();
+    viewport_fold_enable();
     ui_put("\n");
 }
 
@@ -761,9 +758,7 @@ static int preview_open(const char *text, enum ui_role role)
     w.first_indent = w.indent = PREVIEW_INDENT + nest;
     w.role = role;
     ui_wrap_paint(text, &w);
-    nest_pad(PREVIEW_INDENT);
-    viewport_fold_button();
-    ui_put("\n");
+    viewport_fold_enable();
     return 1;
 }
 

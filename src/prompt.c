@@ -40,6 +40,7 @@ struct prompt {
     char       **queued;
     int          queued_count;
     int          queued_cap;
+    char        *queued_open;
     int        (*q_count)(void *ud);
     const char *(*q_at)(void *ud, int i);
     char      *(*q_take)(void *ud);
@@ -235,6 +236,31 @@ static const char *queued_line(struct prompt *p, int i)
     return i < theirs ? p->q_at(p->q_ud, i) : p->queued[i - theirs];
 }
 
+static int queued_cap(struct prompt *p, const char *line)
+{
+    if (!p->queued_open || strcmp(p->queued_open, line))
+        return QUEUED_LINES;
+    int cap = tty_rows() / 2;
+    return cap > QUEUED_LINES ? cap : QUEUED_LINES;
+}
+
+static int queued_click(struct prompt *p, int row, int col)
+{
+    char *url = viewport_link_at(row, col);
+    int index = -1;
+    if (url)
+        sscanf(url, "scrap-queue:%d", &index);
+    free(url);
+    if (index < 0 || index >= queued_total(p))
+        return 0;
+    const char *line = queued_line(p, index);
+    int open = p->queued_open && !strcmp(p->queued_open, line);
+    free(p->queued_open);
+    p->queued_open = open ? NULL : strdup(line);
+    chrome_paint();
+    return 1;
+}
+
 int prompt_queued_rows(struct prompt *p, int cols)
 {
     int n = p ? queued_total(p) : 0;
@@ -243,7 +269,7 @@ int prompt_queued_rows(struct prompt *p, int cols)
     size_t budget = queued_budget(cols);
     int rows = n - 1;
     for (int i = 0; i < n; i++)
-        rows += painted_rows(queued_line(p, i), budget, QUEUED_LINES, NULL);
+        rows += painted_rows(queued_line(p, i), budget, queued_cap(p, queued_line(p, i)), NULL);
     return rows;
 }
 
@@ -256,7 +282,7 @@ void prompt_paint_queued(struct prompt *p, int room)
     int used = 0;
     for (int i = 0; i < n; i++) {
         const char *line = queued_line(p, i);
-        int need = painted_rows(line, budget, QUEUED_LINES, NULL);
+        int need = painted_rows(line, budget, queued_cap(p, line), NULL);
         if (i)
             need++;
         if (used + need > room)
@@ -264,7 +290,15 @@ void prompt_paint_queued(struct prompt *p, int room)
         used += need;
         if (i)
             ui_put("\n");
-        paint_bars(line, budget, UI_DIM, QUEUED_LINES, NULL);
+        int folds = painted_rows(line, budget, QUEUED_LINES + 1, NULL) > QUEUED_LINES;
+        if (folds) {
+            char link[64];
+            snprintf(link, sizeof link, "\x1b]8;;scrap-queue:%d\x1b\\", i);
+            ui_esc(link);
+        }
+        paint_bars(line, budget, UI_DIM, queued_cap(p, line), NULL);
+        if (folds)
+            ui_esc("\x1b]8;;\x1b\\");
     }
 }
 
@@ -366,13 +400,8 @@ static void echo_paint(const struct echo_item *e)
     int    folds = e->cap > 0 && painted_rows(e->text, budget, e->cap + 1, NULL) > e->cap;
     struct ui_wrap w = bar_wrap(budget, e->role, open ? 0 : e->cap, NULL);
     ui_wrap_paint(e->text, &w);
-    if (!folds)
-        return;
-    ui_esc(ui_style(e->role));
-    ui_put(UI_BAR " ");
-    ui_esc(ui_style(UI_RESET));
-    viewport_fold_button();
-    ui_put("\n");
+    if (folds)
+        viewport_fold_enable();
 }
 
 static int echo_pad_after(const struct echo_item *e)
@@ -521,6 +550,7 @@ void prompt_free(struct prompt *p)
     for (int i = 0; i < p->queued_count; i++)
         free(p->queued[i]);
     free(p->queued);
+    free(p->queued_open);
     free(p);
 }
 
@@ -1064,7 +1094,7 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
         return KEY_OK;
 
     case TK_MOUSE_DOWN:
-        if (p->click)
+        if (!queued_click(p, ev->row, ev->col) && p->click)
             p->click(p->click_ud, ev->row, ev->col);
         return KEY_OK;
 

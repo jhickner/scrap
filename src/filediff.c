@@ -383,13 +383,14 @@ int filediff_render_patch(const char *patch)
 
     char note[64] = "";
     if (dropped > 0)
-        snprintf(note, sizeof note, "+%d more line%s  ", dropped, dropped == 1 ? "" : "s");
-    if (folded || rows > MAX_ROWS) {
+        snprintf(note, sizeof note, "+%d more line%s", dropped, dropped == 1 ? "" : "s");
+    if (folded || rows > MAX_ROWS)
+        viewport_fold_enable();
+    if (*note) {
         ui_put("    ");
         ui_esc(ui_style(UI_DIM));
         ui_put(note);
         ui_esc(ui_style(UI_RESET));
-        viewport_fold_button();
         ui_put("\n");
     }
     return changed > 0;
