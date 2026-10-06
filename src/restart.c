@@ -179,6 +179,48 @@ static int tabs_dump(const struct session *front, const char *path)
     return wrote;
 }
 
+static int wake_path(char *out, size_t n, const char *id)
+{
+    char what[160];
+    return snprintf(what, sizeof what, "wake-%s", id) < (int)sizeof what &&
+           tmp_path(out, n, what, -1);
+}
+
+static void wake_dump(void)
+{
+    for (int i = 0; i < workspace_count(); i++) {
+        struct session *s = workspace_at(i);
+        const char *id = session_id(s), *text = session_wake_owed(s);
+        char path[4096];
+        if (!id || !text || !wake_path(path, sizeof path, id))
+            continue;
+        FILE *f = fopen(path, "w");
+        if (!f)
+            continue;
+        fputs(text, f);
+        if (fclose(f) != 0)
+            unlink(path);
+    }
+}
+
+void restart_wake(struct session *s)
+{
+    const char *id = session_id(s);
+    char path[4096];
+    if (!id || !wake_path(path, sizeof path, id))
+        return;
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return;
+    char text[16384];
+    size_t n = fread(text, 1, sizeof text - 1, f);
+    text[n] = '\0';
+    fclose(f);
+    unlink(path);
+    if (n)
+        workspace_send(workspace_index_of(s), text, "task notification from before the restart");
+}
+
 int restart_exec(struct session *s)
 {
     wanted = 0;
@@ -209,6 +251,7 @@ int restart_exec(struct session *s)
     }
 
     hud_restarted();
+    wake_dump();
 
     struct session *served = relay_session();
     const char     *rid = served ? session_id(served) : NULL;

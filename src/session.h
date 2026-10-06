@@ -99,6 +99,7 @@ int  session_idle_fd(const struct session *s);
 
 int  session_idle_pump(struct session *s);
 int  session_idle_busy(const struct session *s);
+const char *session_wake_owed(const struct session *s);
 
 const struct tasktab *session_tasks(const struct session *s);
 const struct task    *session_task_change(const struct session *s);

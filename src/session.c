@@ -499,6 +499,13 @@ int session_idle_busy(const struct session *s)
     return s->agent->busy(s->agent) ? 1 : 0;
 }
 
+const char *session_wake_owed(const struct session *s)
+{
+    if (!s || !s->agent || !s->agent->wake_owed)
+        return NULL;
+    return s->agent->wake_owed(s->agent);
+}
+
 static session_key_fn typeahead;
 static void          *typeahead_ud;
 

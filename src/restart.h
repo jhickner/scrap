@@ -18,4 +18,6 @@ void restart_clear(void);
 
 int restart_exec(struct session *s);
 
+void restart_wake(struct session *s);
+
 #endif

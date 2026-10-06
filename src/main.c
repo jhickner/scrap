@@ -1050,6 +1050,7 @@ int main(int argc, char **argv)
         unlink(tabs_arg);
         tabs_admit(0);
     }
+    restart_wake(session);
 
     if (!resume && !restore_arg && !front_screen && (session_arg || grokbottail_applies(session)))
         sessionload_into(session);

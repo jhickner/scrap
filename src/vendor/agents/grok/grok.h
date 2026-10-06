@@ -151,6 +151,11 @@ int grok_idle_pump(grok_client *c);
 /* Background subagents and commands still running. */
 int grok_background_tasks(grok_client *c);
 
+/* Background work that finished between sends and whose wake-up turn has not
+ * yet ended, as text for the model, or NULL if none. A front end that replaces
+ * the process can send this to the resumed session so the model still answers. */
+const char *grok_wake_owed(grok_client *c);
+
 /* Ask the agent to abandon the in-flight turn (ACP session/cancel). The turn
  * still ends with a prompt response, so the stream stays usable for the next
  * send. Returns nonzero on success. */
@@ -259,6 +264,7 @@ struct grok_client {
     int   task_running[GK_TASK_CAP];
     int   n_tasks;
     int   turn_open;          /* a turn grok started itself is running      */
+    char *owed;               /* finished work no turn has answered yet     */
 };
 
 void grok_set_verbose(grok_client *c, int on) { if (c) c->verbose = on; }
@@ -887,6 +893,30 @@ int grok_background_tasks(grok_client *c) {
     return n;
 }
 
+static void gk_owe(grok_client *c, const char *kind, const char *id, const char *status,
+                   const char *about, const char *out_label, const char *out) {
+    if (c->turn_open || !id) return;
+    char block[4096];
+    int n = snprintf(block, sizeof block, "Background %s %s finished: %s.\n%s%s%s%s%s%s",
+                     kind, id, status, about ? "Description: " : "", about ? about : "",
+                     about ? "\n" : "", out ? out_label : "", out ? out : "", out ? "\n" : "");
+    if (n <= 0) return;
+    if ((size_t)n >= sizeof block) n = sizeof block - 1;
+    size_t have = c->owed ? strlen(c->owed) : 0;
+    char *grown = realloc(c->owed, have + (size_t)n + 1);
+    if (!grown) return;
+    memcpy(grown + have, block, (size_t)n + 1);
+    c->owed = grown;
+}
+
+static void gk_turn_closed(grok_client *c) {
+    c->turn_open = 0;
+    free(c->owed);
+    c->owed = NULL;
+}
+
+const char *grok_wake_owed(grok_client *c) { return c ? c->owed : NULL; }
+
 /* Subagent and background-command lifecycle, from the _x.ai notifications. */
 static void gk_task_update(grok_client *c, cJSON *u) {
     const char *su = gk_str(u, "sessionUpdate");
@@ -898,6 +928,8 @@ static void gk_task_update(grok_client *c, cJSON *u) {
         const char *st = gk_str(u, "status");
         gk_task(c, gk_str(u, "subagent_id"), st ? st : "completed",
                 gk_str(u, "output"), NULL, "local_agent", NULL);
+        gk_owe(c, "subagent", gk_str(u, "subagent_id"), st ? st : "completed", NULL,
+               "Output: ", gk_str(u, "output"));
     } else if (!strcmp(su, "task_backgrounded")) {
         const char *cmd = gk_str(u, "command");
         gk_task(c, gk_str(u, "task_id"), "running", cmd ? cmd : gk_str(u, "description"),
@@ -908,8 +940,10 @@ static void gk_task_update(grok_client *c, cJSON *u) {
         const char *st = cJSON_IsTrue(cJSON_GetObjectItem(t, "explicitly_killed")) ? "killed"
                        : cJSON_IsNumber(code) && code->valueint == 0 ? "completed" : "failed";
         gk_task(c, gk_str(t, "task_id"), st, NULL, NULL, "local_bash", NULL);
+        gk_owe(c, "command", gk_str(t, "task_id"), st, gk_str(t, "description"),
+               "Output file: ", gk_str(t, "output_file"));
     } else if (!strcmp(su, "turn_completed")) {
-        c->turn_open = 0;
+        gk_turn_closed(c);
     }
 }
 
@@ -1584,7 +1618,7 @@ char *grok_send_ex(grok_client *c, const char *user_text, grok_result *meta) {
     c->meta = NULL;
     c->cancelling = 0;
     c->abort_latched = 0;
-    c->turn_open = 0;
+    gk_turn_closed(c);
     if (!ok) { free(acc); return NULL; }
     gk_read_billing(c);
     return acc ? acc : strdup("");
@@ -1656,6 +1690,7 @@ void grok_stop(grok_client *c) {
     free(c->model);
     free(c->effort);
     free(c->buf);
+    free(c->owed);
     free(c);
 }
 

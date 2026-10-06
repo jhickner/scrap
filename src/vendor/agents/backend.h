@@ -224,6 +224,8 @@ struct Backend {
      * subagents and detached commands outlive the send that started them, so a
      * turn ending is not the work ending. NULL for a driver that cannot say. */
     int  (*busy)(Backend *b);
+    /* Unanswered task notifications to resend after a process restart, or NULL. */
+    const char *(*wake_owed)(Backend *b);
 
     /* NULL until known, or when the driver never reports it. */
     const char *(*session_id)(Backend *b);
@@ -621,6 +623,11 @@ static int backend_claude_busy(Backend *b) {
     return x->client ? claude_background_tasks(x->client) : 0;
 }
 
+static const char *backend_claude_wake_owed(Backend *b) {
+    backend_claude *x = b->ctx;
+    return x->client ? claude_wake_owed(x->client) : NULL;
+}
+
 static const char *backend_claude_session_id(Backend *b) {
     backend_claude *x = b->ctx;
     return x->client ? claude_session_id(x->client) : NULL;
@@ -677,6 +684,7 @@ static Backend *backend_claude_open(const backend_opts *o) {
     b->idle_fd = backend_claude_idle_fd;
     b->idle_pump = backend_claude_idle_pump;
     b->busy = backend_claude_busy;
+    b->wake_owed = backend_claude_wake_owed;
     b->session_id = backend_claude_session_id;
     b->model = backend_claude_model;
     b->effort = backend_claude_effort;
@@ -1076,6 +1084,11 @@ static int backend_grok_busy(Backend *b) {
     return x->client ? grok_background_tasks(x->client) : 0;
 }
 
+static const char *backend_grok_wake_owed(Backend *b) {
+    backend_grok *x = b->ctx;
+    return x->client ? grok_wake_owed(x->client) : NULL;
+}
+
 static const char *backend_grok_session_id(Backend *b) {
     backend_grok *x = b->ctx;
     return x->client ? grok_session_id(x->client) : NULL;
@@ -1158,6 +1171,7 @@ static Backend *backend_grok_open(const backend_opts *o) {
     b->idle_fd = backend_grok_idle_fd;
     b->idle_pump = backend_grok_idle_pump;
     b->busy = backend_grok_busy;
+    b->wake_owed = backend_grok_wake_owed;
     b->session_id = backend_grok_session_id;
     b->model = backend_grok_model;
     b->effort = backend_grok_effort;
