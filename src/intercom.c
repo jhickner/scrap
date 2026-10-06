@@ -247,6 +247,8 @@ char *intercom_note(const char *name)
         "- `scrap send @%s /COMMAND` runs a scrap command such as /clear on this session "
         "once the current turn ends; only this session can do this to itself.\n"
         "- `scrap open TARGET` resumes a past session in a new tab.\n"
+        "- `scrap new [--on MACHINE] [-C DIR] [PROMPT]` starts a session in a new tab, here or "
+        "in the newest scrap window on a tailnet machine, and prints its address.\n"
         "- `scrap yank TARGET...` moves live sessions from other windows into this window as tabs.\n"
         "- `scrap attach --tab machine:@name` opens a session on another machine as a tab "
         "in this window, without moving it; a session on this machine is yanked instead.\n"
@@ -918,6 +920,20 @@ int intercom_send(const char *from, const char *target, const char *text, int in
     return intercom_deliver(NULL, from, local, text, interrupt, msg, size);
 }
 
+static char *join_args(int argc, char **argv)
+{
+    size_t len = 0;
+    for (int i = 0; i < argc; i++)
+        len += strlen(argv[i]) + 1;
+    char *text = calloc(1, len + 1);
+    for (int i = 0; text && i < argc; i++) {
+        if (i)
+            strcat(text, " ");
+        strcat(text, argv[i]);
+    }
+    return text;
+}
+
 static int cmd_send(int argc, char **argv)
 {
     int interrupt = argc > 1 && !strcmp(argv[1], "--interrupt");
@@ -929,17 +945,9 @@ static int cmd_send(int argc, char **argv)
         fprintf(stderr, "usage: scrap send [--interrupt] TARGET TEXT\n");
         return 2;
     }
-    size_t len = 0;
-    for (int i = 2; i < argc; i++)
-        len += strlen(argv[i]) + 1;
-    char *text = calloc(1, len + 1);
+    char *text = join_args(argc - 2, argv + 2);
     if (!text)
         return 1;
-    for (int i = 2; i < argc; i++) {
-        if (i > 2)
-            strcat(text, " ");
-        strcat(text, argv[i]);
-    }
 
     char me[INTERCOM_NAME_MAX], msg[1200];
     self_name(me, sizeof me);
@@ -1008,6 +1016,63 @@ static int cmd_open(int argc, char **argv)
         cJSON_Delete(o);
     }
     free(l.e);
+    return rc;
+}
+
+static int cmd_new(int argc, char **argv)
+{
+    const char *on = NULL, *dir = NULL;
+    int         i = 1;
+    for (; i + 1 < argc && argv[i][0] == '-'; i += 2)
+        if (!strcmp(argv[i], "--on"))
+            on = argv[i + 1];
+        else if (!strcmp(argv[i], "-C"))
+            dir = argv[i + 1];
+        else
+            break;
+    if (i < argc && argv[i][0] == '-') {
+        fprintf(stderr, "usage: scrap new [--on MACHINE] [-C DIR] [PROMPT]\n");
+        return 2;
+    }
+    const char *owner = getenv("SCRAP_PID");
+    long        pid = owner ? atol(owner) : 0;
+    if (!on && (pid <= 0 || !livelist_alive(pid))) {
+        fprintf(stderr, "scrap: new runs inside a scrap session or takes --on\n");
+        return 1;
+    }
+    char *prompt = join_args(argc - i, argv + i);
+    if (!prompt)
+        return 1;
+    char msg[1200], cwd[4096];
+    int  rc = 1;
+    if (on) {
+        char target[TAILNET_HOST_MAX + 64];
+        if ((rc = !tailnet_spawn(on, dir, prompt, target, sizeof target, msg, sizeof msg)))
+            fprintf(stderr, "scrap: %s\n", msg);
+        else
+            printf("started %s\n", target);
+        free(prompt);
+        return rc;
+    }
+    cJSON *o = cJSON_CreateObject(), *r;
+    cJSON_AddStringToObject(o, "cwd", dir ? dir : here(cwd, sizeof cwd) ? cwd : "~");
+    if (*prompt)
+        cJSON_AddStringToObject(o, "prompt", prompt);
+    char reply[1024] = "";
+    request(pid, o, reply, sizeof reply);
+    cJSON_Delete(o);
+    r = cJSON_Parse(reply);
+    const char *error = cJSON_GetStringValue(cJSON_GetObjectItem(r, "error"));
+    const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(r, "name"));
+    const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(r, "session"));
+    if (error || !id)
+        fprintf(stderr, "scrap: %s\n", error ? error : "no reply from the scrap window");
+    else {
+        printf(name ? "started @%s\n" : "started %s\n", name ? name : id);
+        rc = 0;
+    }
+    cJSON_Delete(r);
+    free(prompt);
     return rc;
 }
 
@@ -1244,6 +1309,8 @@ int intercom_main(int argc, char **argv)
         return cmd_send(argc, argv);
     if (!strcmp(argv[0], "open"))
         return cmd_open(argc, argv);
+    if (!strcmp(argv[0], "new"))
+        return cmd_new(argc, argv);
     if (!strcmp(argv[0], "attach"))
         return cmd_attach(argc, argv);
     if (!strcmp(argv[0], "yank"))

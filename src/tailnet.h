@@ -35,8 +35,8 @@ int tailnet_send(const char *host, const char *from, const char *target, const c
 char *tailnet_read(const char *host, const char *target, long turns, long bytes, char *msg,
                    size_t size);
 
-int tailnet_spawn(const char *host, const char *cwd, char *target, size_t tsize, char *msg,
-                  size_t size);
+int tailnet_spawn(const char *host, const char *cwd, const char *prompt,
+                  char *target, size_t tsize, char *msg, size_t size);
 
 int tailnet_close(const char *host, const char *target, char *msg, size_t size);
 

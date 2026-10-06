@@ -545,7 +545,7 @@ static void spawn_on(const char *machine)
     char target[TAILNET_HOST_MAX + 64], msg[1200];
     ui_note("starting a session on %s\xe2\x80\xa6", machine);
     ui_flush();
-    if (tailnet_spawn(machine, cwd, target, sizeof target, msg, sizeof msg))
+    if (tailnet_spawn(machine, cwd, NULL, target, sizeof target, msg, sizeof msg))
         cmd_attach(target);
     else {
         ui_error("%s", msg);

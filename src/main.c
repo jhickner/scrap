@@ -182,6 +182,7 @@ static void usage(void)
             "  " APP_NAME " read TARGET [-n TURNS] [--bytes N]   print a session's last turns\n"
             "  " APP_NAME " send TARGET TEXT   message a live session\n"
             "  " APP_NAME " open TARGET   resume a past session in a new tab, or here outside scrap\n"
+            "  " APP_NAME " new [--on MACHINE] [-C DIR] [PROMPT]   start a session in a new tab\n"
             "  " APP_NAME " attach TARGET   stream a live session as JSON lines; stdin lines are prompts\n"
             "  " APP_NAME " job ls|check NAME   scheduled jobs; " APP_NAME " job prints the file format\n"
             "  " APP_NAME " hub   the per-machine process for the network broker and jobs (started on demand)\n"
@@ -658,7 +659,7 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "sync"))
         return agentsync_main(argc - 1, argv + 1);
     if (argc > 1 && (!strcmp(argv[1], "ls") || !strcmp(argv[1], "read") ||
-                     !strcmp(argv[1], "send") || !strcmp(argv[1], "open") ||
+                     !strcmp(argv[1], "send") || !strcmp(argv[1], "open") || !strcmp(argv[1], "new") ||
                      !strcmp(argv[1], "attach") || !strcmp(argv[1], "yank") || !strcmp(argv[1], "close")))
         return intercom_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "hub"))
