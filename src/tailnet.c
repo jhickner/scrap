@@ -57,7 +57,9 @@ int tailnet_dir_port(void)
 
 int tailnet_broker(void)
 {
-    return strcmp(cfg_get("broker", "on"), "off") != 0;
+    const char *dir = getenv("SCRAP_CONFIG_DIR");
+    const char *set = cfg_get("broker", dir && *dir && !cfg_get("port", NULL) ? "off" : "on");
+    return strcmp(set, "off") != 0;
 }
 
 const char *tailnet_bind_ip(void)
