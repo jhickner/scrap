@@ -57,7 +57,9 @@ int tailnet_dir_port(void)
 
 int tailnet_broker(void)
 {
-    return strcmp(cfg_get("broker", "on"), "off") != 0;
+    const char *dir = getenv("SCRAP_CONFIG_DIR");
+    const char *set = cfg_get("broker", dir && *dir && !cfg_get("port", NULL) ? "off" : "on");
+    return strcmp(set, "off") != 0;
 }
 
 const char *tailnet_bind_ip(void)
@@ -415,7 +417,7 @@ static cJSON *directory(const char *ip, char *msg, size_t size)
 }
 
 int tailnet_send(const char *host, const char *from, const char *target, const char *text,
-                 char *msg, size_t size)
+                 int interrupt, char *msg, size_t size)
 {
     char ip[256];
     tailnet_resolve(host, ip, sizeof ip);
@@ -424,6 +426,8 @@ int tailnet_send(const char *host, const char *from, const char *target, const c
     cJSON_AddStringToObject(req, "to", target);
     if (from && *from)
         cJSON_AddStringToObject(req, "from", from);
+    if (interrupt)
+        cJSON_AddBoolToObject(req, "interrupt", 1);
     char   err[512];
     cJSON *r = ask(ip, tailnet_dir_port(), req, SEND_TIMEOUT, err, sizeof err);
     if (!r) {
@@ -463,18 +467,15 @@ static int manage(const char *host, cJSON *req, char *msg, size_t size)
         snprintf(msg, size, "%s: %s", host, err);
         return 1;
     }
-    int ok = cJSON_IsTrue(cJSON_GetObjectItem(r, "ok"));
     cJSON_Delete(r);
-    if (!ok)
-        snprintf(msg, size, "%s runs an older scrap", host);
-    return !ok;
+    return 0;
 }
 
 int tailnet_close(const char *host, const char *target, char *msg, size_t size)
 {
     cJSON *req = cJSON_CreateObject();
-    cJSON_AddBoolToObject(req, "ls", 1);
-    cJSON_AddStringToObject(req, "kill", target);
+    cJSON_AddStringToObject(req, "to", target);
+    cJSON_AddStringToObject(req, "close", target);
     return manage(host, req, msg, size);
 }
 
@@ -482,20 +483,21 @@ int tailnet_rename(const char *host, const char *target, const char *title, char
                    size_t size)
 {
     cJSON *req = cJSON_CreateObject();
-    cJSON_AddBoolToObject(req, "ls", 1);
     cJSON_AddStringToObject(req, "rename", target);
     cJSON_AddStringToObject(req, "title", title);
     return manage(host, req, msg, size);
 }
 
-int tailnet_spawn(const char *host, const char *cwd, char *target, size_t tsize, char *msg,
-                  size_t size)
+int tailnet_spawn(const char *host, const char *cwd, const char *prompt,
+                  char *target, size_t tsize, char *msg, size_t size)
 {
     char ip[256], err[512];
     tailnet_resolve(host, ip, sizeof ip);
     cJSON *req = cJSON_CreateObject();
     if (cwd && *cwd)
         cJSON_AddStringToObject(req, "cwd", cwd);
+    if (prompt && *prompt)
+        cJSON_AddStringToObject(req, "prompt", prompt);
     cJSON *r = ask(ip, tailnet_dir_port(), req, SPAWN_TIMEOUT, err, sizeof err);
     if (!r) {
         snprintf(msg, size, "%s: %s", host, err);

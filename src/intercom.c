@@ -236,24 +236,35 @@ char *intercom_note(const char *name)
     return text_dsprintf(
         "This session is @%s in scrap. Other scrap sessions are reachable with the `scrap` "
         "command, run through Bash:\n"
-        "- `scrap ls [--live] [--cwd DIR] [QUERY]` lists sessions, newest first; `--cwd .` "
-        "means this directory; QUERY also searches transcript text.\n"
+        "- `scrap ls [--exited] [--cwd DIR] [QUERY]` lists live sessions, newest first; "
+        "`--exited` lists exited sessions instead; `--cwd .` means this directory; QUERY also "
+        "searches transcript text.\n"
         "- `scrap read TARGET [-n TURNS] [--bytes N]` prints a session's recent turns.\n"
-        "- `scrap send TARGET TEXT` sends a message to a live session.\n"
+        "- `scrap send TARGET TEXT` sends a message to a live session; it waits until the "
+        "session's current turn ends.\n"
+        "- `scrap send --interrupt TARGET TEXT` stops the session's current turn and delivers "
+        "the message now. Use it only when the message changes what that session should be "
+        "doing right now.\n"
         "- `scrap send @%s /COMMAND` runs a scrap command such as /clear on this session "
         "once the current turn ends; only this session can do this to itself.\n"
         "- `scrap open TARGET` resumes a past session in a new tab.\n"
+        "- `scrap new [--on MACHINE] [-C DIR] [PROMPT]` starts a session in a new tab, here or "
+        "in the newest scrap window on a tailnet machine, and prints its address.\n"
         "- `scrap yank TARGET...` moves live sessions from other windows into this window as tabs.\n"
         "- `scrap attach --tab machine:@name` opens a session on another machine as a tab "
         "in this window, without moving it; a session on this machine is yanked instead.\n"
-        "- `scrap close TARGET...` closes tabs in this window; an attached tab detaches.\n"
+        "- `scrap close TARGET...` closes sessions; an attached tab in this window detaches.\n"
         "- `scrap ls --net` lists live sessions on every machine on the tailnet.\n"
+        "- `scrap status TEXT` sets this session's status, shown as its title in `scrap ls`, "
+        "the session picker and the relay. Set it when you start a task and whenever what "
+        "you are doing changes; keep it under 60 characters. Scrap clears it when the session "
+        "goes idle.\n"
         "TARGET is @name, a session id prefix, or a title; machine:@name reaches a session "
-        "on another tailnet machine through `send` and `read`. Messages from other "
+        "on another tailnet machine through `send`, `read`, and `close`. Messages from other "
         "sessions arrive prefixed `[from @name]` or `[from machine:@name]`; answer them "
         "with `scrap send` to that exact address only when an answer is needed.\n"
-        "To coordinate with a live session: `scrap ls --live --cwd .`, then `scrap read "
-        "@name`, then `scrap send @name ...`. To recover old context: `scrap ls QUERY`, then "
+        "To coordinate with a live session: `scrap ls --cwd .`, then `scrap read "
+        "@name`, then `scrap send @name ...`. To recover old context: `scrap ls --exited QUERY`, then "
         "`scrap read TARGET`.",
         name, name);
 }
@@ -283,7 +294,7 @@ struct entry {
     char backend[32];
     char cwd[1024];
     char title[200];
-    char status[16];
+    char state[16];
     long ts;
     long pid;
     int  live;
@@ -340,7 +351,7 @@ static void add_records(struct entries *l, const struct live_session *v, int n, 
         snprintf(e.backend, sizeof e.backend, "%s", v[i].backend);
         snprintf(e.cwd, sizeof e.cwd, "%s", v[i].cwd);
         snprintf(e.title, sizeof e.title, "%s", v[i].title);
-        snprintf(e.status, sizeof e.status, "%s", live ? v[i].status : "closed");
+        snprintf(e.state, sizeof e.state, "%s", live ? v[i].state : "closed");
         e.ts = v[i].ts;
         e.pid = v[i].pid;
         e.live = live;
@@ -377,7 +388,7 @@ static void add_chain(const char *chain, const struct chain_record *r, void *ctx
     snprintf(e.name, sizeof e.name, "%s", r->name);
     snprintf(e.backend, sizeof e.backend, "%s", last->backend);
     snprintf(e.cwd, sizeof e.cwd, "%s", last->cwd);
-    snprintf(e.status, sizeof e.status, "closed");
+    snprintf(e.state, sizeof e.state, "closed");
     e.ts = transcript_time(&e);
     add(ctx, &e);
 }
@@ -409,7 +420,7 @@ static void add_past(struct entries *l, const char *cwd)
             snprintf(e.backend, sizeof e.backend, "%s", *b);
             snprintf(e.cwd, sizeof e.cwd, "%s", cwd);
             snprintf(e.title, sizeof e.title, "%s", past[i].label);
-            snprintf(e.status, sizeof e.status, "closed");
+            snprintf(e.state, sizeof e.state, "closed");
             e.ts = (long)past[i].modified;
             add(l, &e);
         }
@@ -423,28 +434,27 @@ static void collect(struct entries *l, const char *cwd, int live_only, int up)
     int                  n = livelist_load(&v);
     add_records(l, v, n, 1);
     free(v);
-    if (live_only)
-        return;
+    if (!live_only) {
+        n = livelist_closed_load(&v);
+        add_records(l, v, n, 0);
+        free(v);
 
-    n = livelist_closed_load(&v);
-    add_records(l, v, n, 0);
-    free(v);
+        migrate();
+        chain_scan(add_chain, l);
 
-    migrate();
-    chain_scan(add_chain, l);
-
-    char dir[4096];
-    snprintf(dir, sizeof dir, "%s", cwd ? cwd : "");
-    while (dir[0]) {
-        add_past(l, dir);
-        char *slash = strrchr(dir, '/');
-        if (!up || !slash || slash == dir)
-            break;
-        *slash = '\0';
+        char dir[4096];
+        snprintf(dir, sizeof dir, "%s", cwd ? cwd : "");
+        while (dir[0]) {
+            add_past(l, dir);
+            char *slash = strrchr(dir, '/');
+            if (!up || !slash || slash == dir)
+                break;
+            *slash = '\0';
+        }
     }
 
     for (int i = 0; i < l->n; i++)
-        if (!l->e[i].title[0] && l->e[i].id[0])
+        if (l->e[i].id[0])
             title_lookup(l->e[i].id, l->e[i].title, sizeof l->e[i].title);
     qsort(l->e, (size_t)l->n, sizeof *l->e, newest);
 }
@@ -524,7 +534,7 @@ static void print_entry(FILE *out, const struct entry *e)
         snprintf(who, sizeof who, "%.8s", e->id);
     path_home_relative(e->cwd, where, sizeof where);
     fprintf(out, "%-20s %-4s %-8s %s  %s\n", who, e->live ? "live" : "past",
-           e->status[0] ? e->status : "-", where, e->title[0] ? e->title : "untitled");
+           e->state[0] ? e->state : "-", where, e->title[0] ? e->title : "untitled");
 }
 
 static int here(char *out, size_t size)
@@ -564,7 +574,7 @@ char *intercom_net_list(const char *query)
             snprintf(e.id, sizeof e.id, "%s", jstr(o, "id"));
             snprintf(e.cwd, sizeof e.cwd, "%s", jstr(o, "cwd"));
             snprintf(e.title, sizeof e.title, "%s", jstr(o, "title"));
-            snprintf(e.status, sizeof e.status, "%s", jstr(o, "status"));
+            snprintf(e.state, sizeof e.state, "%s", jstr(o, "state"));
             if (!out || (query && !contains(e.name, query) && !contains(e.title, query) &&
                          !contains(e.cwd, query)))
                 continue;
@@ -596,11 +606,11 @@ static int cmd_ls_net(const char *query)
 
 static int cmd_ls(int argc, char **argv)
 {
-    int         live_only = 0, net = 0;
+    int         exited = 0, net = 0;
     const char *dir = NULL, *query = NULL;
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--live"))
-            live_only = 1;
+        if (!strcmp(argv[i], "--exited"))
+            exited = 1;
         else if (!strcmp(argv[i], "--net"))
             net = 1;
         else if (!strcmp(argv[i], "--cwd") && i + 1 < argc)
@@ -608,7 +618,7 @@ static int cmd_ls(int argc, char **argv)
         else if (!query && argv[i][0] != '-')
             query = argv[i];
         else {
-            fprintf(stderr, "usage: scrap ls [--live] [--net] [--cwd DIR] [QUERY]\n");
+            fprintf(stderr, "usage: scrap ls [--exited] [--net] [--cwd DIR] [QUERY]\n");
             return 2;
         }
     }
@@ -626,9 +636,11 @@ static int cmd_ls(int argc, char **argv)
     const char *hint = dir ? dir : here(cwd, sizeof cwd) ? cwd : NULL;
 
     struct entries l = {0};
-    collect(&l, hint, live_only, 0);
+    collect(&l, hint, !exited, 0);
     for (int i = 0; i < l.n; i++) {
         const struct entry *e = &l.e[i];
+        if (e->live == exited)
+            continue;
         if (dir && !under(e->cwd, dir))
             continue;
         if (query && !contains(e->name, query) && !contains(e->title, query) &&
@@ -761,7 +773,7 @@ cJSON *intercom_live_json(void)
         if (!v[i].id[0] || !title_lookup(v[i].id, title, sizeof title))
             snprintf(title, sizeof title, "%s", v[i].title);
         cJSON_AddStringToObject(o, "title", title);
-        cJSON_AddStringToObject(o, "status", v[i].status);
+        cJSON_AddStringToObject(o, "state", v[i].state);
         cJSON_AddNumberToObject(o, "ts", (double)v[i].ts);
         cJSON_AddItemToArray(a, o);
     }
@@ -817,29 +829,61 @@ static int answered(const char *reply, const char *done)
     return error ? 1 : 0;
 }
 
-static void self_name(char *out, size_t size)
+static int reply_error_to(const char *reply, char *msg, size_t size)
+{
+    cJSON      *r = cJSON_Parse(reply);
+    const char *error = cJSON_GetStringValue(cJSON_GetObjectItem(r, "error"));
+    snprintf(msg, size, "%s", error ? error : "");
+    cJSON_Delete(r);
+    return error != NULL;
+}
+
+int intercom_close(const char *target, char *msg, size_t size)
+{
+    char        host[TAILNET_HOST_MAX];
+    const char *local, *name = route(target, host, sizeof host, &local);
+    if (name)
+        return tailnet_close(host, name, msg, size);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "to", local);
+    long pid = intercom_owner(o, msg, size);
+    int  rc = 1;
+    if (pid > 0) {
+        char reply[1024] = "";
+        cJSON_AddStringToObject(o, "close", jstr(o, "session"));
+        rc = request(pid, o, reply, sizeof reply) ? reply_error_to(reply, msg, size) : 1;
+    }
+    cJSON_Delete(o);
+    return rc;
+}
+
+static int self_id(char *out, size_t size)
 {
     out[0] = '\0';
     const char *file = getenv("MUX_SESSION_FILE");
     char       *id = file && *file ? text_slurp(file, 4096, NULL) : NULL;
     if (id) {
         text_chomp(id);
-        intercom_name_of(id, out, size);
+        snprintf(out, size, "%s", id);
     }
     free(id);
+    return out[0] != '\0';
+}
+
+static void self_name(char *out, size_t size)
+{
+    char id[4096];
+    out[0] = '\0';
+    if (self_id(id, sizeof id))
+        intercom_name_of(id, out, size);
 }
 
 /* A local sender's session id, so a session sending to itself can run commands. */
 static void add_self_id(cJSON *o)
 {
-    const char *file = getenv("MUX_SESSION_FILE");
-    char       *id = file && *file ? text_slurp(file, 4096, NULL) : NULL;
-    if (id) {
-        text_chomp(id);
-        if (*id)
-            cJSON_AddStringToObject(o, "from_id", id);
-    }
-    free(id);
+    char id[4096];
+    if (self_id(id, sizeof id))
+        cJSON_AddStringToObject(o, "from_id", id);
 }
 
 static char *spill(const char *text)
@@ -859,7 +903,7 @@ static char *spill(const char *text)
 }
 
 int intercom_deliver(const char *host, const char *from, const char *target, const char *text,
-                     char *msg, size_t size)
+                     int interrupt, char *msg, size_t size)
 {
     struct entries l = {0};
     char           cwd[4096];
@@ -880,6 +924,8 @@ int intercom_deliver(const char *host, const char *from, const char *target, con
             cJSON_AddStringToObject(o, "name", e->name);
         if (from && *from)
             cJSON_AddStringToObject(o, "from", from);
+        if (interrupt)
+            cJSON_AddBoolToObject(o, "interrupt", 1);
         if (host && *host)
             cJSON_AddStringToObject(o, "host", host);
         else
@@ -902,43 +948,79 @@ int intercom_deliver(const char *host, const char *from, const char *target, con
     return rc;
 }
 
-int intercom_send(const char *from, const char *target, const char *text, char *msg,
-                  size_t size)
+int intercom_send(const char *from, const char *target, const char *text, int interrupt,
+                  char *msg, size_t size)
 {
     char        host[TAILNET_HOST_MAX];
     const char *local, *name = route(target, host, sizeof host, &local);
     if (name)
-        return tailnet_send(host, from, name, text, msg, size);
-    return intercom_deliver(NULL, from, local, text, msg, size);
+        return tailnet_send(host, from, name, text, interrupt, msg, size);
+    return intercom_deliver(NULL, from, local, text, interrupt, msg, size);
+}
+
+static char *join_args(int argc, char **argv)
+{
+    size_t len = 0;
+    for (int i = 0; i < argc; i++)
+        len += strlen(argv[i]) + 1;
+    char *text = calloc(1, len + 1);
+    for (int i = 0; text && i < argc; i++) {
+        if (i)
+            strcat(text, " ");
+        strcat(text, argv[i]);
+    }
+    return text;
 }
 
 static int cmd_send(int argc, char **argv)
 {
+    int interrupt = argc > 1 && !strcmp(argv[1], "--interrupt");
+    if (interrupt) {
+        argv++;
+        argc--;
+    }
     if (argc < 3) {
-        fprintf(stderr, "usage: scrap send TARGET TEXT\n");
+        fprintf(stderr, "usage: scrap send [--interrupt] TARGET TEXT\n");
         return 2;
     }
-    size_t len = 0;
-    for (int i = 2; i < argc; i++)
-        len += strlen(argv[i]) + 1;
-    char *text = calloc(1, len + 1);
+    char *text = join_args(argc - 2, argv + 2);
     if (!text)
         return 1;
-    for (int i = 2; i < argc; i++) {
-        if (i > 2)
-            strcat(text, " ");
-        strcat(text, argv[i]);
-    }
 
     char me[INTERCOM_NAME_MAX], msg[1200];
     self_name(me, sizeof me);
-    int rc = intercom_send(me, argv[1], text, msg, sizeof msg);
+    int rc = intercom_send(me, argv[1], text, interrupt, msg, sizeof msg);
     if (rc)
         fprintf(stderr, "scrap: %s\n", msg);
     else
         printf("%s\n", msg);
     free(text);
     return rc;
+}
+
+static int cmd_status(int argc, char **argv)
+{
+    if (argc < 2) {
+        fprintf(stderr, "usage: scrap status TEXT\n");
+        return 2;
+    }
+    char id[4096];
+    if (!getenv("MUX_SESSION_FILE")) {
+        fprintf(stderr, "scrap: status runs inside a scrap session\n");
+        return 1;
+    }
+    if (!self_id(id, sizeof id)) {
+        fprintf(stderr, "scrap: this session has no id yet\n");
+        return 1;
+    }
+    char *text = join_args(argc - 1, argv + 1);
+    int   ok = text && title_set(id, text);
+    free(text);
+    if (!ok) {
+        fprintf(stderr, "scrap: status has to be 1 to 80 characters\n");
+        return 1;
+    }
+    return 0;
 }
 
 static int cmd_open(int argc, char **argv)
@@ -997,6 +1079,63 @@ static int cmd_open(int argc, char **argv)
         cJSON_Delete(o);
     }
     free(l.e);
+    return rc;
+}
+
+static int cmd_new(int argc, char **argv)
+{
+    const char *on = NULL, *dir = NULL;
+    int         i = 1;
+    for (; i + 1 < argc && argv[i][0] == '-'; i += 2)
+        if (!strcmp(argv[i], "--on"))
+            on = argv[i + 1];
+        else if (!strcmp(argv[i], "-C"))
+            dir = argv[i + 1];
+        else
+            break;
+    if (i < argc && argv[i][0] == '-') {
+        fprintf(stderr, "usage: scrap new [--on MACHINE] [-C DIR] [PROMPT]\n");
+        return 2;
+    }
+    const char *owner = getenv("SCRAP_PID");
+    long        pid = owner ? atol(owner) : 0;
+    if (!on && (pid <= 0 || !livelist_alive(pid))) {
+        fprintf(stderr, "scrap: new runs inside a scrap session or takes --on\n");
+        return 1;
+    }
+    char *prompt = join_args(argc - i, argv + i);
+    if (!prompt)
+        return 1;
+    char msg[1200], cwd[4096];
+    int  rc = 1;
+    if (on) {
+        char target[TAILNET_HOST_MAX + 64];
+        if ((rc = !tailnet_spawn(on, dir, prompt, target, sizeof target, msg, sizeof msg)))
+            fprintf(stderr, "scrap: %s\n", msg);
+        else
+            printf("started %s\n", target);
+        free(prompt);
+        return rc;
+    }
+    cJSON *o = cJSON_CreateObject(), *r;
+    cJSON_AddStringToObject(o, "cwd", dir ? dir : here(cwd, sizeof cwd) ? cwd : "~");
+    if (*prompt)
+        cJSON_AddStringToObject(o, "prompt", prompt);
+    char reply[1024] = "";
+    request(pid, o, reply, sizeof reply);
+    cJSON_Delete(o);
+    r = cJSON_Parse(reply);
+    const char *error = cJSON_GetStringValue(cJSON_GetObjectItem(r, "error"));
+    const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(r, "name"));
+    const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(r, "session"));
+    if (error || !id)
+        fprintf(stderr, "scrap: %s\n", error ? error : "no reply from the scrap window");
+    else {
+        printf(name ? "started @%s\n" : "started %s\n", name ? name : id);
+        rc = 0;
+    }
+    cJSON_Delete(r);
+    free(prompt);
     return rc;
 }
 
@@ -1151,18 +1290,23 @@ static int cmd_close(int argc, char **argv)
     }
     const char *owner = getenv("SCRAP_PID");
     long        pid = owner ? atol(owner) : 0;
-    if (pid <= 0 || !livelist_alive(pid)) {
-        fprintf(stderr, "scrap: close runs inside a scrap session\n");
-        return 1;
-    }
-    int rc = 0;
+    int         rc = 0, window_live = pid > 0 && livelist_alive(pid);
     for (int i = 1; i < argc; i++) {
-        char   reply[1024] = "", done[200];
-        cJSON *o = cJSON_CreateObject();
-        cJSON_AddStringToObject(o, "close", argv[i]);
-        snprintf(done, sizeof done, "closed %s", argv[i]);
-        rc |= request(pid, o, reply, sizeof reply) ? answered(reply, done) : 1;
-        cJSON_Delete(o);
+        char msg[1200] = "", reply[1024] = "";
+        int  failed = 1;
+        if (window_live) {
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddStringToObject(o, "close", argv[i]);
+            failed = !request(pid, o, reply, sizeof reply) || reply_error_to(reply, msg, sizeof msg);
+            cJSON_Delete(o);
+        }
+        if (failed && (!window_live || !strcmp(msg, "no such session")))
+            failed = intercom_close(argv[i], msg, sizeof msg);
+        if (failed)
+            fprintf(stderr, "scrap: %s\n", msg[0] ? msg : "could not close that session");
+        else
+            printf("closed %s\n", argv[i]);
+        rc |= failed;
     }
     return rc;
 }
@@ -1231,8 +1375,12 @@ int intercom_main(int argc, char **argv)
         return cmd_read(argc, argv);
     if (!strcmp(argv[0], "send"))
         return cmd_send(argc, argv);
+    if (!strcmp(argv[0], "status"))
+        return cmd_status(argc, argv);
     if (!strcmp(argv[0], "open"))
         return cmd_open(argc, argv);
+    if (!strcmp(argv[0], "new"))
+        return cmd_new(argc, argv);
     if (!strcmp(argv[0], "attach"))
         return cmd_attach(argc, argv);
     if (!strcmp(argv[0], "yank"))

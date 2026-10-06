@@ -87,7 +87,7 @@ S→C {t:"res", id, ok:true, ...result} | {t:"res", id, ok:false, code, msg}
 ### 3.2 State
 
 ```
-session: {id, title, cwd, backend, model, name, hud:[[{text, role}]]}  hud = scrap's 3 status rows; at most 1/s
+session: {id, title, cwd, backend, model, name, quota?, hud:[[{text, role}]]}  hud = scrap's 3 status rows; at most 1/s
 entries: last 50, oldest first; older:true when more exist
 live:    {busy, started?, context?, queue:[text]}
 ask:     null | {id, questions:[{text, options:[{label, detail?}]}]}
@@ -100,9 +100,12 @@ entry:   {id, kind, ts, ...}   id: per-relay counter, never reused within a bind
              input, result and diff are not sent; held:true marks them, fetch with op "entry"
   note       text                   backend warnings
   btw        text, answer, failed?  /btw side-channel answers
+  bash       text, out, exit?, signal?, error?  `!` shell lines run at the terminal
   end        every turn: secs; stopped:true | failed:true, text = error
   any        clipped:true when a string field over 16 KB was cut; fetch with op "entry"
 ```
+
+- **Quota** is `null` when unavailable, otherwise either `{used_percent, resets_at, window_minutes}` for a subscription window or `{balance_usd}` for a prepaid balance, from the selected backend’s cached reading. Percentage is used (0–100), reset is Unix seconds, duration is minutes, and balance is US dollars remaining; zero metadata means unknown. Older relays may omit it. Snapshots and session deltas replace it together with backend identity. This carries no provider observation timestamp.
 
 - **History from disk** has only user, assistant and stopped entries. Tool calls appear
   for turns run while the relay is on.

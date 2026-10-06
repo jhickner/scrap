@@ -77,6 +77,8 @@ struct session {
     int finish;
 };
 
+static int quota_blocked;
+int session_autobackend(struct session *s) { (void)s; return quota_blocked ? -1 : 0; }
 int session_turn_running(const struct session *s) { return s && s->running; }
 const char *session_prompt(const struct session *s) { (void)s; return NULL; }
 const char *session_remote(const struct session *s) { (void)s; return NULL; }
@@ -354,6 +356,16 @@ int main(void)
                 fail("the line is pending");
             if (!workspace_dump(1, dump) || dump_count(dump, "queued-dispatch-line"))
                 fail("a queued line is not echoed until its turn starts");
+
+            quota_blocked = 1;
+            busy.finish = 1;
+            workspace_pump();
+            if (busy.running || workspace_queued(1) != 1 ||
+                strcmp(workspace_pending_at(1, 0), "queued-dispatch-line"))
+                fail("a quota stop preserves the queued request");
+            quota_blocked = 0;
+            busy.running = 1;
+            busy.finish = 0;
 
             if (!workspace_send(1, "second-line", NULL) || !workspace_send(1, "third-line", NULL))
                 fail("queue two more lines");

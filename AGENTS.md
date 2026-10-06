@@ -32,7 +32,9 @@ tools/rig/scraprig stop $n
   output, as a Bash tool call would; `scrap` on its PATH is the built binary.
   `pvsay` on its PATH is `tools/rig/fake-pvsay`: it appends its argv and stdin
   to `/tmp/scraprig/<name>/pvsay.log` and sleeps 30s, so `/voice on` speaks
-  nothing aloud.
+  nothing aloud. `mem` is `tools/rig/fake-mem`: seeded `personal` and `work`
+  stores kept in `/tmp/scraprig/<name>/mem.json`, so `/mem` never touches the
+  real store.
 - `--openai` runs `tools/rig/fake-openai`, a chat-completions server for the
   core backend, and points `agent/providers.json` at it as `fake/echo`. It
   echoes each prompt; `run: CMD` becomes a bash call and `spawn: TASK` an
@@ -73,3 +75,6 @@ tools/rig/scraprig stop $n
 
 ## Rules
 - don't write comments. any you do write will be stripped during `make`
+- all features should support all backends, not just claude, etc. unless that
+backend is not able to support the feature
+- prefer rig tests over unit tests

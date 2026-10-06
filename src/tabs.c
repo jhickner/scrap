@@ -9,6 +9,7 @@
 #include "chain.h"
 #include "chrome.h"
 #include "hud.h"
+#include "restart.h"
 #include "scrollback.h"
 #include "session.h"
 #include "sessionload.h"
@@ -153,6 +154,7 @@ static void tabs_take(int at)
     }
     workspace_render(index, replay_tab, pending_tabs[at].screen
                                             ? pending_tabs[at].screen : (void *)"");
+    restart_wake(s);
     if (pending_tabs[at].screen)
         unlink(pending_tabs[at].screen);
     free(pending_tabs[at].screen);

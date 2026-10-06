@@ -196,6 +196,19 @@ static int cli_catalogs(void)
 
 int main(void)
 {
+    const char *sources[] = {"claude-opus-5-5", "claude-opus-5-5", "claude-sonnet-5", "claude-sonnet-5", "claude-haiku-4-5"};
+    const char *efforts[] = {"xhigh", "medium", "medium", "low", "default"};
+    const char *codex[] = {"gpt-6-astra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-sol", "gpt-6-luna"};
+    const char *grok[] = {"grok-4.7", "grok-4.7", "grok-4.7", "grok-4.7", "grok-4.6"};
+    for (int i = 0; i < 5; i++) {
+        const char *m, *e;
+        models_autobackend("claude", sources[i], efforts[i], "codex", &m, &e);
+        if (strcmp(m, codex[i]) || strcmp(e, i == 4 ? "low" : efforts[i]))
+            return fail("auto-backend Claude to Codex mapping");
+        models_autobackend("codex", m, e, "grok", &m, &e);
+        if (strcmp(m, grok[i]) || strcmp(e, i == 1 ? "high" : i == 4 ? "low" : efforts[i]))
+            return fail("auto-backend Codex to Grok mapping");
+    }
     char path[4096];
     struct stat st;
     if (path_config_file(path, sizeof path, "openrouter.json") &&

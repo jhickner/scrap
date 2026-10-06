@@ -1,0 +1,5 @@
+{"type":"assistant","message":{"role":"assistant","model":"fake","content":[{"type":"tool_use","id":"toolu_bg","name":"Bash","input":{"command":"sleep 99","description":"Wait"}}]}}
+{"type":"system","subtype":"task_started","task_id":"bmove","tool_use_id":"toolu_bg","description":"Wait","is_backgrounded":false,"task_type":"local_bash"}
+{"type":"system","subtype":"task_updated","task_id":"bmove","patch":{"is_backgrounded":true}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_bg","content":"Command running in background with ID: bmove"}]}}
+{"type":"assistant","message":{"role":"assistant","model":"fake","content":[{"type":"text","text":"Moved to the background."}]}}

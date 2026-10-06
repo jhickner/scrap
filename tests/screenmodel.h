@@ -171,6 +171,8 @@ __attribute__((unused)) static void feed(struct screen *s, const char *p, size_t
             while (j < n && p[j] != 0x07 && !(p[j] == 0x1b && j > i + 1))
                 j++;
             i = j < n ? j + 1 : n;
+            if (j < n && p[j] == 0x1b && i < n && p[i] == '\\')
+                i++;
             continue;
         }
         size_t w = utf8_cell(p + i, n - i);

@@ -59,9 +59,11 @@ struct keep {
     enum ui_role   role;
     int            error;
     int            collapses;
+    int            background;
     int            nested;
     char          *label;
     char          *row;
+    char          *call;
 };
 
 static void keep_free(void *ud)
@@ -72,11 +74,13 @@ static void keep_free(void *ud)
     free(k->spans);
     free(k->label);
     free(k->row);
+    free(k->call);
     free(k);
 }
 
 static void cluster_paint(const char *line, const unsigned char *spans);
-static void tool_tag(const char *name, char *out, size_t size);
+static void tool_tag(const char *name, int background, char *out, size_t size);
+static void tool_call(const char *name, const char *arg, int background);
 static unsigned char *row_spans(const char *name, const char *row, size_t prefix);
 static int cluster_budget(void);
 static void view_activity(const char *marker, const char *text, enum ui_role role);
@@ -110,10 +114,11 @@ static size_t row_prefix(const char *row)
     return row[n] ? n + 2 : n;
 }
 
-static void call_row(const char *name, const char *arg, char *out, size_t size)
+static void call_row(const char *name, const char *arg, int background, char *out,
+                     size_t size)
 {
     char tag[64];
-    tool_tag(name, tag, sizeof tag);
+    tool_tag(name, background, tag, sizeof tag);
 
     char flat[4096];
     text_one_line(arg ? arg : "", flat, sizeof flat);
@@ -142,7 +147,7 @@ static void call_collapsed(const struct keep *k)
     char own[4096];
     const char *row = k->row;
     if (!row) {
-        call_row(k->a, k->b, own, sizeof own);
+        call_row(k->a, k->b, k->background, own, sizeof own);
         row = own;
     }
 
@@ -176,7 +181,7 @@ static void keep_render(void *ud, int cols)
 
     switch (k->kind) {
     case KEEP_ACTIVITY: view_activity(k->a, k->b, k->role);              break;
-    case KEEP_CALL:     view_tool_call(k->a, k->b);                      break;
+    case KEEP_CALL:     tool_call(k->a, k->b, k->background);            break;
     case KEEP_OUTPUT:
         if (k->error)
             view_tool_error(k->a);
@@ -233,6 +238,7 @@ static char *keep_encode(void *ud)
     cJSON_AddNumberToObject(o, "role", k->role);
     cJSON_AddNumberToObject(o, "error", k->error);
     cJSON_AddNumberToObject(o, "collapses", k->collapses);
+    cJSON_AddNumberToObject(o, "background", k->background);
     if (k->nested) {
         cJSON_AddNumberToObject(o, "nested", k->nested);
         if (k->label)
@@ -310,6 +316,7 @@ void view_keep_load(const cJSON *st)
     k->role = (enum ui_role)scrollback_int(st, "role");
     k->error = scrollback_int(st, "error");
     k->collapses = scrollback_int(st, "collapses");
+    k->background = scrollback_int(st, "background");
     if (!k->a || !k->b) {
         keep_free(k);
         return;
@@ -333,13 +340,41 @@ void view_keep_activity(const char *marker, const char *text, enum ui_role role)
 
 void view_keep_tool_call(const char *name, const char *arg, int collapses)
 {
+    view_keep_tool_call_bg(name, arg, collapses, 0, NULL);
+}
+
+void view_keep_tool_call_bg(const char *name, const char *arg, int collapses, int background,
+                            const char *call)
+{
     struct keep *k = keep_new(KEEP_CALL);
     if (!k)
         return;
+    k->background = background;
     k->a = strdup(name ? name : "?");
     k->b = strdup(arg ? arg : "");
     k->collapses = collapses;
+    k->call = call && *call ? strdup(call) : NULL;
     keep(k);
+}
+
+static void background_item(unsigned mark, const char *kind, void *ud, void *ctx)
+{
+    struct keep *k = ud;
+    if (!ud || !kind || strcmp(kind, VIEW_KEEP_KIND) != 0 || k->kind != KEEP_CALL ||
+        !k->call || strcmp(k->call, ctx) != 0 || k->background)
+        return;
+    k->background = 1;
+    free(k->row);
+    k->row = NULL;
+    viewport_item_stale(mark);
+}
+
+void view_keep_background(const char *call)
+{
+    if (!call || !*call)
+        return;
+    viewport_scan(0, background_item, (void *)call);
+    restate(0, 0);
 }
 
 void view_keep_break(void) { view_state()->run_start = 0; }
@@ -409,6 +444,7 @@ static void restate_item(unsigned mark, const char *kind, void *ud, void *ctx)
 
     char row[4096];
     if (as_row && c->head && c->head->collapses == k->collapses &&
+        c->head->background == k->background &&
         strcmp(c->head->a, k->a) == 0 &&
         call_row_extend(c->head->row, k->b, row, sizeof row)) {
         row_set(c->head, c->head_mark, row);
@@ -423,7 +459,7 @@ static void restate_item(unsigned mark, const char *kind, void *ud, void *ctx)
         viewport_item_stale(mark);
 
     if (as_row) {
-        call_row(k->a, k->b, row, sizeof row);
+        call_row(k->a, k->b, k->background, row, sizeof row);
         row_set(k, mark, row);
         c->head = k;
         c->head_mark = mark;
@@ -573,12 +609,17 @@ static void view_activity(const char *marker, const char *text, enum ui_role rol
     ui_wrap_paint(text, &w);
 }
 
-static void tool_tag(const char *name, char *out, size_t size)
+static void tool_tag(const char *name, int background, char *out, size_t size)
 {
     size_t t = 0;
+    size_t mark = background ? 4 : 0;
     out[t++] = '[';
-    for (const char *p = name; *p && t + 2 < size; p++)
+    for (const char *p = name; *p && t + 2 + mark < size; p++)
         out[t++] = (*p >= 'A' && *p <= 'Z') ? (char)(*p + 32) : *p;
+    if (background) {
+        memcpy(out + t, " \xe2\x86\x97", 4);
+        t += 4;
+    }
     out[t++] = ']';
     out[t] = '\0';
 }
@@ -596,10 +637,12 @@ static unsigned char *shell_spans(const char *name, const char *text, size_t len
     return spans;
 }
 
-void view_tool_call(const char *name, const char *arg)
+void view_tool_call(const char *name, const char *arg) { tool_call(name, arg, 0); }
+
+static void tool_call(const char *name, const char *arg, int background)
 {
     char tag[64];
-    tool_tag(name, tag, sizeof tag);
+    tool_tag(name, background, tag, sizeof tag);
 
     int indent = TOOL_INDENT + nest + (int)ui_cells(tag) + 1;
     int columns = ui_columns();
@@ -624,10 +667,16 @@ void view_tool_call(const char *name, const char *arg)
     w.budget = (size_t)budget;
     w.indent = indent;
     w.role = UI_RESET;
-    w.max_rows = TOOL_CALL_ROWS;
+    w.max_rows = TOOL_CALL_ROWS + 1;
+    w.measure = 1;
+    int folds = ui_wrap_paint(arg, &w) > TOOL_CALL_ROWS;
+    w.measure = 0;
+    w.max_rows = viewport_fold_open() ? 0 : TOOL_CALL_ROWS;
     w.spans = spans;
     ui_wrap_paint(arg, &w);
     free(spans);
+    if (folds)
+        viewport_fold_enable();
 }
 
 static unsigned char *row_spans(const char *name, const char *row, size_t prefix)
@@ -720,12 +769,26 @@ static void preview_elision(int lines)
     ui_esc(ui_style(UI_DIM));
     ui_printf("+%d line%s", lines, lines == 1 ? "" : "s");
     ui_esc(ui_style(UI_RESET));
+    viewport_fold_enable();
     ui_put("\n");
+}
+
+static int preview_open(const char *text, enum ui_role role)
+{
+    if (!viewport_fold_open())
+        return 0;
+    struct ui_wrap w = {0};
+    w.budget = (size_t)preview_budget();
+    w.first_indent = w.indent = PREVIEW_INDENT + nest;
+    w.role = role;
+    ui_wrap_paint(text, &w);
+    viewport_fold_enable();
+    return 1;
 }
 
 void view_tool_error(const char *text)
 {
-    if (!text || !*text)
+    if (!text || !*text || preview_open(text, UI_ERROR))
         return;
 
     const char *head = NULL;
@@ -770,7 +833,7 @@ void view_tool_error(const char *text)
 
 static void view_tool_output(const char *text, enum ui_role role)
 {
-    if (!text || !*text)
+    if (!text || !*text || preview_open(text, role))
         return;
 
     int columns = ui_columns();
@@ -814,11 +877,5 @@ static void view_tool_output(const char *text, enum ui_role role)
             remaining++;
     if (*p && shown >= TOOL_PREVIEW_ROWS)
         remaining++;
-    if (remaining > 0) {
-        ui_put("    ");
-        ui_esc(ui_style(UI_DIM));
-        ui_printf("+%d line%s", remaining, remaining == 1 ? "" : "s");
-        ui_esc(ui_style(UI_RESET));
-        ui_put("\n");
-    }
+    preview_elision(remaining);
 }

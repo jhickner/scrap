@@ -150,7 +150,7 @@ static int mock_cli(int argc, char **argv)
             fflush(stdout);
             stray_turn("workers done");
             printf("{\"type\":\"system\",\"subtype\":\"task_notification\","
-                   "\"status\":\"stopped\"}\n");
+                   "\"task_id\":\"b\",\"status\":\"stopped\"}\n");
             fflush(stdout);
         }
 
@@ -352,6 +352,14 @@ int main(int argc, char **argv)
     }
     if (busy || claude_background_tasks(client)) {
         fputs("claudetest: idle work never cleared once the workers finished\n", stderr);
+        claude_stop(client);
+        return 1;
+    }
+    const char *owed = claude_wake_owed(client);
+    if (!owed || !strstr(owed, "<task-id>b</task-id>") ||
+        !strstr(owed, "<status>stopped</status>") || strstr(owed, "</task-notification>\n<task")) {
+        fprintf(stderr, "claudetest: unanswered notification not kept (%s)\n",
+                owed ? owed : "none");
         claude_stop(client);
         return 1;
     }

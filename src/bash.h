@@ -6,7 +6,8 @@
 
 int bash_is_command(const char *line);
 
-void bash_run(const char *line);
+/* Returns the wait status, or -1 if nothing ran; *out, if given, takes the output. */
+int bash_run(const char *line, char **out);
 
 char *bash_take_context(void);
 

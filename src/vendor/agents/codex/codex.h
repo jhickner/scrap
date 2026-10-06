@@ -37,12 +37,14 @@ typedef struct {
     int skip_git_repo_check;    /* retained for source compatibility; unused  */
     int ephemeral;              /* nonzero: do not materialize the thread on disk */
     const char *const *config;  /* extra --config key=value entries, NULL-ended */
+    int skip_quota_read;        /* nonzero: no account/rateLimits/read at startup */
 } codex_opts;
 
 /* Spawn app-server and initialize/start its thread in the background. Returns
  * once the child and worker exist; the first operation waits if startup is
  * still in progress. */
 codex_client *codex_start(const codex_opts *opts);
+int codex_connect(codex_client *c);
 
 /* Start one turn on the existing process/thread and return its final agent
  * message (malloc'd), or NULL on failure. An interrupted turn returns the text
@@ -153,6 +155,7 @@ void codex_stop(codex_client *c);
 #include <sys/wait.h>
 #include <unistd.h>
 #include "cJSON.h"
+#include "../spawnfd.h"
 
 /* How long a read waits on the app-server before running the abort predicate
  * again. Also the worst-case delay before a key the caller reads from that
@@ -182,7 +185,7 @@ struct codex_client {
     void (*on_event)(void *ud, const codex_event *ev);
     void *on_event_ud;
     char *model, *effort, *sandbox, *sys, *resume, *project, *cli;
-    int effort_changed, ephemeral, fork_session;
+    int effort_changed, ephemeral, fork_session, skip_quota_read;
     char session_id[128];
     char resolved[32];         /* config or stream effort when none was set */
     char resolved_model[64];   /* the model id the app-server picked          */
@@ -762,10 +765,10 @@ static int cx_open_thread_once(codex_client *c, const char *resume, int note) {
     cJSON_AddStringToObject(p, "approvalPolicy", "never");
     cJSON_AddStringToObject(p, "sandbox", c->sandbox);
     cJSON_AddBoolToObject(p, "experimentalRawEvents", 1);
-    if (resume && *resume) {
+    if (resume && *resume)
         cJSON_AddStringToObject(p, "threadId", resume);
-    } else {
-        if (c->model) cJSON_AddStringToObject(p, "model", c->model);
+    if (c->model) cJSON_AddStringToObject(p, "model", c->model);
+    if (!(resume && *resume)) {
         if (c->sys) cJSON_AddStringToObject(p, "developerInstructions", c->sys);
         if (c->ephemeral) cJSON_AddBoolToObject(p, "ephemeral", 1);
     }
@@ -805,7 +808,7 @@ static int cx_open_thread(codex_client *c, const char *resume) {
 static void *cx_warm(void *arg) {
     codex_client *c = arg;
     int initialized = cx_initialize(c);
-    if (initialized) cx_read_rate_limit(c);
+    if (initialized && !c->skip_quota_read) cx_read_rate_limit(c);
     int ok = initialized && cx_open_thread(c, c->resume);
     atomic_store_explicit(&c->warm_state, ok ? 1 : -1, memory_order_release);
     return NULL;
@@ -822,6 +825,10 @@ static int cx_await_ready(codex_client *c) {
     return atomic_load_explicit(&c->warm_state, memory_order_acquire) == 1;
 }
 
+int codex_connect(codex_client *c) {
+    return cx_await_ready(c);
+}
+
 codex_client *codex_start(const codex_opts *opts) {
     codex_opts o = opts ? *opts : (codex_opts){0};
     const char *cli = o.cli_path && *o.cli_path ? o.cli_path : "codex";
@@ -834,6 +841,7 @@ codex_client *codex_start(const codex_opts *opts) {
     c->warning_mu_ready = 1;
     c->model = cx_dup(o.model); c->effort = cx_dup(o.effort);
     c->ephemeral = o.ephemeral;
+    c->skip_quota_read = o.skip_quota_read;
     c->fork_session = o.fork_session;
     c->sys = cx_dup(o.append_system);
     cx_seed_effort(c, o.cwd);
@@ -883,6 +891,7 @@ codex_client *codex_start(const codex_opts *opts) {
             argv[n++] = *k;
         }
         argv[n] = NULL;
+        agents_close_inherited();
         execvp(cli, (char *const *)argv); _exit(127);
     }
     close(in[0]); close(out[1]); close(err[1]);

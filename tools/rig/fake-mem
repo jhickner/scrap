@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+import json, os, struct, sys, zlib
+
+path = os.path.join(os.path.dirname(sys.argv[0]), "..", "mem.json")
+SEED = {"personal": [
+    {"id": "aaa111", "title": None, "content": "buy milk", "tags": ["todo", "home"]},
+    {"id": "bbb222", "title": "Rig plan", "content": "# Rig plan\n\nwrite the **rig** test", "tags": ["todo", "scrap"],
+     "attachments": [{"id": "att1", "filename": "red.png", "mime": "image/png"},
+                     {"id": "att2", "filename": "blue.png", "mime": "image/png"},
+                     {"id": "att3", "filename": "notes.txt", "mime": "text/plain"}]},
+    {"id": "ccc333", "title": None, "content": "old idea", "tags": ["scrap", "starred"]},
+], "work": [
+    {"id": "ddd444", "title": None, "content": "file expenses", "tags": ["todo"]},
+]}
+db = json.load(open(path)) if os.path.exists(path) else SEED
+for recs in db.values():
+    for r in recs:
+        r.setdefault("revision", 1)
+
+args, store = [], "personal"
+it = iter(sys.argv[1:])
+for a in it:
+    if a == "--json":
+        continue
+    if a in ("-s", "--store"):
+        store = next(it)
+    else:
+        args.append(a)
+recs = db.setdefault(store, [])
+
+def out(o, code=0):
+    print(json.dumps(o))
+    json.dump(db, open(path, "w"))
+    sys.exit(code)
+
+def shape(r, full=False):
+    o = {"id": r["id"], "title": r["title"], "revision": r["revision"],
+         "modified_at": "2026-10-06T12:00:00.000Z", "attachments": r.get("attachments", []),
+         "tags": [{"name": t} for t in r["tags"]]}
+    o["content" if full else "summary"] = r["content"]
+    return o
+
+def find(i):
+    for r in recs:
+        if r["id"] == i:
+            return r
+    out({"error": {"code": "not_found", "message": "record not found"}}, 5)
+
+def opts(rest):
+    tags, kv, pos = [], {}, []
+    rest = iter(rest)
+    for a in rest:
+        if a == "--tag":
+            tags.append(next(rest))
+        elif a in ("--tag-counts",):
+            kv[a] = True
+        elif a.startswith("--"):
+            kv[a] = next(rest)
+        else:
+            pos.append(a)
+    return pos, tags, kv
+
+cmd, rest = args[0], args[1:]
+pos, tags, kv = opts(rest)
+if cmd == "stores":
+    out({"stores": list(db)})
+if cmd == "tags":
+    names = sorted({t for r in recs for t in r["tags"]})
+    out({"tags": [{"name": n, "count": sum(n in r["tags"] for r in recs)} for n in names]})
+if cmd == "search":
+    terms = pos[0].split() if pos else []
+    q = kv.get("--text", "").lower()
+    hits = [r for r in recs
+            if all((t[1:] not in r["tags"]) if t.startswith("!") else (t in r["tags"]) for t in terms)
+            and q in r["content"].lower()]
+    o = {"records": [shape(r) for r in hits], "total": len(hits)}
+    if "--tag-counts" in kv:
+        names = sorted({t for r in hits for t in r["tags"]})
+        o["tags"] = [{"name": n, "count": sum(n in r["tags"] for r in hits)} for n in names]
+    out(o)
+def png(rgb):
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+    raw = b"".join(b"\0" + bytes(rgb) * 32 for _ in range(16))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 32, 16, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+if cmd == "get" and pos[0].startswith("att"):
+    open(kv["--output"], "wb").write(png((200, 0, 0) if pos[0] == "att1" else (0, 0, 200)))
+    sys.exit(0)
+if cmd == "get":
+    out(shape(find(pos[0]), True))
+if cmd == "create":
+    r = {"id": "new%03d" % len(recs), "title": kv.get("--title"), "content": kv["--text"],
+         "tags": tags, "revision": 1}
+    recs.insert(0, r)
+    out(shape(r, True))
+if cmd == "edit":
+    r = find(pos[0])
+    if int(kv["--revision"]) != r["revision"]:
+        out({"error": {"code": "conflict", "message": "revision conflict"}}, 6)
+    if "--title" in kv:
+        r["title"] = kv["--title"] or None
+    if tags or "--title" not in kv:
+        r["tags"] = tags
+    r["revision"] += 1
+    out(shape(r, True))
+if cmd == "delete":
+    r = find(pos[0])
+    recs.remove(r)
+    out({"deleted": r["id"]})
+out({"error": {"code": "usage", "message": "fake mem: " + cmd}}, 2)

@@ -166,10 +166,13 @@ static int mock_server(void)
             cJSON *params = cJSON_GetObjectItemCaseSensitive(msg, "params");
             const char *thread = params ? cJSON_GetStringValue(
                 cJSON_GetObjectItemCaseSensitive(params, "threadId")) : NULL;
-            if (!thread || strcmp(thread, "thread-parent"))
+            const char *model = params ? cJSON_GetStringValue(
+                cJSON_GetObjectItemCaseSensitive(params, "model")) : NULL;
+            if (!thread || strcmp(thread, "thread-parent") ||
+                !model || strcmp(model, "astra"))
                 respond_error(id);
             else
-                respond(id, "{\"thread\":{\"id\":\"thread-fork\"}}");
+                respond(id, "{\"thread\":{\"id\":\"thread-fork\"},\"model\":\"astra\"}");
         } else if (method && !strcmp(method, "thread/resume")) {
             respond_error(id);
         } else if (method && !strcmp(method, "turn/start")) {
@@ -458,13 +461,16 @@ int main(int argc, char **argv)
     free(reply);
 
     codex_opts fork_opts = { .cli_path = argv[0],
+                             .model = "astra",
                              .resume_session = "thread-parent",
                              .fork_session = 1 };
     codex_client *forked = codex_start(&fork_opts);
     if (forked)
         codex_trust_project(forked, "/project.with.dot");
     const char *fork_id = codex_session_id(forked);
-    if (!forked || !fork_id || strcmp(fork_id, "thread-fork")) {
+    const char *fork_model = codex_model(forked);
+    if (!forked || !fork_id || strcmp(fork_id, "thread-fork") ||
+        !fork_model || strcmp(fork_model, "astra")) {
         fprintf(stderr, "codextest: resumed thread was not forked (%s)\n",
                 forked && codex_last_error(forked)
                     ? codex_last_error(forked) : "no backend error");

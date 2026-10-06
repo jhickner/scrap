@@ -15,7 +15,6 @@
 
 struct session {
     char title[128];
-    int  skip_naming;
 };
 
 static struct session spawned;
@@ -23,7 +22,6 @@ static struct session current_tab;
 static int            spawn_at = 1;
 static int            spawned_n;
 static int            renamed;
-static int            naming_calls;
 static int            turn_running;
 static int            render_n;
 static int            send_n;
@@ -57,6 +55,8 @@ static char spawned_id[64];
 static int  spawned_open = 1;
 static int  closed_at = -1;
 static int  close_n;
+static int  in_view;
+static int  interrupted;
 
 struct session *workspace_current(void) { return &current_tab; }
 struct session *workspace_at(int index)
@@ -65,7 +65,7 @@ struct session *workspace_at(int index)
         return &current_tab;
     return index == spawn_at && spawned_open ? &spawned : NULL;
 }
-int workspace_index(void) { return 0; }
+int workspace_index(void) { return in_view; }
 int workspace_count(void) { return spawned_open ? spawn_at + 1 : 1; }
 int workspace_index_of(const struct session *s)
 {
@@ -103,6 +103,10 @@ int workspace_send(int index, const char *line, const char *shown)
     last_send_at = index;
     snprintf(last_send, sizeof last_send, "%s", line ? line : "");
     return 1;
+}
+int workspace_send_now(int index, const char *line, const char *shown)
+{
+    return workspace_send(index, line, shown);
 }
 
 int workspace_spawn_env(const char *backend, const char *model, const char *effort,
@@ -150,6 +154,11 @@ int session_turn_running(const struct session *s)
     (void)s;
     return turn_running;
 }
+void session_interrupt(struct session *s)
+{
+    (void)s;
+    interrupted++;
+}
 
 enum session_rename session_rename(struct session *s, const char *name)
 {
@@ -160,18 +169,10 @@ enum session_rename session_rename(struct session *s, const char *name)
     return SESSION_RENAME_OK;
 }
 
-void session_set_naming(struct session *s, int on)
-{
-    naming_calls++;
-    if (s)
-        s->skip_naming = !on;
-}
-
 static void reset_case(void)
 {
     spawned_n = 0;
     renamed = 0;
-    naming_calls = 0;
     turn_running = 0;
     render_n = 0;
     send_n = 0;
@@ -181,6 +182,8 @@ static void reset_case(void)
     last_echo[0] = last_send[0] = '\0';
     close_n = 0;
     closed_at = -1;
+    in_view = 0;
+    interrupted = 0;
     memset(&spawned, 0, sizeof spawned);
 }
 
@@ -278,8 +281,6 @@ int main(void)
         fail("spawn fields");
     if (renamed != 1 || strcmp(last_title, "name dispatched worker tabs"))
         fail("title is the session name");
-    if (naming_calls != 1 || !spawned.skip_naming)
-        fail("dispatched title is not auto-replaced");
     if (render_n != 1 || echo_n != 1 || strcmp(last_echo, "do the thing"))
         fail("spawn echoes the prompt");
     if (read_res(dir, "titled"))
@@ -298,7 +299,7 @@ int main(void)
     poll_once();
     if (spawned_n != 1)
         fail("spawn without title");
-    if (renamed || naming_calls)
+    if (renamed)
         fail("omitted title leaves auto-titling");
     expect_res(dir, "plain", "\"session\":\"sess-1\"", "known id replies at once");
 
@@ -307,7 +308,7 @@ int main(void)
     poll_once();
     if (spawned_n != 1)
         fail("spawn with empty title");
-    if (renamed || naming_calls)
+    if (renamed)
         fail("empty title is ignored");
 
     reset_case();
@@ -379,10 +380,14 @@ int main(void)
     expect_res(dir, "unknown-close", "no such session", "an unknown close id is an error");
 
     reset_case();
+    in_view = spawn_at;
+    turn_running = 1;
     drop_req(dir, "close-id", "{\"close\":\"sess-1\"}");
     poll_once();
     if (close_n != 1 || closed_at != spawn_at)
-        fail("close by id closes that session");
+        fail("close by id closes that session, also in view and mid-turn");
+    if (interrupted != 1)
+        fail("close interrupts a running turn");
     expect_res(dir, "close-id", "\"session\":\"sess-1\"", "close reply names the session");
 
     reset_case();

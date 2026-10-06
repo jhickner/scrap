@@ -28,6 +28,8 @@ struct item {
     int    borrowed;
     int    hcols;
     int    hrows;
+    int    open;
+    int    foldable;
     unsigned id;
     const char        *kind;
     viewport_encode_fn encode;
@@ -50,6 +52,7 @@ static void  *open_ud;
 static void (*open_free)(void *);
 static int    open_reflow;
 static int    open_wrapped;
+static int    open_foldable;
 static int    open_pad_after;
 static int    open_paid;
 
@@ -66,6 +69,7 @@ static struct open_frame open_stack[OPEN_DEPTH];
 static int open_depth;
 
 static int in_render;
+static struct item *rendering;
 
 static char **chrome_rows;
 static int    chrome_n, chrome_cap;
@@ -349,6 +353,19 @@ void viewport_repad(void)
     layout_changed();
 }
 
+int viewport_fold_open(void)
+{
+    return rendering && rendering->open;
+}
+
+void viewport_fold_enable(void)
+{
+    if (rendering)
+        rendering->foldable = 1;
+    else if (open_wrapped && open_reflow)
+        open_foldable = 1;
+}
+
 void viewport_item_update(unsigned mark)
 {
     if (in_render)
@@ -538,6 +555,7 @@ static void loose_row(const char *body, size_t n)
 
 static void open_reset(void)
 {
+    open_foldable = 0;
     open_len = 0;
     if (open_buf)
         open_buf[0] = '\0';
@@ -561,6 +579,8 @@ static void open_close(int cols)
     it->ud = open_ud;
     it->free_ud = open_free;
     it->reflow = open_reflow;
+    it->foldable = open_foldable;
+    open_foldable = 0;
     rows_set(it, open_buf ? open_buf : "", cols);
 
     open_reset();
@@ -982,7 +1002,10 @@ static void item_rows(struct item *it, int W)
         return;
     ui_capture_begin(W);
     in_render++;
+    rendering = it;
+    it->foldable = 0;
     it->render(it->ud, W);
+    rendering = NULL;
     in_render--;
     char *painted = ui_capture_end();
     rows_set(it, painted ? painted : "", W);
@@ -1307,6 +1330,37 @@ static struct window window_geometry(int W, int H, struct item *pending)
     geom_epoch = layout_epoch;
     geom_valid = 1;
     return g;
+}
+
+int viewport_fold_click(int row, int col)
+{
+    int W = tty_screen_columns(), H = tty_rows();
+    if (row < 1 || row > H || col < 1 || col > W)
+        return 0;
+    struct item pending = {0};
+    struct window g = window_geometry(W, H, &pending);
+    if (row > g.body)
+        return 0;
+    int height = 0;
+    for (int r = g.first; r < g.total; r++)
+        height += item_height(r, &pending, W);
+    int top = height - g.skip < g.body ? g.body - (height - g.skip) : 0;
+    int at = row - 1 - top + g.skip;
+    if (row <= top)
+        return 0;
+    for (int r = g.first; r < g.total; r++) {
+        int n = item_height(r, &pending, W);
+        if (at < n) {
+            struct item *it = item_at(r, &pending);
+            if (!it->foldable)
+                return 0;
+            it->open = !it->open;
+            viewport_item_update(it->id);
+            return 1;
+        }
+        at -= n;
+    }
+    return 0;
 }
 
 int viewport_visible(unsigned mark)

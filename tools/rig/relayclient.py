@@ -98,6 +98,15 @@ async def main():
             if mine != v["entries"]:
                 fail(f"replica entries differ from a fresh view:\n{mine}\n{v['entries']}")
             say("= replica matches a fresh view")
+        elif "quiet" in step:
+            end = time.time() + step.get("secs", 2)
+            while time.time() < end:
+                try:
+                    raw = await asyncio.wait_for(inbox.get(), max(0.01, end - time.time()))
+                except asyncio.TimeoutError:
+                    break
+                if re.search(step["quiet"], raw):
+                    fail(f"unexpected frame matched /{step['quiet']}/: {raw}")
         elif "count" in step:
             got = sum(1 for e in rep.view["entries"] if re.search(step["count"], json.dumps(e)))
             if got != step["n"]:

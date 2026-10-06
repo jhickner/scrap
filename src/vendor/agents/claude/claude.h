@@ -176,6 +176,8 @@ typedef struct {
                                subagent produced the message, and on TASK the
                                tool_use that started the task. NULL otherwise */
     int failed;             /* TOOL_RESULT: the tool reported is_error */
+    int backgrounded;       /* TASK: a foreground command moved to the
+                               background; parent is its tool call */
 } claude_event;
 
 /* Register a callback invoked for each interesting stream event during a turn.
@@ -209,6 +211,15 @@ void claude_set_permission_cb(claude_client *c,
  * rather than take the turn's result as the end of the work. The CLI reports the
  * whole set whenever it changes, so this is a snapshot, not a running count. */
 int claude_background_tasks(claude_client *c);
+
+/* The task notifications the CLI announced between sends whose turn has not yet
+ * ended, in the CLI's own <task-notification> form, or NULL if none. A front end
+ * that replaces the process can send this to the resumed session so the model
+ * still answers them. */
+const char *claude_wake_owed(claude_client *c);
+
+/* Whether a turn the CLI started for itself is open between sends. */
+int claude_turn_open(claude_client *c);
 
 /* Ask the CLI to abandon the in-flight turn (the Agent SDK's interrupt control
  * request). The turn still ends with a result event, so the stream stays usable
@@ -270,6 +281,7 @@ void claude_stop(claude_client *c);
 #include <sys/wait.h>
 #include <time.h>
 #include "cJSON.h"
+#include "../spawnfd.h"
 
 #define CLAUDE_ERR_MAX 4096
 
@@ -314,7 +326,9 @@ struct claude_client {
     claude_result *meta;      /* filled from the in-flight turn's result event */
     int   turn_open;          /* an init has arrived with no result yet        */
     int   notified;           /* task notifications still owed a turn each     */
+    char *owed;               /* those notifications' text until a turn ends   */
     int   bg_tasks;           /* background tasks the CLI last reported open   */
+    struct { char id[32], call[64]; } fg[8]; /* foreground bash tasks, unreported */
     claude_rate_limit rate_limit; /* latest rate_limit_event reading           */
     int   awaiting;           /* a send is out and has not been given its turn */
     int   turn_mine;          /* the open turn answers this client's send      */
@@ -564,6 +578,7 @@ claude_client *claude_start(const claude_opts *opts) {
                                                        argv[n++] = "--allowedTools";         argv[n++] = "mcp__optchat"; }
         if (o.permission_prompt)                     { argv[n++] = "--permission-prompt-tool"; argv[n++] = "stdio"; }
         argv[n] = NULL;
+        agents_close_inherited();
         execvp(cli, (char *const *)argv);
         _exit(127);   /* exec failed */
     }
@@ -652,8 +667,36 @@ static void cl_turn_opened(claude_client *c) {
     }
 }
 
-static void cl_turn_announced(claude_client *c) {
-    if (!c->turn_open) c->notified++;
+static void cl_turn_announced(claude_client *c, const cJSON *ev) {
+    if (c->turn_open) return;
+    c->notified++;
+    char block[4096];
+    const char *out = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "output_file"));
+    const char *status = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "status"));
+    const char *summary = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "summary"));
+    const char *tool = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "tool_use_id"));
+    const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "task_id"));
+    int n = snprintf(block, sizeof block,
+                     "<task-notification>\n<task-id>%s</task-id>\n%s%s%s%s%s%s"
+                     "<status>%s</status>\n<summary>%s</summary>\n</task-notification>\n",
+                     id ? id : "",
+                     tool ? "<tool-use-id>" : "", tool ? tool : "", tool ? "</tool-use-id>\n" : "",
+                     out ? "<output-file>" : "", out ? out : "", out ? "</output-file>\n" : "",
+                     status ? status : "", summary ? summary : "");
+    if (n <= 0) return;
+    if ((size_t)n >= sizeof block) n = sizeof block - 1;
+    size_t have = c->owed ? strlen(c->owed) : 0;
+    char *grown = realloc(c->owed, have + (size_t)n + 1);
+    if (!grown) return;
+    memcpy(grown + have, block, (size_t)n + 1);
+    c->owed = grown;
+}
+
+static void cl_turn_closed(claude_client *c) {
+    c->turn_open = 0;
+    c->turn_mine = 0;
+    free(c->owed);
+    c->owed = NULL;
 }
 
 static const char *cl_kind_label(claude_event_kind k) {
@@ -883,6 +926,15 @@ static void cl_answer_permission(claude_client *c, cJSON *ev) {
     cl_write_json(c, msg);
 }
 
+/* The slot holding foreground task id, or -1. An empty id finds a free
+ * slot, reusing the first when all are taken. */
+static int cl_foreground(claude_client *c, const char *id) {
+    if (!id) return -1;
+    for (int i = 0; i < 8; i++)
+        if (!strcmp(c->fg[i].id, id)) return i;
+    return *id ? -1 : 0;
+}
+
 /* Parse one JSONL event line. If it is the turn's `result`, return its text
  * (malloc'd) via *out and return 1. Otherwise return 0. */
 static int cl_handle_line(claude_client *c, const char *line, char **out) {
@@ -897,7 +949,7 @@ static int cl_handle_line(claude_client *c, const char *line, char **out) {
         if (sub && strcmp(sub, "init") == 0) {
             cl_turn_opened(c);
         } else if (sub && strcmp(sub, "task_notification") == 0) {
-            cl_turn_announced(c);
+            cl_turn_announced(c, ev);
         } else if (sub && strcmp(sub, "background_tasks_changed") == 0) {
             /* The event carries the whole outstanding set, so it replaces the
              * count rather than adjusting it. */
@@ -912,7 +964,33 @@ static int cl_handle_line(claude_client *c, const char *line, char **out) {
             cJSON *patch = cJSON_GetObjectItem(ev, "patch");
             claude_event out = {.kind = CLAUDE_EV_TASK};
             out.id = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "task_id"));
-            out.name = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "status"));
+            /* The CLI reports foreground bash as a task too. It is the open
+             * tool call, so it is reported only once it moves to the
+             * background, as a task starting then. */
+            int fg = cl_foreground(c, out.id);
+            const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "task_type"));
+            if (!strcmp(sub, "task_started") && out.id && type && !strcmp(type, "local_bash") &&
+                cJSON_IsFalse(cJSON_GetObjectItem(ev, "is_backgrounded"))) {
+                if (fg < 0) fg = cl_foreground(c, "");
+                const char *call = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "tool_use_id"));
+                snprintf(c->fg[fg].id, sizeof c->fg[fg].id, "%s", out.id);
+                snprintf(c->fg[fg].call, sizeof c->fg[fg].call, "%s", call ? call : "");
+                out.id = NULL;
+            } else if (fg >= 0) {
+                if (cJSON_IsTrue(cJSON_GetObjectItem(patch, "is_backgrounded"))) {
+                    out.backgrounded = 1;
+                    out.name = "running";
+                    out.task_type = "local_bash";
+                    out.parent = c->fg[fg].call;
+                    c->fg[fg].id[0] = '\0';
+                } else {
+                    if (!strcmp(sub, "task_notification"))
+                        c->fg[fg].id[0] = '\0';
+                    out.id = NULL;
+                }
+            }
+            if (!out.name)
+                out.name = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "status"));
             if (!out.name && patch)
                 out.name = cJSON_GetStringValue(cJSON_GetObjectItem(patch, "status"));
             if (!out.name)
@@ -920,8 +998,10 @@ static int cl_handle_line(claude_client *c, const char *line, char **out) {
             out.arg = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "subagent_type"));
             if (!out.arg)
                 out.arg = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "workflow_name"));
-            out.task_type = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "task_type"));
-            out.parent = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "tool_use_id"));
+            if (!out.task_type)
+                out.task_type = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "task_type"));
+            if (!out.parent)
+                out.parent = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "tool_use_id"));
             out.text = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "description"));
             if (!out.text)
                 out.text = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "summary"));
@@ -958,8 +1038,7 @@ static int cl_handle_line(claude_client *c, const char *line, char **out) {
         /* Attributed when the turn opened; a result that never had an init of
          * its own answers whoever is waiting, since nothing announced it. */
         int mine = c->turn_open ? c->turn_mine : c->awaiting;
-        c->turn_open = 0;
-        c->turn_mine = 0;
+        cl_turn_closed(c);
         /* The CLI names the turns it started for itself, and one of those never
          * answers a send however the counting came out: the init it arrived on
          * was the one this send was still owed, so the wait resumes rather than
@@ -1070,10 +1149,9 @@ static void *cl_warm(void *arg) {
             cJSON_GetObjectItemCaseSensitive(ev, "subtype"));
         if (type && !strcmp(type, "system") && sub) {
             if (!strcmp(sub, "init")) cl_turn_opened(c);
-            else if (!strcmp(sub, "task_notification")) cl_turn_announced(c);
+            else if (!strcmp(sub, "task_notification")) cl_turn_announced(c, ev);
         } else if (type && !strcmp(type, "result")) {
-            c->turn_open = 0;
-            c->turn_mine = 0;
+            cl_turn_closed(c);
         }
         cJSON *response = cJSON_GetObjectItemCaseSensitive(ev, "response");
         const char *request_id = response ? cJSON_GetStringValue(
@@ -1161,6 +1239,7 @@ int claude_auth_login(claude_client *c) {
             close(output[1]);
         unsetenv("ANTHROPIC_API_KEY");
         const char *argv[] = {c->cli, "auth", "login", "--claudeai", NULL};
+        agents_close_inherited();
         execvp(c->cli, (char *const *)argv);
         _exit(127);
     }
@@ -1314,6 +1393,10 @@ int claude_idle_pump(claude_client *c) {
 
 int claude_background_tasks(claude_client *c) { return c ? c->bg_tasks : 0; }
 
+const char *claude_wake_owed(claude_client *c) { return c ? c->owed : NULL; }
+
+int claude_turn_open(claude_client *c) { return c ? c->turn_open : 0; }
+
 static char *cl_send(claude_client *c, const char *user_text, int content_block) {
     if (!c || !user_text) return NULL;
     if (!cl_await_ready(c)) return NULL;
@@ -1459,6 +1542,7 @@ void claude_stop(claude_client *c) {
     if (c->out_fd >= 0) close(c->out_fd);
     if (c->err_fd >= 0) close(c->err_fd);
     free(c->buf);
+    free(c->owed);
     free(c);
 }
 

@@ -15,6 +15,7 @@
 #include "chrome.h"
 #include "frontend.h"
 #include "hud.h"
+#include "memui.h"
 #include "models.h"
 #include "newsession.h"
 #include "pick.h"
@@ -1003,6 +1004,19 @@ static int handoff_path(const struct session *s, char *out, size_t size)
            size;
 }
 
+#define HANDOFF_WRITE                                                                     \
+    "Write a handoff note for a new session that will continue this work with none of "   \
+    "this conversation's context. Cover the goal; the user's last request, quoted "       \
+    "verbatim, and whether it is answered; the current state, including uncommitted "     \
+    "changes; decisions made; relevant files; dead ends and why they failed; assumptions " \
+    "to verify, each with the command that checks it; and the single next step."
+
+static const char AUTOHANDOFF_SEED[] =
+    "This message is from scrap, not the user. The previous session reached its context "
+    "limit and was cleared; below is the handoff note it wrote. Continue any in-progress "
+    "work it describes. If there is none, reply in at most two sentences that you have "
+    "the context. Do not restate the note.\n\n";
+
 static void do_handoff(struct session *s, const char *arg)
 {
     char path[4200];
@@ -1017,9 +1031,7 @@ static void do_handoff(struct session *s, const char *arg)
 
     char prompt[8192 + 4200 * 3], label[4200];
     snprintf(prompt, sizeof prompt,
-             "Write a handoff note for a new session that will continue this work with none "
-             "of this conversation's context. Cover the goal, current state, decisions made, "
-             "relevant files, and next steps.%s%s Save it to %s and show it with "
+             HANDOFF_WRITE "%s%s Save it to %s and show it with "
              "`@view %s`. Revise it when the user asks. When the user approves it, end the "
              "reply with `@handoff %s` alone on its own line.",
              arg && *arg ? " Focus: " : "", arg && *arg ? arg : "", path, path, path);
@@ -1040,30 +1052,150 @@ static int handoff_marked(const char *reply, const char *path)
            !strncmp(reply + start + 9, path, plen);
 }
 
-void cmd_turn_done(struct session *s)
+static void archive_handoff(const char *path, const char *was)
+{
+    char dir[4200], dst[4400];
+    if (path_config_subdir(dir, sizeof dir, "handoffs/") &&
+        (size_t)snprintf(dst, sizeof dst, "%s%s.md", dir, was) < sizeof dst &&
+        rename(path, dst) == 0)
+        return;
+    unlink(path);
+}
+
+static int handoff_swap(struct session *s, int automatic)
 {
     char path[4200];
     if (session_remote(s) || session_last_result(s)->interrupted ||
         !handoff_path(s, path, sizeof path) || !handoff_marked(session_last_block(s), path))
-        return;
+        return 0;
 
     char *text = text_slurp(path, 1 << 20, NULL);
     if (!text || !*text) {
         reply_error("could not read the handoff at %s", path);
         free(text);
-        return;
+        return 1;
     }
     char was[128];
     snprintf(was, sizeof was, "%s", session_id(s));
     clear(s, 0);
     if (!strcmp(was, session_id(s) ? session_id(s) : "")) {
         free(text);
+        return 1;
+    }
+    if (automatic) {
+        archive_handoff(path, was);
+        session_autohandoff_set(s, AUTOHANDOFF_SEEDED);
+        char *seed = text_dsprintf("%s%s", AUTOHANDOFF_SEED, text);
+        prompt_echo_message("auto-handoff");
+        workspace_send(workspace_index_of(s), seed ? seed : text, "auto-handoff");
+        free(seed);
+    } else {
+        unlink(path);
+        prompt_echo_message("handoff");
+        workspace_send(workspace_index_of(s), text, "handoff");
+    }
+    free(text);
+    return 1;
+}
+
+static void autohandoff_ask(struct session *s, int interrupted)
+{
+    char path[4200];
+    if (!handoff_path(s, path, sizeof path)) {
+        session_autohandoff_set(s, AUTOHANDOFF_OFF);
         return;
     }
-    unlink(path);
-    prompt_echo_message("handoff");
-    workspace_send(workspace_index_of(s), text, "handoff");
-    free(text);
+    char prompt[8192 + 4200 * 2];
+    snprintf(prompt, sizeof prompt,
+             "Context is at %d%%, past the auto-handoff threshold of %d%%%s. " HANDOFF_WRITE
+             " Save it to %s, make no other changes, and end the reply with `@handoff %s` "
+             "alone on its own line.",
+             session_context_percent(s), settings_get_int(SETTING_AUTO_HANDOFF, 0),
+             interrupted ? ", so your last turn was interrupted; include the step that was in "
+                           "flight"
+                         : "",
+             path, path);
+    session_autohandoff_set(s, AUTOHANDOFF_WRITING);
+    workspace_send(workspace_index_of(s), prompt, "auto-handoff");
+}
+
+void cmd_turn_done(struct session *s)
+{
+    int switched = session_last_interrupted(s) && !session_autobackend_due(s)
+                       ? 0 : session_autobackend(s);
+    if (switched != 0) {
+        if (switched > 0)
+            workspace_send(workspace_index_of(s), "continue", "auto-backend: continue");
+        return;
+    }
+    int state = session_autohandoff(s);
+    if (handoff_swap(s, state == AUTOHANDOFF_WRITING))
+        return;
+    if (state == AUTOHANDOFF_WRITING) {
+        session_autohandoff_set(s, AUTOHANDOFF_OFF);
+        reply_error("auto-handoff: no handoff note came back; this session carries on");
+        return;
+    }
+    if (state == AUTOHANDOFF_DUE ||
+        (!session_last_result(s)->interrupted && session_autohandoff_ready(s))) {
+        autohandoff_ask(s, state == AUTOHANDOFF_DUE);
+        return;
+    }
+    if (state == AUTOHANDOFF_IDLE || state == AUTOHANDOFF_SEEDED)
+        session_autohandoff_set(s, AUTOHANDOFF_IDLE);
+}
+
+static void do_autohandoff(struct session *s, const char *arg)
+{
+    (void)s;
+    if (arg && *arg) {
+        long at = 0;
+        if (strcmp(arg, "off")) {
+            char *end;
+            at = strtol(arg, &end, 10);
+            while (*end == '%' || *end == ' ')
+                end++;
+            if (*end || at < AUTO_HANDOFF_MIN || at > AUTO_HANDOFF_MAX) {
+                reply_error("/autohandoff takes off or a context percent between %d and %d",
+                            AUTO_HANDOFF_MIN, AUTO_HANDOFF_MAX);
+                return;
+            }
+        }
+        settings_set_int(SETTING_AUTO_HANDOFF, (int)at);
+    }
+    int at = settings_get_int(SETTING_AUTO_HANDOFF, 0);
+    if (at > 0)
+        reply_note("auto-handoff at %d%% context", at);
+    else
+        reply_note("auto-handoff off");
+}
+
+static void do_autobackend(struct session *s, const char *arg)
+{
+    (void)s;
+    if (arg && *arg) {
+        long at = 0;
+        if (strcmp(arg, "off")) {
+            char *end;
+            at = strtol(arg, &end, 10);
+            if (end == arg) {
+                reply_error("/autobackend takes off or a quota percent between 1 and 100");
+                return;
+            }
+            if (*end == '%') end++;
+            while (*end == ' ') end++;
+            if (*end || at < 1 || at > 100) {
+                reply_error("/autobackend takes off or a quota percent between 1 and 100");
+                return;
+            }
+        }
+        settings_set_int(SETTING_AUTO_BACKEND, (int)at);
+    }
+    int at = settings_get_int(SETTING_AUTO_BACKEND, 0);
+    if (at > 0)
+        reply_note("auto-backend at %d%% quota (Claude → Codex → Grok)", at);
+    else
+        reply_note("auto-backend off");
 }
 
 static void do_clear(struct session *s, const char *arg)
@@ -1222,16 +1354,13 @@ static void do_split(struct session *s, const char *arg)
 
 static void do_rename(struct session *s, const char *arg)
 {
-    int named = arg && *arg;
-    enum session_rename why = session_rename(s, named ? arg : NULL);
+    enum session_rename why = session_rename(s, arg);
 
     viewport_item_begin(VIEWPORT_ROWS(1, 1));
     if (why != SESSION_RENAME_OK)
         ui_error("%s", session_rename_error(why));
-    else if (named)
-        ui_note("renamed to %s", session_title(s));
     else
-        ui_note("naming this session again");
+        ui_note("renamed to %s", session_title(s));
     viewport_item_end();
     ui_flush();
 }
@@ -1268,7 +1397,7 @@ static void do_send(struct session *s, const char *arg)
         char msg[1200];
         if (!*text)
             ui_error("usage: /send @name text");
-        else if (intercom_send(session_name(s), target, text, msg, sizeof msg))
+        else if (intercom_send(session_name(s), target, text, 0, msg, sizeof msg))
             ui_error("%s", msg);
         else
             ui_note("%s", msg);
@@ -1382,6 +1511,15 @@ static void do_sessions(struct session *s, const char *arg)
     if (!can_pick("/sessions", 0))
         return;
     sessionswitch_run();
+}
+
+static void do_mem(struct session *s, const char *arg)
+{
+    (void)s;
+    (void)arg;
+    if (!can_pick("/mem", 0))
+        return;
+    memui_run();
 }
 
 static void do_status(struct session *s, const char *arg)
@@ -1534,6 +1672,10 @@ static const struct cmd COMMANDS[] = {
      do_clear_history},
     {"/handoff", "write a handoff for review, then continue from it in a fresh conversation",
      "[focus]", 0, do_handoff},
+    {"/autohandoff", "hand off to a fresh conversation when context reaches a percent",
+     "[percent|off]", CMD_LIVE, do_autohandoff},
+    {"/autobackend", "switch to the next backend below the quota limit",
+     "[percent|off]", CMD_LIVE, do_autobackend},
     {"/model", "switch model", "[name]", 0, do_model},
     {"/effort", "set reasoning/thinking effort", "[level]", 0, do_effort},
     {"/backend", "continue with another backend", "<name>", 0, do_backend},
@@ -1559,6 +1701,7 @@ static const struct cmd COMMANDS[] = {
     {"/resume", "resume a past conversation", NULL, 0, do_resume},
     {"/sessions", "sessions in every window, and on other tailnet machines", NULL,
      CMD_LIVE, do_sessions},
+    {"/mem", "browse and edit the mem store", NULL, CMD_LIVE, do_mem},
     {"/fork", "fork into a new tab, tmux split, or tmux window",
      "[tab|horizontal|vertical|window]", CMD_LIVE, do_fork},
     {"/split", "open a shell split in this directory", "[h|v|w]", 0, do_split},
@@ -1566,8 +1709,7 @@ static const struct cmd COMMANDS[] = {
     {"/session", "show this session's info and totals", NULL, CMD_LIVE, do_session},
     {"/tokenomics", "token and cache breakdown for this session, per turn", NULL,
      CMD_LIVE, do_tokenomics},
-    {"/title", "set this session's title, or ask the model to title it again", "[title]",
-     0, do_rename},
+    {"/title", "set this session's title", "title", 0, do_rename},
     {"/name", "show or set this session's @name for scrap send", "[name]", 0, do_name},
     {"/send", "send a message to another session", "@name text", CMD_LIVE_ARG, do_send},
     {"/attach", "open a live session from another window or machine in a tab", "machine:@name", 0,

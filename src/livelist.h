@@ -16,7 +16,7 @@ struct live_session {
     char chain[40];
     char parent[128];
     char title[200];
-    char status[16];
+    char state[16];
     char channels[48];
     int  unseen;
     char pane[32];
@@ -26,7 +26,7 @@ struct live_session {
 
 void livelist_begin(void);
 
-void livelist_publish(const struct session *s, const char *status);
+void livelist_publish(const struct session *s, const char *state);
 
 void livelist_forget(const struct session *s);
 

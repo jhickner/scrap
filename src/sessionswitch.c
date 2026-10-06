@@ -159,7 +159,7 @@ static void fill_live(struct row *r, const struct live_session *v)
              models_short_name(v->backend, v->label[0] ? v->label : v->model),
              v->name[0] ? " @" : "", v->name);
     snprintf(r->when, sizeof r->when, "%s", when);
-    row_status(r, v->status);
+    row_status(r, v->state);
 }
 
 static void live_rows(struct row *rows, int *n, const struct live_session *live, int count)
@@ -221,7 +221,7 @@ static void remote_rows(struct row *rows, int *n, const cJSON *m)
         r.ts = cJSON_IsNumber(ts) ? (long)ts->valuedouble : 0;
         if (r.ts)
             text_ago(r.ts, 1, r.when, sizeof r.when);
-        row_status(&r, jstr(o, "status"));
+        row_status(&r, jstr(o, "state"));
         rows[(*n)++] = r;
     }
 }
@@ -525,7 +525,7 @@ static void send_to(const char *target)
     if (text && *text) {
         struct session *here = workspace_current();
         char            msg[1200];
-        if (intercom_send(here ? session_name(here) : NULL, target, text, msg, sizeof msg))
+        if (intercom_send(here ? session_name(here) : NULL, target, text, 0, msg, sizeof msg))
             ui_error("%s", msg);
         else
             ui_note("%s", msg);
@@ -545,7 +545,7 @@ static void spawn_on(const char *machine)
     char target[TAILNET_HOST_MAX + 64], msg[1200];
     ui_note("starting a session on %s\xe2\x80\xa6", machine);
     ui_flush();
-    if (tailnet_spawn(machine, cwd, target, sizeof target, msg, sizeof msg))
+    if (tailnet_spawn(machine, cwd, NULL, target, sizeof target, msg, sizeof msg))
         cmd_attach(target);
     else {
         ui_error("%s", msg);
@@ -760,10 +760,10 @@ static void yank_all(const struct live_session *live, int nlive)
 
 static void close_live(const struct live_session *v)
 {
-    int said = 0;
-    if (handoff_close(v->pid, v->id, waiting, &said))
+    char msg[1200];
+    if (!intercom_close(v->id, msg, sizeof msg))
         return;
-    ui_error("could not close that session");
+    ui_error("%s", msg);
     ui_put("\n");
     ui_flush();
 }
@@ -1263,8 +1263,7 @@ int sessionswitch_gave_last(void) { return gave_last; }
 void sessionswitch_serve_request(void)
 {
     char id[128];
-    int closing = 0;
-    if (!handoff_take_request(id, sizeof id, &closing))
+    if (!handoff_take_request(id, sizeof id))
         return;
 
     int at = workspace_find_id(id);
@@ -1273,8 +1272,7 @@ void sessionswitch_serve_request(void)
         return;
     }
 
-    if (!closing)
-        workspace_wait_turn(at);
+    workspace_wait_turn(at);
 
     char screen[4400];
     if (handoff_screen_path(id, screen, sizeof screen))

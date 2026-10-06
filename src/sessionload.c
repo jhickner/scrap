@@ -268,7 +268,8 @@ static void draw_tool(const cJSON *block, const char *cwd)
 
     char arg[4096];
     view_tool_argument(&ev, cwd, arg, sizeof arg);
-    view_keep_tool_call(name, arg, toolstyle_collapses(name, json, NULL));
+    view_keep_tool_call_bg(name, arg, toolstyle_collapses(name, json, NULL),
+                           toolstyle_background(json), NULL);
     free(json);
 }
 

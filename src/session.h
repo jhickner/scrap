@@ -38,10 +38,9 @@ void session_set_system_extra(struct session *s, const char *text);
 int session_set_env(struct session *s, const char *const *env);
 
 const backend_result *session_last_result(const struct session *s);
+void session_rate_limit(struct session *s, backend_rate_limit *out);
 
 void session_set_abort_hook(struct session *s, int (*fn)(void *ud), void *ud);
-
-void session_set_naming(struct session *s, int on);
 
 void session_set_thinking(struct session *s, int on);
 int  session_thinking(const struct session *s);
@@ -85,6 +84,7 @@ void session_turn_wait(struct session *s);
 void session_interrupt(struct session *s);
 
 int  session_busy(const struct session *s);
+int  session_in_turn(const struct session *s);
 
 void session_set_unseen(struct session *s, int on);
 
@@ -98,6 +98,7 @@ int  session_idle_fd(const struct session *s);
 
 int  session_idle_pump(struct session *s);
 int  session_idle_busy(const struct session *s);
+const char *session_wake_owed(const struct session *s);
 
 const struct tasktab *session_tasks(const struct session *s);
 const struct task    *session_task_change(const struct session *s);
@@ -106,6 +107,9 @@ int  session_task_repeat(const struct session *s);
 int session_work_count(const struct session *s);
 
 int  session_stalled(struct session *s);
+
+int session_autobackend(struct session *s);
+int session_autobackend_due(const struct session *s);
 
 int session_switch_backend(struct session *s, const char *backend);
 
@@ -164,7 +168,6 @@ enum session_rename {
     SESSION_RENAME_NO_ID,
     SESSION_RENAME_BAD_NAME,
     SESSION_RENAME_NO_STORE,
-    SESSION_RENAME_NO_SOURCE,
 };
 
 enum session_rename session_rename(struct session *s, const char *name);
@@ -267,6 +270,20 @@ long session_tokens_out(const struct session *s);
 long session_tokens_cached(const struct session *s);
 
 int session_context_percent(const struct session *s);
+
+enum {
+    AUTOHANDOFF_IDLE,
+    AUTOHANDOFF_DUE,
+    AUTOHANDOFF_WRITING,
+    AUTOHANDOFF_SEEDED,
+    AUTOHANDOFF_OFF,
+};
+
+#define AUTOHANDOFF_RUN_MAX 2
+
+int  session_autohandoff(const struct session *s);
+void session_autohandoff_set(struct session *s, int state);
+int  session_autohandoff_ready(const struct session *s);
 
 long session_context_window(const struct session *s);
 

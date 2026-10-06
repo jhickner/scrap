@@ -79,6 +79,19 @@ static inline int kvlog_upsert(struct kvlog_map *m, const char *key,
     return 1;
 }
 
+static inline void kvlog_remove(struct kvlog_map *m, const char *key)
+{
+    for (int i = 0; i < m->n; i++) {
+        if (strcmp(m->ents[i].key, key) != 0)
+            continue;
+        free(m->ents[i].key);
+        free(m->ents[i].val);
+        memmove(&m->ents[i], &m->ents[i + 1], (size_t)(m->n - i - 1) * sizeof *m->ents);
+        m->n--;
+        return;
+    }
+}
+
 static inline struct kvlog_map *kvlog_slot(const char *path)
 {
     for (int i = 0; i < KVLOG_MAPS; i++)
@@ -131,6 +144,8 @@ static inline void kvlog_load(struct kvlog_map *m)
         value[strcspn(value, "\n")] = '\0';
         if (*line && *value)
             kvlog_upsert(m, line, value);
+        else if (*line)
+            kvlog_remove(m, line);
     }
     free(line);
     fclose(f);
@@ -200,7 +215,9 @@ static inline int kvlog_append(const char *path, const char *key,
     if (left != 0 || n <= 0)
         return 0;
 
-    if (value && *value && !kvlog_upsert(m, key, value)) {
+    if (!*value)
+        kvlog_remove(m, key);
+    else if (!kvlog_upsert(m, key, value)) {
         m->loaded = 0;
         return 1;
     }

@@ -77,6 +77,10 @@ char *viewport_link_at(int row, int col);
 
 void  viewport_item_update(unsigned mark);
 
+int  viewport_fold_open(void);
+void viewport_fold_enable(void);
+int  viewport_fold_click(int row, int col);
+
 void viewport_item_hide(unsigned mark, int on);
 void viewport_item_pad(unsigned mark, int on);
 void viewport_item_stale(unsigned mark);

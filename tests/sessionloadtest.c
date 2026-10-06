@@ -88,6 +88,14 @@ void view_keep_tool_call(const char *name, const char *arg, int collapses)
         tools++;
 }
 
+void view_keep_tool_call_bg(const char *name, const char *arg, int collapses, int background,
+                            const char *call)
+{
+    (void)background;
+    (void)call;
+    view_keep_tool_call(name, arg, collapses);
+}
+
 void view_keep_activity(const char *marker, const char *text, enum ui_role role)
 {
     (void)marker;
@@ -100,6 +108,12 @@ int toolstyle_collapses(const char *name, const char *input_json, const char *ar
     (void)name;
     (void)input_json;
     (void)arg;
+    return 0;
+}
+
+int toolstyle_background(const char *input_json)
+{
+    (void)input_json;
     return 0;
 }
 

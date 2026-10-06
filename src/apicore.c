@@ -50,10 +50,12 @@ struct agent {
 };
 
 struct usage {
-    char name[32];
-    int  used_percent;
-    long resets_at, window_minutes;
-    long updated_at;
+    char               name[32];
+    backend_quota_kind kind;
+    int                used_percent;
+    long               resets_at, window_minutes;
+    double             balance_usd;
+    long               updated_at;
 };
 
 static struct agent     agents[AGENTS_MAX];
@@ -276,9 +278,13 @@ static void note_agent(struct agent *a)
 static cJSON *usage_reading_json(const struct usage *u)
 {
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddNumberToObject(o, "used_percent", u->used_percent);
-    cJSON_AddNumberToObject(o, "resets_at", (double)u->resets_at);
-    cJSON_AddNumberToObject(o, "window_minutes", (double)u->window_minutes);
+    if (u->kind == BACKEND_QUOTA_BALANCE) {
+        cJSON_AddNumberToObject(o, "balance_usd", u->balance_usd);
+    } else {
+        cJSON_AddNumberToObject(o, "used_percent", u->used_percent);
+        cJSON_AddNumberToObject(o, "resets_at", (double)u->resets_at);
+        cJSON_AddNumberToObject(o, "window_minutes", (double)u->window_minutes);
+    }
     cJSON_AddNumberToObject(o, "updated_at", (double)u->updated_at);
     return o;
 }
@@ -293,16 +299,20 @@ void apicore_usage(const char *backend, const backend_rate_limit *limit)
             u = &usages[i];
     int changed = 1;
     if (u)
-        changed = u->used_percent != limit->used_percent || u->resets_at != limit->resets_at ||
-                  u->window_minutes != limit->window_minutes;
+        changed = u->kind != limit->kind || u->used_percent != limit->used_percent ||
+                  u->resets_at != limit->resets_at ||
+                  u->window_minutes != limit->window_minutes ||
+                  u->balance_usd != limit->balance_usd;
     else if (nusages < USAGE_MAX) {
         u = &usages[nusages++];
         snprintf(u->name, sizeof u->name, "%s", backend);
     } else
         return;
+    u->kind = limit->kind;
     u->used_percent = limit->used_percent;
     u->resets_at = limit->resets_at;
     u->window_minutes = limit->window_minutes;
+    u->balance_usd = limit->balance_usd;
     u->updated_at = (long)time(NULL);
     if (!changed)
         return;

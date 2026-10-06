@@ -726,6 +726,13 @@ static void send_next(int index, int hold)
     if (!t->npending || session_turn_running(t->s))
         return;
 
+    if (!cmd_is_command(t->pending[0].line)) {
+        enter_held(index, hold);
+        int ready = session_autobackend(t->s);
+        leave();
+        if (ready < 0)
+            return;
+    }
     struct pending p = t->pending[0];
     for (int i = 1; i < t->npending; i++)
         t->pending[i - 1] = t->pending[i];
@@ -802,21 +809,12 @@ static int join(char **dst, const char *text)
     return 1;
 }
 
-static int redirect(struct tab *t, const char *text, const char *full)
+static int send_first(struct tab *t, const char *line, const char *shown, int typed)
 {
-    struct pending p = {strdup(full ? full : text), full ? strdup(text) : NULL, 1};
-    if (!p.line || (full && !p.shown)) {
-        free(p.line);
-        free(p.shown);
+    if (t->npending >= PENDING_MAX)
         return 0;
-    }
-    struct pending *last = t->npending ? &t->pending[t->npending - 1] : NULL;
-    if (last && last->typed) {
-        prompt_hold(last->shown ? last->shown : last->line);
-        free(last->shown ? last->line : NULL);
-        t->npending--;
-    }
-    if (t->npending >= PENDING_MAX) {
+    struct pending p = {strdup(line), shown ? strdup(shown) : NULL, typed};
+    if (!p.line || (shown && !p.shown)) {
         free(p.line);
         free(p.shown);
         return 0;
@@ -826,6 +824,27 @@ static int redirect(struct tab *t, const char *text, const char *full)
     t->npending++;
     session_interrupt(t->s);
     return 1;
+}
+
+static int redirect(struct tab *t, const char *text, const char *full)
+{
+    struct pending *last = t->npending ? &t->pending[t->npending - 1] : NULL;
+    if (last && last->typed) {
+        prompt_hold(last->shown ? last->shown : last->line);
+        free(last->shown ? last->line : NULL);
+        t->npending--;
+    }
+    return send_first(t, full ? full : text, full ? text : NULL, 1);
+}
+
+int workspace_send_now(int index, const char *line, const char *shown)
+{
+    if (index < 0 || index >= ntabs || !line || !*line)
+        return 0;
+    struct tab *t = &tabs[index];
+    if (!session_turn_running(t->s) || session_remote(t->s))
+        return workspace_send(index, line, shown);
+    return send_first(t, line, shown, 0);
 }
 
 int workspace_send_typed(int index, const char *text, const char *full)

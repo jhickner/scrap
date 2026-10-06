@@ -30,13 +30,13 @@ void tailnet_resolve(const char *host, char *ip, size_t size);
 int tailnet_connect(const char *ip, int port, int timeout_s, char *err, size_t esize);
 
 int tailnet_send(const char *host, const char *from, const char *target, const char *text,
-                 char *msg, size_t size);
+                 int interrupt, char *msg, size_t size);
 
 char *tailnet_read(const char *host, const char *target, long turns, long bytes, char *msg,
                    size_t size);
 
-int tailnet_spawn(const char *host, const char *cwd, char *target, size_t tsize, char *msg,
-                  size_t size);
+int tailnet_spawn(const char *host, const char *cwd, const char *prompt,
+                  char *target, size_t tsize, char *msg, size_t size);
 
 int tailnet_close(const char *host, const char *target, char *msg, size_t size);
 

@@ -49,6 +49,7 @@
 #include "tty.h"
 #include "ui.h"
 #include "vendor/agents/backend.h"
+#include "quota.h"
 #include "text.h"
 #include "vendor/cJSON.h"
 #include "vncinset.h"
@@ -70,13 +71,11 @@ struct session {
     char    *addr;
     char   **env;
     backend_result last_result;
+    int      quota_failed;
+    int      autobackend_due;
     char     title[128];
-    char     stale_title[128];
     char     held_title[128];
-    int      announce_title;
-    int      retitle;
-    int      named;
-    double   named_at;
+    double   title_polled;
     char    *prompt;
     char    *last_reply;
     char    *failed_prompt;
@@ -93,6 +92,9 @@ struct session {
     int      ledger_n, ledger_cap;
     long     context_tokens;
     long     context_window;
+    int      autohandoff;
+    int      autohandoffs;
+    backend_rate_limit noted;
     int      quiet;
     char    *system_extra;
     char    *handoff;
@@ -100,7 +102,6 @@ struct session {
     void    *observer_ud;
     int    (*abort_hook)(void *ud);
     void    *abort_ud;
-    int      skip_naming;
     int      thinking;
     int      compact;
     int      resetting;
@@ -233,6 +234,8 @@ static void render_event(struct session *s, const backend_event *ev)
         !(ev->parent && *ev->parent))
         replace(&s->last_block, ev->text);
 
+    if (s->agent && s->agent->caps & BACKEND_CAP_TASKS)
+        s->tasks.lifecycle = 1;
     s->task_change = tasks_note(&s->tasks, ev, &s->task_repeat);
     if (s->task_change && !tasks_done(s->task_change))
         s->stall_told = 0;
@@ -388,6 +391,12 @@ static void tab_busy(struct session *s, int busy)
     if (busy == s->idle_busy)
         return;
     s->idle_busy = busy;
+    if (!busy && !s->running && !tasks_pending(&s->tasks) && !s->remote && s->id[0]) {
+        title_clear(s->id);
+        s->title[0] = '\0';
+        if (s == live)
+            status_set_note(NULL);
+    }
     publish(s, busy ? "working" : "finished");
 }
 
@@ -498,6 +507,13 @@ int session_idle_busy(const struct session *s)
     return s->agent->busy(s->agent) ? 1 : 0;
 }
 
+const char *session_wake_owed(const struct session *s)
+{
+    if (!s || !s->agent || !s->agent->wake_owed)
+        return NULL;
+    return s->agent->wake_owed(s->agent);
+}
+
 static session_key_fn typeahead;
 static void          *typeahead_ud;
 
@@ -509,14 +525,69 @@ void session_set_typeahead(session_key_fn fn, void *ud)
 
 static void set_id(struct session *s, const char *id);
 
+static const char *quota_name(const struct session *s)
+{
+    return s->remote ? NULL : quota_provider(s->backend, session_model_label(s));
+}
+
+static int same_limit(const backend_rate_limit *a, const backend_rate_limit *b)
+{
+    return a->available == b->available && a->kind == b->kind &&
+           a->used_percent == b->used_percent && a->resets_at == b->resets_at &&
+           a->window_minutes == b->window_minutes && a->balance_usd == b->balance_usd;
+}
+
+void session_rate_limit(struct session *s, backend_rate_limit *out)
+{
+    memset(out, 0, sizeof *out);
+    if (!s)
+        return;
+    if (s->agent && s->agent->rate_limit)
+        s->agent->rate_limit(s->agent, out);
+    const char *q = quota_name(s);
+    if (!q)
+        return;
+    if (out->available && !same_limit(out, &s->noted)) {
+        s->noted = *out;
+        quota_note(q, out);
+    }
+    quota_read(q, out);
+}
+
+static int autobackend_ready(struct session *s)
+{
+    int at = settings_get_int(SETTING_AUTO_BACKEND, 0);
+    if (!s || s->remote || !s->agent || !s->agent->rate_limit || at < 1 || at > 100 ||
+        (strcmp(s->backend, "claude") && strcmp(s->backend, "codex") &&
+         strcmp(s->backend, "grok")))
+        return 0;
+    backend_rate_limit limit;
+    session_rate_limit(s, &limit);
+    return limit.available && limit.kind == BACKEND_QUOTA_PERCENT &&
+           limit.used_percent >= at &&
+           (limit.resets_at <= 0 || limit.resets_at > (long)time(NULL));
+}
+
+static void autobackend_interrupt(struct session *s)
+{
+    if (s && !s->abort_request && autobackend_ready(s)) {
+        s->autobackend_due = 1;
+        s->abort_request = 1;
+    }
+}
+
+int session_autobackend_due(const struct session *s)
+{
+    return s && s->autobackend_due;
+}
+
 static void usage_poll(struct session *s)
 {
-    if (!s || !s->agent || !s->agent->rate_limit)
-        return;
-    backend_rate_limit limit = {0};
-    s->agent->rate_limit(s->agent, &limit);
+    backend_rate_limit limit;
+    session_rate_limit(s, &limit);
     if (limit.available) {
-        agenttabs_usage(s, limit.used_percent, limit.resets_at, limit.window_minutes);
+        if (limit.kind == BACKEND_QUOTA_PERCENT)
+            agenttabs_usage(s, limit.used_percent, limit.resets_at, limit.window_minutes);
         apicore_usage(session_backend(s), &limit);
     }
 }
@@ -524,21 +595,12 @@ static void usage_poll(struct session *s)
 static int adopt_title(struct session *s)
 {
     char found[sizeof s->title];
-    if (!title_lookup(s->id, found, sizeof found))
+    if (!title_lookup(s->id, found, sizeof found) || !strcmp(found, s->title))
         return 0;
-    if (s->stale_title[0] && !strcmp(found, s->stale_title))
-        return 0;
-    s->stale_title[0] = '\0';
     snprintf(s->title, sizeof s->title, "%s", found);
-    status_set_note(s->title);
+    if (s == live)
+        status_set_note(s->title);
     publish(s, s->idle_busy ? "working" : "finished");
-    if (s->announce_title) {
-        s->announce_title = 0;
-        viewport_item_begin(VIEWPORT_ROWS(1, 1));
-        ui_note("renamed to %s", s->title);
-        viewport_item_end();
-        ui_flush();
-    }
     return 1;
 }
 
@@ -554,33 +616,10 @@ static void name_poll(struct session *s)
         set_id(s, id);
     }
 
-    if (s->id[0] && s->held_title[0]) {
-        title_set(s->id, s->held_title);
-        s->held_title[0] = '\0';
-        s->named = 1;
-        s->retitle = 0;
-        adopt_title(s);
-    }
-
-    if (s->title[0])
-        return;
-
-    if (!s->named) {
-        if (s->skip_naming || !s->prompt)
-            return;
-        const char *model = s->resolved && *s->resolved ? s->resolved : s->model;
-        title_request(s->id, s->backend, model, s->cwd, s->prompt, s->last_reply);
-        s->named = 1;
-        s->retitle = 0;
-        s->named_at = now_seconds();
-        return;
-    }
-
     double now = now_seconds();
-    if (now - s->named_at < 1.0)
+    if (now - s->title_polled < 1.0)
         return;
-    s->named_at = now;
-
+    s->title_polled = now;
     adopt_title(s);
 }
 
@@ -596,8 +635,6 @@ const char *session_rename_error(enum session_rename why)
     case SESSION_RENAME_NO_STORE:
         return "the name would not stay written — check ~/.config/" APP_NAME
                "/titles";
-    case SESSION_RENAME_NO_SOURCE:
-        return "nothing to name it from yet — the model names it from a turn";
     case SESSION_RENAME_OK:
         break;
     }
@@ -609,44 +646,22 @@ enum session_rename session_rename(struct session *s, const char *name)
     if (!s)
         return SESSION_RENAME_NO_ID;
 
-    if (!s->id[0] && name && *name) {
+    if (!s->id[0]) {
         if (!title_clean(name, s->held_title, sizeof s->held_title))
             return SESSION_RENAME_BAD_NAME;
         snprintf(s->title, sizeof s->title, "%s", s->held_title);
-        s->stale_title[0] = '\0';
-        s->named = 1;
-        s->retitle = 0;
-        status_set_note(s->title);
+        if (s == live)
+            status_set_note(s->title);
         publish(s, s->idle_busy ? "working" : "finished");
         return SESSION_RENAME_OK;
     }
 
-    if (!s->id[0])
-        return SESSION_RENAME_NO_ID;
-
-    if (name && *name) {
-        if (!title_set(s->id, name))
-            return SESSION_RENAME_BAD_NAME;
-        s->stale_title[0] = '\0';
-        if (!adopt_title(s))
-            return SESSION_RENAME_NO_STORE;
-        s->named = 1;
-        s->retitle = 0;
-        return SESSION_RENAME_OK;
-    }
-
-    if (!s->prompt)
-        return SESSION_RENAME_NO_SOURCE;
-
-    const char *model = s->resolved && *s->resolved ? s->resolved : s->model;
-    title_request(s->id, s->backend, model, s->cwd, s->prompt, s->last_reply);
-    snprintf(s->stale_title, sizeof s->stale_title, "%s", s->title);
-    s->title[0] = '\0';
-    s->named = 1;
-    s->retitle = 0;
-    s->named_at = now_seconds();
-    s->announce_title = 1;
-    status_set_note(NULL);
+    char found[sizeof s->title];
+    if (!title_set(s->id, name))
+        return SESSION_RENAME_BAD_NAME;
+    if (!title_lookup(s->id, found, sizeof found))
+        return SESSION_RENAME_NO_STORE;
+    adopt_title(s);
     return SESSION_RENAME_OK;
 }
 
@@ -843,6 +858,8 @@ static int abort_check(void)
     if (live && live->abort_hook)
         interrupt |= live->abort_hook(live->abort_ud);
     relay_poll(live);
+    if (!interrupt)
+        autobackend_interrupt(live);
     if (live && live->abort_request)
         interrupt = 1;
 
@@ -1199,7 +1216,6 @@ struct session *session_agent_open(struct agent_job *j)
     s->agent       = j->child;
     s->job         = j;
     s->subagent    = 1;
-    s->skip_naming = 1;
     s->agent->set_event_cb(s->agent, on_event, s);
     s->agent->set_abort_check(s->agent, abort_check);
     claim_name(s);
@@ -1276,12 +1292,17 @@ static Backend *agent(struct session *s)
     char exe[PATH_MAX];
     if (s->memory && hub_self_path(exe, sizeof exe))
         o.memory_relay = exe;
+    o.skip_quota_read = !strcmp(s->backend, "grok") ||
+                        (!strcmp(s->backend, "codex") && quota_fresh("codex"));
 
     char *joined = s->remote ? NULL : session_system(s, s->handoff);
     o.system = joined;
     s->agent = s->remote ? remote_open(s->remote) : backend_open_ex(&o);
     free(joined);
     if (s->agent) {
+        const char *q = quota_name(s);
+        if (q)
+            quota_want(q);
         s->agent->set_event_cb(s->agent, on_event, s);
         s->agent->set_abort_check(s->agent, abort_check);
         if (s->agent->set_permission_cb)
@@ -1331,10 +1352,19 @@ static char *carried_handoff(const struct session *s)
         src = &disk;
     char *handoff = transcript_handoff(src, 128 * 1024, s->id[0] ? s->id : NULL);
     transcript_free(&disk);
+    if (s->failed_prompt && *s->failed_prompt) {
+        char *full = text_dsprintf("%s\nThe most recent user request failed before completion:\n%s\n",
+                                  handoff ? handoff : "", s->failed_prompt);
+        if (full) {
+            free(handoff);
+            handoff = full;
+        }
+    }
     return handoff;
 }
 
-int session_switch_backend(struct session *s, const char *backend)
+static int switch_backend(struct session *s, const char *backend,
+                          const char *model, const char *effort, int quota)
 {
     if (!s || !backend || !*backend || s->running)
         return 0;
@@ -1345,6 +1375,8 @@ int session_switch_backend(struct session *s, const char *backend)
     char *joined = session_system(s, handoff);
     backend_opts o = {0};
     o.name = backend;
+    o.model = model;
+    o.effort = effort;
     o.system = joined;
     o.cwd = s->cwd;
     o.allow_customizations = s->customizations;
@@ -1362,23 +1394,36 @@ int session_switch_backend(struct session *s, const char *backend)
 
     if (replacement->set_permission_cb)
         replacement->set_permission_cb(replacement, on_permission, s);
-    if (!replacement->start(replacement, NULL)) {
+    if (!replacement->start(replacement, NULL) ||
+        (quota > 0 && replacement->connect && !replacement->connect(replacement))) {
         const char *why = replacement->last_error ? replacement->last_error(replacement) : NULL;
         snprintf(start_error, sizeof start_error, "%s", why ? why : "");
         replacement->close(replacement);
         free(handoff);
         return 0;
     }
+    if (quota > 0) {
+        backend_rate_limit limit = {0};
+        if (replacement->rate_limit)
+            replacement->rate_limit(replacement, &limit);
+        if (!limit.available || limit.used_percent >= quota ||
+            (limit.resets_at > 0 && limit.resets_at <= (long)time(NULL))) {
+            replacement->close(replacement);
+            free(handoff);
+            return 0;
+        }
+    }
     replacement->set_event_cb(replacement, on_event, s);
     replacement->set_abort_check(replacement, abort_check);
 
     Backend *previous = s->agent;
     s->agent = replacement;
+    s->quota_failed = 0;
     free(s->handoff);
     s->handoff = handoff;
     replace(&s->backend, backend);
-    replace(&s->model, NULL);
-    replace(&s->effort, NULL);
+    replace(&s->model, model);
+    replace(&s->effort, effort);
     replace(&s->resolved, NULL);
 
     if (s->title[0] && !s->held_title[0])
@@ -1393,7 +1438,15 @@ int session_switch_backend(struct session *s, const char *backend)
     s->context_tokens = 0;
     s->context_window = 0;
     retire(previous);
+    const char *q = quota_name(s);
+    if (q)
+        quota_want(q);
     return 1;
+}
+
+int session_switch_backend(struct session *s, const char *backend)
+{
+    return switch_backend(s, backend, NULL, NULL, 0);
 }
 
 void session_set_quiet(struct session *s, int quiet) { s->quiet = quiet; }
@@ -1450,8 +1503,6 @@ void session_set_abort_hook(struct session *s, int (*fn)(void *ud), void *ud)
     s->abort_hook = fn;
     s->abort_ud = ud;
 }
-
-void session_set_naming(struct session *s, int on) { s->skip_naming = !on; }
 
 void session_set_thinking(struct session *s, int on) { s->thinking = on; }
 
@@ -1536,16 +1587,10 @@ static void set_id(struct session *s, const char *id)
         if (s->held_title[0]) {
             title_set(s->id, s->held_title);
             s->held_title[0] = '\0';
-            s->named = 1;
-            s->retitle = 0;
         } else {
             s->title[0] = '\0';
-            s->stale_title[0] = '\0';
-            s->announce_title = 0;
-            s->named = 0;
         }
-        if (!s->retitle)
-            title_lookup(s->id, s->title, sizeof s->title);
+        title_lookup(s->id, s->title, sizeof s->title);
         if (!s->remote && s->context_tokens <= 0) {
             long tokens, window;
             if (sessionload_context(s->backend, s->cwd, s->id, &tokens, &window)) {
@@ -2009,11 +2054,8 @@ static void started_over(struct session *s)
 {
     reset_turns(s, RESET_BLOCK | RESET_WORKDIR);
     s->title[0] = '\0';
-    s->stale_title[0] = '\0';
     s->held_title[0] = '\0';
-    s->announce_title = 0;
-    s->retitle = 1;
-    s->named = 0;
+    s->autohandoff = AUTOHANDOFF_IDLE;
     status_set_note(NULL);
 
     s->id[0] = '\0';
@@ -2111,11 +2153,7 @@ int session_clear(struct session *s)
     tasks_reset(&s->tasks, s->backend);
 
     s->title[0] = '\0';
-    s->stale_title[0] = '\0';
     s->held_title[0] = '\0';
-    s->announce_title = 0;
-    s->retitle = 1;
-    s->named = 0;
     status_set_note(NULL);
 
     const char *id = s->agent->session_id(s->agent);
@@ -2147,17 +2185,6 @@ int session_history_file(const struct session *s, char *out, size_t size)
     if (access(out, F_OK) != 0 && history_file(s->name, legacy, sizeof legacy))
         rename(legacy, out);
     return 1;
-}
-
-static void update_title(struct session *s)
-{
-    if (!s->id[0] || s->title[0])
-        return;
-    if (!s->named) {
-        name_poll(s);
-        return;
-    }
-    adopt_title(s);
 }
 
 static int dir_alive(const char *path)
@@ -2295,10 +2322,52 @@ static int session_reground(struct session *s)
     return GROUND_LOST;
 }
 
+int session_autobackend(struct session *s)
+{
+    int at = settings_get_int(SETTING_AUTO_BACKEND, 0);
+    if (!s || s->remote || s->running || !s->agent || !s->agent->rate_limit)
+        return 0;
+    int failed = s->quota_failed;
+    int due = s->autobackend_due;
+    s->quota_failed = 0;
+    s->autobackend_due = 0;
+    if (at < 1 || at > 100)
+        return 0;
+    static const char *const order[] = {"claude", "codex", "grok"};
+    int current = -1;
+    for (int i = 0; i < 3; i++)
+        if (!strcmp(s->backend, order[i]))
+            current = i;
+    if (current < 0)
+        return 0;
+    backend_rate_limit limit;
+    session_rate_limit(s, &limit);
+    if (!failed && !due && !autobackend_ready(s))
+        return 0;
+    for (int i = current + 1; i < 3; i++) {
+        const char *model, *effort;
+        models_autobackend(s->backend, session_model_label(s), session_effort(s),
+                          order[i], &model, &effort);
+        if (switch_backend(s, order[i], model, effort, at)) {
+            s->autohandoff = AUTOHANDOFF_IDLE;
+            session_warn(s, "auto-backend: switched to %s (%s, %s)", order[i], model, effort);
+            usage_poll(s);
+            return 1;
+        }
+    }
+    replace(&s->error_note, "auto-backend stopped: no next backend has known quota below the limit");
+    if (failed)
+        session_warn(s, "auto-backend stopped after quota error: no next backend has known quota below %d%%", at);
+    else
+        session_warn(s, "auto-backend stopped at %d%%: no next backend has known quota below %d%%",
+                     limit.used_percent, at);
+    return -1;
+}
+
 static int turn_ready(struct session *s, const char *text)
 {
     replace(&s->error_note, NULL);
-    if (s->remote || session_reground(s))
+    if ((s->remote || session_reground(s)) && session_autobackend(s) >= 0)
         return 1;
     replace(&s->failed_prompt, text);
     return 0;
@@ -2318,6 +2387,7 @@ static void turn_prepare(struct session *s, const char *text)
     s->stall_told = 0;
     s->stall_at = 0;
     s->interrupted = 0;
+    s->autobackend_due = 0;
     s->abort_request = 0;
     publish(s, "working");
 }
@@ -2330,11 +2400,31 @@ static void continuation_fallback(struct session *s)
     s->heard_at = s->stall_at;
 }
 
+static int quota_error(const char *error)
+{
+    static const char *const phrases[] = {
+        "rate_limit", "rate limit", "usage_limit", "usage limit",
+        "quota exceeded", "quota exhausted", "insufficient_quota",
+        "exceeded your current quota", "quota_exceeded",
+        "insufficient credits", "credit limit", "out of credits",
+        "you've hit your", "you have hit your", "spend limit"
+    };
+    if (error)
+        for (size_t i = 0; i < sizeof phrases / sizeof *phrases; i++)
+            if (strcasestr(error, phrases[i]))
+                return 1;
+    return 0;
+}
+
 static int turn_finish(struct session *s, char *reply, const backend_result *meta,
                        double elapsed)
 {
     const backend_result m = *meta;
     s->last_result = m;
+    s->interrupted = m.interrupted || s->abort_request;
+    s->quota_failed = !s->interrupted && (!reply || m.is_error) &&
+        (quota_error(m.subtype) || quota_error(s->agent->last_error(s->agent)) ||
+         (m.is_error && quota_error(reply)));
     int continuing = s->continuing;
     s->continuing = 0;
     const char *text = s->prompt ? s->prompt : "";
@@ -2373,7 +2463,6 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
         detail = s->agent->last_error(s->agent);
     sessionpresent_turn_result(&s->present, s->backend, reply, s->last_block,
                                detail, &m, s->quiet);
-    s->interrupted = m.interrupted;
 
     if (*reply)
         replace(&s->last_reply, reply);
@@ -2400,6 +2489,10 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     s->tokens_out += m.output_tokens;
     s->tokens_cached += m.cache_read_tokens;
 
+    const char *quota = quota_name(s);
+    if (quota)
+        quota_want(quota);
+
     if (m.context_window > 0)
         s->context_window = m.context_window;
     if (m.context_tokens > 0)
@@ -2410,7 +2503,7 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     gitinfo_forget();
 
     if (!s->remote) {
-        update_title(s);
+        adopt_title(s);
         remember_model(s);
         remember_window(s);
     }
@@ -2442,7 +2535,11 @@ int session_turn(struct session *s, const char *text)
     if (!s->quiet)
         status_end();
 
-    return turn_finish(s, reply, &meta, elapsed);
+    int ok = turn_finish(s, reply, &meta, elapsed);
+    int switched = s->interrupted && !s->autobackend_due ? 0 : session_autobackend(s);
+    if (switched > 0)
+        return session_turn(s, "continue");
+    return switched < 0 ? 0 : ok;
 }
 
 static void wake_write(struct session *s)
@@ -2521,6 +2618,13 @@ int session_turn_continue_begin(struct session *s)
         return 0;
     }
 
+    int switched = session_autobackend(s);
+    if (switched < 0) {
+        continuation_fallback(s);
+        return 0;
+    }
+    if (switched > 0)
+        return session_turn_begin(s, "continue");
     turn_prepare(s, s->remote ? remote_prompt(s->agent) : NULL);
     replace(&s->asked, NULL);
     s->reply = NULL;
@@ -2551,8 +2655,10 @@ double session_turn_elapsed(const struct session *s)
 
 void session_interrupt(struct session *s)
 {
-    if (s && s->running)
+    if (s && s->running) {
+        s->autobackend_due = 0;
         s->abort_request = 1;
+    }
 }
 
 void session_set_unseen(struct session *s, int on)
@@ -2570,6 +2676,13 @@ void session_republish(const struct session *s)
 {
     if (s)
         publish(s, session_busy(s) ? "working" : "finished");
+}
+
+int session_in_turn(const struct session *s)
+{
+    if (!s)
+        return 0;
+    return s->running || (s->agent && s->agent->turn_open && s->agent->turn_open(s->agent));
 }
 
 int session_busy(const struct session *s)
@@ -2605,6 +2718,11 @@ int session_turn_pump(struct session *s)
     usage_poll(s);
 
     if (!s->finished) {
+        autobackend_interrupt(s);
+        if (!s->abort_request && session_autohandoff_ready(s)) {
+            s->autohandoff = AUTOHANDOFF_DUE;
+            s->abort_request = 1;
+        }
         side_drain(s);
         status_update_tick(s);
         return 1;
@@ -2633,7 +2751,7 @@ void session_turn_wait(struct session *s)
             continue;
         }
         struct pollfd p = {.fd = fd, .events = POLLIN};
-        poll(&p, 1, -1);
+        poll(&p, 1, 200);
     }
 }
 
@@ -2992,6 +3110,30 @@ int session_context_percent(const struct session *s)
         return -1;
     int percent = (int)(used * 100 / window);
     return percent > 100 ? 100 : percent;
+}
+
+int session_autohandoff(const struct session *s)
+{
+    return s->autohandoff;
+}
+
+void session_autohandoff_set(struct session *s, int state)
+{
+    if (state == AUTOHANDOFF_SEEDED)
+        s->autohandoffs++;
+    else if (state == AUTOHANDOFF_IDLE)
+        s->autohandoffs = 0;
+    s->autohandoff = state;
+}
+
+int session_autohandoff_ready(const struct session *s)
+{
+    int at = settings_get_int(SETTING_AUTO_HANDOFF, 0);
+    if (at <= 0 || s->remote || s->autohandoffs >= AUTOHANDOFF_RUN_MAX)
+        return 0;
+    if (s->autohandoff != AUTOHANDOFF_IDLE && s->autohandoff != AUTOHANDOFF_SEEDED)
+        return 0;
+    return session_context_percent(s) >= at;
 }
 
 static const char *auth_description(const struct session *s)

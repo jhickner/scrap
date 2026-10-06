@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,9 +25,10 @@
 
 #define ID_WAIT_MS   30000
 
-#define PAIR_WINDOW  60
-#define PAIR_CAP     6
-#define PAIR_SLOTS   64
+#define PAIR_WINDOW   60
+#define PAIR_CAP      6
+#define INTERRUPT_CAP 2
+#define PAIR_SLOTS    64
 
 int dispatch_dir(char *out, size_t size)
 {
@@ -138,23 +140,21 @@ static void close_session(int fd, const cJSON *target)
         reply_error(fd, "no such session", id);
         return;
     }
-    if (at == workspace_index()) {
-        reply_error(fd, "session is in view", id);
-        return;
-    }
-    if (!session_remote(s) && (session_turn_running(s) || workspace_queued(at))) {
-        reply_error(fd, "session is busy", id);
-        return;
-    }
+    if (session_turn_running(s))
+        session_interrupt(s);
+    int last = workspace_count() == 1;
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "ok", 1);
     cJSON_AddStringToObject(r, "session", id);
     char *json = cJSON_PrintUnformatted(r);
-    workspace_close(at);
+    if (!last)
+        workspace_close(at);
     reply(fd, json ? json : "{\"ok\":true}");
     free(json);
     cJSON_Delete(r);
+    if (last)
+        raise(SIGTERM);
 }
 
 static struct {
@@ -162,10 +162,10 @@ static struct {
     double at;
 } delivered[PAIR_SLOTS];
 
-static int pair_allowed(const char *from, const char *to)
+static int pair_allowed(const char *from, const char *to, const char *kind, int cap)
 {
     char pair[200];
-    snprintf(pair, sizeof pair, "%s>%s", from, to);
+    snprintf(pair, sizeof pair, "%s>%s%s", from, to, kind);
     double now = now_seconds();
     int    seen = 0, slot = 0;
     for (int i = 0; i < PAIR_SLOTS; i++) {
@@ -174,18 +174,18 @@ static int pair_allowed(const char *from, const char *to)
         if (delivered[i].at < delivered[slot].at)
             slot = i;
     }
-    if (seen >= PAIR_CAP)
+    if (seen >= cap)
         return 0;
     snprintf(delivered[slot].pair, sizeof delivered[slot].pair, "%s", pair);
     delivered[slot].at = now;
     return 1;
 }
 
-static int deliver(int at, const char *line, const char *shown)
+static int deliver(int at, const char *line, const char *shown, int interrupt)
 {
     if (!session_turn_running(workspace_at(at)))
         workspace_render(at, echo_prompt, (void *)shown);
-    return workspace_send(at, line, shown);
+    return interrupt ? workspace_send_now(at, line, shown) : workspace_send(at, line, shown);
 }
 
 static void send_session(int fd, const cJSON *o, const cJSON *send)
@@ -219,7 +219,7 @@ static void send_session(int fd, const cJSON *o, const cJSON *send)
     char        from[200] = "";
     if (sender)
         snprintf(from, sizeof from, "%s%s@%s", host ? host : "", host ? ":" : "", sender);
-    if (sender && !pair_allowed(from, id)) {
+    if (sender && !pair_allowed(from, id, "", PAIR_CAP)) {
         reply_error(fd, "too many messages to this session in the last minute", id);
         return;
     }
@@ -227,9 +227,12 @@ static void send_session(int fd, const cJSON *o, const cJSON *send)
     const char *from_id = field(o, "from_id"), *own = session_id(workspace_at(at));
     if (!host && from_id && own && !strcmp(from_id, own) && cmd_is_command(line))
         sender = NULL;
+    /* Interrupts past the cap queue instead, so two sessions cannot keep stopping each other. */
+    int interrupt = sender && cJSON_IsTrue(cJSON_GetObjectItem((cJSON *)o, "interrupt")) &&
+                    pair_allowed(from, id, "!", INTERRUPT_CAP);
     char *framed = sender ? text_dsprintf("[from %s] %s", from, line) : NULL;
     char *shown = sender ? text_dsprintf("from %s: %s", from, line) : NULL;
-    int   sent = sender ? framed && shown && deliver(at, framed, shown) : dispatch_send(at, line);
+    int   sent = sender ? framed && shown && deliver(at, framed, shown, interrupt) : dispatch_send(at, line);
     free(framed);
     free(shown);
     if (!sent)
@@ -323,8 +326,7 @@ int dispatch_spawn(const char *backend, const char *model, const char *effort, c
         char name[81];
         struct session *s = workspace_at(at);
         snprintf(name, sizeof name, "%s", title);
-        if (session_rename(s, name) == SESSION_RENAME_OK)
-            session_set_naming(s, 0);
+        session_rename(s, name);
     }
     if (resume)
         workspace_replay(at);
@@ -335,7 +337,7 @@ int dispatch_spawn(const char *backend, const char *model, const char *effort, c
 
 int dispatch_send(int at, const char *line)
 {
-    return deliver(at, line, line);
+    return deliver(at, line, line, 0);
 }
 
 static char *(*serve_extra)(const cJSON *o, int fd, int *kept);

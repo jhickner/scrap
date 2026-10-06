@@ -178,22 +178,21 @@ struct conn {
     char ip[INET6_ADDRSTRLEN];
 };
 
-static void manage(int fd, cJSON *o)
+static void rename_session(int fd, cJSON *o)
 {
-    const char *killed = cJSON_GetStringValue(cJSON_GetObjectItem(o, "kill"));
     const char *renamed = cJSON_GetStringValue(cJSON_GetObjectItem(o, "rename"));
     const char *title = cJSON_GetStringValue(cJSON_GetObjectItem(o, "title"));
     char        msg[600] = "";
     cJSON_DeleteItemFromObject(o, "to");
-    cJSON_AddStringToObject(o, "to", killed ? killed : renamed ? renamed : "");
+    cJSON_AddStringToObject(o, "to", renamed ? renamed : "");
     long        pid = intercom_owner(o, msg, sizeof msg);
     const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(o, "session"));
     if (pid <= 0 || !id || !*id) {
         fail(fd, msg[0] ? msg : "no such session");
         return;
     }
-    if (killed ? !handoff_close(pid, id, NULL, NULL) : !title || !title_set(id, title)) {
-        fail(fd, killed ? "could not close that session" : "bad name");
+    if (!title || !title_set(id, title)) {
+        fail(fd, "bad name");
         return;
     }
     cJSON *r = cJSON_CreateObject();
@@ -204,8 +203,8 @@ static void manage(int fd, cJSON *o)
 static void route(int fd, cJSON *o)
 {
     char msg[600] = "";
-    if (cJSON_GetObjectItem(o, "kill") || cJSON_GetObjectItem(o, "rename"))
-        manage(fd, o);
+    if (cJSON_GetObjectItem(o, "rename"))
+        rename_session(fd, o);
     else if (cJSON_GetObjectItem(o, "to")) {
         long pid = intercom_owner(o, msg, sizeof msg);
         if (pid > 0)

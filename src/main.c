@@ -24,6 +24,7 @@
 #include "hud.h"
 #include "stamp.h"
 #include "tabbar.h"
+#include "taskrows.h"
 #include "image.h"
 #include "docview.h"
 #include "stream.h"
@@ -43,6 +44,7 @@
 #include "hub.h"
 #include "instance.h"
 #include "job.h"
+#include "memnote.h"
 #include "sessionpresent.h"
 #include "sessionswitch.h"
 #include "sessionview.h"
@@ -57,6 +59,7 @@
 #include "agentsync.h"
 #include "relay.h"
 #include "bridges.h"
+#include "quota.h"
 #include "api.h"
 #include "voice.h"
 #include "tty.h"
@@ -179,10 +182,11 @@ static void usage(void)
             "  -V, --version  print the version and exit\n"
             "\n"
             "  " APP_NAME " version   the same, as a subcommand\n"
-            "  " APP_NAME " ls [--live] [--net] [--cwd DIR] [QUERY]   list sessions, newest first\n"
+            "  " APP_NAME " ls [--exited] [--net] [--cwd DIR] [QUERY] list live sessions, newest first\n"
             "  " APP_NAME " read TARGET [-n TURNS] [--bytes N]   print a session's last turns\n"
             "  " APP_NAME " send TARGET TEXT   message a live session\n"
             "  " APP_NAME " open TARGET   resume a past session in a new tab, or here outside scrap\n"
+            "  " APP_NAME " new [--on MACHINE] [-C DIR] [PROMPT]   start a session in a new tab\n"
             "  " APP_NAME " attach TARGET   stream a live session as JSON lines; stdin lines are prompts\n"
             "  " APP_NAME " job ls|check NAME   scheduled jobs; " APP_NAME " job prints the file format\n"
             "  " APP_NAME " hub   the per-machine process for the network broker and jobs (started on demand)\n"
@@ -239,6 +243,7 @@ static int idle_render(void *ud)
     relay_poll(NULL);
     api_poll();
     bridges_tick();
+    quota_tick();
     struct session *drew = session_set_drawing(workspace_current());
     image_poll();
     session_set_drawing(drew);
@@ -321,8 +326,12 @@ static int clicked(void *ud, int row, int col)
             workspace_show(tab);
         return 1;
     }
-    if (imageview_click(row, col) || docview_click(row, col))
+    if (imageview_click(row, col) || docview_click(row, col) || viewport_fold_click(row, col))
         return 1;
+    if (taskrows_click(row)) {
+        chrome_paint();
+        return 1;
+    }
     char *cmd = md_command_at(row, col);
     if (cmd)
         prompt_set_line(ud, cmd);
@@ -411,9 +420,16 @@ static void splitter(void *ud, int quiet)
 
 static struct askblock *asked;
 static struct session  *asked_by;
+static int              asking;
+static int              ask_stale;
 
 static void drop_asked(void)
 {
+    if (asking) {
+        ask_stale = 1;
+        tty_wake();
+        return;
+    }
     askblock_free(asked);
     asked = NULL;
     asked_by = NULL;
@@ -440,15 +456,23 @@ static int ask_ready(void)
 
 static int ask_interrupted(void)
 {
-    return handoff_wanted() || relay_pending();
+    return ask_stale || handoff_wanted() || relay_pending();
 }
 
 static void ask_run_form(void)
 {
     enum askform_exit how;
     chrome_modal_interrupt(ask_interrupted);
+    asking = 1;
     char *answer = askform_run(asked, &how);
+    asking = 0;
     chrome_modal_interrupt(handoff_wanted);
+    if (ask_stale) {
+        ask_stale = 0;
+        drop_asked();
+        free(answer);
+        return;
+    }
     if (how == ASKFORM_NEW_TAB) {
         another(NULL);
         return;
@@ -677,13 +701,15 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "sync"))
         return agentsync_main(argc - 1, argv + 1);
     if (argc > 1 && (!strcmp(argv[1], "ls") || !strcmp(argv[1], "read") ||
-                     !strcmp(argv[1], "send") || !strcmp(argv[1], "open") ||
+                     !strcmp(argv[1], "send") || !strcmp(argv[1], "status") || !strcmp(argv[1], "open") || !strcmp(argv[1], "new") ||
                      !strcmp(argv[1], "attach") || !strcmp(argv[1], "yank") || !strcmp(argv[1], "close")))
         return intercom_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "hub"))
         return hub_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "job"))
         return job_main(argc - 1, argv + 1);
+    if (argc > 1 && !strcmp(argv[1], "note"))
+        return memnote_main(argc - 1, argv + 1);
     if (argc > 1 && !strcmp(argv[1], "version")) {
         printf(APP_NAME " %s\n", SCRAP_VERSION);
         return 0;
@@ -962,7 +988,6 @@ int main(int argc, char **argv)
             return 1;
         }
         session_set_quiet(session, 1);
-        session_set_naming(session, 0);
         int ok = session_turn(session, prompt_arg);
         session_free(session);
         return ok ? 0 : 1;
@@ -1067,6 +1092,7 @@ int main(int argc, char **argv)
         unlink(tabs_arg);
         tabs_admit(0);
     }
+    restart_wake(session);
 
     if (!resume && !restore_arg && !front_screen && (session_arg || grokbottail_applies(session)))
         sessionload_into(session);
@@ -1137,7 +1163,7 @@ int main(int argc, char **argv)
 
         if (bash_is_command(line)) {
             tty_watch(workspace_watch_fds, workspace_watch_ready, NULL);
-            bash_run(line);
+            bash_run(line, NULL);
             tty_watch(NULL, NULL, NULL);
             gitinfo_forget();
             free(line);

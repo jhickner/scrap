@@ -173,6 +173,8 @@ void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
 
     case BACKEND_EV_TASK: {
         char line[240];
+        if (ev->backgrounded)
+            view_keep_background(ev->parent);
         if (!task_change || (p->call_open && !tasks_done(task_change)))
             break;
         size_t cmd_at, cmd_len;
@@ -240,7 +242,8 @@ void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
         }
         if (!nested)
             p->call_open = 1;
-        view_keep_tool_call(name, arg, collapses);
+        view_keep_tool_call_bg(name, arg, collapses, toolstyle_background(ev->input_json),
+                               ev->id);
 
         char path[4096];
         if (!collapses && view_tool_path(ev->input_json, cwd, path, sizeof path))

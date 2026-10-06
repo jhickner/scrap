@@ -812,3 +812,29 @@ int models_codex_slug(const char *model, char *out, size_t size)
     snprintf(out, size, "%s", hit);
     return 1;
 }
+
+void models_autobackend(const char *backend, const char *model, const char *effort,
+                        const char *target, const char **out_model, const char **out_effort)
+{
+    const char *m = model ? model : "";
+    const char *e = effort ? effort : "";
+    int tier = 2;
+    if (strstr(m, "haiku") || strstr(m, "luna") ||
+        (!strcmp(backend, "grok") && !strcmp(m, "grok-4.6")))
+        tier = 4;
+    else if (strstr(m, "opus") || strstr(m, "astra"))
+        tier = (!strcmp(e, "xhigh") || !strcmp(e, "max") || !strcmp(e, "ultra")) ? 0 : 1;
+    else if (!strcmp(backend, "grok") && !strcmp(m, "grok-4.7"))
+        tier = !strcmp(e, "xhigh") ? 0 : !strcmp(e, "high") ? 1 : !strcmp(e, "low") ? 3 : 2;
+    else if (!strcmp(e, "low"))
+        tier = 3;
+    static const char *const codex[] = {
+        "gpt-6-astra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-sol", "gpt-6-luna"
+    };
+    static const char *const grok[] = {
+        "grok-4.7", "grok-4.7", "grok-4.7", "grok-4.7", "grok-4.6"
+    };
+    static const char *const efforts[] = {"xhigh", "medium", "medium", "low", "low"};
+    *out_model = !strcmp(target, "codex") ? codex[tier] : grok[tier];
+    *out_effort = !strcmp(target, "grok") && tier == 1 ? "high" : efforts[tier];
+}

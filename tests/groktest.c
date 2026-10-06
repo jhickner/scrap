@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "vendor/agents/grok/grok.h"
 #include "vendor/cJSON.h"
@@ -263,6 +264,14 @@ static int mock_server(int argc, char **argv)
                         "\"inputTokens\":900,\"outputTokens\":40,"
                         "\"cachedReadTokens\":300,\"cacheCreationTokens\":12,"
                         "\"totalTokens\":940,\"costUsdTicks\":1500000}}}");
+            if (text && strstr(text, "bg-finish")) {
+                printf("{\"jsonrpc\":\"2.0\",\"method\":\"_x.ai/session_notification\","
+                       "\"params\":{\"sessionId\":\"grok-session-%d\",\"update\":{"
+                       "\"sessionUpdate\":\"task_completed\",\"task_snapshot\":{"
+                       "\"task_id\":\"bg-1\",\"exit_code\":0,\"description\":\"run tests\","
+                       "\"output_file\":\"/tmp/bg-1.out\"}}}}\n", sessions);
+                fflush(stdout);
+            }
         } else if (idj) {
             printf("{\"jsonrpc\":\"2.0\",\"id\":%d,\"error\":{"
                    "\"code\":-32601,\"message\":\"unhandled method: %s\"}}\n",
@@ -485,6 +494,26 @@ int main(int argc, char **argv)
         return 1;
     }
     free(reply);
+    reply = grok_send(client, "bg-finish");
+    free(reply);
+    for (int i = 0; i < 100 && !grok_wake_owed(client); i++) {
+        grok_idle_pump(client);
+        usleep(2000);
+    }
+    const char *owed = grok_wake_owed(client);
+    if (!owed || !strstr(owed, "bg-1") || !strstr(owed, "/tmp/bg-1.out")) {
+        fprintf(stderr, "groktest: finished background command not kept (%s)\n",
+                owed ? owed : "none");
+        grok_stop(client);
+        return 1;
+    }
+    reply = grok_send(client, "after background");
+    free(reply);
+    if (grok_wake_owed(client)) {
+        fputs("groktest: owed wake survived the next turn\n", stderr);
+        grok_stop(client);
+        return 1;
+    }
 
     grok_stop(client);
     puts("groktest: ok");

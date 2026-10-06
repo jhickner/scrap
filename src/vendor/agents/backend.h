@@ -42,6 +42,8 @@ typedef struct {
     const char *permission_mode;/* claude: --permission-mode; NULL -> bypassPermissions*/
     const char *session_name;   /* optional display name; currently used by claude     */
     int ephemeral;              /* do not persist this helper conversation             */
+    int skip_quota_read;        /* codex, grok: no quota read at startup; the host
+                                   already holds a fresh reading                     */
     int disable_tools;          /* helper needs text generation, not machine access    */
     int allow_customizations;   /* claude: load skills, CLAUDE.md, MCP servers, ...   */
     int no_browser_login;       /* claude: report expired auth instead of opening the
@@ -95,6 +97,8 @@ typedef struct {
                                up the same stream. NULL for the session's own,
                                and for drivers that do not say                  */
     int failed;             /* TOOL_RESULT: the tool did not succeed            */
+    int backgrounded;       /* TASK: a foreground call moved to the background;
+                               parent is that call                              */
 } backend_event;
 
 /* Accounting for one turn, zeroed before each. Token counts are that turn's;
@@ -122,14 +126,22 @@ typedef struct {
     const char *path;        /* the path that triggered the prompt, if any */
 } backend_permission;
 
-/* Subscription rate limit reported by a backend's local protocol. This is
- * deliberately separate from context usage above: one measures account quota,
- * the other measures how full the current model request is. */
+/* Account quota reported by a backend: a subscription window as a used
+ * percentage, or a prepaid balance in US dollars. This is deliberately separate
+ * from context usage above: one measures the account, the other measures how
+ * full the current model request is. */
+typedef enum {
+    BACKEND_QUOTA_PERCENT,
+    BACKEND_QUOTA_BALANCE,
+} backend_quota_kind;
+
 typedef struct {
-    int  available;
-    int  used_percent;
-    long resets_at;
-    long window_minutes;
+    int                available;
+    backend_quota_kind kind;
+    int                used_percent;
+    long               resets_at;
+    long               window_minutes;
+    double             balance_usd;
 } backend_rate_limit;
 
 /* What a driver supports, in Backend.caps. */
@@ -152,6 +164,7 @@ struct Backend {
      * a missing CLI surfaces before the first turn. ask() starts lazily when
      * this was never called. Returns nonzero on success. */
     int (*start)(Backend *b, const char *resume_session);
+    int (*connect)(Backend *b);
 
     /* As ask(), also filling *meta, which is zeroed first. `meta` may be NULL. */
     char *(*ask_ex)(Backend *b, const char *user, backend_result *meta);
@@ -235,6 +248,10 @@ struct Backend {
      * subagents and detached commands outlive the send that started them, so a
      * turn ending is not the work ending. NULL for a driver that cannot say. */
     int  (*busy)(Backend *b);
+    /* Unanswered task notifications to resend after a process restart, or NULL. */
+    const char *(*wake_owed)(Backend *b);
+    /* Whether a turn the agent started for itself is open between sends. */
+    int  (*turn_open)(Backend *b);
 
     /* NULL until known, or when the driver never reports it. */
     const char *(*session_id)(Backend *b);
@@ -294,7 +311,7 @@ typedef struct {
     char *session_file;
     char **env;
     char **mcp;
-    int   allow_customizations, ephemeral, disable_tools, fork_session;
+    int   allow_customizations, ephemeral, disable_tools, fork_session, skip_quota_read;
     int   no_browser_login;
     int   chrome;
     int   memory;
@@ -344,6 +361,7 @@ static void backend_state_init(backend_state *st, const backend_opts *o) {
     st->permission = backend_dup(o->permission_mode);
     st->session_name = backend_dup(o->session_name);
     st->ephemeral = o->ephemeral;
+    st->skip_quota_read = o->skip_quota_read;
     st->disable_tools = o->disable_tools;
     st->allow_customizations = o->allow_customizations;
     st->fork_session = o->fork_session;
@@ -440,7 +458,7 @@ static void backend_claude_event(void *ud, const claude_event *e) {
     backend_event ev = { .text = e->text, .name = e->name, .input_json = e->input_json,
                          .arg = e->arg, .id = e->id, .parent = e->parent,
                          .task_type = e->task_type,
-                         .failed = e->failed };
+                         .failed = e->failed, .backgrounded = e->backgrounded };
     switch (e->kind) {
     case CLAUDE_EV_ASSISTANT:   ev.kind = BACKEND_EV_ASSISTANT;   break;
     case CLAUDE_EV_THINKING:    ev.kind = BACKEND_EV_THINKING;    break;
@@ -655,6 +673,16 @@ static int backend_claude_busy(Backend *b) {
     return x->client ? claude_background_tasks(x->client) : 0;
 }
 
+static int backend_claude_turn_open(Backend *b) {
+    backend_claude *x = b->ctx;
+    return x->client ? claude_turn_open(x->client) : 0;
+}
+
+static const char *backend_claude_wake_owed(Backend *b) {
+    backend_claude *x = b->ctx;
+    return x->client ? claude_wake_owed(x->client) : NULL;
+}
+
 static const char *backend_claude_session_id(Backend *b) {
     backend_claude *x = b->ctx;
     return x->client ? claude_session_id(x->client) : NULL;
@@ -711,6 +739,8 @@ static Backend *backend_claude_open(const backend_opts *o) {
     b->idle_fd = backend_claude_idle_fd;
     b->idle_pump = backend_claude_idle_pump;
     b->busy = backend_claude_busy;
+    b->wake_owed = backend_claude_wake_owed;
+    b->turn_open = backend_claude_turn_open;
     b->session_id = backend_claude_session_id;
     b->model = backend_claude_model;
     b->effort = backend_claude_effort;
@@ -797,6 +827,7 @@ static int backend_codex_start(Backend *b, const char *resume) {
         cJSON_Delete(cmd); cJSON_Delete(args);
         o.config = (const char *const *)config;
     }
+    o.skip_quota_read = x->st.skip_quota_read;
     codex_client *c = codex_start(&o);
     for (int i = 0; i < 3; i++) free(config[i]);
     if (!c) return 0;
@@ -806,6 +837,10 @@ static int backend_codex_start(Backend *b, const char *resume) {
     x->client = c;
     backend_set(&x->st.resume, resume);
     return 1;
+}
+
+static int backend_codex_connect(Backend *b) {
+    return codex_connect(((backend_codex *)b->ctx)->client);
 }
 
 static char *backend_codex_ask_ex(Backend *b, const char *user, backend_result *meta) {
@@ -967,6 +1002,7 @@ static Backend *backend_codex_open(const backend_opts *o) {
     b->reset = backend_codex_reset;
     b->close = backend_codex_close;
     b->start = backend_codex_start;
+    b->connect = backend_codex_connect;
     b->ask_ex = backend_codex_ask_ex;
     b->continue_ex = backend_codex_continue_ex;
     b->usage = backend_codex_usage;
@@ -1025,6 +1061,14 @@ static void backend_grok_event(void *ud, const grok_event *e) {
         backend_emit(&x->st, &ev);
         return;
     }
+    case GROK_EV_TASK: {
+        backend_event ev = { .kind = BACKEND_EV_TASK, .id = e->id, .name = e->name,
+                             .text = e->text, .arg = e->arg,
+                             .task_type = e->task_type, .parent = e->parent };
+        backend_flush(&x->st);
+        backend_emit(&x->st, &ev);
+        return;
+    }
     }
 }
 
@@ -1040,6 +1084,7 @@ static int backend_grok_start(Backend *b, const char *resume) {
     o.resume_session = resume;
     o.no_session = x->st.ephemeral;
     o.mcp = (const char *const *)x->st.mcp;
+    o.skip_quota_read = x->st.skip_quota_read;
     grok_client *c = grok_start(&o);
     if (!c) return 0;
     grok_set_event_cb(c, backend_grok_event, b);
@@ -1054,6 +1099,10 @@ static int backend_grok_start(Backend *b, const char *resume) {
     x->client = c;
     backend_set(&x->st.resume, resume);
     return 1;
+}
+
+static int backend_grok_connect(Backend *b) {
+    return grok_connect(((backend_grok *)b->ctx)->client);
 }
 
 static char *backend_grok_ask_ex(Backend *b, const char *user, backend_result *meta) {
@@ -1097,6 +1146,29 @@ static void backend_grok_set_abort(Backend *b, int (*cb)(void)) {
     backend_grok *x = b->ctx;
     x->st.abort = cb;
     if (x->client) grok_set_abort_check(x->client, cb);
+}
+
+static int backend_grok_idle_fd(Backend *b) {
+    backend_grok *x = b->ctx;
+    return x->client ? grok_idle_fd(x->client) : -1;
+}
+static int backend_grok_idle_pump(Backend *b) {
+    backend_grok *x = b->ctx;
+    return x->client ? grok_idle_pump(x->client) : 0;
+}
+static int backend_grok_busy(Backend *b) {
+    backend_grok *x = b->ctx;
+    return x->client ? grok_background_tasks(x->client) : 0;
+}
+
+static int backend_grok_turn_open(Backend *b) {
+    backend_grok *x = b->ctx;
+    return x->client ? grok_turn_open(x->client) : 0;
+}
+
+static const char *backend_grok_wake_owed(Backend *b) {
+    backend_grok *x = b->ctx;
+    return x->client ? grok_wake_owed(x->client) : NULL;
 }
 
 static const char *backend_grok_session_id(Backend *b) {
@@ -1165,17 +1237,24 @@ static Backend *backend_grok_open(const backend_opts *o) {
     if (!x || !b) { free(x); free(b); return NULL; }
     backend_state_init(&x->st, o);
     b->ctx = x;
-    b->caps = BACKEND_CAP_RESUME | BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT;
+    b->caps = BACKEND_CAP_RESUME | BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT |
+              BACKEND_CAP_TASKS;
     b->ask = backend_grok_ask;
     b->reset = backend_grok_reset;
     b->close = backend_grok_close;
     b->start = backend_grok_start;
+    b->connect = backend_grok_connect;
     b->ask_ex = backend_grok_ask_ex;
     b->set_model = backend_set_model_generic;
     b->set_effort = backend_grok_set_effort;
     b->set_permission = backend_set_permission_none;
     b->set_event_cb = backend_grok_set_event_cb;
     b->set_abort_check = backend_grok_set_abort;
+    b->idle_fd = backend_grok_idle_fd;
+    b->idle_pump = backend_grok_idle_pump;
+    b->busy = backend_grok_busy;
+    b->wake_owed = backend_grok_wake_owed;
+    b->turn_open = backend_grok_turn_open;
     b->session_id = backend_grok_session_id;
     b->model = backend_grok_model;
     b->effort = backend_grok_effort;

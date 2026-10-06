@@ -8,6 +8,7 @@
 
 #include "block.h"
 #include "chrome.h"
+#include "taskrows.h"
 #include "tty.h"
 #include "ui.h"
 #include "viewport.h"
@@ -253,6 +254,15 @@ void status_begin_at(double elapsed)
 
 void status_tick(void)
 {
+    if (taskrows_stale() && !size_changing() && !chrome_modal_active()) {
+        if (active && visible) {
+            spin_advance(&frame, &frame_at);
+            paint();
+        } else {
+            chrome_paint();
+        }
+        return;
+    }
     if (!active || !visible || size_changing())
         return;
     if (chrome_modal_active()) {
