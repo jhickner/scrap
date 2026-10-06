@@ -47,6 +47,7 @@
 #include "tty.h"
 #include "ui.h"
 #include "vendor/agents/backend.h"
+#include "quota.h"
 #include "text.h"
 #include "vendor/cJSON.h"
 #include "vncinset.h"
@@ -94,6 +95,7 @@ struct session {
     long     context_window;
     int      autohandoff;
     int      autohandoffs;
+    backend_rate_limit noted;
     int      quiet;
     char    *system_extra;
     char    *handoff;
@@ -506,11 +508,33 @@ void session_set_typeahead(session_key_fn fn, void *ud)
 
 static void set_id(struct session *s, const char *id);
 
-void session_rate_limit(const struct session *s, backend_rate_limit *out)
+static const char *quota_name(const struct session *s)
+{
+    return s->remote ? NULL : quota_provider(s->backend, session_model_label(s));
+}
+
+static int same_limit(const backend_rate_limit *a, const backend_rate_limit *b)
+{
+    return a->available == b->available && a->kind == b->kind &&
+           a->used_percent == b->used_percent && a->resets_at == b->resets_at &&
+           a->window_minutes == b->window_minutes && a->balance_usd == b->balance_usd;
+}
+
+void session_rate_limit(struct session *s, backend_rate_limit *out)
 {
     memset(out, 0, sizeof *out);
-    if (s && s->agent && s->agent->rate_limit)
+    if (!s)
+        return;
+    if (s->agent && s->agent->rate_limit)
         s->agent->rate_limit(s->agent, out);
+    const char *q = quota_name(s);
+    if (!q)
+        return;
+    if (out->available && !same_limit(out, &s->noted)) {
+        s->noted = *out;
+        quota_note(q, out);
+    }
+    quota_read(q, out);
 }
 
 static void usage_poll(struct session *s)
@@ -518,7 +542,8 @@ static void usage_poll(struct session *s)
     backend_rate_limit limit;
     session_rate_limit(s, &limit);
     if (limit.available) {
-        agenttabs_usage(s, limit.used_percent, limit.resets_at, limit.window_minutes);
+        if (limit.kind == BACKEND_QUOTA_PERCENT)
+            agenttabs_usage(s, limit.used_percent, limit.resets_at, limit.window_minutes);
         apicore_usage(session_backend(s), &limit);
     }
 }
@@ -1091,12 +1116,17 @@ static Backend *agent(struct session *s)
     o.chrome = settings_get_int(SETTING_CHROME, 0);
     o.plugin_dir = shunt_plugin_dir(s);
     o.env = (const char *const *)s->env;
+    o.skip_quota_read = !strcmp(s->backend, "grok") ||
+                        (!strcmp(s->backend, "codex") && quota_fresh("codex"));
 
     char *joined = s->remote ? NULL : session_system(s, s->handoff);
     o.system = joined;
     s->agent = s->remote ? remote_open(s->remote) : backend_open_ex(&o);
     free(joined);
     if (s->agent) {
+        const char *q = quota_name(s);
+        if (q)
+            quota_want(q);
         s->agent->set_event_cb(s->agent, on_event, s);
         s->agent->set_abort_check(s->agent, abort_check);
         if (s->agent->set_permission_cb)
@@ -1230,6 +1260,9 @@ static int switch_backend(struct session *s, const char *backend,
     s->context_tokens = 0;
     s->context_window = 0;
     retire(previous);
+    const char *q = quota_name(s);
+    if (q)
+        quota_want(q);
     return 1;
 }
 
@@ -2281,6 +2314,10 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     s->tokens_in += m.input_tokens + m.cache_read_tokens + m.cache_creation_tokens;
     s->tokens_out += m.output_tokens;
     s->tokens_cached += m.cache_read_tokens;
+
+    const char *quota = quota_name(s);
+    if (quota)
+        quota_want(quota);
 
     if (m.context_window > 0)
         s->context_window = m.context_window;

@@ -42,6 +42,8 @@ typedef struct {
     const char *permission_mode;/* claude: --permission-mode; NULL -> bypassPermissions*/
     const char *session_name;   /* optional display name; currently used by claude     */
     int ephemeral;              /* do not persist this helper conversation             */
+    int skip_quota_read;        /* codex, grok: no quota read at startup; the host
+                                   already holds a fresh reading                     */
     int disable_tools;          /* helper needs text generation, not machine access    */
     int allow_customizations;   /* claude: load skills, CLAUDE.md, MCP servers, ...   */
     int no_browser_login;       /* claude: report expired auth instead of opening the
@@ -115,14 +117,22 @@ typedef struct {
     const char *path;        /* the path that triggered the prompt, if any */
 } backend_permission;
 
-/* Subscription rate limit reported by a backend's local protocol. This is
- * deliberately separate from context usage above: one measures account quota,
- * the other measures how full the current model request is. */
+/* Account quota reported by a backend: a subscription window as a used
+ * percentage, or a prepaid balance in US dollars. This is deliberately separate
+ * from context usage above: one measures the account, the other measures how
+ * full the current model request is. */
+typedef enum {
+    BACKEND_QUOTA_PERCENT,
+    BACKEND_QUOTA_BALANCE,
+} backend_quota_kind;
+
 typedef struct {
-    int  available;
-    int  used_percent;
-    long resets_at;
-    long window_minutes;
+    int                available;
+    backend_quota_kind kind;
+    int                used_percent;
+    long               resets_at;
+    long               window_minutes;
+    double             balance_usd;
 } backend_rate_limit;
 
 /* What a driver supports, in Backend.caps. */
@@ -272,7 +282,7 @@ typedef struct {
     char *model, *effort, *system, *cwd, *resume, *permission, *session_name;
     char *session_file;
     char **env;
-    int   allow_customizations, ephemeral, disable_tools, fork_session;
+    int   allow_customizations, ephemeral, disable_tools, fork_session, skip_quota_read;
     int   no_browser_login;
     int   chrome;
     char *plugin_dir;
@@ -312,6 +322,7 @@ static void backend_state_init(backend_state *st, const backend_opts *o) {
     st->permission = backend_dup(o->permission_mode);
     st->session_name = backend_dup(o->session_name);
     st->ephemeral = o->ephemeral;
+    st->skip_quota_read = o->skip_quota_read;
     st->disable_tools = o->disable_tools;
     st->allow_customizations = o->allow_customizations;
     st->fork_session = o->fork_session;
@@ -737,6 +748,7 @@ static int backend_codex_start(Backend *b, const char *resume) {
     o.resume_session = resume;
     o.ephemeral = x->st.ephemeral;
     o.fork_session = x->st.fork_session;
+    o.skip_quota_read = x->st.skip_quota_read;
     codex_client *c = codex_start(&o);
     if (!c) return 0;
     codex_set_event_cb(c, backend_codex_event, b);
@@ -983,6 +995,7 @@ static int backend_grok_start(Backend *b, const char *resume) {
     o.reasoning_effort = x->st.effort ? x->st.effort : getenv("GROK_EFFORT");
     o.resume_session = resume;
     o.no_session = x->st.ephemeral;
+    o.skip_quota_read = x->st.skip_quota_read;
     grok_client *c = grok_start(&o);
     if (!c) return 0;
     grok_set_event_cb(c, backend_grok_event, b);

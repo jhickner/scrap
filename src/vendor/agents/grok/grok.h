@@ -39,6 +39,7 @@ typedef struct {
     const char *append_system;   /* prepended to each user turn; NULL -> none   */
     const char *resume_session;  /* ACP session/resume this id; NULL -> new     */
     int no_session;              /* nonzero: ask Grok not to persist the session */
+    int skip_quota_read;         /* nonzero: no _x.ai/billing read at handshake  */
 } grok_opts;
 
 /* Spawn a persistent `grok agent stdio` process. Returns NULL only on a local
@@ -216,6 +217,7 @@ struct grok_client {
     gk_model models[GK_MODEL_CAP];
     int   n_models;
     int   no_session;         /* use an ephemeral session/new                */
+    int   skip_quota_read;
     int   handshake_failed;   /* the deferred handshake was tried and lost  */
     int   rpc_quiet;          /* skip last_error for a probe whose fail is ok */
     grok_rate_limit rate_limit;
@@ -1252,6 +1254,7 @@ grok_client *grok_start(const grok_opts *opts) {
     c->model = (o.model && *o.model) ? strdup(o.model) : NULL;
     c->effort = (o.reasoning_effort && *o.reasoning_effort) ? strdup(o.reasoning_effort) : NULL;
     c->no_session = o.no_session;
+    c->skip_quota_read = o.skip_quota_read;
 
     return c;
 }
@@ -1318,7 +1321,7 @@ static int gk_handshake(grok_client *c) {
             c->effort = NULL;
         }
     }
-    gk_read_billing(c);
+    if (!c->skip_quota_read) gk_read_billing(c);
     return 1;
 }
 

@@ -104,7 +104,7 @@ entry:   {id, kind, ts, ...}   id: per-relay counter, never reused within a bind
   any        clipped:true when a string field over 16 KB was cut; fetch with op "entry"
 ```
 
-- **Quota** is `null` when unavailable, otherwise `{used_percent, resets_at, window_minutes}` from the selected backend’s cached single window. Percentage is used (0–100), reset is Unix seconds, and duration is minutes; zero metadata means unknown. Older relays may omit it. Snapshots and session deltas replace it together with backend identity. This carries no provider observation timestamp.
+- **Quota** is `null` when unavailable, otherwise either `{used_percent, resets_at, window_minutes}` for a subscription window or `{balance_usd}` for a prepaid balance, from the selected backend’s cached reading. Percentage is used (0–100), reset is Unix seconds, duration is minutes, and balance is US dollars remaining; zero metadata means unknown. Older relays may omit it. Snapshots and session deltas replace it together with backend identity. This carries no provider observation timestamp.
 
 - **History from disk** has only user, assistant and stopped entries. Tool calls appear
   for turns run while the relay is on.

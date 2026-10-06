@@ -21,6 +21,9 @@ int  core_agent_session_dir(const char *cwd, char *out, size_t size);
 long core_agent_models_stamp(void);
 void core_agent_models(void (*fn)(void *ud, const char *id, const char *name, long context),
                         void *ud);
+/* Blocking: the OpenRouter account's remaining credit in US dollars, from
+ * GET /credits with the key providers.json names. Returns nonzero on success. */
+int  core_agent_openrouter_balance(double *usd);
 
 #ifdef BACKEND_H
 Backend *core_agent_open(const backend_opts *o);
@@ -349,6 +352,47 @@ typedef struct { char *url, *key, *path; } sa_fetch;
 static size_t sa_collect(char *p, size_t sz, size_t nm, void *ud) {
     sa_put(ud, p, sz * nm);
     return sz * nm;
+}
+
+int core_agent_openrouter_balance(double *usd) {
+    char err[256];
+    cJSON *config = sa_config_load(err, sizeof err);
+    const cJSON *prov = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItem(config, "providers"),
+                                                         "openrouter");
+    const char *base = sa_jstr(prov, "base_url"), *key = NULL;
+    int ok = 0;
+    CURL *c = base && sa_provider_key(prov, &key) && key ? curl_easy_init() : NULL;
+    if (c) {
+        char url[1024], auth[1200];
+        snprintf(url, sizeof url, "%s/credits", base);
+        snprintf(auth, sizeof auth, "Authorization: Bearer %s", key);
+        struct curl_slist *h = curl_slist_append(NULL, auth);
+        sa_buf body = {0};
+        curl_easy_setopt(c, CURLOPT_URL, url);
+        curl_easy_setopt(c, CURLOPT_HTTPHEADER, h);
+        curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, sa_collect);
+        curl_easy_setopt(c, CURLOPT_WRITEDATA, &body);
+        curl_easy_setopt(c, CURLOPT_TIMEOUT, 30L);
+        curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
+        long code = 0;
+        if (curl_easy_perform(c) == CURLE_OK &&
+            curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code) == CURLE_OK && code == 200) {
+            cJSON *j = cJSON_Parse(sa_str(&body));
+            cJSON *d = cJSON_GetObjectItem(j, "data");
+            cJSON *total = cJSON_GetObjectItem(d, "total_credits");
+            cJSON *used = cJSON_GetObjectItem(d, "total_usage");
+            if (cJSON_IsNumber(total) && cJSON_IsNumber(used)) {
+                *usd = total->valuedouble - used->valuedouble;
+                ok = 1;
+            }
+            cJSON_Delete(j);
+        }
+        sa_free(&body);
+        curl_slist_free_all(h);
+        curl_easy_cleanup(c);
+    }
+    cJSON_Delete(config);
+    return ok;
 }
 
 static void *sa_fetch_thread(void *arg) {

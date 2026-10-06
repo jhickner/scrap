@@ -549,7 +549,9 @@ static cJSON *session_obj(struct session *s)
     backend_rate_limit limit;
     session_rate_limit(s, &limit);
     cJSON *quota = limit.available ? cJSON_CreateObject() : cJSON_CreateNull();
-    if (limit.available) {
+    if (limit.available && limit.kind == BACKEND_QUOTA_BALANCE) {
+        cJSON_AddNumberToObject(quota, "balance_usd", limit.balance_usd);
+    } else if (limit.available) {
         cJSON_AddNumberToObject(quota, "used_percent", limit.used_percent);
         cJSON_AddNumberToObject(quota, "resets_at", limit.resets_at);
         cJSON_AddNumberToObject(quota, "window_minutes", limit.window_minutes);

@@ -36,6 +36,7 @@ typedef struct {
     int bypass_approvals;       /* danger-full-access, only if externally sandboxed */
     int skip_git_repo_check;    /* retained for source compatibility; unused  */
     int ephemeral;              /* nonzero: do not materialize the thread on disk */
+    int skip_quota_read;        /* nonzero: no account/rateLimits/read at startup */
 } codex_opts;
 
 /* Spawn app-server and initialize/start its thread in the background. Returns
@@ -182,7 +183,7 @@ struct codex_client {
     void (*on_event)(void *ud, const codex_event *ev);
     void *on_event_ud;
     char *model, *effort, *sandbox, *sys, *resume, *project, *cli;
-    int effort_changed, ephemeral, fork_session;
+    int effort_changed, ephemeral, fork_session, skip_quota_read;
     char session_id[128];
     char resolved[32];         /* config or stream effort when none was set */
     char resolved_model[64];   /* the model id the app-server picked          */
@@ -805,7 +806,7 @@ static int cx_open_thread(codex_client *c, const char *resume) {
 static void *cx_warm(void *arg) {
     codex_client *c = arg;
     int initialized = cx_initialize(c);
-    if (initialized) cx_read_rate_limit(c);
+    if (initialized && !c->skip_quota_read) cx_read_rate_limit(c);
     int ok = initialized && cx_open_thread(c, c->resume);
     atomic_store_explicit(&c->warm_state, ok ? 1 : -1, memory_order_release);
     return NULL;
@@ -838,6 +839,7 @@ codex_client *codex_start(const codex_opts *opts) {
     c->warning_mu_ready = 1;
     c->model = cx_dup(o.model); c->effort = cx_dup(o.effort);
     c->ephemeral = o.ephemeral;
+    c->skip_quota_read = o.skip_quota_read;
     c->fork_session = o.fork_session;
     c->sys = cx_dup(o.append_system);
     cx_seed_effort(c, o.cwd);

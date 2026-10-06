@@ -55,6 +55,7 @@
 #include "agentsync.h"
 #include "relay.h"
 #include "bridges.h"
+#include "quota.h"
 #include "api.h"
 #include "voice.h"
 #include "tty.h"
@@ -237,6 +238,7 @@ static int idle_render(void *ud)
     relay_poll(NULL);
     api_poll();
     bridges_tick();
+    quota_tick();
     struct session *drew = session_set_drawing(workspace_current());
     image_poll();
     session_set_drawing(drew);

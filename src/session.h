@@ -38,7 +38,7 @@ void session_set_system_extra(struct session *s, const char *text);
 int session_set_env(struct session *s, const char *const *env);
 
 const backend_result *session_last_result(const struct session *s);
-void session_rate_limit(const struct session *s, backend_rate_limit *out);
+void session_rate_limit(struct session *s, backend_rate_limit *out);
 
 void session_set_abort_hook(struct session *s, int (*fn)(void *ud), void *ud);
 
