@@ -55,6 +55,7 @@ Backend *core_agent_open(const backend_opts *o);
 #include <unistd.h>
 #include <curl/curl.h>
 #include "cJSON.h"
+#include "../spawnfd.h"
 
 extern char **environ;
 
@@ -686,7 +687,7 @@ static int sa_run(sa_agent *x, const sa_proc *p, sa_buf *out, sa_buf *err, int *
         dup2(p->input ? in[0] : devnull, 0);
         dup2(o[1], 1);
         dup2(p->merge ? o[1] : e[1], 2);
-        for (int fd = 3; fd < 256; fd++) close(fd);
+        agents_close_inherited();
         char *argv[] = { "bash", "-c", (char *)p->cmd, NULL };
         execve("/bin/bash", argv, envp ? envp : environ);
         _exit(127);

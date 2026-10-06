@@ -147,6 +147,7 @@ Backend *pi_backend_open(const backend_opts *opts);
 #include <ctype.h>
 #include <sys/wait.h>
 #include "cJSON.h"
+#include "../spawnfd.h"
 
 /* How long a read waits on the child before running the abort predicate again.
  * Also the worst-case delay before a key the caller reads from that predicate
@@ -512,6 +513,7 @@ pi_client *pi_start(const pi_opts *opts) {
         if (o.model && *o.model) { argv[n++] = "--model"; argv[n++] = o.model; }
         if (o.effort && *o.effort) { argv[n++] = "--thinking"; argv[n++] = o.effort; }
         argv[n] = NULL;
+        agents_close_inherited();
         execvp(cli, (char *const *)argv); _exit(127);
     }
     close(in[0]); close(out[1]);

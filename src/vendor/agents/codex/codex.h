@@ -154,6 +154,7 @@ void codex_stop(codex_client *c);
 #include <sys/wait.h>
 #include <unistd.h>
 #include "cJSON.h"
+#include "../spawnfd.h"
 
 /* How long a read waits on the app-server before running the abort predicate
  * again. Also the worst-case delay before a key the caller reads from that
@@ -884,6 +885,7 @@ codex_client *codex_start(const codex_opts *opts) {
             "--config", "project_doc_max_bytes=0",
             NULL
         };
+        agents_close_inherited();
         execvp(cli, (char *const *)argv); _exit(127);
     }
     close(in[0]); close(out[1]); close(err[1]);

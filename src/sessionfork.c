@@ -13,6 +13,7 @@
 #include "text.h"
 #include "ui.h"
 #include "viewport.h"
+#include "vendor/agents/spawnfd.h"
 
 static char program[4096] = APP_NAME;
 
@@ -49,6 +50,7 @@ static int run(char *const argv[], const char *out_path)
             dup2(null, STDERR_FILENO);
             close(null);
         }
+        agents_close_inherited();
         execvp(argv[0], argv);
         _exit(127);
     }

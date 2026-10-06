@@ -196,6 +196,7 @@ void grok_stop(grok_client *c);
 #include <sys/wait.h>
 #include <time.h>
 #include "cJSON.h"
+#include "../spawnfd.h"
 
 #define GK_TOOL_CAP 64
 #define GK_TOOL_ID  80
@@ -1370,6 +1371,7 @@ grok_client *grok_start(const grok_opts *opts) {
         argv[n++] = "--always-approve";
         argv[n++] = "stdio";
         argv[n] = NULL;
+        agents_close_inherited();
         execvp(cli, (char *const *)argv);
         _exit(127);
     }

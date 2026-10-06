@@ -276,6 +276,7 @@ void claude_stop(claude_client *c);
 #include <stdatomic.h>
 #include <sys/wait.h>
 #include "cJSON.h"
+#include "../spawnfd.h"
 
 #define CLAUDE_ERR_MAX 4096
 
@@ -566,6 +567,7 @@ claude_client *claude_start(const claude_opts *opts) {
         if (o.tools)                                 { argv[n++] = "--tools";                argv[n++] = o.tools; }
         if (o.permission_prompt)                     { argv[n++] = "--permission-prompt-tool"; argv[n++] = "stdio"; }
         argv[n] = NULL;
+        agents_close_inherited();
         execvp(cli, (char *const *)argv);
         _exit(127);   /* exec failed */
     }
@@ -1189,6 +1191,7 @@ int claude_auth_login(claude_client *c) {
             close(output[1]);
         unsetenv("ANTHROPIC_API_KEY");
         const char *argv[] = {c->cli, "auth", "login", "--claudeai", NULL};
+        agents_close_inherited();
         execvp(c->cli, (char *const *)argv);
         _exit(127);
     }

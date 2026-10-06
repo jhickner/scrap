@@ -25,7 +25,7 @@ CHECKS := kittywraptest overlaytest viewporttest imagerowtest chrometest imagefi
           sidechannelcmdtest taskstest voicetest filelocktest prompttest \
           dispatchtest grokbottailtest vncinsettest grokvnctest \
           settingstest
-CHECKS += agentsynctest sessionaddrtest apitest apihttptest activelogtest proxyprototest coreagenttest scheduletest askblocktest chaintest
+CHECKS += spawnfdtest agentsynctest sessionaddrtest apitest apihttptest activelogtest proxyprototest coreagenttest scheduletest askblocktest chaintest
 MANUAL_TOOLS := imagetest keydump pastetest spintest vncprobe
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,

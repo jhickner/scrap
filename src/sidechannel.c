@@ -22,6 +22,7 @@
 #include "viewport.h"
 #include "workspace.h"
 #include "vendor/cJSON.h"
+#include "vendor/agents/spawnfd.h"
 
 #define SIDE_MAX 4
 
@@ -285,6 +286,7 @@ static int spawn(struct side *c, const struct session *s, const char *prompt)
             if (null != STDIN_FILENO)
                 close(null);
         }
+        agents_close_inherited();
         execvp(argv[0], argv);
         _exit(127);
     }
