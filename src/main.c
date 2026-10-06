@@ -179,7 +179,7 @@ static void usage(void)
             "  -V, --version  print the version and exit\n"
             "\n"
             "  " APP_NAME " version   the same, as a subcommand\n"
-            "  " APP_NAME " ls [--live] [--net] [--cwd DIR] [QUERY]   list sessions, newest first\n"
+            "  " APP_NAME " ls [--exited] [--net] [--cwd DIR] [QUERY] list live sessions, newest first\n"
             "  " APP_NAME " read TARGET [-n TURNS] [--bytes N]   print a session's last turns\n"
             "  " APP_NAME " send TARGET TEXT   message a live session\n"
             "  " APP_NAME " open TARGET   resume a past session in a new tab, or here outside scrap\n"

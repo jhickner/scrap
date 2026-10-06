@@ -236,8 +236,9 @@ char *intercom_note(const char *name)
     return text_dsprintf(
         "This session is @%s in scrap. Other scrap sessions are reachable with the `scrap` "
         "command, run through Bash:\n"
-        "- `scrap ls [--live] [--cwd DIR] [QUERY]` lists sessions, newest first; `--cwd .` "
-        "means this directory; QUERY also searches transcript text.\n"
+        "- `scrap ls [--exited] [--cwd DIR] [QUERY]` lists live sessions, newest first; "
+        "`--exited` lists exited sessions instead; `--cwd .` means this directory; QUERY also "
+        "searches transcript text.\n"
         "- `scrap read TARGET [-n TURNS] [--bytes N]` prints a session's recent turns.\n"
         "- `scrap send TARGET TEXT` sends a message to a live session; it waits until the "
         "session's current turn ends.\n"
@@ -262,8 +263,8 @@ char *intercom_note(const char *name)
         "on another tailnet machine through `send`, `read`, and `close`. Messages from other "
         "sessions arrive prefixed `[from @name]` or `[from machine:@name]`; answer them "
         "with `scrap send` to that exact address only when an answer is needed.\n"
-        "To coordinate with a live session: `scrap ls --live --cwd .`, then `scrap read "
-        "@name`, then `scrap send @name ...`. To recover old context: `scrap ls QUERY`, then "
+        "To coordinate with a live session: `scrap ls --cwd .`, then `scrap read "
+        "@name`, then `scrap send @name ...`. To recover old context: `scrap ls --exited QUERY`, then "
         "`scrap read TARGET`.",
         name, name);
 }
@@ -605,11 +606,11 @@ static int cmd_ls_net(const char *query)
 
 static int cmd_ls(int argc, char **argv)
 {
-    int         live_only = 0, net = 0;
+    int         exited = 0, net = 0;
     const char *dir = NULL, *query = NULL;
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--live"))
-            live_only = 1;
+        if (!strcmp(argv[i], "--exited"))
+            exited = 1;
         else if (!strcmp(argv[i], "--net"))
             net = 1;
         else if (!strcmp(argv[i], "--cwd") && i + 1 < argc)
@@ -617,7 +618,7 @@ static int cmd_ls(int argc, char **argv)
         else if (!query && argv[i][0] != '-')
             query = argv[i];
         else {
-            fprintf(stderr, "usage: scrap ls [--live] [--net] [--cwd DIR] [QUERY]\n");
+            fprintf(stderr, "usage: scrap ls [--exited] [--net] [--cwd DIR] [QUERY]\n");
             return 2;
         }
     }
@@ -635,9 +636,11 @@ static int cmd_ls(int argc, char **argv)
     const char *hint = dir ? dir : here(cwd, sizeof cwd) ? cwd : NULL;
 
     struct entries l = {0};
-    collect(&l, hint, live_only, 0);
+    collect(&l, hint, !exited, 0);
     for (int i = 0; i < l.n; i++) {
         const struct entry *e = &l.e[i];
+        if (e->live == exited)
+            continue;
         if (dir && !under(e->cwd, dir))
             continue;
         if (query && !contains(e->name, query) && !contains(e->title, query) &&

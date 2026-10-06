@@ -14,7 +14,7 @@ $R say $a '/save work' 'saved 2 tabs as work'
 b=$($R start --fake --share "$share" -- --instance work)
 for name in $names; do $R wait $b "$name"; done
 [ "$($R tab $b)" = "$(head -1 <<<"$names")" ]
-live=$($R cli $b ls --live)
+live=$($R cli $b ls)
 for name in $names; do
     [ "$(grep -c "$name" <<<"$live")" = 1 ] || { echo "instanceyank: $name open more than once" >&2; echo "$live" >&2; exit 1; }
 done

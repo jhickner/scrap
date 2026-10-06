@@ -14,12 +14,12 @@ printf 'aaaa1111-named\tamber-fox\tclaude\t%s\n' "$work" > "$tmp/config/names"
 run() { (cd "$work/sub" && HOME="$tmp/home" SCRAP_CONFIG_DIR="$tmp/config" "$scrap" "$@"); }
 fail() { echo "intercomread: $*" >&2; exit 1; }
 
-out=$(run ls --cwd "$work")
+out=$(run ls --exited --cwd "$work")
 echo "$out" | grep -Eq '^@amber-fox +past ' || fail "ls lacks @amber-fox: $out"
 echo "$out" | grep -Eq '^bbbb2222 +past .*where is the retry backoff' || fail "ls lacks the unnamed session: $out"
-[ -z "$(run ls --live)" ] || fail "ls --live lists past sessions"
-run ls zebracorn | grep -q amber-fox || fail "ls QUERY does not search transcripts"
-[ -z "$(run ls --cwd "$work/sub")" ] || fail "ls --cwd matches outside DIR"
+[ -z "$(run ls)" ] || fail "ls lists past sessions"
+run ls --exited zebracorn | grep -q amber-fox || fail "ls QUERY does not search transcripts"
+[ -z "$(run ls --exited --cwd "$work/sub")" ] || fail "ls --cwd matches outside DIR"
 
 out=$(run read @amber-fox -n 1)
 echo "$out" | grep -q 'last 1 of 2 turns' || fail "read header: $out"
