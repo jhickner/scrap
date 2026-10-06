@@ -56,6 +56,7 @@
 #define SETTING_STAMP "stamp"
 
 #define SETTING_AUTO_HANDOFF "auto_handoff"
+#define SETTING_AUTO_BACKEND "auto_backend"
 
 #define AUTO_HANDOFF_MIN 10
 #define AUTO_HANDOFF_MAX 90

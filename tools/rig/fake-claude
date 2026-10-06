@@ -4,7 +4,7 @@ import json, os, re, select, subprocess, sys, time, uuid
 SESSION = "fake-%d" % os.getpid()
 NOTES = 0
 CHAIN = 0
-MODEL = "fake"
+MODEL = sys.argv[sys.argv.index("--model") + 1] if "--model" in sys.argv else "fake"
 
 
 def emit(ev):
@@ -92,7 +92,20 @@ def main():
                       "usage": {"input_tokens": 0, "output_tokens": 0}})
                 continue
             record("user", text)
-            if text.startswith("ask: "):
+            if text.startswith("quota-error") or text.startswith("other-error"):
+                error = "You've hit your session limit · resets 3:45pm" if text.startswith("quota-error") else "connection failed"
+                if "wait" in text:
+                    run("sleep 2")
+                emit({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                      "result": error})
+                continue
+            if text.startswith("quota: "):
+                used = int(text.split()[1])
+                emit({"type": "rate_limit_event", "rate_limit_info": {
+                    "rateLimitType": "five_hour", "utilization": used / 100,
+                    "resetsAt": 2000000000}})
+                text = run("sleep 2") if "wait" in text else "quota %d" % used
+            elif text.startswith("ask: "):
                 if "--permission-prompt-tool" not in sys.argv:
                     text = "denied: no permission prompt tool"
                 else:

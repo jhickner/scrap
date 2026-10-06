@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+import json, os, sys
+
+backend = os.path.basename(sys.argv[0])
+model, effort, system = 'default', 'default', ''
+for option, dest in [('-m', 'model'), ('--reasoning-effort', 'effort')]:
+    if option in sys.argv:
+        globals()[dest] = sys.argv[sys.argv.index(option) + 1]
+
+
+def emit(value):
+    print(json.dumps(value), flush=True)
+
+
+def quota():
+    try:
+        return json.load(open('backend-quota.json')).get(backend)
+    except (OSError, ValueError):
+        return None
+
+
+if quota() == 'fail':
+    sys.exit(1)
+for line in sys.stdin:
+    msg = json.loads(line)
+    with open('backend-protocol.jsonl', 'a') as log:
+        log.write(json.dumps({'backend': backend, 'message': msg}) + '\n')
+    method, params = msg.get('method'), msg.get('params') or {}
+    result = {}
+    if method == 'account/rateLimits/read':
+        used = quota()
+        result = {'rateLimits': {'primary': {'usedPercent': used, 'resetsAt': 2000000000}}} if isinstance(used, int) else {}
+    elif method == '_x.ai/billing':
+        used = quota()
+        result = {'config': {'creditUsagePercent': used, 'billingPeriodEnd': '2033-05-18T03:33:20Z'}} if isinstance(used, int) else {}
+    elif method in ('thread/start', 'thread/resume'):
+        model = params.get('model', model)
+        system = params.get('developerInstructions', '')
+        result = {'thread': {'id': 'fake-codex'}}
+    elif method in ('session/new', 'session/resume'):
+        result = {'sessionId': 'fake-grok'}
+    elif method == 'session/set_model':
+        model = params['modelId']
+    elif method == 'session/set_mode':
+        effort = params['modeId']
+    elif method in ('turn/start', 'session/prompt'):
+        inputs = params.get('input', params.get('prompt', []))
+        text = ''.join(i.get('text', '') for i in inputs)
+        effort = params.get('effort', effort)
+        prompt = text if backend == 'codex' else text.split('\n')[-1]
+        if prompt.startswith('quota-error'):
+            error = {'message': "You've hit your usage limit", 'codexErrorInfo': 'usageLimitExceeded'}
+            if backend == 'codex':
+                emit({'id': msg['id'], 'result': {'turn': {'id': 'fake-turn'}}})
+                emit({'method': 'turn/completed', 'params': {'threadId': 'fake-codex', 'turn': {'id': 'fake-turn', 'status': 'failed', 'error': error}}})
+            else:
+                emit({'jsonrpc': '2.0', 'id': msg['id'], 'error': error})
+            continue
+        history = system if backend == 'codex' else text
+        reply = '%s: %s (%s, %s) history=%s' % (backend, prompt, model, effort, 'kept' if 'history-marker' in history else 'empty')
+        if backend == 'codex':
+            emit({'id': msg['id'], 'result': {'turn': {'id': 'fake-turn'}}})
+            emit({'method': 'item/agentMessage/delta', 'params': {'threadId': 'fake-codex', 'turnId': 'fake-turn', 'delta': reply}})
+            emit({'method': 'turn/completed', 'params': {'threadId': 'fake-codex', 'turn': {'id': 'fake-turn', 'status': 'completed'}}})
+        else:
+            emit({'jsonrpc': '2.0', 'method': 'session/update', 'params': {'sessionId': 'fake-grok', 'update': {'sessionUpdate': 'agent_message_chunk', 'content': {'type': 'text', 'text': reply}}}})
+            emit({'jsonrpc': '2.0', 'id': msg['id'], 'result': {'stopReason': 'end_turn'}})
+        continue
+    if 'id' in msg:
+        emit({'jsonrpc': '2.0', 'id': msg['id'], 'result': result})

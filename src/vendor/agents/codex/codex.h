@@ -42,6 +42,7 @@ typedef struct {
  * once the child and worker exist; the first operation waits if startup is
  * still in progress. */
 codex_client *codex_start(const codex_opts *opts);
+int codex_connect(codex_client *c);
 
 /* Start one turn on the existing process/thread and return its final agent
  * message (malloc'd), or NULL on failure. An interrupted turn returns the text
@@ -819,6 +820,10 @@ static int cx_await_ready(codex_client *c) {
         c->warm_joinable = 0;
     }
     return atomic_load_explicit(&c->warm_state, memory_order_acquire) == 1;
+}
+
+int codex_connect(codex_client *c) {
+    return cx_await_ready(c);
 }
 
 codex_client *codex_start(const codex_opts *opts) {

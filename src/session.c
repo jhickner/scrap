@@ -68,6 +68,7 @@ struct session {
     char    *addr;
     char   **env;
     backend_result last_result;
+    int      quota_failed;
     char     title[128];
     char     stale_title[128];
     char     held_title[128];
@@ -1138,10 +1139,19 @@ static char *carried_handoff(const struct session *s)
         src = &disk;
     char *handoff = transcript_handoff(src, 128 * 1024, s->id[0] ? s->id : NULL);
     transcript_free(&disk);
+    if (s->failed_prompt && *s->failed_prompt) {
+        char *full = text_dsprintf("%s\nThe most recent user request failed before completion:\n%s\n",
+                                  handoff ? handoff : "", s->failed_prompt);
+        if (full) {
+            free(handoff);
+            handoff = full;
+        }
+    }
     return handoff;
 }
 
-int session_switch_backend(struct session *s, const char *backend)
+static int switch_backend(struct session *s, const char *backend,
+                          const char *model, const char *effort, int quota)
 {
     if (!s || !backend || !*backend || s->running)
         return 0;
@@ -1152,6 +1162,8 @@ int session_switch_backend(struct session *s, const char *backend)
     char *joined = session_system(s, handoff);
     backend_opts o = {0};
     o.name = backend;
+    o.model = model;
+    o.effort = effort;
     o.system = joined;
     o.cwd = s->cwd;
     o.allow_customizations = s->customizations;
@@ -1169,23 +1181,36 @@ int session_switch_backend(struct session *s, const char *backend)
 
     if (replacement->set_permission_cb)
         replacement->set_permission_cb(replacement, on_permission, s);
-    if (!replacement->start(replacement, NULL)) {
+    if (!replacement->start(replacement, NULL) ||
+        (quota > 0 && replacement->connect && !replacement->connect(replacement))) {
         const char *why = replacement->last_error ? replacement->last_error(replacement) : NULL;
         snprintf(start_error, sizeof start_error, "%s", why ? why : "");
         replacement->close(replacement);
         free(handoff);
         return 0;
     }
+    if (quota > 0) {
+        backend_rate_limit limit = {0};
+        if (replacement->rate_limit)
+            replacement->rate_limit(replacement, &limit);
+        if (!limit.available || limit.used_percent >= quota ||
+            (limit.resets_at > 0 && limit.resets_at <= (long)time(NULL))) {
+            replacement->close(replacement);
+            free(handoff);
+            return 0;
+        }
+    }
     replacement->set_event_cb(replacement, on_event, s);
     replacement->set_abort_check(replacement, abort_check);
 
     Backend *previous = s->agent;
     s->agent = replacement;
+    s->quota_failed = 0;
     free(s->handoff);
     s->handoff = handoff;
     replace(&s->backend, backend);
-    replace(&s->model, NULL);
-    replace(&s->effort, NULL);
+    replace(&s->model, model);
+    replace(&s->effort, effort);
     replace(&s->resolved, NULL);
 
     if (s->title[0] && !s->held_title[0])
@@ -1201,6 +1226,11 @@ int session_switch_backend(struct session *s, const char *backend)
     s->context_window = 0;
     retire(previous);
     return 1;
+}
+
+int session_switch_backend(struct session *s, const char *backend)
+{
+    return switch_backend(s, backend, NULL, NULL, 0);
 }
 
 void session_set_quiet(struct session *s, int quiet) { s->quiet = quiet; }
@@ -2082,10 +2112,51 @@ static int session_reground(struct session *s)
     return GROUND_LOST;
 }
 
+int session_autobackend(struct session *s)
+{
+    int at = settings_get_int(SETTING_AUTO_BACKEND, 0);
+    if (!s || s->remote || s->running || !s->agent || !s->agent->rate_limit)
+        return 0;
+    int failed = s->quota_failed;
+    s->quota_failed = 0;
+    if (at < 1 || at > 100)
+        return 0;
+    static const char *const order[] = {"claude", "codex", "grok"};
+    int current = -1;
+    for (int i = 0; i < 3; i++)
+        if (!strcmp(s->backend, order[i]))
+            current = i;
+    if (current < 0)
+        return 0;
+    backend_rate_limit limit = {0};
+    s->agent->rate_limit(s->agent, &limit);
+    if (!failed && (!limit.available || limit.used_percent < at ||
+        (limit.resets_at > 0 && limit.resets_at <= (long)time(NULL))))
+        return 0;
+    for (int i = current + 1; i < 3; i++) {
+        const char *model, *effort;
+        models_autobackend(s->backend, session_model_label(s), session_effort(s),
+                          order[i], &model, &effort);
+        if (switch_backend(s, order[i], model, effort, at)) {
+            s->autohandoff = AUTOHANDOFF_IDLE;
+            session_warn(s, "auto-backend: switched to %s (%s, %s)", order[i], model, effort);
+            usage_poll(s);
+            return 1;
+        }
+    }
+    replace(&s->error_note, "auto-backend stopped: no next backend has known quota below the limit");
+    if (failed)
+        session_warn(s, "auto-backend stopped after quota error: no next backend has known quota below %d%%", at);
+    else
+        session_warn(s, "auto-backend stopped at %d%%: no next backend has known quota below %d%%",
+                     limit.used_percent, at);
+    return -1;
+}
+
 static int turn_ready(struct session *s, const char *text)
 {
     replace(&s->error_note, NULL);
-    if (s->remote || session_reground(s))
+    if ((s->remote || session_reground(s)) && session_autobackend(s) >= 0)
         return 1;
     replace(&s->failed_prompt, text);
     return 0;
@@ -2117,11 +2188,31 @@ static void continuation_fallback(struct session *s)
     s->heard_at = s->stall_at;
 }
 
+static int quota_error(const char *error)
+{
+    static const char *const phrases[] = {
+        "rate_limit", "rate limit", "usage_limit", "usage limit",
+        "quota exceeded", "quota exhausted", "insufficient_quota",
+        "exceeded your current quota", "quota_exceeded",
+        "insufficient credits", "credit limit", "out of credits",
+        "you've hit your", "you have hit your", "spend limit"
+    };
+    if (error)
+        for (size_t i = 0; i < sizeof phrases / sizeof *phrases; i++)
+            if (strcasestr(error, phrases[i]))
+                return 1;
+    return 0;
+}
+
 static int turn_finish(struct session *s, char *reply, const backend_result *meta,
                        double elapsed)
 {
     const backend_result m = *meta;
     s->last_result = m;
+    s->interrupted = m.interrupted || s->abort_request;
+    s->quota_failed = !s->interrupted && (!reply || m.is_error) &&
+        (quota_error(m.subtype) || quota_error(s->agent->last_error(s->agent)) ||
+         (m.is_error && quota_error(reply)));
     int continuing = s->continuing;
     s->continuing = 0;
     const char *text = s->prompt ? s->prompt : "";
@@ -2160,7 +2251,6 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
         detail = s->agent->last_error(s->agent);
     sessionpresent_turn_result(&s->present, s->backend, reply, s->last_block,
                                detail, &m, s->quiet);
-    s->interrupted = m.interrupted;
 
     if (*reply)
         replace(&s->last_reply, reply);
@@ -2229,7 +2319,11 @@ int session_turn(struct session *s, const char *text)
     if (!s->quiet)
         status_end();
 
-    return turn_finish(s, reply, &meta, elapsed);
+    int ok = turn_finish(s, reply, &meta, elapsed);
+    int switched = s->interrupted ? 0 : session_autobackend(s);
+    if (switched > 0)
+        return session_turn(s, "continue");
+    return switched < 0 ? 0 : ok;
 }
 
 static void wake_write(struct session *s)
@@ -2308,6 +2402,13 @@ int session_turn_continue_begin(struct session *s)
         return 0;
     }
 
+    int switched = session_autobackend(s);
+    if (switched < 0) {
+        continuation_fallback(s);
+        return 0;
+    }
+    if (switched > 0)
+        return session_turn_begin(s, "continue");
     turn_prepare(s, s->remote ? remote_prompt(s->agent) : NULL);
     replace(&s->asked, NULL);
     s->reply = NULL;

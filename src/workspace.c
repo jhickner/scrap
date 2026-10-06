@@ -688,6 +688,13 @@ static void send_next(int index, int hold)
     if (!t->npending || session_turn_running(t->s))
         return;
 
+    if (!cmd_is_command(t->pending[0].line)) {
+        enter_held(index, hold);
+        int ready = session_autobackend(t->s);
+        leave();
+        if (ready < 0)
+            return;
+    }
     struct pending p = t->pending[0];
     for (int i = 1; i < t->npending; i++)
         t->pending[i - 1] = t->pending[i];

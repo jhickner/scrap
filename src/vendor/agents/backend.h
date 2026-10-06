@@ -143,6 +143,7 @@ struct Backend {
      * a missing CLI surfaces before the first turn. ask() starts lazily when
      * this was never called. Returns nonzero on success. */
     int (*start)(Backend *b, const char *resume_session);
+    int (*connect)(Backend *b);
 
     /* As ask(), also filling *meta, which is zeroed first. `meta` may be NULL. */
     char *(*ask_ex)(Backend *b, const char *user, backend_result *meta);
@@ -746,6 +747,10 @@ static int backend_codex_start(Backend *b, const char *resume) {
     return 1;
 }
 
+static int backend_codex_connect(Backend *b) {
+    return codex_connect(((backend_codex *)b->ctx)->client);
+}
+
 static char *backend_codex_ask_ex(Backend *b, const char *user, backend_result *meta) {
     backend_codex *x = b->ctx;
     if (meta) memset(meta, 0, sizeof *meta);
@@ -905,6 +910,7 @@ static Backend *backend_codex_open(const backend_opts *o) {
     b->reset = backend_codex_reset;
     b->close = backend_codex_close;
     b->start = backend_codex_start;
+    b->connect = backend_codex_connect;
     b->ask_ex = backend_codex_ask_ex;
     b->continue_ex = backend_codex_continue_ex;
     b->usage = backend_codex_usage;
@@ -991,6 +997,10 @@ static int backend_grok_start(Backend *b, const char *resume) {
     x->client = c;
     backend_set(&x->st.resume, resume);
     return 1;
+}
+
+static int backend_grok_connect(Backend *b) {
+    return grok_connect(((backend_grok *)b->ctx)->client);
 }
 
 static char *backend_grok_ask_ex(Backend *b, const char *user, backend_result *meta) {
@@ -1103,6 +1113,7 @@ static Backend *backend_grok_open(const backend_opts *o) {
     b->reset = backend_grok_reset;
     b->close = backend_grok_close;
     b->start = backend_grok_start;
+    b->connect = backend_grok_connect;
     b->ask_ex = backend_grok_ask_ex;
     b->set_model = backend_set_model_generic;
     b->set_effort = backend_grok_set_effort;

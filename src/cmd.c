@@ -1080,6 +1080,12 @@ static void autohandoff_ask(struct session *s, int interrupted)
 
 void cmd_turn_done(struct session *s)
 {
+    int switched = session_last_interrupted(s) ? 0 : session_autobackend(s);
+    if (switched != 0) {
+        if (switched > 0)
+            workspace_send(workspace_index_of(s), "continue", "auto-backend: continue");
+        return;
+    }
     int state = session_autohandoff(s);
     if (handoff_swap(s, state == AUTOHANDOFF_WRITING))
         return;
@@ -1120,6 +1126,34 @@ static void do_autohandoff(struct session *s, const char *arg)
         reply_note("auto-handoff at %d%% context", at);
     else
         reply_note("auto-handoff off");
+}
+
+static void do_autobackend(struct session *s, const char *arg)
+{
+    (void)s;
+    if (arg && *arg) {
+        long at = 0;
+        if (strcmp(arg, "off")) {
+            char *end;
+            at = strtol(arg, &end, 10);
+            if (end == arg) {
+                reply_error("/autobackend takes off or a quota percent between 1 and 100");
+                return;
+            }
+            if (*end == '%') end++;
+            while (*end == ' ') end++;
+            if (*end || at < 1 || at > 100) {
+                reply_error("/autobackend takes off or a quota percent between 1 and 100");
+                return;
+            }
+        }
+        settings_set_int(SETTING_AUTO_BACKEND, (int)at);
+    }
+    int at = settings_get_int(SETTING_AUTO_BACKEND, 0);
+    if (at > 0)
+        reply_note("auto-backend at %d%% quota (Claude → Codex → Grok)", at);
+    else
+        reply_note("auto-backend off");
 }
 
 static void do_clear(struct session *s, const char *arg)
@@ -1592,6 +1626,8 @@ static const struct cmd COMMANDS[] = {
      "[focus]", 0, do_handoff},
     {"/autohandoff", "hand off to a fresh conversation when context reaches a percent",
      "[percent|off]", CMD_LIVE, do_autohandoff},
+    {"/autobackend", "switch to the next backend below the quota limit",
+     "[percent|off]", CMD_LIVE, do_autobackend},
     {"/model", "switch model", "[name]", 0, do_model},
     {"/effort", "set reasoning/thinking effort", "[level]", 0, do_effort},
     {"/backend", "continue with another backend", "<name>", 0, do_backend},
