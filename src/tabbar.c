@@ -131,13 +131,13 @@ struct tab {
     const char  *meter;
     int          step;
     enum ui_role role;
-    int          cells;
 };
 
 static struct tab tabs[WORKSPACE_MAX];
 static int        ntabs;
 static int        box_col = -1;
 static int        box_w;
+static int        col_glyph, col_name, col_status, col_meter;
 
 static void rule(int cells)
 {
@@ -158,21 +158,27 @@ static void paint_row(void *ud, int line, int w)
             ui_esc(ui_style(t->role));
             ui_put(t->glyph);
             ui_put(" ");
+        } else {
+            ui_pad(col_glyph);
         }
         ui_esc(ui_style(t->index == workspace_index() ? UI_ACCENT : UI_DIM));
         ui_put(t->name);
+        ui_pad(col_name - (int)ui_cells(t->name));
+        if (col_status) {
+            ui_esc(ui_style(UI_DIM));
+            ui_put(" ");
+            ui_put(t->status);
+            ui_pad(col_status - (int)ui_cells(t->status));
+        }
         if (t->meter) {
             ui_put(" ");
             if (t->step > 4)
                 ui_esc(ui_style(UI_ERROR));
             ui_put(t->meter);
+        } else {
+            ui_pad(col_meter);
         }
-        if (t->status[0]) {
-            ui_esc(ui_style(UI_DIM));
-            ui_put(" ");
-            ui_put(t->status);
-        }
-        ui_pad(w - 2 - t->cells);
+        ui_pad(w - 2 - col_glyph - col_name - (col_status ? 1 + col_status : 0) - col_meter);
     } else if (at == ntabs) {
         ui_put("\xe2\x95\xb0");
         rule(w - 1 - BUTTON_W);
@@ -204,7 +210,7 @@ void tabbar_cover(char **rows, int n, int cols)
         return;
 
     ntabs = count < n - 3 ? count : n - 3;
-    int widest = 0;
+    col_glyph = col_name = col_status = col_meter = 0;
     for (int i = 0; i < ntabs; i++) {
         struct tab           *t = &tabs[i];
         const struct session *s = workspace_at(i);
@@ -215,11 +221,16 @@ void tabbar_cover(char **rows, int n, int cols)
         t->glyph = mark(s, &t->role);
         t->step = meter_step(s);
         t->meter = t->step ? METER[t->step] : NULL;
-        t->cells = (int)ui_cells(t->name) + (t->meter ? 2 : 0) + (t->glyph ? 2 : 0) +
-                   (t->status[0] ? 1 + (int)ui_cells(t->status) : 0);
-        if (t->cells > widest)
-            widest = t->cells;
+        if (t->glyph)
+            col_glyph = 2;
+        if ((int)ui_cells(t->name) > col_name)
+            col_name = (int)ui_cells(t->name);
+        if ((int)ui_cells(t->status) > col_status)
+            col_status = (int)ui_cells(t->status);
+        if (t->meter)
+            col_meter = 1 + (int)ui_cells(t->meter);
     }
+    int widest = col_glyph + col_name + (col_status ? 1 + col_status : 0) + col_meter;
     int w = widest + 3;
     if (w < BUTTON_W + 2)
         w = BUTTON_W + 2;
