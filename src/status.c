@@ -255,10 +255,12 @@ void status_begin_at(double elapsed)
 void status_tick(void)
 {
     if (taskrows_stale() && !size_changing() && !chrome_modal_active()) {
-        if (active && visible)
+        if (active && visible) {
+            spin_advance(&frame, &frame_at);
             paint();
-        else
+        } else {
             chrome_paint();
+        }
         return;
     }
     if (!active || !visible || size_changing())
