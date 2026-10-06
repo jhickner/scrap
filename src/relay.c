@@ -27,6 +27,7 @@
 #include "chrome.h"
 #include "cmd.h"
 #include "frontend.h"
+#include "gitinfo.h"
 #include "highlight.h"
 #include "hub.h"
 #include "hud.h"
@@ -40,6 +41,7 @@
 #include "text.h"
 #include "tg.h"
 #include "transcript.h"
+#include "tty.h"
 #include "toolstyle.h"
 #include "ui.h"
 #include "viewport.h"
@@ -647,11 +649,16 @@ static void send_view(int client)
     cJSON *o = frame("view");
     cJSON_AddNumberToObject(o, "seq", (double)rt.seq);
     cJSON_AddNumberToObject(o, "binding", rt.binding);
-    cJSON_AddItemToObject(o, "session", session_obj(s));
+    cJSON *ses = session_obj(s), *live = live_obj(s);
+    if (!rt.session_json)
+        rt.session_json = cJSON_PrintUnformatted(ses);
+    if (!rt.live_json)
+        rt.live_json = cJSON_PrintUnformatted(live);
+    cJSON_AddItemToObject(o, "session", ses);
     int n = cJSON_GetArraySize(rt.cur->entries);
     cJSON_AddItemToObject(o, "entries", entries_before(n, WINDOW));
     cJSON_AddBoolToObject(o, "older", n > WINDOW);
-    cJSON_AddItemToObject(o, "live", live_obj(s));
+    cJSON_AddItemToObject(o, "live", live);
     cJSON_AddItemToObject(o, "ask", ask_obj());
     send_to(client, o);
 }
@@ -1047,6 +1054,29 @@ static void blank(struct session *s, void *ud)
     hud_print(s);
 }
 
+static void shell(struct session *s, void *ud)
+{
+    (void)s;
+    const char *line = ud;
+    prompt_echo_message(line);
+    tty_watch(workspace_watch_fds, workspace_watch_ready, NULL);
+    char *out = NULL;
+    int status = bash_run(line, &out);
+    tty_watch(NULL, NULL, NULL);
+    gitinfo_forget();
+
+    cJSON *e = entry_new("bash", line);
+    cJSON_AddStringToObject(e, "out", out ? out : "");
+    if (status < 0)
+        cJSON_AddStringToObject(e, "error", "could not run the shell");
+    else if (WIFSIGNALED(status))
+        cJSON_AddNumberToObject(e, "signal", WTERMSIG(status));
+    else if (WIFEXITED(status) && WEXITSTATUS(status))
+        cJSON_AddNumberToObject(e, "exit", WEXITSTATUS(status));
+    entry_add(rt.cur, e);
+    free(out);
+}
+
 static cJSON *run_line(const char *req, const char *text)
 {
     struct session *s = relay_session();
@@ -1057,8 +1087,10 @@ static cJSON *run_line(const char *req, const char *text)
         relay_banner(s);
         return res_ok(req);
     }
-    if (bash_is_command(text))
-        return res_error(req, "shell", "shell lines run at the terminal only");
+    if (bash_is_command(text)) {
+        workspace_render(workspace_index_of(s), shell, (void *)text);
+        return res_ok(req);
+    }
     struct submit_ctx c = {req, text, NULL};
     workspace_render(workspace_index_of(s), submit, &c);
     return c.res ? c.res : res_error(req, "failed", "not submitted");

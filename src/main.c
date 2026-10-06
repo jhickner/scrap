@@ -1120,7 +1120,7 @@ int main(int argc, char **argv)
 
         if (bash_is_command(line)) {
             tty_watch(workspace_watch_fds, workspace_watch_ready, NULL);
-            bash_run(line);
+            bash_run(line, NULL);
             tty_watch(NULL, NULL, NULL);
             gitinfo_forget();
             free(line);

@@ -100,6 +100,7 @@ entry:   {id, kind, ts, ...}   id: per-relay counter, never reused within a bind
              input, result and diff are not sent; held:true marks them, fetch with op "entry"
   note       text                   backend warnings
   btw        text, answer, failed?  /btw side-channel answers
+  bash       text, out, exit?, signal?, error?  `!` shell lines run at the terminal
   end        every turn: secs; stopped:true | failed:true, text = error
   any        clipped:true when a string field over 16 KB was cut; fetch with op "entry"
 ```

@@ -410,16 +410,18 @@ static void no_pager(void)
     setenv("DELTA_PAGER", "cat", 1);
 }
 
-void bash_run(const char *line)
+int bash_run(const char *line, char **out)
 {
     const char *cmd = bash_body(line);
+    if (out)
+        *out = NULL;
     if (!cmd)
-        return;
+        return -1;
 
     struct termios cooked;
     if (tty_cooked_termios(&cooked) != 0) {
         ui_error("could not read the terminal mode");
-        return;
+        return -1;
     }
     struct winsize ws = {0};
     ws.ws_col = (unsigned short)tty_columns();
@@ -573,7 +575,10 @@ void bash_run(const char *line)
             if (!handed)
                 ran_set(mark, text);
             context_add(cmd, text, status);
-            free(text);
+            if (out)
+                *out = text;
+            else
+                free(text);
         }
         if (WIFSIGNALED(status))
             ui_error("terminated by signal %d", WTERMSIG(status));
@@ -584,4 +589,5 @@ void bash_run(const char *line)
 
     ui_put("\n");
     ui_flush();
+    return pid < 0 ? -1 : status;
 }
