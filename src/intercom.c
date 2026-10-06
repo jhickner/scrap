@@ -825,6 +825,34 @@ static int answered(const char *reply, const char *done)
     return error ? 1 : 0;
 }
 
+static int reply_error_to(const char *reply, char *msg, size_t size)
+{
+    cJSON      *r = cJSON_Parse(reply);
+    const char *error = cJSON_GetStringValue(cJSON_GetObjectItem(r, "error"));
+    snprintf(msg, size, "%s", error ? error : "");
+    cJSON_Delete(r);
+    return error != NULL;
+}
+
+int intercom_close(const char *target, char *msg, size_t size)
+{
+    char        host[TAILNET_HOST_MAX];
+    const char *local, *name = route(target, host, sizeof host, &local);
+    if (name)
+        return tailnet_close(host, name, msg, size);
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "to", local);
+    long pid = intercom_owner(o, msg, size);
+    int  rc = 1;
+    if (pid > 0) {
+        char reply[1024] = "";
+        cJSON_AddStringToObject(o, "close", jstr(o, "session"));
+        rc = request(pid, o, reply, sizeof reply) ? reply_error_to(reply, msg, size) : 1;
+    }
+    cJSON_Delete(o);
+    return rc;
+}
+
 static int self_id(char *out, size_t size)
 {
     out[0] = '\0';
@@ -1258,18 +1286,23 @@ static int cmd_close(int argc, char **argv)
     }
     const char *owner = getenv("SCRAP_PID");
     long        pid = owner ? atol(owner) : 0;
-    if (pid <= 0 || !livelist_alive(pid)) {
-        fprintf(stderr, "scrap: close runs inside a scrap session\n");
-        return 1;
-    }
-    int rc = 0;
+    int         rc = 0, window_live = pid > 0 && livelist_alive(pid);
     for (int i = 1; i < argc; i++) {
-        char   reply[1024] = "", done[200];
-        cJSON *o = cJSON_CreateObject();
-        cJSON_AddStringToObject(o, "close", argv[i]);
-        snprintf(done, sizeof done, "closed %s", argv[i]);
-        rc |= request(pid, o, reply, sizeof reply) ? answered(reply, done) : 1;
-        cJSON_Delete(o);
+        char msg[1200] = "", reply[1024] = "";
+        int  failed = 1;
+        if (window_live) {
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddStringToObject(o, "close", argv[i]);
+            failed = !request(pid, o, reply, sizeof reply) || reply_error_to(reply, msg, sizeof msg);
+            cJSON_Delete(o);
+        }
+        if (failed && (!window_live || !strcmp(msg, "no such session")))
+            failed = intercom_close(argv[i], msg, sizeof msg);
+        if (failed)
+            fprintf(stderr, "scrap: %s\n", msg[0] ? msg : "could not close that session");
+        else
+            printf("closed %s\n", argv[i]);
+        rc |= failed;
     }
     return rc;
 }

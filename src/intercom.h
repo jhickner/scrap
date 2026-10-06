@@ -35,6 +35,8 @@ cJSON *intercom_live_json(void);
 
 long intercom_owner(cJSON *o, char *msg, size_t size);
 
+int intercom_close(const char *target, char *msg, size_t size);
+
 void intercom_set_window(void);
 
 char *intercom_serve(const cJSON *o);

@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -139,23 +140,21 @@ static void close_session(int fd, const cJSON *target)
         reply_error(fd, "no such session", id);
         return;
     }
-    if (at == workspace_index()) {
-        reply_error(fd, "session is in view", id);
-        return;
-    }
-    if (!session_remote(s) && (session_turn_running(s) || workspace_queued(at))) {
-        reply_error(fd, "session is busy", id);
-        return;
-    }
+    if (session_turn_running(s))
+        session_interrupt(s);
+    int last = workspace_count() == 1;
 
     cJSON *r = cJSON_CreateObject();
     cJSON_AddBoolToObject(r, "ok", 1);
     cJSON_AddStringToObject(r, "session", id);
     char *json = cJSON_PrintUnformatted(r);
-    workspace_close(at);
+    if (!last)
+        workspace_close(at);
     reply(fd, json ? json : "{\"ok\":true}");
     free(json);
     cJSON_Delete(r);
+    if (last)
+        raise(SIGTERM);
 }
 
 static struct {

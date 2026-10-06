@@ -55,6 +55,8 @@ static char spawned_id[64];
 static int  spawned_open = 1;
 static int  closed_at = -1;
 static int  close_n;
+static int  in_view;
+static int  interrupted;
 
 struct session *workspace_current(void) { return &current_tab; }
 struct session *workspace_at(int index)
@@ -63,7 +65,7 @@ struct session *workspace_at(int index)
         return &current_tab;
     return index == spawn_at && spawned_open ? &spawned : NULL;
 }
-int workspace_index(void) { return 0; }
+int workspace_index(void) { return in_view; }
 int workspace_count(void) { return spawned_open ? spawn_at + 1 : 1; }
 int workspace_index_of(const struct session *s)
 {
@@ -152,6 +154,11 @@ int session_turn_running(const struct session *s)
     (void)s;
     return turn_running;
 }
+void session_interrupt(struct session *s)
+{
+    (void)s;
+    interrupted++;
+}
 
 enum session_rename session_rename(struct session *s, const char *name)
 {
@@ -175,6 +182,8 @@ static void reset_case(void)
     last_echo[0] = last_send[0] = '\0';
     close_n = 0;
     closed_at = -1;
+    in_view = 0;
+    interrupted = 0;
     memset(&spawned, 0, sizeof spawned);
 }
 
@@ -371,10 +380,14 @@ int main(void)
     expect_res(dir, "unknown-close", "no such session", "an unknown close id is an error");
 
     reset_case();
+    in_view = spawn_at;
+    turn_running = 1;
     drop_req(dir, "close-id", "{\"close\":\"sess-1\"}");
     poll_once();
     if (close_n != 1 || closed_at != spawn_at)
-        fail("close by id closes that session");
+        fail("close by id closes that session, also in view and mid-turn");
+    if (interrupted != 1)
+        fail("close interrupts a running turn");
     expect_res(dir, "close-id", "\"session\":\"sess-1\"", "close reply names the session");
 
     reset_case();

@@ -11,7 +11,6 @@
 #include "livelist.h"
 #include "text.h"
 
-#define WAIT_MS   15000
 #define POLL_MS   30
 
 static int dir_path(char *out, size_t size)
@@ -66,11 +65,9 @@ int handoff_wanted(void)
     return request_path((long)getpid(), path, sizeof path) && stat(path, &st) == 0;
 }
 
-int handoff_take_request(char *id, size_t size, int *kill)
+int handoff_take_request(char *id, size_t size)
 {
     char path[4400];
-    if (kill)
-        *kill = 0;
     if (!request_path((long)getpid(), path, sizeof path))
         return 0;
 
@@ -80,13 +77,7 @@ int handoff_take_request(char *id, size_t size, int *kill)
     if (!text)
         return 0;
     text_chomp(text);
-    const char *s = text;
-    if (s[0] == 'x' && s[1] == ' ') {
-        if (kill)
-            *kill = 1;
-        s += 2;
-    }
-    snprintf(id, size, "%s", s);
+    snprintf(id, size, "%s", text);
     free(text);
     return id_ok(id);
 }
@@ -128,22 +119,17 @@ static int write_id(FILE *f, void *ud)
     return fprintf(f, "%s\n", (const char *)ud) > 0;
 }
 
-static int ask(long pid, const char *id, int kill_it, char *screen, size_t size,
-               void (*tick)(int waited_ms, void *ud), void *ud)
+int handoff_ask(long pid, const char *id, char *screen, size_t size,
+                void (*tick)(int waited_ms, void *ud), void *ud)
 {
-    char req[4400], state[4400], no[4400], line[160];
+    char req[4400], state[4400], no[4400];
     if (!id_ok(id) || !request_path(pid, req, sizeof req) ||
         !state_path(id, state, sizeof state) || !refused_path(id, no, sizeof no))
         return 0;
-    if (kill_it)
-        snprintf(line, sizeof line, "x %s", id);
-    else
-        snprintf(line, sizeof line, "%s", id);
-
     unlink(state);
     unlink(no);
 
-    if (!text_spit(req, write_id, line))
+    if (!text_spit(req, write_id, (void *)id))
         return 0;
 
     if (kill((pid_t)pid, SIGURG) != 0) {
@@ -152,8 +138,7 @@ static int ask(long pid, const char *id, int kill_it, char *screen, size_t size,
     }
 
     struct stat st;
-    int cap = kill_it ? WAIT_MS : -1;
-    for (int waited = 0; cap < 0 || waited < cap; waited += POLL_MS) {
+    for (int waited = 0;; waited += POLL_MS) {
         if (stat(state, &st) == 0) {
             snprintf(screen, size, "%s", state);
             return 1;
@@ -176,31 +161,4 @@ static int ask(long pid, const char *id, int kill_it, char *screen, size_t size,
         return 1;
     }
     return 0;
-}
-
-int handoff_ask(long pid, const char *id, char *screen, size_t size,
-                void (*tick)(int waited_ms, void *ud), void *ud)
-{
-    return ask(pid, id, 0, screen, size, tick, ud);
-}
-
-int handoff_kill(long pid, const char *id, char *screen, size_t size,
-                 void (*tick)(int waited_ms, void *ud), void *ud)
-{
-    return ask(pid, id, 1, screen, size, tick, ud);
-}
-
-int handoff_close(long pid, const char *id, void (*tick)(int waited_ms, void *ud), void *ud)
-{
-    char screen[4400];
-    if (handoff_kill(pid, id, screen, sizeof screen, tick, ud)) {
-        unlink(screen);
-        return 1;
-    }
-    struct live_session *live = NULL;
-    int                  n = livelist_load(&live), held = 0;
-    for (int i = 0; i < n; i++)
-        held += live[i].pid == pid;
-    free(live);
-    return held == 1 && pid > 0 && kill((pid_t)pid, SIGTERM) == 0;
 }

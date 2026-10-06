@@ -760,10 +760,10 @@ static void yank_all(const struct live_session *live, int nlive)
 
 static void close_live(const struct live_session *v)
 {
-    int said = 0;
-    if (handoff_close(v->pid, v->id, waiting, &said))
+    char msg[1200];
+    if (!intercom_close(v->id, msg, sizeof msg))
         return;
-    ui_error("could not close that session");
+    ui_error("%s", msg);
     ui_put("\n");
     ui_flush();
 }
@@ -1263,8 +1263,7 @@ int sessionswitch_gave_last(void) { return gave_last; }
 void sessionswitch_serve_request(void)
 {
     char id[128];
-    int closing = 0;
-    if (!handoff_take_request(id, sizeof id, &closing))
+    if (!handoff_take_request(id, sizeof id))
         return;
 
     int at = workspace_find_id(id);
@@ -1273,8 +1272,7 @@ void sessionswitch_serve_request(void)
         return;
     }
 
-    if (!closing)
-        workspace_wait_turn(at);
+    workspace_wait_turn(at);
 
     char screen[4400];
     if (handoff_screen_path(id, screen, sizeof screen))
