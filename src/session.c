@@ -70,6 +70,7 @@ struct session {
     char   **env;
     backend_result last_result;
     int      quota_failed;
+    int      autobackend_due;
     char     title[128];
     char     stale_title[128];
     char     held_title[128];
@@ -546,6 +547,33 @@ void session_rate_limit(struct session *s, backend_rate_limit *out)
     quota_read(q, out);
 }
 
+static int autobackend_ready(struct session *s)
+{
+    int at = settings_get_int(SETTING_AUTO_BACKEND, 0);
+    if (!s || s->remote || !s->agent || !s->agent->rate_limit || at < 1 || at > 100 ||
+        (strcmp(s->backend, "claude") && strcmp(s->backend, "codex") &&
+         strcmp(s->backend, "grok")))
+        return 0;
+    backend_rate_limit limit;
+    session_rate_limit(s, &limit);
+    return limit.available && limit.kind == BACKEND_QUOTA_PERCENT &&
+           limit.used_percent >= at &&
+           (limit.resets_at <= 0 || limit.resets_at > (long)time(NULL));
+}
+
+static void autobackend_interrupt(struct session *s)
+{
+    if (s && !s->abort_request && autobackend_ready(s)) {
+        s->autobackend_due = 1;
+        s->abort_request = 1;
+    }
+}
+
+int session_autobackend_due(const struct session *s)
+{
+    return s && s->autobackend_due;
+}
+
 static void usage_poll(struct session *s)
 {
     backend_rate_limit limit;
@@ -879,6 +907,8 @@ static int abort_check(void)
     if (live && live->abort_hook)
         interrupt |= live->abort_hook(live->abort_ud);
     relay_poll(live);
+    if (!interrupt)
+        autobackend_interrupt(live);
     if (live && live->abort_request)
         interrupt = 1;
 
@@ -2165,7 +2195,9 @@ int session_autobackend(struct session *s)
     if (!s || s->remote || s->running || !s->agent || !s->agent->rate_limit)
         return 0;
     int failed = s->quota_failed;
+    int due = s->autobackend_due;
     s->quota_failed = 0;
+    s->autobackend_due = 0;
     if (at < 1 || at > 100)
         return 0;
     static const char *const order[] = {"claude", "codex", "grok"};
@@ -2177,8 +2209,7 @@ int session_autobackend(struct session *s)
         return 0;
     backend_rate_limit limit;
     session_rate_limit(s, &limit);
-    if (!failed && (!limit.available || limit.used_percent < at ||
-        (limit.resets_at > 0 && limit.resets_at <= (long)time(NULL))))
+    if (!failed && !due && !autobackend_ready(s))
         return 0;
     for (int i = current + 1; i < 3; i++) {
         const char *model, *effort;
@@ -2223,6 +2254,7 @@ static void turn_prepare(struct session *s, const char *text)
     s->stall_told = 0;
     s->stall_at = 0;
     s->interrupted = 0;
+    s->autobackend_due = 0;
     s->abort_request = 0;
     publish(s, "working");
 }
@@ -2371,7 +2403,7 @@ int session_turn(struct session *s, const char *text)
         status_end();
 
     int ok = turn_finish(s, reply, &meta, elapsed);
-    int switched = s->interrupted ? 0 : session_autobackend(s);
+    int switched = s->interrupted && !s->autobackend_due ? 0 : session_autobackend(s);
     if (switched > 0)
         return session_turn(s, "continue");
     return switched < 0 ? 0 : ok;
@@ -2490,8 +2522,10 @@ double session_turn_elapsed(const struct session *s)
 
 void session_interrupt(struct session *s)
 {
-    if (s && s->running)
+    if (s && s->running) {
+        s->autobackend_due = 0;
         s->abort_request = 1;
+    }
 }
 
 void session_set_unseen(struct session *s, int on)
@@ -2551,6 +2585,7 @@ int session_turn_pump(struct session *s)
     usage_poll(s);
 
     if (!s->finished) {
+        autobackend_interrupt(s);
         if (!s->abort_request && session_autohandoff_ready(s)) {
             s->autohandoff = AUTOHANDOFF_DUE;
             s->abort_request = 1;
@@ -2583,7 +2618,7 @@ void session_turn_wait(struct session *s)
             continue;
         }
         struct pollfd p = {.fd = fd, .events = POLLIN};
-        poll(&p, 1, -1);
+        poll(&p, 1, 200);
     }
 }
 

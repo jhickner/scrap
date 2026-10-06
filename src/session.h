@@ -111,6 +111,7 @@ int session_work_count(const struct session *s);
 int  session_stalled(struct session *s);
 
 int session_autobackend(struct session *s);
+int session_autobackend_due(const struct session *s);
 
 int session_switch_backend(struct session *s, const char *backend);
 

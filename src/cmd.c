@@ -1080,7 +1080,8 @@ static void autohandoff_ask(struct session *s, int interrupted)
 
 void cmd_turn_done(struct session *s)
 {
-    int switched = session_last_interrupted(s) ? 0 : session_autobackend(s);
+    int switched = session_last_interrupted(s) && !session_autobackend_due(s)
+                       ? 0 : session_autobackend(s);
     if (switched != 0) {
         if (switched > 0)
             workspace_send(workspace_index_of(s), "continue", "auto-backend: continue");
