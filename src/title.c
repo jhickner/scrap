@@ -63,3 +63,10 @@ int title_set(const char *id, const char *name)
     write_cache(id, text);
     return 1;
 }
+
+void title_clear(const char *id)
+{
+    char found[256];
+    if (title_lookup(id, found, sizeof found))
+        write_cache(id, "");
+}

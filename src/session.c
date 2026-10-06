@@ -385,6 +385,12 @@ static void tab_busy(struct session *s, int busy)
     if (busy == s->idle_busy)
         return;
     s->idle_busy = busy;
+    if (!busy && !s->running && !tasks_pending(&s->tasks) && !s->remote && s->id[0]) {
+        title_clear(s->id);
+        s->title[0] = '\0';
+        if (s == live)
+            status_set_note(NULL);
+    }
     publish(s, busy ? "working" : "finished");
 }
 
