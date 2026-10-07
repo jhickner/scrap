@@ -5,6 +5,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2024,6 +2025,16 @@ int session_set_memory(struct session *s, int on)
     return 0;
 }
 
+void session_adopt_chain(struct session *s, const char *chain)
+{
+    if (!s || !chain || !*chain || strlen(chain) >= sizeof s->chain)
+        return;
+    for (const char *p = chain; *p; p++)
+        if (!isxdigit((unsigned char)*p))
+            return;
+    snprintf(s->chain, sizeof s->chain, "%s", chain);
+}
+
 void session_adopt_id(struct session *s, const char *id)
 {
     if (s && id && *id) {
@@ -3105,6 +3116,11 @@ int session_argv(const struct session *s, char **out, int max, unsigned what)
         out[n++] = (char *)"--name";
         out[n++] = (char *)s->name;
         out[n] = NULL;
+        if (s->chain[0] && n + 2 < max) {
+            out[n++] = (char *)"--chain";
+            out[n++] = (char *)s->chain;
+            out[n] = NULL;
+        }
     }
     return n;
 }

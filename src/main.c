@@ -733,6 +733,7 @@ int main(int argc, char **argv)
         {"effort",  required_argument, NULL, 'e'},
         {"dir",     required_argument, NULL, 'C'},
         {"name",    required_argument, NULL, 'n'},
+        {"chain",   required_argument, NULL, 'K'},
         {"safe",    no_argument,       NULL, 's'},
         {"resume",  no_argument,       NULL, 'r'},
         {"session", required_argument, NULL, 'S'},
@@ -759,6 +760,7 @@ int main(int argc, char **argv)
     const char *effort = NULL;
     const char *dir = NULL;
     const char *name = NULL;
+    const char *chain_arg = NULL;
     const char *session_arg = NULL;
     const char *restore_arg = NULL;
     const char *tabs_arg = NULL;
@@ -784,6 +786,7 @@ int main(int argc, char **argv)
         case 'C': dir = optarg; break;
         case 'p': prompt_arg = optarg; break;
         case 'n': name = optarg + (optarg[0] == '@'); break;
+        case 'K': chain_arg = optarg; break;
         case 's': safe_mode = 1; break;
         case 'r': resume = 1; break;
         case 'S': session_arg = optarg; break;
@@ -846,6 +849,7 @@ int main(int argc, char **argv)
             session_arg = t.id;
             memory = t.memory;
             name = t.id ? NULL : t.name;
+            chain_arg = t.id ? NULL : t.chain;
         }
         dir = t.cwd;
         front_screen = t.screen && *t.screen ? t.screen : NULL;
@@ -896,7 +900,7 @@ int main(int argc, char **argv)
         settings_open(path);
     }
 
-    if (name && intercom_name_taken(name, NULL)) {
+    if (name && !restore_arg && intercom_name_taken(name, chain_arg)) {
         if (prompt_arg || dir || instance_arg || attach_arg) {
             fprintf(stderr, APP_NAME ": the name '%s' is taken\n", name);
             return 1;
@@ -977,8 +981,9 @@ int main(int argc, char **argv)
                                                      session_permission_default())));
 
         session_adopt_id(session, session_arg);
-        if (name)
-            session_set_name(session, name);
+        session_adopt_chain(session, chain_arg);
+        if (name && !session_set_name(session, name) && restore_arg)
+            ui_note("the name '%s' is taken; this tab is now @%s", name, session_name(session));
         if (attach_arg)
             session_set_remote(session, attach_arg);
     }

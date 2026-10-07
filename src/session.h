@@ -161,6 +161,8 @@ int         session_permission_default(void);
 int session_resume(struct session *s, const char *id);
 
 void session_adopt_id(struct session *s, const char *id);
+/* Keep the chain a restarted tab had, so its own record doesn't hold its name. */
+void session_adopt_chain(struct session *s, const char *chain);
 
 const char *session_title(const struct session *s);
 int         session_set_remote(struct session *s, const char *target);
@@ -220,7 +222,7 @@ enum {
     SESSION_ARGV_RESUME = 1u << 1,
     SESSION_ARGV_SAFE   = 1u << 2,
     SESSION_ARGV_FORK   = 1u << 3,
-    SESSION_ARGV_NAME   = 1u << 4, /* --name when there's no --session to carry it */
+    SESSION_ARGV_NAME   = 1u << 4, /* --name and --chain when there's no --session to carry them */
 };
 
 static inline int scrap_argv(char **out, int max, unsigned what,

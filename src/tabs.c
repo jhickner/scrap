@@ -8,6 +8,7 @@
 
 #include "chain.h"
 #include "chrome.h"
+#include "ui.h"
 #include "hud.h"
 #include "restart.h"
 #include "scrollback.h"
@@ -69,6 +70,8 @@ int tabs_parse(char *line, struct tab_args *t)
             t->remote = value;
         else if (!strcmp(arg, "--name"))
             t->name = value;
+        else if (!strcmp(arg, "--chain"))
+            t->chain = value;
     }
     if (t->remote)
         return 1;
@@ -120,8 +123,9 @@ void tabs_prepare(const char *path)
         if (!s)
             continue;
         session_set_memory(s, t.memory);
-        if (t.name)
-            session_set_name(s, t.name);
+        session_adopt_chain(s, t.chain);
+        if (t.name && !session_set_name(s, t.name))
+            ui_note("the name '%s' is taken; that tab is now @%s", t.name, session_name(s));
         tabs_queue(s, t.screen);
     }
     fclose(f);
