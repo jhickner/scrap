@@ -3075,10 +3075,15 @@ int session_argv(const struct session *s, char **out, int max, unsigned what)
     }
     const char *id = session_id(s);
     int resume = (what & SESSION_ARGV_RESUME) && id && session_can_resume(s);
-    return scrap_argv(out, max, resume ? what : (what & ~SESSION_ARGV_RESUME),
-                    NULL, session_backend(s), session_cwd(s), session_model(s),
-                    session_effort(s), id,
-                    (what & SESSION_ARGV_SAFE) && s && !s->customizations, NULL);
+    int n = scrap_argv(out, max, resume ? what : (what & ~SESSION_ARGV_RESUME),
+                       NULL, session_backend(s), session_cwd(s), session_model(s),
+                       session_effort(s), id,
+                       (what & SESSION_ARGV_SAFE) && s && !s->customizations, NULL);
+    if (s && s->memory && n + 1 < max) {
+        out[n++] = (char *)"--memory";
+        out[n] = NULL;
+    }
+    return n;
 }
 
 int session_last_interrupted(const struct session *s) { return s ? s->interrupted : 0; }

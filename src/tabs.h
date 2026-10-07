@@ -7,6 +7,7 @@ struct session;
 
 struct tab_args {
     const char *screen, *backend, *cwd, *model, *effort, *id, *remote;
+    int         memory;
     char        latest[128];
 };
 

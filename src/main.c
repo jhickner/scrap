@@ -172,6 +172,7 @@ static void usage(void)
             "  -r         --resume: pick a past conversation to continue\n"
             "  --session id  resume a specific conversation (used by the fork commands)\n"
             "  --fork     with --session: branch off it instead of writing back to it\n"
+            "  --memory   start in memory mode (see /memory)\n"
             "  --restore f  take over the screen from a restarting scrap (used by /restart)\n"
             "  --tabs f   reopen the sessions a restarting scrap was holding (used by /restart)\n"
             "  --relay id  serve that session over the relay once it is open (used by /restart)\n"
@@ -722,6 +723,7 @@ int main(int argc, char **argv)
         {"resume",  no_argument,       NULL, 'r'},
         {"session", required_argument, NULL, 'S'},
         {"fork",    no_argument,       NULL, 'F'},
+        {"memory",  no_argument,       NULL, 'M'},
         {"restore", required_argument, NULL, 'R'},
         {"tabs",    required_argument, NULL, 'B'},
         {"relay",   required_argument, NULL, 'L'},
@@ -756,6 +758,7 @@ int main(int argc, char **argv)
     int pin_backend = 0;
     int fork_session = 0;
     int safe_mode = 0;
+    int memory = 0;
     int resume = 0;
     int opt;
 
@@ -771,6 +774,7 @@ int main(int argc, char **argv)
         case 'r': resume = 1; break;
         case 'S': session_arg = optarg; break;
         case 'F': fork_session = 1; break;
+        case 'M': memory = 1; break;
         case 'R': restore_arg = optarg; break;
         case 'B': tabs_arg = optarg; break;
         case 'L': relay_resume(optarg); break;
@@ -949,6 +953,7 @@ int main(int argc, char **argv)
         session_set_customizations(session, !safe_mode);
         session_set_browser_login(session, interactive);
         session_set_fork(session, fork_session && session_arg);
+        session_set_memory(session, memory);
         session_set_thinking(session, settings_get_int(SETTING_THINKING, 1));
         session_set_compact(session, settings_get_int(SETTING_COMPACT, 0));
         session_set_permission(session,

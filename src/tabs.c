@@ -48,7 +48,9 @@ int tabs_parse(char *line, struct tab_args *t)
     char *rest = line;
     t->screen = strsep(&rest, "\t");
     for (char *arg; (arg = strsep(&rest, "\t"));) {
-        if (arg[0] != '-' || !strcmp(arg, "-s"))
+        if (!strcmp(arg, "--memory"))
+            t->memory = 1;
+        if (arg[0] != '-' || !strcmp(arg, "-s") || !strcmp(arg, "--memory"))
             continue;
         char *value = strsep(&rest, "\t");
         if (!value)
@@ -110,6 +112,7 @@ void tabs_prepare(const char *path)
         }
         if (!s)
             continue;
+        session_set_memory(s, t.memory);
         tabs_queue(s, t.screen);
     }
     fclose(f);
