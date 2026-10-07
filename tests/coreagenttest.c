@@ -571,7 +571,19 @@ static int mock_claude(int argc, char **argv)
             continue;
         }
         cJSON *content = cJSON_GetObjectItem(cJSON_GetObjectItem(msg, "message"), "content");
-        const char *text = cJSON_IsString(content) ? content->valuestring
+        /* Blocks are logged joined by "|", a cached one followed by "^". */
+        char *joined = NULL;
+        if (cJSON_GetArraySize(content) > 1) {
+            size_t n = 0;
+            FILE *f = open_memstream(&joined, &n);
+            cJSON *block;
+            cJSON_ArrayForEach(block, content)
+                fprintf(f, "%s%s%s", block == content->child ? "" : "|",
+                        cJSON_GetStringValue(cJSON_GetObjectItem(block, "text")) ?: "",
+                        cJSON_GetObjectItem(block, "cache_control") ? "^" : "");
+            fclose(f);
+        }
+        const char *text = joined ? joined : cJSON_IsString(content) ? content->valuestring
                          : cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(content, 0), "text"));
         printf("{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"mock\"}\n");
         if (text && !strcmp(text, "/clear")) {
@@ -594,6 +606,7 @@ static int mock_claude(int argc, char **argv)
             cli_result(zoom ? zoom : "done");
             free(zoom);
         }
+        free(joined);
         cJSON_Delete(msg);
     }
     free(line);
@@ -642,7 +655,10 @@ static void drive_test(void)
     CHECK(strstr(log, "MCP \"{\\\"mcpServers\\\":{\\\"optchat\\\":{\\\"command\\\":\\\"relay\\\",\\\"args\\\":[\\\"mcp-memory\\\",\\\"/tmp/optchat-"));
     char *first = strstr(log, "PROMPT "), *clear = strstr(log, "CLEAR"), *second = first ? strstr(first + 1, "PROMPT ") : NULL;
     CHECK(first && clear && second && first < clear && clear < second);
-    CHECK(first && strstr(first, "\\n</chat>\\ndrive one\""));
+    CHECK(first && strstr(first, "<chat>\\n^|</chat>\\ndrive one\""));
+    /* The breakpoint goes before </chat>, so the next turn's view, which only
+       adds lines, starts with this one's cached prefix. */
+    CHECK(second && strstr(second, "|echo: x-out\\n^|</chat>\\ndrive ZOOM\""));
     CHECK(second && strstr(second, "|user: drive one\\n") && strstr(second, "|talk: cli says hi\\n") &&
           strstr(second, "|tool: Bash {\\\"command\\\":\\\"echo x\\\"}\\n") && strstr(second, "|echo: x-out\\n"));
     CHECK(!strstr(log, "/sub"));

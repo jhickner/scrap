@@ -610,6 +610,7 @@ typedef struct {
     int (*agent_host)(void *ud, Backend *child, const char *task, char **report);
     void *agent_ud;
     char drive[16];
+    long view_seen;
     Backend *inner;
     int inner_used;
     char *relay;
@@ -2472,10 +2473,22 @@ static int sa_memory_turn(sa_agent *x, const char *user, const sa_buf *reminder,
         oc_append(x->mem, "user", user);
         return 0;
     }
-    char *view = oc_render(x->mem, !out);
+    /* Claude turns each start after /clear, so the view goes as one user
+       message; claude.h turns its marks into blocks with one breakpoint on
+       the last marked piece. That mark sits before </chat> so the next
+       turn's view (which only adds lines) starts with this turn's cached
+       prefix, and a mark where the last view ended keeps that prefix within
+       the API's lookback when many lines came since. Other drives would see
+       the marks as raw text. */
+    int marks = !out || !strcmp(x->drive, "claude");
+    char *view = oc_render_from(x->mem, marks, out && marks ? &x->view_seen : NULL);
     if (!x->sub) oc_append(x->mem, "user", user);
     if (out) {
-        sa_printf(out, "%s\n%s", view, user);
+        size_t n = strlen(view);
+        if (marks && n >= 7 && !strcmp(view + n - 7, "</chat>"))
+            sa_printf(out, "%.*s" BACKEND_CACHE_MARK "</chat>\n%s", (int)(n - 7), view, user);
+        else
+            sa_printf(out, "%s\n%s", view, user);
         free(view);
         return 1;
     }

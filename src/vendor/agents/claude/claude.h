@@ -1465,7 +1465,9 @@ static void cl_text_block(cJSON *content, const char *s, size_t n, int cache) {
 /* Text with cache marks becomes one block per marked piece. The CLI keeps
  * one breakpoint free, so it goes on the last marked piece; that piece's
  * final lines are separate blocks so the API's lookback finds an entry a
- * previous turn wrote a few lines earlier. 1h matches the CLI's own marks. */
+ * previous turn wrote a few lines earlier. The piece's own start stays
+ * within the lookback too, for callers that mark where they last ended.
+ * 1h matches the CLI's own marks. */
 static void cl_cache_content(cJSON *content, const char *text) {
     const char *last = strrchr(text, CL_CACHE_MARK);
     for (const char *s = text, *e; s <= last; s = e + 1) {
@@ -1473,7 +1475,7 @@ static void cl_cache_content(cJSON *content, const char *text) {
         if (e != last) { cl_text_block(content, s, (size_t)(e - s), 0); continue; }
         const char *cut[CL_CACHE_LINES + 1];
         int k = 0;
-        for (const char *p = e; p > s && k <= CL_CACHE_LINES; p--)
+        for (const char *p = e; p > s && k < CL_CACHE_LINES - 1; p--)
             if (p[-1] == '\n' && p != e) cut[k++] = p;
         const char *from = s;
         for (int j = k - 1; j >= 0; j--) {

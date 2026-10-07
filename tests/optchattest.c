@@ -220,6 +220,22 @@ static void marks_test(void)
     CHECK(count == 3 && !strstr(plain, BACKEND_CACHE_MARK));
     free(view);
     free(plain);
+
+    /* A mark goes after the line that ended the previous render, and only
+       when lines came after it. */
+    long seen = 0;
+    char *first = oc_render_from(m, 0, &seen);
+    CHECK(seen == id + 1 && !strstr(first, BACKEND_CACHE_MARK));
+    free(first);
+    oc_append(m, "user", "next");
+    char *next = oc_render_from(m, 0, &seen), *mark = strstr(next, BACKEND_CACHE_MARK);
+    char want[32];
+    snprintf(want, sizeof want, "%ld+1|user: next\n</chat>", id + 1);
+    CHECK(mark && mark[-1] == '\n' && !strcmp(mark + 1, want) && seen == id + 2);
+    free(next);
+    char *again = oc_render_from(m, 0, &seen);
+    CHECK(!strstr(again, BACKEND_CACHE_MARK) && seen == id + 2);
+    free(again);
     oc_close(m);
     char cmd[600];
     snprintf(cmd, sizeof cmd, "rm -rf %s", dir);

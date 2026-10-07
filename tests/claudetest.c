@@ -291,6 +291,21 @@ int main(int argc, char **argv)
     }
     free(reply);
 
+    /* A long marked piece keeps its start (where a caller last ended) within
+       the API's 20-block lookback: 18 line blocks plus the rest. */
+    char longer[512] = "head\n\x1e";
+    for (int i = 0; i < 25; i++)
+        strcat(longer, "x\n");
+    strcat(longer, "\x1e" "tail");
+    reply = claude_send(client, longer);
+    if (!reply || strcmp(reply, "L|L|L|L|L|L|L|L|L|L|L|L|L|L|L|L|L|L|L|L*|T")) {
+        fprintf(stderr, "claudetest: long marked piece became %s\n", reply ? reply : "none");
+        free(reply);
+        claude_stop(client);
+        return 1;
+    }
+    free(reply);
+
     reply = claude_send(client, "env");
     if (!reply || strcmp(reply, "worker-7") || getenv("CLAUDETEST_ENV")) {
         fprintf(stderr, "claudetest: env did not reach only the child (%s)\n", reply ? reply : "none");

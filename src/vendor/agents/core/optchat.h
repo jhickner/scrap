@@ -44,6 +44,7 @@ int         oc_settle(oc_mem *m, int (*abort)(void *ud), void *ud);
 int         oc_view(oc_mem *m, oc_ref **parts);
 long        oc_view_size(oc_mem *m);
 char       *oc_render(oc_mem *m, int marks);
+char       *oc_render_from(oc_mem *m, int marks, long *seen);
 char       *oc_zoom(oc_mem *m, long id, long n);
 
 oc_compactor *oc_compactor_start(oc_mem *m, int jobs, Backend *(*open)(void *ud, const char *system),
@@ -498,9 +499,14 @@ static void oc_line(oc_buf *b, long id, long n, const char *text) {
     oc_flat(b, text);
 }
 
-char *oc_render(oc_mem *m, int marks) {
+/* With seen, a cache mark also goes after the line ending at message *seen
+   (the last line of the caller's previous render), so a cache entry written
+   there is found however many lines came after it; *seen becomes the end of
+   this render's last line. */
+char *oc_render_from(oc_mem *m, int marks, long *seen) {
     oc_buf b = {0};
     int next = marks ? 0 : 3;
+    long end = 0;
     oc_cats(&b, "<chat>\n");
     pthread_mutex_lock(&m->mu);
     for (int k = 0; k < m->np; k++) {
@@ -509,11 +515,16 @@ char *oc_render(oc_mem *m, int marks) {
         oc_mark(&b, strlen(t ? t : OC_UNBUILT) + 24, &next);
         oc_line(&b, oc_start(p), 1L << p.l, t ? t : OC_UNBUILT);
         oc_cats(&b, "\n");
+        end = oc_start(p) + (1L << p.l);
+        if (seen && *seen > 0 && end == *seen && k + 1 < m->np) oc_cats(&b, BACKEND_CACHE_MARK);
     }
     pthread_mutex_unlock(&m->mu);
     oc_cats(&b, "</chat>");
+    if (seen) *seen = end;
     return b.p;
 }
+
+char *oc_render(oc_mem *m, int marks) { return oc_render_from(m, marks, NULL); }
 
 char *oc_zoom(oc_mem *m, long id, long n) {
     oc_buf b = {0};
