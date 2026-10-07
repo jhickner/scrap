@@ -17,6 +17,10 @@ void view_tool_argument(const backend_event *ev, const char *cwd, char *out, siz
 
 const char *view_tool_arg_value(const cJSON *input);
 
+/* The argument a one-line view shows for a call: the optchat tools' ids or
+ * task, else view_tool_arg_value(). Fills scratch only for the former. */
+const char *view_tool_value(const char *name, const cJSON *input, char *scratch, size_t size);
+
 int  view_tool_path(const char *input_json, const char *cwd, char *out, size_t size);
 
 void view_tool_call(const char *name, const char *arg);

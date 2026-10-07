@@ -313,6 +313,21 @@ int main(void)
         view_tool_argument(&call, NULL, arg, sizeof arg);
         if (strcmp(arg, MEMORY_CALLS[i].arg) != 0)
             return fail("a memory tool call lost its arguments", arg);
+        /* relay and Telegram take the same value through view_tool_value() */
+        cJSON *in = cJSON_Parse(MEMORY_CALLS[i].input);
+        char scratch[256];
+        const char *v = view_tool_value(MEMORY_CALLS[i].name, in, scratch, sizeof scratch);
+        if (!v || strcmp(v, MEMORY_CALLS[i].arg) != 0)
+            return fail("view_tool_value lost a memory tool's arguments", v);
+        cJSON_Delete(in);
+    }
+    {
+        cJSON *in = cJSON_Parse("{\"command\":\"ls\"}");
+        char scratch[256];
+        const char *v = view_tool_value("Bash", in, scratch, sizeof scratch);
+        if (!v || strcmp(v, "ls") != 0)
+            return fail("view_tool_value lost a plain tool's argument", v);
+        cJSON_Delete(in);
     }
     ui_capture_begin(80);
     view_tool_call("mcp__optchat__zoom", "512+1");

@@ -511,17 +511,13 @@ static const char *short_path(const char *p)
     return p;
 }
 
-static const char *tool_arg(cJSON *in)
-{
-    return view_tool_arg_value(in);
-}
-
 static void tool_line(char *label, size_t ln, char *arg, size_t an,
                       const backend_event *ev)
 {
+    char scratch[600];
     toolstyle_label(label, ln, ev->name ? ev->name : "tool");
     cJSON *in = ev->input_json ? cJSON_Parse(ev->input_json) : NULL;
-    const char *v = in ? tool_arg(in) : ev->arg;
+    const char *v = in ? view_tool_value(ev->name, in, scratch, sizeof scratch) : ev->arg;
     if (v && (!strcmp(label, "read") || !strcmp(label, "edit") ||
               !strcmp(label, "write") || !strcmp(label, "notebookedit")))
         v = short_path(v);

@@ -564,6 +564,13 @@ static int memory_tool_argument(const char *name, const cJSON *input, char *out,
     return 0;
 }
 
+const char *view_tool_value(const char *name, const cJSON *input, char *scratch, size_t size)
+{
+    if (memory_tool_argument(name, input, scratch, size))
+        return scratch;
+    return view_tool_arg_value(input);
+}
+
 void view_tool_argument(const backend_event *ev, const char *cwd, char *out, size_t size)
 {
     char arg[4096] = "";

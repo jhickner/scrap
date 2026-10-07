@@ -765,10 +765,10 @@ static cJSON *runs_of(const char *text, size_t len, const unsigned char *roles)
 
 static void tool_entry(struct log *l, const backend_event *ev)
 {
-    char label[48], arg[600];
+    char label[48], arg[600], scratch[600];
     toolstyle_label(label, sizeof label, ev->name ? ev->name : "tool");
     cJSON *in = ev->input_json ? cJSON_Parse(ev->input_json) : NULL;
-    const char *v = in ? view_tool_arg_value(in) : ev->arg;
+    const char *v = in ? view_tool_value(ev->name, in, scratch, sizeof scratch) : ev->arg;
     if (v && (!strcmp(label, "read") || !strcmp(label, "edit") ||
               !strcmp(label, "write") || !strcmp(label, "notebookedit")))
         v = short_path(v);
