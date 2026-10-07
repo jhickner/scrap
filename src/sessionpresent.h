@@ -48,6 +48,7 @@ void sessionpresent_turn_result(struct sessionpresent *p, const char *backend,
                                 int quiet);
 
 void sessionpresent_footer(double elapsed, long tokens, long window, double cost,
+                           long fresh, long cache_read, long cache_write,
                            const char *title);
 
 struct sessionpresent_report {

@@ -27,7 +27,7 @@ static void expect(const char *what, const char *want, const char *drawn)
 static void check_footer(void)
 {
     ui_capture_begin(80);
-    sessionpresent_footer(12.0, 1500, 8000, 0.125, "A useful title");
+    sessionpresent_footer(12.0, 1500, 8000, 0.125, 0, 0, 0, "A useful title");
     char *drawn = ui_capture_end();
     expect("footer snapshot",
            "12s \xc2\xb7 1.5k / 8.0k (18%) \xc2\xb7 $0.1250 \xc2\xb7 A useful title",
@@ -35,10 +35,25 @@ static void check_footer(void)
     free(drawn);
 
     ui_capture_begin(28);
-    sessionpresent_footer(12.0, 1500, 8000, 0.125, "A useful title");
+    sessionpresent_footer(12.0, 1500, 8000, 0.125, 0, 0, 0, "A useful title");
     drawn = ui_capture_end();
     expect("narrow footer keeps the title on a second line",
            "12s \xc2\xb7 1.5k / 8.0k (18%) \xc2\xb7 $0.1250\nA useful title", drawn);
+    free(drawn);
+
+    ui_capture_begin(120);
+    sessionpresent_footer(4.0, 192000, 1000000, 0, 600, 182000, 9400, NULL);
+    drawn = ui_capture_end();
+    expect("footer shows cache use when the backend reports it",
+           "4s \xc2\xb7 192.0k / 1.0M (19%) \xc2\xb7 cache 94% (182.0k read, 9.4k write)",
+           drawn);
+    free(drawn);
+
+    ui_capture_begin(120);
+    sessionpresent_footer(4.0, 9000, 0, 0, 1000, 9000, 0, NULL);
+    drawn = ui_capture_end();
+    expect("footer leaves out a zero cache write",
+           "4s \xc2\xb7 9.0k \xc2\xb7 cache 90% (9.0k read)", drawn);
     free(drawn);
 }
 

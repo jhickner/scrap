@@ -2534,7 +2534,8 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
     }
     if (!s->quiet)
         sessionpresent_footer(elapsed, s->context_tokens, s->context_window,
-                              s->cost_usd, s->title);
+                              s->cost_usd, m.input_tokens, m.cache_read_tokens,
+                              m.cache_creation_tokens, s->title);
     hud_refresh(s);
     return 1;
 }

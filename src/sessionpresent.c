@@ -426,6 +426,7 @@ struct footer {
     long   tokens;
     long   window;
     double cost;
+    long   fresh, cache_read, cache_write;
     char   title[128];
 };
 
@@ -453,6 +454,17 @@ static void footer_render(void *ud, int cols)
     } else if (f->tokens > 0) {
         APPEND(" \xc2\xb7 %s", used);
     }
+    if (f->cache_read > 0 || f->cache_write > 0) {
+        long in = f->fresh + f->cache_read + f->cache_write;
+        char rd[32], wr[32];
+        text_humanize(f->cache_read, rd, sizeof rd);
+        text_humanize(f->cache_write, wr, sizeof wr);
+        APPEND(" \xc2\xb7 cache %d%% (%s read",
+               (int)((double)f->cache_read * 100.0 / (double)in), rd);
+        if (f->cache_write > 0)
+            APPEND(", %s write", wr);
+        APPEND(")");
+    }
     if (f->cost > 0)
         APPEND(" \xc2\xb7 $%.4f", f->cost);
 
@@ -476,6 +488,7 @@ static void footer_render(void *ud, int cols)
 }
 
 void sessionpresent_footer(double elapsed, long tokens, long window, double cost,
+                           long fresh, long cache_read, long cache_write,
                            const char *title)
 {
     struct footer *f = calloc(1, sizeof *f);
@@ -485,6 +498,9 @@ void sessionpresent_footer(double elapsed, long tokens, long window, double cost
     f->tokens = tokens;
     f->window = window;
     f->cost = cost;
+    f->fresh = fresh;
+    f->cache_read = cache_read;
+    f->cache_write = cache_write;
     snprintf(f->title, sizeof f->title, "%s", title ? title : "");
     viewport_item_begin(&(struct viewport_entry){
         .render = footer_render, .ud = f, .free_ud = free, .reflow = 1});

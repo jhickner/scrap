@@ -2551,7 +2551,9 @@ static char *sa_ask_ex(Backend *b, const char *user, backend_result *meta) {
         int ok = body && sa_request(x, body, &r, &interrupted);
         free(body);
         backend_flush(&x->st);
-        res.input_tokens += r.in;
+        /* prompt_tokens counts the cached reads and writes too */
+        long fresh = r.in - r.cached - r.written;
+        res.input_tokens += fresh > 0 ? fresh : 0;
         res.output_tokens += r.out;
         res.cache_read_tokens += r.cached;
         res.cache_creation_tokens += r.written;

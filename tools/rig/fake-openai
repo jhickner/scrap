@@ -45,8 +45,13 @@ def reply(msgs):
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-        out = reply(body.get("messages", []))
-        out += "data: " + json.dumps({"choices": [], "usage": {"prompt_tokens": 100, "completion_tokens": 5}}) + "\n\n"
+        msgs = body.get("messages", [])
+        out = reply(msgs)
+        usage = {"prompt_tokens": 100, "completion_tokens": 5}
+        if msgs and "cachestats" in text_of(msgs[-1]):
+            usage = {"prompt_tokens": 10000, "completion_tokens": 5,
+                     "prompt_tokens_details": {"cached_tokens": 9000, "cache_write_tokens": 500}}
+        out += "data: " + json.dumps({"choices": [], "usage": usage}) + "\n\n"
         out += "data: [DONE]\n\n"
         data = out.encode()
         self.send_response(200)
