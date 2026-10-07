@@ -242,7 +242,8 @@ int restart_exec(struct session *s)
     int   n = 0;
     argv[n++] = (char *)sessionfork_program();
     n += session_argv(front, argv + n, SESSION_ARGV_MAX,
-                      SESSION_ARGV_CWD | SESSION_ARGV_RESUME | SESSION_ARGV_SAFE);
+                      SESSION_ARGV_CWD | SESSION_ARGV_RESUME | SESSION_ARGV_SAFE |
+                          SESSION_ARGV_NAME);
 
     for (int i = 0; i < extra_n; i++)
         argv[n++] = (char *)extra[i];

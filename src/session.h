@@ -221,6 +221,7 @@ enum {
     SESSION_ARGV_RESUME = 1u << 1,
     SESSION_ARGV_SAFE   = 1u << 2,
     SESSION_ARGV_FORK   = 1u << 3,
+    SESSION_ARGV_NAME   = 1u << 4, /* --name when there's no --session to carry it */
 };
 
 static inline int scrap_argv(char **out, int max, unsigned what,

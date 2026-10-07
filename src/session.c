@@ -3129,6 +3129,11 @@ int session_argv(const struct session *s, char **out, int max, unsigned what)
         out[n++] = (char *)"--memory";
         out[n] = NULL;
     }
+    if (s && !resume && (what & SESSION_ARGV_NAME) && s->name[0] && n + 2 < max) {
+        out[n++] = (char *)"--name";
+        out[n++] = (char *)s->name;
+        out[n] = NULL;
+    }
     return n;
 }
 

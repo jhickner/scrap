@@ -67,6 +67,8 @@ int tabs_parse(char *line, struct tab_args *t)
             t->id = value;
         else if (!strcmp(arg, "--attach"))
             t->remote = value;
+        else if (!strcmp(arg, "--name"))
+            t->name = value;
     }
     if (t->remote)
         return 1;
@@ -89,7 +91,8 @@ int tabs_parse(char *line, struct tab_args *t)
 void tabs_write(FILE *f, const struct session *s, const char *screen)
 {
     char *args[SESSION_ARGV_MAX];
-    int   n = session_argv(s, args, SESSION_ARGV_MAX, SESSION_ARGV_CWD | SESSION_ARGV_RESUME);
+    int   n = session_argv(s, args, SESSION_ARGV_MAX,
+                           SESSION_ARGV_CWD | SESSION_ARGV_RESUME | SESSION_ARGV_NAME);
     fputs(screen, f);
     for (int a = 0; a < n; a++)
         fprintf(f, "\t%s", args[a]);
@@ -117,6 +120,8 @@ void tabs_prepare(const char *path)
         if (!s)
             continue;
         session_set_memory(s, t.memory);
+        if (t.name)
+            session_set_name(s, t.name);
         tabs_queue(s, t.screen);
     }
     fclose(f);

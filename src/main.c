@@ -830,6 +830,8 @@ int main(int argc, char **argv)
             model = t.model;
             effort = t.effort;
             session_arg = t.id;
+            memory = t.memory;
+            name = t.id ? NULL : t.name;
         }
         dir = t.cwd;
         front_screen = t.screen && *t.screen ? t.screen : NULL;
