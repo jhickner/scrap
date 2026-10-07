@@ -74,3 +74,4 @@ tools/rig/scraprig stop $n
 - all features should support all backends, not just claude, etc. unless that
 backend is not able to support the feature
 - prefer rig tests over unit tests
+- this also fails on master is not a valid argument: fix it
