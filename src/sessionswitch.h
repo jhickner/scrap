@@ -11,6 +11,7 @@ int  sessionswitch_show_open(const char *id);
 
 int  sessionswitch_gave_last(void);
 void sessionswitch_serve_request(void);
+int  sessionswitch_handoff_due(void);
 int  sessionswitch_yank(const char *target, char *why, size_t size);
 
 cJSON *sessionswitch_rows(void);

@@ -33,7 +33,9 @@
 #include "tailnet.h"
 #include "text.h"
 #include "title.h"
+#include "tty.h"
 #include "ui.h"
+#include "viewport.h"
 #include "vendor/agents/backend.h"
 #include "workspace.h"
 
@@ -666,19 +668,38 @@ void sessionswitch_step(int dir)
     free(o.live);
 }
 
-static void waiting(int waited_ms, void *ud)
+static int waiting(int waited_ms, void *ud)
 {
     int *said = ud;
+    if (tty_input_waiting()) {
+        tty_event ev = {0};
+        int got = tty_read(&ev, 0);
+        free(ev.text);
+        if (got &&
+            (ev.key == TK_ESCAPE || ev.key == TK_EOF || (ev.key == TK_CHAR && ev.cp == 3))) {
+            *said = 2;
+            viewport_item_begin(VIEWPORT_ROWS(1, 1));
+            ui_note("stopped waiting");
+            viewport_item_end();
+            ui_flush();
+            viewport_paint();
+            return 1;
+        }
+    }
     if (waited_ms < 1000 || *said)
-        return;
+        return 0;
     *said = 1;
-    ui_bar(ui_style(UI_DIM), "no reply yet \xc2\xb7 waiting\xe2\x80\xa6");
-    ui_put("\n");
+    viewport_item_begin(VIEWPORT_ROWS(1, 1));
+    ui_bar(ui_style(UI_DIM),
+           "waiting for its turn to end \xc2\xb7 esc to stop waiting\xe2\x80\xa6");
+    viewport_item_end();
     ui_flush();
+    viewport_paint();
+    return 0;
 }
 
 static int take(const struct live_session *v, char *why, size_t size,
-                void (*wait)(int waited_ms, void *ud), void *ud)
+                int (*wait)(int waited_ms, void *ud), void *ud)
 {
     char screen[4400];
     if (!handoff_ask(v->pid, v->id, screen, sizeof screen, wait, ud)) {
@@ -716,13 +737,16 @@ int sessionswitch_yank(const char *target, char *why, size_t size)
         snprintf(why, size, "no live session matches %s", target);
     else if (v[found].mine && (at = workspace_find_id(v[found].id)) < 0)
         snprintf(why, size, "%s is not a tab here", target);
-    else if (!v[found].mine)
-        at = take(&v[found], why, size, NULL, NULL);
+    else if (!v[found].mine) {
+        int said = 0;
+        at = take(&v[found], why, size, waiting, &said);
+    }
     free(v);
     return at;
 }
 
-static void yank(const struct live_session *v)
+/* Returns 0 when the user stopped waiting, so pulling every window stops too. */
+static int yank(const struct live_session *v)
 {
     ui_bar(ui_style(UI_DIM), "asking %s for the session\xe2\x80\xa6",
            v->pane[0] ? v->pane : "the other window");
@@ -732,15 +756,18 @@ static void yank(const struct live_session *v)
     char why[200];
     int said = 0;
     if (take(v, why, sizeof why, waiting, &said) < 0) {
+        if (said == 2)
+            return 0;
         ui_error("%s", why);
         ui_put("\n");
         ui_flush();
-        return;
+        return 1;
     }
     ui_bar(ui_style(UI_DIM), "session is here \xc2\xb7 %s",
            v->title[0] ? v->title : v->backend);
     ui_put("\n");
     ui_flush();
+    return 1;
 }
 
 static void yank_all(const struct live_session *live, int nlive)
@@ -749,8 +776,9 @@ static void yank_all(const struct live_session *live, int nlive)
     for (int i = 0; i < nlive; i++) {
         if (live[i].mine || !live[i].id[0])
             continue;
-        yank(&live[i]);
         any = 1;
+        if (!yank(&live[i]))
+            break;
     }
     if (!any) {
         ui_note("no sessions in other windows");
@@ -1261,20 +1289,14 @@ static int gave_last;
 
 int sessionswitch_gave_last(void) { return gave_last; }
 
-void sessionswitch_serve_request(void)
+/* A session asked for mid-turn moves once its turn ends. Waiting for the turn
+ * in place would freeze this window, and every tab in it, for as long as the
+ * turn runs, and a turn that stops for a permission prompt would never end. */
+static char held_id[128];
+static long held_asker;
+
+static void give(int at, const char *id)
 {
-    char id[128];
-    if (!handoff_take_request(id, sizeof id))
-        return;
-
-    int at = workspace_find_id(id);
-    if (at < 0) {
-        handoff_refuse(id);
-        return;
-    }
-
-    workspace_wait_turn(at);
-
     char screen[4400];
     if (handoff_screen_path(id, screen, sizeof screen))
         workspace_dump(at, screen);
@@ -1289,4 +1311,64 @@ void sessionswitch_serve_request(void)
     ui_bar(ui_style(UI_DIM), "handed a session to another window");
     ui_put("\n");
     ui_flush();
+}
+
+int sessionswitch_handoff_due(void)
+{
+    if (!held_id[0])
+        return 0;
+    int at = workspace_find_id(held_id);
+    if (at < 0 || handoff_withdrawn(held_id, held_asker))
+        return 1;
+    return !session_turn_running(workspace_at(at));
+}
+
+static void serve_held(void)
+{
+    char id[128];
+    snprintf(id, sizeof id, "%s", held_id);
+    held_id[0] = '\0';
+
+    int at = workspace_find_id(id);
+    if (at < 0) {
+        handoff_refuse(id);
+        return;
+    }
+    if (handoff_withdrawn(id, held_asker)) {
+        handoff_forget(id);
+        ui_bar(ui_style(UI_DIM), "@%s stays here \xc2\xb7 the other window stopped waiting",
+               session_name(workspace_at(at)));
+        ui_put("\n");
+        ui_flush();
+        return;
+    }
+    give(at, id);
+}
+
+void sessionswitch_serve_request(void)
+{
+    if (sessionswitch_handoff_due())
+        serve_held();
+
+    char id[128];
+    long asker;
+    if (!handoff_take_request(id, sizeof id, &asker))
+        return;
+
+    int at = workspace_find_id(id);
+    if (at < 0 || held_id[0]) {
+        handoff_refuse(id);
+        return;
+    }
+
+    if (session_turn_running(workspace_at(at))) {
+        snprintf(held_id, sizeof held_id, "%s", id);
+        held_asker = asker;
+        ui_bar(ui_style(UI_DIM), "@%s moves to another window when its turn ends",
+               session_name(workspace_at(at)));
+        ui_put("\n");
+        ui_flush();
+        return;
+    }
+    give(at, id);
 }

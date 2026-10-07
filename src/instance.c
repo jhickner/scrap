@@ -70,13 +70,14 @@ int instance_names(char *out, size_t size)
     return n;
 }
 
-static void waiting(int waited_ms, void *ud)
+static int waiting(int waited_ms, void *ud)
 {
     int *said = ud;
     if (waited_ms < 1000 || *said)
-        return;
+        return 0;
     *said = 1;
     fprintf(stderr, APP_NAME ": waiting for another window to release the session\n");
+    return 0;
 }
 
 static const char *yank(const char *id, const struct live_session *live, int nlive,

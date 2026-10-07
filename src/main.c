@@ -500,6 +500,8 @@ static int takeover_pending(void *ud)
         return 1;
     if (session_permission_pending(workspace_current()))
         return 1;
+    if (sessionswitch_handoff_due())
+        return 1;
     return restart_wanted() && handoff_wanted();
 }
 

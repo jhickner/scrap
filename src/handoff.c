@@ -58,6 +58,16 @@ static int refused_path(const char *id, char *out, size_t size)
     return id_ok(id) && leaf(id, ".no", out, size);
 }
 
+static int cancel_path(const char *id, char *out, size_t size)
+{
+    return id_ok(id) && leaf(id, ".cancel", out, size);
+}
+
+static int asker_path(const char *id, char *out, size_t size)
+{
+    return id_ok(id) && leaf(id, ".asker", out, size);
+}
+
 int handoff_wanted(void)
 {
     char path[4400];
@@ -65,8 +75,9 @@ int handoff_wanted(void)
     return request_path((long)getpid(), path, sizeof path) && stat(path, &st) == 0;
 }
 
-int handoff_take_request(char *id, size_t size)
+int handoff_take_request(char *id, size_t size, long *asker)
 {
+    *asker = 0;
     char path[4400];
     if (!request_path((long)getpid(), path, sizeof path))
         return 0;
@@ -79,7 +90,17 @@ int handoff_take_request(char *id, size_t size)
     text_chomp(text);
     snprintf(id, size, "%s", text);
     free(text);
-    return id_ok(id);
+    if (!id_ok(id))
+        return 0;
+    char who[4400];
+    if (asker_path(id, who, sizeof who)) {
+        char *pid = text_slurp(who, 64, &len);
+        if (pid)
+            *asker = strtol(pid, NULL, 10);
+        free(pid);
+        unlink(who);
+    }
+    return 1;
 }
 
 void handoff_refuse(const char *id)
@@ -90,6 +111,22 @@ void handoff_refuse(const char *id)
     FILE *f = fopen(path, "w");
     if (f)
         fclose(f);
+}
+
+int handoff_withdrawn(const char *id, long asker)
+{
+    char path[4400];
+    struct stat st;
+    if (cancel_path(id, path, sizeof path) && stat(path, &st) == 0)
+        return 1;
+    return asker > 0 && !livelist_alive(asker);
+}
+
+void handoff_forget(const char *id)
+{
+    char path[4400];
+    if (cancel_path(id, path, sizeof path))
+        unlink(path);
 }
 
 int handoff_publish(const char *id)
@@ -119,16 +156,27 @@ static int write_id(FILE *f, void *ud)
     return fprintf(f, "%s\n", (const char *)ud) > 0;
 }
 
-int handoff_ask(long pid, const char *id, char *screen, size_t size,
-                void (*tick)(int waited_ms, void *ud), void *ud)
+static int write_pid(FILE *f, void *ud)
 {
-    char req[4400], state[4400], no[4400];
+    (void)ud;
+    return fprintf(f, "%ld\n", (long)getpid()) > 0;
+}
+
+int handoff_ask(long pid, const char *id, char *screen, size_t size,
+                int (*tick)(int waited_ms, void *ud), void *ud)
+{
+    char req[4400], state[4400], no[4400], cancel[4400];
     if (!id_ok(id) || !request_path(pid, req, sizeof req) ||
-        !state_path(id, state, sizeof state) || !refused_path(id, no, sizeof no))
+        !state_path(id, state, sizeof state) || !refused_path(id, no, sizeof no) ||
+        !cancel_path(id, cancel, sizeof cancel))
         return 0;
     unlink(state);
     unlink(no);
+    unlink(cancel);
 
+    char who[4400];
+    if (asker_path(id, who, sizeof who))
+        text_spit(who, write_pid, NULL);
     if (!text_spit(req, write_id, (void *)id))
         return 0;
 
@@ -149,14 +197,21 @@ int handoff_ask(long pid, const char *id, char *screen, size_t size,
         }
         if (!livelist_alive(pid))
             break;
-        if (tick)
-            tick(waited, ud);
+        if (tick && tick(waited, ud)) {
+            /* The giver may be holding the request until the session's turn
+             * ends; the marker tells it to keep the session after all. */
+            FILE *f = fopen(cancel, "w");
+            if (f)
+                fclose(f);
+            break;
+        }
         nap();
     }
 
     unlink(req);
 
     if (stat(state, &st) == 0) {
+        unlink(cancel);
         snprintf(screen, size, "%s", state);
         return 1;
     }
