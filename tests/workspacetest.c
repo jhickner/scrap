@@ -159,7 +159,7 @@ int session_turn_pump(struct session *s)
 }
 void session_turn_wait(struct session *s) { (void)s; }
 void session_replay(struct session *s) { (void)s; }
-const char *session_permission_pending(struct session *s) { (void)s; return NULL; }
+int session_permission_waiting(const struct session *s) { (void)s; return 0; }
 int session_idle_pump(struct session *s) { (void)s; return 0; }
 int session_wake_fd(const struct session *s) { (void)s; return -1; }
 int session_idle_fd(const struct session *s) { (void)s; return -1; }
