@@ -1144,7 +1144,7 @@ static void claim_name(struct session *s);
 /* Fire and forget: returns once the subagent's tab is running its task, or
  * at once if the parent is interrupted first. The tab keeps going either way;
  * its task tells it how to report back, such as with scrap send. */
-static int host_agent(void *ud, Backend *child, const char *task, char **report)
+static int host_agent(void *ud, Backend *child, const char *task, const char *cwd, char **report)
 {
     struct session   *s = ud;
     struct agent_job *j = calloc(1, sizeof *j);
@@ -1152,7 +1152,7 @@ static int host_agent(void *ud, Backend *child, const char *task, char **report)
         return BACKEND_AGENT_DECLINED;
     j->child  = child;
     j->task   = strdup(task);
-    j->cwd    = s->cwd ? strdup(s->cwd) : NULL;
+    j->cwd    = cwd ? strdup(cwd) : s->cwd ? strdup(s->cwd) : NULL;
     j->model  = s->model ? strdup(s->model) : NULL;
     j->effort = s->effort ? strdup(s->effort) : NULL;
     j->backend = strdup(s->backend);

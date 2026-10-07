@@ -35,6 +35,9 @@ def reply(msgs):
         return chunk({"content": "summary"})
     if last.get("role") == "tool":
         return chunk({"content": "tool said: " + content[:200]})
+    if content.startswith("spawnin: "):
+        cwd, task = content[9:].split(" ", 1)
+        return tool_call("agent", {"task": task, "cwd": cwd})
     if content.startswith("spawn: "):
         return tool_call("agent", {"task": content[7:]})
     if content.startswith("run: "):

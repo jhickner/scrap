@@ -145,9 +145,11 @@ static const char SA_AGENT_TOOL[] =
     "keeps running even if this turn ends or is interrupted. It does not report back by itself, "
     "so end the task by telling it to send its report with scrap send @<your session name>. The "
     "subagent starts from this view, including this turn so far, and has the same tools, so give "
-    "it the task, not the background. Its steps stay out of the chat; only its report enters it.\","
+    "it the task, not the background. Its steps stay out of the chat; only its report enters it. "
+    "It works in this session's directory unless cwd names another.\","
     "\"parameters\":{\"type\":\"object\",\"properties\":{"
-    "\"task\":{\"type\":\"string\",\"description\":\"What the subagent is to do, ending with how to report back (scrap send @<your session name>)\"}},"
+    "\"task\":{\"type\":\"string\",\"description\":\"What the subagent is to do, ending with how to report back (scrap send @<your session name>)\"},"
+    "\"cwd\":{\"type\":\"string\",\"description\":\"Directory to work in: absolute, ~/..., or relative to this session's; defaults to this session's\"}},"
     "\"required\":[\"task\"]}}}";
 
 static const char SA_DELEGATE[] =
@@ -607,7 +609,7 @@ typedef struct {
     const _Atomic int *halt;
     long timeout;
     int sub;
-    int (*agent_host)(void *ud, Backend *child, const char *task, char **report);
+    int (*agent_host)(void *ud, Backend *child, const char *task, const char *cwd, char **report);
     void *agent_ud;
     char drive[16];
     long view_seen;
@@ -2276,14 +2278,45 @@ static int sa_tool_bash(sa_agent *x, const cJSON *in, sa_buf *out, int *interrup
 
 static char *sa_ask_ex(Backend *b, const char *user, backend_result *meta);
 
+/* The agent tool's cwd as an absolute directory in out: ~ is $HOME, a
+ * relative path is under the parent's cwd. 0 with why in err otherwise. */
+static int sa_agent_cwd(sa_agent *x, const char *want, char *out, size_t size, sa_buf *err) {
+    char path[PATH_MAX];
+    const char *home = getenv("HOME");
+    if (want[0] == '~' && (want[1] == '/' || !want[1]) && home)
+        snprintf(path, sizeof path, "%s%s", home, want + 1);
+    else if (want[0] == '/')
+        snprintf(path, sizeof path, "%s", want);
+    else {
+        char here[PATH_MAX];
+        const char *base = x->st.cwd ? x->st.cwd : getcwd(here, sizeof here);
+        snprintf(path, sizeof path, "%s/%s", base ? base : ".", want);
+    }
+    char real[PATH_MAX];
+    struct stat st;
+    if (!realpath(path, real) || stat(real, &st) || !S_ISDIR(st.st_mode)) {
+        sa_printf(err, "cwd %s is not a directory", path);
+        return 0;
+    }
+    snprintf(out, size, "%s", real);
+    return 1;
+}
+
 static int sa_tool_agent(sa_agent *x, const cJSON *input, sa_buf *out, int *interrupted) {
     const char *task = sa_jstr(input, "task");
     if (!task || !*task) {
         sa_puts(out, "task is required");
         return 1;
     }
+    const char *want = sa_jstr(input, "cwd");
+    char dir[PATH_MAX];
+    const char *cwd = x->st.cwd;
+    if (want && *want) {
+        if (!sa_agent_cwd(x, want, dir, sizeof dir, out)) return 1;
+        cwd = dir;
+    }
     backend_opts o = { .name = x->drive[0] ? x->drive : "core", .model = x->st.model, .effort = x->st.effort,
-                       .cwd = x->st.cwd, .system = x->st.system, .memory = 1, .memory_relay = x->relay,
+                       .cwd = cwd, .system = x->st.system, .memory = 1, .memory_relay = x->relay,
                        .permission_mode = x->st.permission, .env = (const char *const *)x->st.env };
     Backend *b = core_agent_open(&o);
     if (!b) {
@@ -2296,7 +2329,7 @@ static int sa_tool_agent(sa_agent *x, const cJSON *input, sa_buf *out, int *inte
     oc_retain(x->mem);
     c->st.abort = x->st.abort;
     char *report = NULL;
-    int status = x->agent_host ? x->agent_host(x->agent_ud, b, task, &report) : BACKEND_AGENT_DECLINED;
+    int status = x->agent_host ? x->agent_host(x->agent_ud, b, task, cwd, &report) : BACKEND_AGENT_DECLINED;
     if (status == BACKEND_AGENT_STARTED) {
         sa_puts(out, report ? report : "subagent started in its own tab");
         free(report);
@@ -3117,7 +3150,8 @@ static void sa_rate_limit(Backend *b, backend_rate_limit *out) {
     if (x->inner && x->inner->rate_limit) x->inner->rate_limit(x->inner, out);
 }
 
-static void sa_set_agent_host(Backend *b, int (*host)(void *ud, Backend *child, const char *task, char **report),
+static void sa_set_agent_host(Backend *b,
+                              int (*host)(void *ud, Backend *child, const char *task, const char *cwd, char **report),
                               void *ud) {
     sa_agent *x = b->ctx;
     x->agent_host = host;
