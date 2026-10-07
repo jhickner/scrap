@@ -138,28 +138,32 @@ static int modal_yesno(chrome_modal_fn paint, void *ud)
     if (!frontend_has_keyboard() || !tty_is_raw())
         return 0;
 
+    /* A prompt can open over another one (a second tab asking while the
+     * first waits), and closing it must leave the first one drawn. */
+    void *under_ud;
+    chrome_modal_fn under = chrome_modal_current(&under_ud);
     chrome_modal(paint, ud);
     for (;;) {
         if (tty_quit_requested() || chrome_modal_interrupted()) {
-            chrome_modal(NULL, NULL);
+            chrome_modal(under, under_ud);
             return 0;
         }
         tty_event ev;
         if (!tty_read(&ev, -1)) {
             if (!chrome_modal_interrupted())
                 continue;
-            chrome_modal(NULL, NULL);
+            chrome_modal(under, under_ud);
             return 0;
         }
         if (ev.key == TK_TEXT)
             free(ev.text);
         int yn = chrome_read_yesno(&ev);
         if (yn == 1) {
-            chrome_modal(NULL, NULL);
+            chrome_modal(under, under_ud);
             return 1;
         }
         if (yn == 0) {
-            chrome_modal(NULL, NULL);
+            chrome_modal(under, under_ud);
             return 0;
         }
         if (ev.key == TK_RESIZE)

@@ -79,6 +79,14 @@ void chrome_modal(chrome_modal_fn fn, void *ud)
     chrome_paint();
 }
 
+/* The modal on screen, so one opened over it can put it back on close. */
+chrome_modal_fn chrome_modal_current(void **ud)
+{
+    if (ud)
+        *ud = modal_ud;
+    return modal;
+}
+
 void chrome_modal_keep(void)
 {
     modal = NULL;

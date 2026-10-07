@@ -343,6 +343,7 @@ struct claude_client {
     char  stall[160];         /* why a send came back with no turn of its own  */
     char *buf;                /* line-assembly buffer for out_fd       */
     size_t len, cap;
+    int   scanning;           /* a line is being handled: buf is in use */
     pthread_t warm_thread;
     int warm_joinable;
     atomic_int warm_state;    /* 0 while starting, 1 ready, -1 failed */
@@ -1351,9 +1352,12 @@ static int cl_fill(claude_client *c, int timeout_ms) {
  * result (its text lands in *out, untouched otherwise) so the bytes of any
  * following turn stay queued. Returns how many lines were handled. */
 static int cl_scan_lines_n(claude_client *c, char **out, int max) {
-    if (!c->buf || !c->len || max <= 0) return 0;
+    if (!c->buf || !c->len || max <= 0 || c->scanning) return 0;
     int lines = 0;
     char *start = c->buf, *nl;
+    /* A permission callback can run a UI loop that pumps this client again;
+     * the flag keeps that nested pump off buf until the line is handled. */
+    c->scanning = 1;
     while (lines < max && (nl = memchr(start, '\n', c->len - (size_t)(start - c->buf)))) {
         *nl = '\0';
         lines++;
@@ -1361,6 +1365,7 @@ static int cl_scan_lines_n(claude_client *c, char **out, int max) {
         start = nl + 1;
         if (done) break;
     }
+    c->scanning = 0;
     size_t consumed = (size_t)(start - c->buf);
     if (consumed) { memmove(c->buf, start, c->len - consumed); c->len -= consumed; }
     return lines;
@@ -1416,6 +1421,9 @@ int claude_idle_fd(claude_client *c) {
 
 int claude_idle_pump(claude_client *c) {
     if (claude_idle_fd(c) < 0) return 0;
+    /* Reached from inside a line's handling (a permission prompt's UI loop):
+     * what arrives meanwhile waits in the pipe for the scan to finish. */
+    if (c->scanning) return c->turn_open || c->bg_tasks;
     claude_result *saved = c->meta;
     c->meta = NULL;                   /* these turns are nobody's accounting */
     char *stray = NULL;

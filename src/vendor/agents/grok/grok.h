@@ -267,6 +267,7 @@ struct grok_client {
     double cost_usd;          /* the session total; the CLI prices per turn */
     char *buf;                /* line-assembly buffer for out_fd            */
     size_t len, cap;
+    int   idle_pumping;       /* grok_idle_pump is scanning buf             */
     char  tool_id[GK_TOOL_CAP][GK_TOOL_ID];
     unsigned tool_flags[GK_TOOL_CAP]; /* bit0 announced, bit1 resulted      */
     char *tool_text[GK_TOOL_CAP];     /* reason/output accumulated per call */
@@ -1683,6 +1684,10 @@ int grok_idle_fd(grok_client *c) {
 
 int grok_idle_pump(grok_client *c) {
     if (grok_idle_fd(c) < 0) return 0;
+    /* A permission prompt opened while handling a line may pump again; buf is
+     * still being scanned, so the nested pump leaves the stream alone. */
+    if (c->idle_pumping) return c->turn_open || grok_background_tasks(c) > 0;
+    c->idle_pumping = 1;
     int was_open = c->turn_open;
     for (int i = 0; i < 16; i++) {
         struct pollfd p = { c->out_fd, POLLIN, 0 };
@@ -1703,6 +1708,7 @@ int grok_idle_pump(grok_client *c) {
         size_t consumed = (size_t)(start - c->buf);
         if (consumed) { memmove(c->buf, start, c->len - consumed); c->len -= consumed; }
     }
+    c->idle_pumping = 0;
     gk_drain_stderr(c);
     return c->turn_open || grok_background_tasks(c) > 0;
 }

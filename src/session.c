@@ -114,6 +114,7 @@ struct session {
     char    *permission;
     char    *error_note;
     int      idle_busy;
+    int      idle_pumping;
     int      trust_requested;
     struct tasktab     tasks;
     const struct task *task_change;
@@ -478,6 +479,10 @@ int session_idle_pump(struct session *s)
 
     if (!s->agent->idle_pump || s->quiet || s->resetting)
         return 0;
+    /* A permission prompt raised by the backend's pump runs the UI loop, which
+     * pumps every tab again; the backend is mid-read and must not be re-entered. */
+    if (s->idle_pumping)
+        return s->idle_busy;
 
     if (!s->idle_busy) {
         sessionpresent_break(&s->present);
@@ -485,7 +490,9 @@ int session_idle_pump(struct session *s)
     struct session *was = session_set_drawing(s);
     image_poll();
     unsigned long before = s->spoke;
+    s->idle_pumping = 1;
     int busy = s->agent->idle_pump(s->agent) ? 1 : 0;
+    s->idle_pumping = 0;
     int continuation = s->agent->take_continuation &&
                        s->agent->take_continuation(s->agent);
     if (continuation && s->remote && remote_prompt(s->agent) && *remote_prompt(s->agent))

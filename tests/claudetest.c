@@ -170,6 +170,27 @@ static int mock_cli(int argc, char **argv)
             fflush(stdout);
         }
 
+        else if (text && !strcmp(text, "asktwice")) {
+            /* Two tool calls ask back to back, and more output lands while the
+             * first prompt is still open. */
+            printf("{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"mock\"}\n");
+            for (int i = 1; i <= 2; i++)
+                printf("{\"type\":\"control_request\",\"request_id\":\"p%d\","
+                       "\"request\":{\"subtype\":\"can_use_tool\","
+                       "\"tool_name\":\"Bash\",\"input\":{\"command\":\"true\"}}}\n", i);
+            fflush(stdout);
+            usleep(50000);
+            for (int i = 0; i < 400; i++)
+                printf("{\"type\":\"system\",\"subtype\":\"padding\","
+                       "\"n\":%d,\"pad\":\"................................\"}\n", i);
+            fflush(stdout);
+            int allowed = 0;
+            for (int i = 0; i < 2 && getline(&line, &cap, stdin) >= 0; i++)
+                if (strstr(line, "\"allow\""))
+                    allowed++;
+            result(allowed == 2 ? "allowed twice" : "not allowed");
+        }
+
         else if (text && !strcmp(text, "race")) {
             printf("{\"type\":\"rate_limit_event\",\"rate_limit_info\":{"
                    "\"status\":\"allowed_warning\",\"resetsAt\":1789138800,"
@@ -186,6 +207,24 @@ static int mock_cli(int argc, char **argv)
     }
     free(line);
     return 0;
+}
+
+static claude_client *asking;
+static int asks, ask_depth, ask_nested;
+
+/* Stands in for the permission dialog, whose key loop runs the idle pump. */
+static int ask_and_pump(void *ud, const claude_permission *req)
+{
+    (void)ud; (void)req;
+    asks++;
+    if (++ask_depth > 1)
+        ask_nested = 1;
+    for (int i = 0; i < 10; i++) {
+        claude_idle_pump(asking);
+        usleep(10000);
+    }
+    ask_depth--;
+    return 1;
 }
 
 int main(int argc, char **argv)
@@ -255,6 +294,19 @@ int main(int argc, char **argv)
     reply = claude_send(client, "env");
     if (!reply || strcmp(reply, "worker-7") || getenv("CLAUDETEST_ENV")) {
         fprintf(stderr, "claudetest: env did not reach only the child (%s)\n", reply ? reply : "none");
+        free(reply);
+        claude_stop(client);
+        return 1;
+    }
+    free(reply);
+
+    asking = client;
+    claude_set_permission_cb(client, ask_and_pump, NULL);
+    reply = claude_send(client, "asktwice");
+    claude_set_permission_cb(client, NULL, NULL);
+    if (!reply || strcmp(reply, "allowed twice") || asks != 2 || ask_nested) {
+        fprintf(stderr, "claudetest: pumping during a permission prompt broke the scan "
+                "(%s, %d asks, nested %d)\n", reply ? reply : "none", asks, ask_nested);
         free(reply);
         claude_stop(client);
         return 1;

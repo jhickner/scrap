@@ -33,6 +33,7 @@ int  chrome_read_yesno(const tty_event *ev);
 
 typedef void (*chrome_modal_fn)(void *ud);
 void chrome_modal(chrome_modal_fn fn, void *ud);
+chrome_modal_fn chrome_modal_current(void **ud);
 void chrome_modal_keep(void);
 
 int  chrome_modal_active(void);
