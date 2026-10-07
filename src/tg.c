@@ -620,6 +620,27 @@ static void send_tool_line(const backend_event *ev)
     free(b.p);
 }
 
+/* Claude Code's deny rules refuse a call before any prompt reaches us; say so,
+ * since the call line alone looks like it ran. */
+static void send_policy_denial(const backend_event *ev)
+{
+    char why[600];
+    if (!ev->failed || !view_policy_denial(ev->text, why, sizeof why))
+        return;
+    mdv2_buf b = {0};
+    mdv2_puts(&b, "_denied by policy_");
+    if (*why) {
+        char one[180];
+        one_line(one, sizeof one, why);
+        mdv2_puts(&b, " `");
+        mdv2_esc_code(&b, one, strlen(one));
+        mdv2_putc(&b, '`');
+    }
+    if (b.p)
+        tgqueue_push(sendq, TGQUEUE_MARKDOWN, b.p);
+    free(b.p);
+}
+
 static void send_task_line(const struct task *a)
 {
     char line[240];
@@ -722,6 +743,10 @@ static void on_event(void *ud, const backend_event *ev)
             break;
         }
         send_tool_line(ev);
+        break;
+
+    case BACKEND_EV_TOOL_RESULT:
+        send_policy_denial(ev);
         break;
 
     case BACKEND_EV_ASSISTANT:

@@ -806,7 +806,14 @@ static void tool_result(struct log *l, const backend_event *ev)
     cJSON *f = cJSON_CreateObject();
     int cut = 0;
     cJSON_AddBoolToObject(f, "done", 1);
-    if (ev->text && *ev->text)
+    char why[RESULT_CLIP];
+    if (ev->failed && view_policy_denial(ev->text, why, sizeof why)) {
+        /* Claude Code's own deny rule: no prompt was ever shown */
+        char line[RESULT_CLIP + 32];
+        snprintf(line, sizeof line, "denied by policy%s%s", *why ? ": " : "", why);
+        cJSON_AddStringToObject(f, "result", line);
+        cJSON_AddBoolToObject(f, "denied", 1);
+    } else if (ev->text && *ev->text)
         cJSON_AddItemToObject(f, "result", clipped_string(ev->text, RESULT_CLIP, &cut));
     if (ev->diff && *ev->diff)
         cJSON_AddItemToObject(f, "diff", clipped_string(ev->diff, RESULT_CLIP, &cut));

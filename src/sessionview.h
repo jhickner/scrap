@@ -21,6 +21,13 @@ const char *view_tool_arg_value(const cJSON *input);
  * task, else view_tool_arg_value(). Fills scratch only for the former. */
 const char *view_tool_value(const char *name, const cJSON *input, char *scratch, size_t size);
 
+/* A tool result that is Claude Code's own refusal under a permission deny
+ * rule ("Permission to use Bash with command ... has been denied."): the CLI
+ * answers it before any prompt reaches us. Fills out with the call's argument
+ * (may be empty) and returns 1; returns 0 for anything else, including the
+ * user turning down our own prompt. */
+int  view_policy_denial(const char *text, char *out, size_t size);
+
 int  view_tool_path(const char *input_json, const char *cwd, char *out, size_t size);
 
 void view_tool_call(const char *name, const char *arg);

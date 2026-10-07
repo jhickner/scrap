@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "sessionpresent.h"
+#include "sessionview.h"
 #include "restart.h"
 #include "sidechannel.h"
 #include "ui.h"
@@ -118,6 +119,39 @@ static void check_tokenomics(void)
     free(drawn);
 }
 
+/* Compact mode keeps calls to one row and drops their output, but a memory
+ * lookup's result is the point of the call: what zoom or date brought back
+ * stays on screen, even beside a parallel call whose output is dropped. */
+static void check_lookup_output(int compact)
+{
+    struct sessionpresent p = {0};
+    view_collapse(compact);
+    const backend_event zoom = {.kind = BACKEND_EV_TOOL, .name = "mcp__optchat__zoom",
+                                .input_json = "{\"id\":512,\"n\":1}"};
+    const backend_event bash = {.kind = BACKEND_EV_TOOL, .name = "Bash",
+                                .input_json = "{\"command\":\"make\"}"};
+    const backend_event zoomed = {.kind = BACKEND_EV_TOOL_RESULT,
+                                  .text = "512+0|user: zoomed-line-body"};
+    const backend_event built = {.kind = BACKEND_EV_TOOL_RESULT, .text = "built-body"};
+    ui_capture_begin(100);
+    sessionpresent_turn_begin(&p);
+    sessionpresent_event(&p, &zoom, NULL, NULL, NULL, 0);
+    sessionpresent_event(&p, &bash, NULL, NULL, NULL, 0);
+    sessionpresent_event(&p, &zoomed, NULL, NULL, NULL, 0);
+    sessionpresent_event(&p, &built, NULL, NULL, NULL, 0);
+    char *drawn = ui_capture_end();
+    char *plain = ui_plain(drawn, 1);
+    if (!plain || !strstr(plain, "512+1") || !strstr(plain, "zoomed-line-body") ||
+        (compact && strstr(plain, "built-body")) || (!compact && !strstr(plain, "built-body"))) {
+        fprintf(stderr, "FAIL zoom result shows beneath its call (compact %d)\ngot:\n%s\n",
+                compact, plain ? plain : "(null)");
+        failures++;
+    }
+    free(plain);
+    free(drawn);
+    sessionpresent_free(&p);
+}
+
 static void check_report(void)
 {
     const struct sessionpresent_report report = {
@@ -156,12 +190,42 @@ static void check_report(void)
     free(drawn);
 }
 
+static void check_policy_denial(int compact)
+{
+    struct sessionpresent p = {0};
+    view_collapse(compact);
+    const backend_event call = {.kind = BACKEND_EV_TOOL, .name = "Bash",
+                                .input_json = "{\"command\":\"rm -rf /tmp/a\"}"};
+    const backend_event denied = {
+        .kind = BACKEND_EV_TOOL_RESULT, .failed = 1,
+        .text = "Permission to use Bash with command rm -rf /tmp/a has been denied."};
+    ui_capture_begin(100);
+    sessionpresent_event(&p, &call, NULL, NULL, NULL, 0);
+    sessionpresent_event(&p, &denied, NULL, NULL, NULL, 0);
+    char *drawn = ui_capture_end();
+    char *plain = ui_plain(drawn, 1);
+    if (!plain || !strstr(plain, "denied by policy: rm -rf /tmp/a") ||
+        strstr(plain, "failed: Permission")) {
+        fprintf(stderr, "FAIL deny-rule refusal reads as a policy denial (compact %d)\ngot:\n%s\n",
+                compact, plain ? plain : "(null)");
+        failures++;
+    }
+    free(plain);
+    free(drawn);
+}
+
 int main(void)
 {
     ui_init();
+    check_lookup_output(0);
+    check_lookup_output(1);
+    view_collapse(0);
     check_footer();
     check_report();
     check_tokenomics();
+    check_policy_denial(0);
+    check_policy_denial(1);
+    view_collapse(0);
 
     if (failures)
         return 1;

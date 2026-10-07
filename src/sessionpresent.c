@@ -263,7 +263,13 @@ void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
             view_keep_break();
             filediff_clear(&p->filediff);
             const char *why = ev->text && *ev->text ? ev->text : NULL;
-            if (!why || !strcmp(why, "failed")) {
+            char denied[4096];
+            if (view_policy_denial(why, denied, sizeof denied)) {
+                /* Claude Code's own deny rule, not a prompt that went missing */
+                char line[4200];
+                snprintf(line, sizeof line, "denied by policy%s%s", *denied ? ": " : "", denied);
+                view_keep_output(line, UI_ERROR, 1);
+            } else if (!why || !strcmp(why, "failed")) {
                 view_keep_output("failed", UI_ERROR, 0);
             } else {
                 char line[4096];

@@ -299,6 +299,21 @@ int main(void)
         return fail("view_tool_call flattened the command", out);
     free(out);
 
+    {
+        char why[512];
+        if (!view_policy_denial("Permission to use Bash with command cd x && rm -rf /tmp/a "
+                                "has been denied.", why, sizeof why) ||
+            strcmp(why, "cd x && rm -rf /tmp/a") != 0)
+            return fail("a deny-rule refusal was not recognized", why);
+        if (!view_policy_denial("Permission to use WebFetch has been denied.", why, sizeof why) ||
+            *why)
+            return fail("a deny-rule refusal without an argument was not recognized", why);
+        if (view_policy_denial("The user denied this tool call.", why, sizeof why) ||
+            view_policy_denial("Exit code 1\nPermission to use x", why, sizeof why) ||
+            view_policy_denial(NULL, why, sizeof why))
+            return fail("a plain failure read as a deny-rule refusal", why);
+    }
+
     static const struct {
         const char *name, *input, *arg;
     } MEMORY_CALLS[] = {

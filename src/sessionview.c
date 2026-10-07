@@ -593,6 +593,34 @@ void view_tool_argument(const backend_event *ev, const char *cwd, char *out, siz
     snprintf(out, size, "%s", arg);
 }
 
+int view_policy_denial(const char *text, char *out, size_t size)
+{
+    static const char HEAD[] = "Permission to use ", TAIL[] = " has been denied.";
+    if (!text || strncmp(text, HEAD, sizeof HEAD - 1))
+        return 0;
+    const char *p = text + sizeof HEAD - 1;
+    size_t n = strlen(p);
+    while (n && (p[n - 1] == '\n' || p[n - 1] == ' '))
+        n--;
+    if (n < sizeof TAIL - 1 || strncmp(p + n - (sizeof TAIL - 1), TAIL, sizeof TAIL - 1))
+        return 0;
+    n -= sizeof TAIL - 1;
+    /* "<Tool>" or "<Tool> with <field> <value>" */
+    const char *with = memmem(p, n, " with ", 6);
+    const char *v = "";
+    size_t vn = 0;
+    if (with) {
+        const char *field = with + 6, *sp = memchr(field, ' ', (size_t)(p + n - field));
+        if (sp) {
+            v = sp + 1;
+            vn = (size_t)(p + n - v);
+        }
+    }
+    if (size)
+        snprintf(out, size, "%.*s", (int)vn, v);
+    return 1;
+}
+
 int view_tool_path(const char *input_json, const char *cwd, char *out, size_t size)
 {
     if (!input_json)
