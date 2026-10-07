@@ -587,7 +587,7 @@ static int pump(int hold, int screen)
         if (!running)
             nudge_stalled(i, hold, screen);
 
-        if (i != cur && session_permission_pending(s))
+        if (i != cur && session_permission_waiting(s))
             session_set_unseen(s, 1);
 
         if (running && !session_turn_running(s)) {
@@ -888,6 +888,8 @@ const char *workspace_status(const struct session *s)
 {
     if (!s)
         return "finished";
+    if (session_permission_waiting(s))
+        return "waiting";
     if (session_busy(s))
         return "working";
     if (session_failed_prompt(s))

@@ -478,13 +478,13 @@ static void ask_run_form(void)
     free(answer);
 }
 
-static int ask_permission(struct session *s, const char *question)
+static int ask_permission(struct session *s, const struct permission *p)
 {
     if (s == workspace_current())
-        return confirm_run(question);
-    char buf[700];
-    snprintf(buf, sizeof buf, "@%s: %s", session_name(s), question);
-    return confirm_run(buf);
+        return confirm_permission(NULL, p);
+    char from[256];
+    snprintf(from, sizeof from, "@%s", session_name(s));
+    return confirm_permission(from, p);
 }
 
 static int takeover_pending(void *ud)
@@ -506,9 +506,9 @@ static void takeover_run(void *ud)
         return;
     }
     struct session *s = workspace_current();
-    const char *question = session_permission_pending(s);
-    if (question) {
-        session_permission_answer(s, confirm_run(question));
+    const struct permission *p = session_permission_pending(s);
+    if (p) {
+        session_permission_answer(s, confirm_permission(NULL, p));
         return;
     }
     if (ask_ready()) {

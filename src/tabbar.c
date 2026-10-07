@@ -78,6 +78,10 @@ static const char *mark(const struct session *s, enum ui_role *role)
 {
     const char *status = workspace_status(s);
 
+    if (!strcmp(status, "waiting")) {
+        *role = UI_ACCENT;
+        return "?";
+    }
     if (session_in_turn(s)) {
         *role = UI_SPIN;
         return spin_glyph(frame);
