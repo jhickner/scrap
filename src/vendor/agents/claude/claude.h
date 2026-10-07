@@ -564,14 +564,23 @@ claude_client *claude_start(const claude_opts *opts) {
         if (o.no_session_persistence) setenv("CLAUDE_CODE_ATTRIBUTION_HEADER", "0", 1);
 
         /* Build argv: headless, streaming both directions. */
-        const char *argv[40];
+        const char *argv[48];
         int n = 0;
         argv[n++] = cli;
         argv[n++] = "--print";
         argv[n++] = "--input-format";  argv[n++] = "stream-json";
         argv[n++] = "--output-format"; argv[n++] = "stream-json";
         argv[n++] = "--verbose";
-        if (!o.allow_customizations) argv[n++] = "--safe-mode";
+        /* --safe-mode drops every MCP server, --mcp-config ones too, so with
+         * one to load the sandbox is built from flags that keep it: no settings
+         * files (hooks, plugins, permissions), skills, CLAUDE.md or other MCP. */
+        if (!o.allow_customizations && o.mcp_config && *o.mcp_config) {
+            argv[n++] = "--strict-mcp-config";
+            argv[n++] = "--setting-sources"; argv[n++] = "";
+            argv[n++] = "--disable-slash-commands";
+            setenv("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1", 1);
+            unsetenv("CLAUDE_CODE_SAFE_MODE");   /* inherited from a safe-mode parent */
+        } else if (!o.allow_customizations) argv[n++] = "--safe-mode";
         if (o.no_session_persistence) argv[n++] = "--no-session-persistence";
         if (o.chrome) argv[n++] = "--chrome";
         if (o.plugin_dir && *o.plugin_dir) { argv[n++] = "--plugin-dir"; argv[n++] = o.plugin_dir; }
