@@ -2937,7 +2937,10 @@ static int sa_drive_start(sa_agent *x) {
                        .env = (const char *const *)x->st.env, .permission_mode = x->st.permission,
                        .allow_customizations = x->st.allow_customizations,
                        .no_browser_login = x->st.no_browser_login, .chrome = x->st.chrome,
-                       .plugin_dir = x->st.plugin_dir, .ephemeral = 1, .mcp = x->relay ? argv : NULL };
+                       .plugin_dir = x->st.plugin_dir, .ephemeral = 1, .mcp = x->relay ? argv : NULL,
+                       /* subagents go through optchat's agent tool, which starts
+                          them from this view in their own tab */
+                       .no_subagents = 1 };
     if (x->inner) x->inner->close(x->inner);
     x->inner_used = 0;
     x->inner = backend_open_ex(&o);

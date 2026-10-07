@@ -56,6 +56,8 @@ typedef struct {
                                    and claude, codex and grok run through core      */
     const char *const *mcp;     /* claude, codex, grok: argv of a stdio MCP server
                                    added as "optchat", NULL-ended; NULL -> none    */
+    int no_subagents;           /* claude, codex, grok: block the CLI's own subagent
+                                   tools, so optchat's agent tool is the only one   */
     const char *memory_relay;   /* memory mode on a CLI: the program run as
                                    "<memory_relay> mcp-memory <socket>" to reach
                                    the memory tools; NULL -> no memory tools       */
@@ -321,7 +323,7 @@ typedef struct {
     int   allow_customizations, ephemeral, disable_tools, fork_session, skip_quota_read;
     int   no_browser_login;
     int   chrome;
-    int   memory;
+    int   memory, no_subagents;
     char *plugin_dir;
     void (*on_event)(void *ud, const backend_event *ev);
     void *event_ud;
@@ -375,6 +377,7 @@ static void backend_state_init(backend_state *st, const backend_opts *o) {
     st->no_browser_login = o->no_browser_login;
     st->chrome = o->chrome;
     st->memory = o->memory;
+    st->no_subagents = o->no_subagents;
     st->plugin_dir = o->plugin_dir ? strdup(o->plugin_dir) : NULL;
 }
 
@@ -507,6 +510,7 @@ static int backend_claude_start(Backend *b, const char *resume) {
     o.session_name = x->st.session_name;
     o.no_session_persistence = x->st.ephemeral;
     if (x->st.disable_tools) o.tools = "";
+    if (x->st.no_subagents) o.disallowed_tools = "Agent,Task,Workflow";
     o.permission_prompt = x->st.on_permission != NULL;
     char *mcp = NULL;
     if (x->st.mcp && x->st.mcp[0]) {
@@ -826,6 +830,7 @@ static int backend_codex_start(Backend *b, const char *resume) {
     o.resume_session = resume;
     o.ephemeral = x->st.ephemeral;
     o.fork_session = x->st.fork_session;
+    o.no_subagents = x->st.no_subagents;
     char *config[4] = {0};
     if (x->st.mcp && x->st.mcp[0]) {
         cJSON *cmd = cJSON_CreateString(x->st.mcp[0]), *args = cJSON_CreateArray();
@@ -1098,6 +1103,7 @@ static int backend_grok_start(Backend *b, const char *resume) {
     o.resume_session = resume;
     o.no_session = x->st.ephemeral;
     o.mcp = (const char *const *)x->st.mcp;
+    o.no_subagents = x->st.no_subagents;
     o.skip_quota_read = x->st.skip_quota_read;
     grok_client *c = grok_start(&o);
     if (!c) return 0;

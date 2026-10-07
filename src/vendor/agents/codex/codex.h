@@ -37,6 +37,7 @@ typedef struct {
     int skip_git_repo_check;    /* retained for source compatibility; unused  */
     int ephemeral;              /* nonzero: do not materialize the thread on disk */
     const char *const *config;  /* extra --config key=value entries, NULL-ended */
+    int no_subagents;           /* nonzero: --disable multi_agent (no spawn_agent) */
     int skip_quota_read;        /* nonzero: no account/rateLimits/read at startup */
 } codex_opts;
 
@@ -886,6 +887,7 @@ codex_client *codex_start(const codex_opts *opts) {
             "--config", "project_doc_max_bytes=0",
         };
         int n = 11;
+        if (o.no_subagents) { argv[n++] = "--disable"; argv[n++] = "multi_agent"; }
         for (const char *const *k = o.config; k && *k && n < 30; k++) {
             argv[n++] = "--config";
             argv[n++] = *k;

@@ -42,6 +42,7 @@ typedef struct {
     const char *const *mcp;      /* argv of a stdio MCP server named "optchat",
                                     NULL-ended; NULL -> none                    */
     int skip_quota_read;         /* nonzero: no _x.ai/billing read at handshake  */
+    int no_subagents;            /* nonzero: GROK_SUBAGENTS=0, no task tool     */
 } grok_opts;
 
 /* Spawn a persistent `grok agent stdio` process. Returns NULL only on a local
@@ -1375,6 +1376,7 @@ grok_client *grok_start(const grok_opts *opts) {
         if (o.cwd && *o.cwd) { if (chdir(o.cwd) != 0) _exit(126); }
         if (o.session_file && *o.session_file) setenv("MUX_SESSION_FILE", o.session_file, 1);
         for (const char *const *e = o.env; e && *e; e++) putenv((char *)*e);
+        if (o.no_subagents) setenv("GROK_SUBAGENTS", "0", 1);
 
         const char *argv[16];
         int n = 0;

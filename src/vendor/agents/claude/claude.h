@@ -47,6 +47,7 @@ typedef struct {
                                     "" -> disable every built-in tool; else a list
                                     like "Bash,Read". Empty string is meaningful,
                                     so NULL (not "") is the "unset" sentinel.       */
+    const char *disallowed_tools;/* --disallowedTools value; NULL -> flag omitted   */
     int use_subscription;        /* nonzero: unset ANTHROPIC_API_KEY in the child
                                     so the CLI uses your claude.ai login           */
     int no_session_persistence;  /* nonzero: pass --no-session-persistence, and
@@ -563,7 +564,7 @@ claude_client *claude_start(const claude_opts *opts) {
         if (o.no_session_persistence) setenv("CLAUDE_CODE_ATTRIBUTION_HEADER", "0", 1);
 
         /* Build argv: headless, streaming both directions. */
-        const char *argv[38];
+        const char *argv[40];
         int n = 0;
         argv[n++] = cli;
         argv[n++] = "--print";
@@ -583,6 +584,7 @@ claude_client *claude_start(const claude_opts *opts) {
         if (o.system)                                { argv[n++] = "--system-prompt";        argv[n++] = o.system; }
         if (o.append_system && *o.append_system)     { argv[n++] = "--append-system-prompt"; argv[n++] = o.append_system; }
         if (o.tools)                                 { argv[n++] = "--tools";                argv[n++] = o.tools; }
+        if (o.disallowed_tools && *o.disallowed_tools) { argv[n++] = "--disallowedTools"; argv[n++] = o.disallowed_tools; }
         if (o.mcp_config && *o.mcp_config)           { argv[n++] = "--mcp-config";           argv[n++] = o.mcp_config;
                                                        argv[n++] = "--allowedTools";         argv[n++] = "mcp__optchat"; }
         if (o.permission_prompt)                     { argv[n++] = "--permission-prompt-tool"; argv[n++] = "stdio"; }
