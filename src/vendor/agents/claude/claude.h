@@ -41,9 +41,7 @@ typedef struct {
                                     id and the original transcript is untouched  */
     const char *append_system;   /* --append-system-prompt text; NULL -> none     */
     const char *system;          /* --system-prompt text, replacing the CLI's own
-                                    prompt, and the per-request billing header
-                                    off so separate turns share a cache prefix;
-                                    NULL -> none                                  */
+                                    prompt; NULL -> none                          */
     const char *session_name;    /* --name value; NULL -> let Claude name it      */
     const char *tools;           /* --tools value; NULL -> flag omitted (all tools);
                                     "" -> disable every built-in tool; else a list
@@ -51,7 +49,10 @@ typedef struct {
                                     so NULL (not "") is the "unset" sentinel.       */
     int use_subscription;        /* nonzero: unset ANTHROPIC_API_KEY in the child
                                     so the CLI uses your claude.ai login           */
-    int no_session_persistence;  /* nonzero: pass --no-session-persistence         */
+    int no_session_persistence;  /* nonzero: pass --no-session-persistence, and
+                                    turn the billing header off: it varies with
+                                    the first message, so turns started with
+                                    /clear would not share a cache prefix          */
     int allow_customizations;    /* nonzero: drop --safe-mode, so the CLI loads the
                                     user's skills, CLAUDE.md, plugins, hooks, MCP
                                     servers, custom commands and agents. Zero (the
@@ -559,7 +560,7 @@ claude_client *claude_start(const claude_opts *opts) {
         if (o.session_file && *o.session_file) setenv("MUX_SESSION_FILE", o.session_file, 1);
         for (const char *const *e = o.env; e && *e; e++) putenv((char *)*e);
         if (o.use_subscription) unsetenv("ANTHROPIC_API_KEY");
-        if (o.system) setenv("CLAUDE_CODE_ATTRIBUTION_HEADER", "0", 1);
+        if (o.no_session_persistence) setenv("CLAUDE_CODE_ATTRIBUTION_HEADER", "0", 1);
 
         /* Build argv: headless, streaming both directions. */
         const char *argv[38];
