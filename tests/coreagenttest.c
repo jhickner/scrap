@@ -297,7 +297,7 @@ static void serve_one(int fd)
         tool_call(fd, name, args);
     } else if (!strncmp(content, "Summarize the conversation", 26)) {
         delta(fd, "content", "SUMMARY");
-    } else if (strstr(content, "Compress this message") && strstr(content, "hang-compactor")) {
+    } else if (strstr(content, "Compress only the message below") && strstr(content, "hang-compactor")) {
         sleep(8);
     } else if (!strcmp(content, "slow")) {
         delta(fd, "content", "partial");

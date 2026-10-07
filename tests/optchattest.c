@@ -84,7 +84,7 @@ static char *fake_ask(Backend *b, const char *user)
     fbad     += strstr(user, "not summarized yet") != NULL;
     fids     += strstr(user, "+1|") != NULL;
     fretries += retry;
-    fmerges  += strstr(user, "Merge these two lines") != NULL;
+    fmerges  += strstr(user, "Merge only the two lines below") != NULL;
     fscale   += !retry && strstr(user, "For scale only, a fictional line unrelated to this chat, exactly 64 bytes:\nuser: greenhouse") != NULL;
     pthread_mutex_unlock(&fmu);
     if (n == 7)
@@ -209,6 +209,9 @@ static void marks_test(void)
         count++;
     }
     CHECK(count == 4);
+    char *close = strstr(ctx, "</chat>"), *ask = strstr(ctx, "The chat above is context only. Compress only the message below");
+    CHECK(close && ask && ask > close && strstr(ask, "include nothing said only in other messages"));
+    CHECK(ask && strstr(ask, "echo: www"));
     free(ctx);
     char *view = oc_render(m, 1), *plain = oc_render(m, 0);
     count = 0;

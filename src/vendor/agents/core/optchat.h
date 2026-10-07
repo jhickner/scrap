@@ -98,7 +98,10 @@ const char OC_COMPACT[] =
     "\n"
     "<chat> is " OC_AGENT "'s view up to the last message of your stretch: use it to\n"
     "understand what was going on, to resolve references, and to recover\n"
-    "detail your input lost.\n"
+    "detail of your stretch that your input lost. It is context only: your\n"
+    "line covers your stretch alone, so never put into it what was said\n"
+    "only in messages outside your stretch, such as the question a reply\n"
+    "answers or the reason behind a tool call.\n"
     "\n"
     "Goal: let " OC_AGENT " work later as well as if it remembered the whole stretch.\n"
     "Space is scarce, so it goes by value:\n"
@@ -763,18 +766,18 @@ static char *oc_context(const oc_mem *m, oc_ref r) {
         oc_cats(&b, "\n");
     }
     oc_cats(&b, BACKEND_CACHE_MARK "</chat>\n\n");
-    char head[128];
+    char head[256];
     snprintf(head, sizeof head, "For scale only, a fictional line unrelated to this chat, exactly %ld bytes:\n", m->node);
     oc_cats(&b, head);
     oc_cat(&b, OC_SCALE, strlen(OC_SCALE) < (size_t)m->node ? strlen(OC_SCALE) : (size_t)m->node);
     if (r.l == 0) {
-        snprintf(head, sizeof head, "\n\nCompress this message into one line, in at most %ld bytes:\n", m->node);
+        snprintf(head, sizeof head, "\n\nThe chat above is context only. Compress only the message below into one line, in at most %ld bytes; include nothing said only in other messages:\n", m->node);
         oc_cats(&b, head);
         oc_cats(&b, m->msgs[r.i].kind);
         oc_cats(&b, ": ");
         oc_cats(&b, m->msgs[r.i].text);
     } else {
-        snprintf(head, sizeof head, "\n\nMerge these two lines into one, in at most %ld bytes:\n", m->node);
+        snprintf(head, sizeof head, "\n\nThe chat above is context only. Merge only the two lines below into one, in at most %ld bytes; include nothing that is not in these two lines or the messages they cover:\n", m->node);
         oc_cats(&b, head);
         oc_flat(&b, oc_get(m, r.l - 1, 2 * r.i));
         oc_cats(&b, "\n");
