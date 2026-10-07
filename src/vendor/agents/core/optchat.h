@@ -822,22 +822,13 @@ static char *oc_trim(char *s) {
     return s;
 }
 
-static size_t oc_cut(const char *s, size_t n) {
-    while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
-    return n;
-}
-
 /* Some CLIs answer a failed request with the API's error as the reply. */
 static int oc_failed(const char *line) {
     return !line || !*line || !strncmp(line, "API Error", 9);
 }
 
-/* Each retry is a fresh one-turn ask: the prompt again, then the cut in a
- * block of its own. A follow-up turn would carry one more cache breakpoint,
- * past the API's 4 on newer CLIs, and it would hold the rejected line; the
- * fresh ask reads the first try's cache through the end of the prompt. */
 static char *oc_build(Backend *b, long node, const char *prompt) {
-    char *best = NULL, *cut = NULL;
+    char *best = NULL;
     b->reset(b);
     char *msg = strdup(prompt);
     for (int t = 0; t < OC_TRIES; t++) {
@@ -845,32 +836,34 @@ static char *oc_build(Backend *b, long node, const char *prompt) {
         free(msg);
         msg = NULL;
         if (oc_failed(line)) { free(line); break; }
-        char *mark = strstr(line, "\xe2\x86\x90 LIMIT");
-        if (mark) {
-            while (mark > line && (mark[-1] == ' ' || mark[-1] == '|')) mark--;
-            *mark = '\0';
+        const char *tags[] = { "<line>", "</line>", "<br>", "<br/>", "<br />", "</br>" };
+        for (size_t k = 0; k < sizeof tags / sizeof *tags; k++) {
+            char *tag;
+            while ((tag = strstr(line, tags[k])))
+                memmove(tag, tag + strlen(tags[k]), strlen(tag + strlen(tags[k])) + 1);
         }
+        oc_trim(line);
+        if (oc_failed(line)) { free(line); break; }
         size_t len = strlen(line);
-        int copied = cut && (mark || !strncmp(cut, line, len) || !strncmp(cut, line, strlen(cut)));
-        if (!copied && (!best || len < strlen(best))) { free(best); best = line; }
+        int copied = strstr(line, "\xe2\x86\x90 LIMIT") != NULL ||
+                     (best && (!strncmp(best, line, len) || !strncmp(best, line, strlen(best))));
+        if (!copied && (long)len <= node) { free(best); return line; }
+        if (!best || (!copied && len < strlen(best))) { free(best); best = line; }
         else free(line);
-        if ((!copied && (long)len <= node) || t + 1 == OC_TRIES) break;
-        free(cut);
-        cut = strndup(best, oc_cut(best, (size_t)node));
+        if (t + 1 == OC_TRIES) break;
         oc_buf r = {0};
-        char head[200];
-        snprintf(head, sizeof head, BACKEND_BLOCK_MARK "\n\n%sYour line was %zu bytes; the limit is %ld. It must end where it is cut here:\n",
-                 copied ? "Rewrite the whole line shorter instead of copying the cut. " : "", strlen(best), node);
+        char head[400];
+        snprintf(head, sizeof head, BACKEND_BLOCK_MARK "\n\nYour line was %zu bytes; the limit is %ld. Rewrite the whole line shorter, preserving complete thoughts. Return only the complete line, without markup or a limit marker. The rejected reply follows in full:\n",
+                 strlen(best), node);
         b->reset(b);
         oc_cats(&r, prompt);
         oc_cats(&r, head);
-        oc_cats(&r, cut);
-        oc_cats(&r, "| \xe2\x86\x90 LIMIT");
+        oc_cats(&r, best);
         msg = r.p;
     }
     free(msg);
-    free(cut);
-    return best;
+    free(best);
+    return NULL;
 }
 
 static void *oc_worker(void *arg) {

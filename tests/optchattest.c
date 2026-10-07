@@ -301,9 +301,9 @@ static void marks_test(void)
         failures++;
 }
 
-static const char *script[4];
+static const char *script[OC_TRIES + 1];
 static int         nscript;
-static char        sent[4][2048];
+static char        sent[OC_TRIES + 1][2048];
 
 static char *script_ask(Backend *b, const char *user)
 {
@@ -335,10 +335,9 @@ static void copy_test(void)
     char *line = oc_build(&b, NODE, "prompt");
     CHECK(nscript == 3);
     CHECK(line && !strcmp(line, "short line"));
-    CHECK(strstr(sent[2], "instead of copying the cut"));
-    /* Retries are fresh asks: reset, the prompt, then the cut in its own block. */
+    CHECK(strstr(sent[2], longline));
     CHECK(resets == 3);
-    CHECK(!strncmp(sent[1], "prompt" BACKEND_BLOCK_MARK, 7) && strstr(sent[1], "| \xe2\x86\x90 LIMIT"));
+    CHECK(!strncmp(sent[1], "prompt" BACKEND_BLOCK_MARK, 7) && strstr(sent[1], longline) && !strstr(sent[1], "LIMIT"));
     free(line);
 
     char marked[NODE + 20];
@@ -361,7 +360,19 @@ static void copy_test(void)
     script[0] = "a line far too long";
     script[1] = error;
     line = oc_build(&b, 10, "prompt");
-    CHECK(nscript == 2 && line && !strcmp(line, "a line far too long"));
+    CHECK(nscript == 2 && !line);
+    free(line);
+    nscript = 0;
+    for (int i = 0; i < OC_TRIES; i++) script[i] = longline;
+    line = oc_build(&b, NODE, "prompt");
+    CHECK(nscript == OC_TRIES && !line);
+    free(line);
+
+    nscript = 0;
+    script[0] = ".h oc_fit fragment| \xe2\x86\x90 LIMIT";
+    script[1] = "<line>tool: fixed retry.</line></br>";
+    line = oc_build(&b, NODE, "prompt");
+    CHECK(nscript == 2 && line && !strcmp(line, "tool: fixed retry."));
     free(line);
 }
 
