@@ -267,6 +267,16 @@ install: $(BIN)
 	@# pkill has no -a and does not exclude them.
 	@pkill -SIGURG $(if $(filter Darwin,$(shell uname -s)),-a) -x $(BIN) || true
 
+# Copies the binary to a remote Mac (same arch, Homebrew libmicrohttpd) and
+# restarts its scraps there; no source goes to the remote.
+REMOTE ?= bcg
+install-remote: $(BIN)
+	scp -q $(BIN) $(REMOTE):.local/bin/$(BIN).new
+	ssh $(REMOTE) 'cd .local/bin && chmod 755 $(BIN).new && ./$(BIN).new -V && mv $(BIN).new $(BIN) && { pkill -SIGURG -a -x $(BIN) || true; }'
+
+install-bcg:
+	$(MAKE) install-remote REMOTE=bcg
+
 $(BUILD) $(BUILD)/vendor $(BUILD)/vendor/mermaid:
 	@mkdir -p $(BUILD)/vendor/mermaid
 
@@ -286,4 +296,4 @@ rigtest: $(BIN)
 strip-comments:
 	stripcomments -i -x vendor src tests tools
 
-.PHONY: all install clean check FORCE manual tests strip-comments map rigtest
+.PHONY: all install install-remote install-bcg clean check FORCE manual tests strip-comments map rigtest
