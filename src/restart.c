@@ -13,6 +13,7 @@
 #include "relay.h"
 #include "session.h"
 #include "sessionfork.h"
+#include "text.h"
 #include "tabs.h"
 #include "tty.h"
 #include "ui.h"
@@ -22,7 +23,14 @@
 
 #define RESTART_SIGNAL SIGURG
 
+/* How long a requested restart waits for background tasks (detached bash,
+ * subagents) to finish before it goes ahead and stops them. Running turns are
+ * always waited out; background work can run for hours and would otherwise hold
+ * the old binary in place indefinitely. */
+#define RESTART_BG_WAIT_S 600
+
 static volatile sig_atomic_t wanted;
+static double                wanted_at;
 
 static void on_signal(int sig)
 {
@@ -85,12 +93,36 @@ void restart_request(void)
 
 int restart_wanted(void)
 {
-    return wanted != 0;
+    if (!wanted) {
+        wanted_at = 0;
+        return 0;
+    }
+    if (!wanted_at)
+        wanted_at = now_seconds();
+    return 1;
+}
+
+double restart_waited(void)
+{
+    return restart_wanted() ? now_seconds() - wanted_at : 0;
+}
+
+double restart_bg_wait(void)
+{
+    const char *env = getenv("SCRAP_RESTART_BG_WAIT");
+    if (env && *env) {
+        char  *end;
+        double v = strtod(env, &end);
+        if (end != env && v >= 0)
+            return v;
+    }
+    return RESTART_BG_WAIT_S;
 }
 
 void restart_clear(void)
 {
     wanted = 0;
+    wanted_at = 0;
 }
 
 static char  pool[8192];
@@ -185,18 +217,28 @@ static int wake_path(char *out, size_t n, const char *id)
            tmp_path(out, n, what, -1);
 }
 
+#define RESTART_STOPPED_NOTE                                                          \
+    "[" APP_NAME "] " APP_NAME " restarted to load a new build while background "     \
+    "tasks you started were still running. Restarting stopped them, so no "           \
+    "notification will come for them. Check their output files, and start again "     \
+    "anything that did not finish."
+
 static void wake_dump(void)
 {
     for (int i = 0; i < workspace_count(); i++) {
         struct session *s = workspace_at(i);
         const char *id = session_id(s), *text = session_wake_owed(s);
+        int stopped = session_idle_busy(s);
         char path[4096];
-        if (!id || !text || !wake_path(path, sizeof path, id))
+        if (!id || (!text && !stopped) || !wake_path(path, sizeof path, id))
             continue;
         FILE *f = fopen(path, "w");
         if (!f)
             continue;
-        fputs(text, f);
+        if (text)
+            fputs(text, f);
+        if (stopped)
+            fprintf(f, "%s%s", text ? "\n\n" : "", RESTART_STOPPED_NOTE);
         if (fclose(f) != 0)
             unlink(path);
     }

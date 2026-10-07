@@ -735,6 +735,14 @@ int workspace_busy(void)
     return 0;
 }
 
+int workspace_turns_running(void)
+{
+    for (int i = 0; i < ntabs; i++)
+        if (session_turn_running(tabs[i].s))
+            return 1;
+    return 0;
+}
+
 static int join(char **dst, const char *text);
 
 static struct pending take_messages(struct tab *t)

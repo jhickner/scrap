@@ -525,20 +525,34 @@ static void takeover_run(void *ud)
         prompt_stop(ud);
 }
 
-static int window_working(void)
+static int window_queued(void)
 {
-    if (workspace_busy())
-        return 1;
     for (int i = 0; i < workspace_count(); i++)
         if (workspace_queued(i))
             return 1;
     return 0;
 }
 
+/* A restart waits for every tab's turn and queue, since replacing the process
+ * mid-turn loses the turn. Background tasks alone hold it only so long: they can
+ * run for hours, and a window that never goes fully quiet would otherwise keep
+ * the old build running indefinitely, missing whatever fix the new one carries. */
 static int restart_pending(void *ud)
 {
     (void)ud;
-    return restart_wanted() && !handoff_wanted() && !window_working();
+    static int shown;
+    if (!restart_wanted() || handoff_wanted()) {
+        shown = 0;
+        return 0;
+    }
+    if (!workspace_turns_running() && !window_queued() &&
+        (!workspace_busy() || restart_waited() >= restart_bg_wait()))
+        return 1;
+    if (!shown) {
+        shown = 1;
+        hud_refresh(workspace_current());
+    }
+    return 0;
 }
 
 static int idle_restart(void *ud)

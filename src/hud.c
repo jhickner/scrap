@@ -14,6 +14,7 @@
 #include "session.h"
 #include "tg.h"
 #include "relay.h"
+#include "restart.h"
 #include "im.h"
 #include "voice.h"
 #include "ui.h"
@@ -136,6 +137,8 @@ static void row_identity(const struct session *s, struct row *r)
         row_add(r, UI_OK, SEP "memory");
     if (api_active())
         row_add(r, UI_OK, SEP "api");
+    if (restart_wanted())
+        row_add(r, UI_ERROR, SEP "restart pending");
     int percent = session_context_percent(s);
     if (percent >= 0)
         row_add(r, UI_DIM, " \xc2\xb7 %d%%", percent);

@@ -166,6 +166,10 @@ def main():
                 if "slowfork" in msg:
                     time.sleep(8)
                 text = "SKIP" if "skipme" in msg else "fork: " + msg
+            elif text == "bgtask":
+                emit({"type": "system", "subtype": "background_tasks_changed",
+                      "tasks": [{"task_id": "bg-1", "status": "running"}]})
+                text = "bg started"
             elif text == "askme":
                 text = "Pick one.\n\n@ask\n1. Color?\n- red\n- blue"
             elif text.startswith("run: "):

@@ -14,6 +14,13 @@ void restart_request(void);
 
 int restart_wanted(void);
 
+/* Seconds since the pending restart was first seen, or 0 if none is pending. */
+double restart_waited(void);
+
+/* How long a pending restart waits for background tasks alone before it stops
+ * them (SCRAP_RESTART_BG_WAIT overrides, in seconds). */
+double restart_bg_wait(void);
+
 void restart_clear(void);
 
 int restart_exec(struct session *s);
