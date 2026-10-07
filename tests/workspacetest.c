@@ -14,6 +14,7 @@
 #include "session.h"
 #include "sessionview.h"
 #include "stamp.h"
+#include "intercom.h"
 #include "sidechannel.h"
 #include "sideroute.h"
 #include "status.h"
@@ -84,6 +85,11 @@ const char *session_prompt(const struct session *s) { (void)s; return NULL; }
 const char *session_remote(const struct session *s) { (void)s; return NULL; }
 void session_interrupt(struct session *s) { (void)s; }
 int sidechannel_start(const struct session *s, const char *prompt, const char *label) { (void)s; (void)prompt; (void)label; return 0; }
+int sidechannel_inbox(const struct session *s, const char *message, sidechannel_done done, void *ud) { (void)s; (void)message; (void)done; (void)ud; return 0; }
+void sidechannel_cancel(sidechannel_done done, void *ud) { (void)done; (void)ud; }
+void sidechannel_show(const struct session *owner, const char *question, const char *answer, int failed) { (void)owner; (void)question; (void)answer; (void)failed; }
+int session_can_resume(const struct session *s) { (void)s; return 0; }
+void intercom_reply(const char *from, const char *to, const char *text) { (void)from; (void)to; (void)text; }
 int session_work_count(const struct session *s) { return s ? s->work : 0; }
 int session_busy(const struct session *s) { return s && (s->busy || s->running); }
 int session_compact(const struct session *s) { (void)s; return 0; }
