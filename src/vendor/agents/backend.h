@@ -44,7 +44,8 @@ typedef struct {
     int ephemeral;              /* do not persist this helper conversation             */
     int skip_quota_read;        /* codex, grok: no quota read at startup; the host
                                    already holds a fresh reading                     */
-    int disable_tools;          /* helper needs text generation, not machine access    */
+    int disable_tools;          /* helper needs text generation, not machine access;
+                                   claude: system replaces the CLI's prompt          */
     int allow_customizations;   /* claude: load skills, CLAUDE.md, MCP servers, ...   */
     int no_browser_login;       /* claude: report expired auth instead of opening the
                                    browser, for runs with nobody watching it        */
@@ -494,7 +495,8 @@ static int backend_claude_start(Backend *b, const char *resume) {
     o.env = (const char *const *)x->st.env;
     o.model = x->st.model;
     o.effort = x->st.effort;
-    o.append_system = x->st.system;
+    if (x->st.disable_tools) o.system = x->st.system ? x->st.system : "";
+    else o.append_system = x->st.system;
     o.permission_mode = x->st.permission ? x->st.permission : "bypassPermissions";
     o.use_subscription = 1;
     o.allow_customizations = x->st.allow_customizations;

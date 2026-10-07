@@ -102,6 +102,22 @@ static int mock_cli(int argc, char **argv)
             continue;
         }
         const char *text = msg ? message_text(msg) : NULL;
+        cJSON *content = msg ? cJSON_GetObjectItemCaseSensitive(
+            cJSON_GetObjectItemCaseSensitive(msg, "message"), "content") : NULL;
+        if (cJSON_GetArraySize(content) > 1) {
+            char shape[256] = "";
+            cJSON *block;
+            cJSON_ArrayForEach(block, content) {
+                const char *t = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(block, "text"));
+                size_t n = strlen(shape);
+                snprintf(shape + n, sizeof shape - n, "%s%c%s", n ? "|" : "",
+                         t[strlen(t) - 1] == '\n' ? 'L' : 'T',
+                         cJSON_GetObjectItemCaseSensitive(block, "cache_control") ? "*" : "");
+            }
+            result(shape);
+            cJSON_Delete(msg);
+            continue;
+        }
         if (text && !strcmp(text, "/effort low") && effort_changes++ == 0)
             result("Set effort level to low");
         else if (text && !strcmp(text, "/effort auto") && effort_changes++ == 1)
@@ -226,6 +242,15 @@ int main(int argc, char **argv)
         claude_stop(client);
         return 1;
     }
+
+    reply = claude_send(client, "head\n\x1e" "a\nb\nc\n\x1e" "tail");
+    if (!reply || strcmp(reply, "L|L|L|L*|T")) {
+        fprintf(stderr, "claudetest: cache marks became %s\n", reply ? reply : "none");
+        free(reply);
+        claude_stop(client);
+        return 1;
+    }
+    free(reply);
 
     reply = claude_send(client, "env");
     if (!reply || strcmp(reply, "worker-7") || getenv("CLAUDETEST_ENV")) {

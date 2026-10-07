@@ -762,7 +762,7 @@ static char *oc_context(const oc_mem *m, oc_ref r) {
         oc_flat(&b, t ? t : OC_UNBUILT);
         oc_cats(&b, "\n");
     }
-    oc_cats(&b, "</chat>\n\n");
+    oc_cats(&b, BACKEND_CACHE_MARK "</chat>\n\n");
     char head[128];
     snprintf(head, sizeof head, "For scale only, a fictional line unrelated to this chat, exactly %ld bytes:\n", m->node);
     oc_cats(&b, head);

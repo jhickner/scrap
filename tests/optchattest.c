@@ -200,13 +200,15 @@ static void marks_test(void)
     int    count = 0;
     size_t limits[] = { 50000, 80000, 100000 };
     for (char *p = ctx; (p = strstr(p, BACKEND_CACHE_MARK)); p++) {
-        CHECK(count < 3);
+        CHECK(count < 4);
         if (count < 3)
             CHECK((size_t)(p - ctx) <= limits[count] && (size_t)(p - ctx) > limits[count] - 600);
+        else
+            CHECK(!strncmp(p + 1, "</chat>", 7));
         CHECK(p[-1] == '\n');
         count++;
     }
-    CHECK(count == 3);
+    CHECK(count == 4);
     free(ctx);
     char *view = oc_render(m, 1), *plain = oc_render(m, 0);
     count = 0;

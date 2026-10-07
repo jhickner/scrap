@@ -40,6 +40,10 @@ typedef struct {
                                     resumed context is copied into a new session
                                     id and the original transcript is untouched  */
     const char *append_system;   /* --append-system-prompt text; NULL -> none     */
+    const char *system;          /* --system-prompt text, replacing the CLI's own
+                                    prompt, and the per-request billing header
+                                    off so separate turns share a cache prefix;
+                                    NULL -> none                                  */
     const char *session_name;    /* --name value; NULL -> let Claude name it      */
     const char *tools;           /* --tools value; NULL -> flag omitted (all tools);
                                     "" -> disable every built-in tool; else a list
@@ -555,6 +559,7 @@ claude_client *claude_start(const claude_opts *opts) {
         if (o.session_file && *o.session_file) setenv("MUX_SESSION_FILE", o.session_file, 1);
         for (const char *const *e = o.env; e && *e; e++) putenv((char *)*e);
         if (o.use_subscription) unsetenv("ANTHROPIC_API_KEY");
+        if (o.system) setenv("CLAUDE_CODE_ATTRIBUTION_HEADER", "0", 1);
 
         /* Build argv: headless, streaming both directions. */
         const char *argv[38];
@@ -574,6 +579,7 @@ claude_client *claude_start(const claude_opts *opts) {
         if (o.permission_mode && *o.permission_mode) { argv[n++] = "--permission-mode"; argv[n++] = o.permission_mode; }
         if (o.resume_session && *o.resume_session)   { argv[n++] = "--resume"; argv[n++] = o.resume_session;
                                                        if (o.fork_session) argv[n++] = "--fork-session"; }
+        if (o.system)                                { argv[n++] = "--system-prompt";        argv[n++] = o.system; }
         if (o.append_system && *o.append_system)     { argv[n++] = "--append-system-prompt"; argv[n++] = o.append_system; }
         if (o.tools)                                 { argv[n++] = "--tools";                argv[n++] = o.tools; }
         if (o.mcp_config && *o.mcp_config)           { argv[n++] = "--mcp-config";           argv[n++] = o.mcp_config;
@@ -1416,6 +1422,43 @@ const char *claude_wake_owed(claude_client *c) { return c ? c->owed : NULL; }
 
 int claude_turn_open(claude_client *c) { return c ? c->turn_open : 0; }
 
+#define CL_CACHE_MARK '\x1e'
+#define CL_CACHE_LINES 19
+
+static void cl_text_block(cJSON *content, const char *s, size_t n, int cache) {
+    if (!n) return;
+    char *t = strndup(s, n);
+    cJSON *b = cJSON_CreateObject();
+    cJSON_AddStringToObject(b, "type", "text");
+    cJSON_AddStringToObject(b, "text", t);
+    if (cache) cJSON_AddItemToObject(b, "cache_control", cJSON_Parse("{\"type\":\"ephemeral\",\"ttl\":\"1h\"}"));
+    cJSON_AddItemToArray(content, b);
+    free(t);
+}
+
+/* Text with cache marks becomes one block per marked piece. The CLI keeps
+ * one breakpoint free, so it goes on the last marked piece; that piece's
+ * final lines are separate blocks so the API's lookback finds an entry a
+ * previous turn wrote a few lines earlier. 1h matches the CLI's own marks. */
+static void cl_cache_content(cJSON *content, const char *text) {
+    const char *last = strrchr(text, CL_CACHE_MARK);
+    for (const char *s = text, *e; s <= last; s = e + 1) {
+        e = strchr(s, CL_CACHE_MARK);
+        if (e != last) { cl_text_block(content, s, (size_t)(e - s), 0); continue; }
+        const char *cut[CL_CACHE_LINES + 1];
+        int k = 0;
+        for (const char *p = e; p > s && k <= CL_CACHE_LINES; p--)
+            if (p[-1] == '\n' && p != e) cut[k++] = p;
+        const char *from = s;
+        for (int j = k - 1; j >= 0; j--) {
+            cl_text_block(content, from, (size_t)(cut[j] - from), 0);
+            from = cut[j];
+        }
+        cl_text_block(content, from, (size_t)(e - from), 1);
+    }
+    cl_text_block(content, last + 1, strlen(last + 1), 0);
+}
+
 static char *cl_send(claude_client *c, const char *user_text, int content_block) {
     if (!c || !user_text) return NULL;
     if (!cl_await_ready(c)) return NULL;
@@ -1426,7 +1469,9 @@ static char *cl_send(claude_client *c, const char *user_text, int content_block)
     cJSON_AddStringToObject(msg, "type", "user");
     cJSON *inner = cJSON_AddObjectToObject(msg, "message");
     cJSON_AddStringToObject(inner, "role", "user");
-    if (content_block) {
+    if (strchr(user_text, CL_CACHE_MARK)) {
+        cl_cache_content(cJSON_AddArrayToObject(inner, "content"), user_text);
+    } else if (content_block) {
         cJSON *content = cJSON_AddArrayToObject(inner, "content");
         cJSON *text = cJSON_CreateObject();
         cJSON_AddStringToObject(text, "type", "text");
