@@ -13,6 +13,9 @@ const struct pick_item *cmd_model_choices(const char *backend, int *count);
 const struct pick_item *cmd_backend_choices(int *count);
 const struct pick_item *cmd_effort_choices(const char *backend, int *count);
 const char             *cmd_default_backend(void);
+/* Whether a tab can start on backend at effort (NULL or "default" always
+ * fits); 0 with why filled otherwise. */
+int cmd_check_choice(const char *backend, const char *effort, char *why, size_t size);
 
 const ReplCommand *cmd_completions(int *count);
 

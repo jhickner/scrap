@@ -490,14 +490,21 @@ int tailnet_rename(const char *host, const char *target, const char *title, char
     return manage(host, req, msg, size);
 }
 
-int tailnet_spawn(const char *host, const char *cwd, const char *prompt,
-                  char *target, size_t tsize, char *msg, size_t size)
+int tailnet_spawn(const char *host, const char *cwd, const char *backend, const char *model,
+                  const char *effort, const char *prompt, char *target, size_t tsize, char *msg,
+                  size_t size)
 {
     char ip[256], err[512];
     tailnet_resolve(host, ip, sizeof ip);
     cJSON *req = cJSON_CreateObject();
     if (cwd && *cwd)
         cJSON_AddStringToObject(req, "cwd", cwd);
+    if (backend && *backend)
+        cJSON_AddStringToObject(req, "backend", backend);
+    if (model && *model)
+        cJSON_AddStringToObject(req, "model", model);
+    if (effort && *effort)
+        cJSON_AddStringToObject(req, "effort", effort);
     if (prompt && *prompt)
         cJSON_AddStringToObject(req, "prompt", prompt);
     cJSON *r = ask(ip, tailnet_dir_port(), req, SPAWN_TIMEOUT, err, sizeof err);

@@ -33,6 +33,7 @@
 #include "sessionaddr.h"
 #include "sessionlist.h"
 #include "sessionload.h"
+#include "cmd.h"
 #include "sessionprefs.h"
 #include "sessionpresent.h"
 #include "sessionview.h"
@@ -1193,18 +1194,29 @@ static void claim_name(struct session *s);
 /* Fire and forget: returns once the subagent's tab is running its task, or
  * at once if the parent is interrupted first. The tab keeps going either way;
  * its task tells it how to report back, such as with scrap send. */
-static int host_agent(void *ud, Backend *child, const char *task, const char *cwd, char **report)
+static int host_agent(void *ud, Backend *child, const char *task, const char *cwd,
+                      const char *backend, const char *model, const char *effort, char **report)
 {
-    struct session   *s = ud;
+    struct session *s = ud;
+    char            why[300];
+    if (!cmd_check_choice(backend, effort, why, sizeof why)) {
+        child->close(child);
+        *report = strdup(why);
+        return BACKEND_AGENT_FAILED;
+    }
+    /* A worker runs at the effort its call names, else its backend's default:
+     * neither the parent's effort nor the saved one, which follows it. */
+    if (!model && (model = session_saved_model(backend)))
+        child->set_model(child, model);
     struct agent_job *j = calloc(1, sizeof *j);
     if (!j)
         return BACKEND_AGENT_DECLINED;
     j->child  = child;
     j->task   = strdup(task);
     j->cwd    = cwd ? strdup(cwd) : s->cwd ? strdup(s->cwd) : NULL;
-    j->model  = s->model ? strdup(s->model) : NULL;
-    j->effort = s->effort ? strdup(s->effort) : NULL;
-    j->backend = strdup(s->backend);
+    j->model  = model ? strdup(model) : NULL;
+    j->effort = effort ? strdup(effort) : NULL;
+    j->backend = strdup(backend);
     j->status = AGENT_PENDING;
     j->refs   = 2;
 

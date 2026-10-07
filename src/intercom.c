@@ -252,8 +252,9 @@ char *intercom_note(const char *name)
         "- `scrap send @%s /COMMAND` runs a scrap command such as /clear on this session "
         "once the current turn ends; only this session can do this to itself.\n"
         "- `scrap open TARGET` resumes a past session in a new tab.\n"
-        "- `scrap new [--on MACHINE] [-C DIR] [PROMPT]` starts a session in a new tab, here or "
-        "in the newest scrap window on a tailnet machine, and prints its address.\n"
+        "- `scrap new [--on MACHINE] [-C DIR] [-b BACKEND] [-m MODEL] [-e EFFORT] [PROMPT]` "
+        "starts a session in a new tab, here or in the newest scrap window on a tailnet machine, "
+        "and prints its address; -b, -m and -e default to what a new tab gets.\n"
         "- `scrap yank TARGET...` moves live sessions from other windows into this window as tabs.\n"
         "- `scrap attach --tab machine:@name` opens a session on another machine as a tab "
         "in this window, without moving it; a session on this machine is yanked instead.\n"
@@ -1123,17 +1124,24 @@ static int cmd_open(int argc, char **argv)
 
 static int cmd_new(int argc, char **argv)
 {
-    const char *on = NULL, *dir = NULL;
+    const char *on = NULL, *dir = NULL, *backend = NULL, *model = NULL, *effort = NULL;
     int         i = 1;
     for (; i + 1 < argc && argv[i][0] == '-'; i += 2)
         if (!strcmp(argv[i], "--on"))
             on = argv[i + 1];
         else if (!strcmp(argv[i], "-C"))
             dir = argv[i + 1];
+        else if (!strcmp(argv[i], "-b"))
+            backend = argv[i + 1];
+        else if (!strcmp(argv[i], "-m"))
+            model = argv[i + 1];
+        else if (!strcmp(argv[i], "-e"))
+            effort = argv[i + 1];
         else
             break;
     if (i < argc && argv[i][0] == '-') {
-        fprintf(stderr, "usage: scrap new [--on MACHINE] [-C DIR] [PROMPT]\n");
+        fprintf(stderr, "usage: scrap new [--on MACHINE] [-C DIR] [-b BACKEND] [-m MODEL] "
+                        "[-e EFFORT] [PROMPT]\n");
         return 2;
     }
     const char *owner = getenv("SCRAP_PID");
@@ -1149,7 +1157,8 @@ static int cmd_new(int argc, char **argv)
     int  rc = 1;
     if (on) {
         char target[TAILNET_HOST_MAX + 64];
-        if ((rc = !tailnet_spawn(on, dir, prompt, target, sizeof target, msg, sizeof msg)))
+        if ((rc = !tailnet_spawn(on, dir, backend, model, effort, prompt, target, sizeof target,
+                                 msg, sizeof msg)))
             fprintf(stderr, "scrap: %s\n", msg);
         else
             printf("started %s\n", target);
@@ -1160,6 +1169,12 @@ static int cmd_new(int argc, char **argv)
     cJSON_AddStringToObject(o, "cwd", dir ? dir : here(cwd, sizeof cwd) ? cwd : "~");
     if (*prompt)
         cJSON_AddStringToObject(o, "prompt", prompt);
+    if (backend)
+        cJSON_AddStringToObject(o, "backend", backend);
+    if (model)
+        cJSON_AddStringToObject(o, "model", model);
+    if (effort)
+        cJSON_AddStringToObject(o, "effort", effort);
     char reply[1024] = "";
     request(pid, o, reply, sizeof reply);
     cJSON_Delete(o);

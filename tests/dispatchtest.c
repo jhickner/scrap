@@ -44,6 +44,7 @@ static void fail(const char *what)
 }
 
 const char *cmd_default_backend(void) { return "claude"; }
+int cmd_check_choice(const char *backend, const char *effort, char *why, size_t size) { (void)backend; (void)effort; (void)why; (void)size; return 1; }
 int cmd_is_command(const char *line) { (void)line; return 0; }
 void        prompt_echo_message(const char *text)
 {

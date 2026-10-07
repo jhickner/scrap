@@ -214,6 +214,27 @@ const char *cmd_default_backend(void)
     return known_backend(name) ? name : "claude";
 }
 
+int cmd_check_choice(const char *backend, const char *effort, char *why, size_t size)
+{
+    if (!known_backend(backend)) {
+        int n = snprintf(why, size, "unknown backend '%s': pick one of", backend ? backend : "");
+        for (const char *const *p = backend_names(); *p && n > 0 && (size_t)n < size; p++)
+            n += snprintf(why + n, size - n, "%s %s", p == backend_names() ? "" : ",", *p);
+        return 0;
+    }
+    if (!effort || !*effort || !strcmp(effort, "default"))
+        return 1;
+    int count;
+    const struct pick_item *v = cmd_effort_choices(backend, &count);
+    for (int i = 0; i < count; i++)
+        if (!strcmp(v[i].label, effort))
+            return 1;
+    int n = snprintf(why, size, "unknown effort '%s' for %s: pick one of", effort, backend);
+    for (int i = 0; i < count && n > 0 && (size_t)n < size; i++)
+        n += snprintf(why + n, size - n, "%s %s", i ? "," : "", v[i].label);
+    return 0;
+}
+
 static const struct pick_item *effort_choices(const struct session *s, int *count)
 {
     const struct pick_item *v = cmd_effort_choices(session_backend(s), count);

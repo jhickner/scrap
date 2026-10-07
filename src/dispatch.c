@@ -417,6 +417,12 @@ static void serve(int fd, const char *text)
     const char *backend = field(o, "backend");
     if (!backend)
         backend = cmd_default_backend();
+    char why[300];
+    if (!cmd_check_choice(backend, field(o, "effort"), why, sizeof why)) {
+        reply_error(fd, why, NULL);
+        cJSON_Delete(o);
+        return;
+    }
 
     const char *cwd = field(o, "cwd"), *home = getenv("HOME");
     char        expanded[4096];

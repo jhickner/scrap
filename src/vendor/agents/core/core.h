@@ -146,10 +146,15 @@ static const char SA_AGENT_TOOL[] =
     "so end the task by telling it to send its report with scrap send @<your session name>. The "
     "subagent starts from this view, including this turn so far, and has the same tools, so give "
     "it the task, not the background. Its steps stay out of the chat; only its report enters it. "
-    "It works in this session's directory unless cwd names another.\","
+    "It works in this session's directory unless cwd names another, on this session's backend and "
+    "model unless backend or model name others, at the backend's default effort unless effort "
+    "names one; this session's effort is not passed on.\","
     "\"parameters\":{\"type\":\"object\",\"properties\":{"
     "\"task\":{\"type\":\"string\",\"description\":\"What the subagent is to do, ending with how to report back (scrap send @<your session name>)\"},"
-    "\"cwd\":{\"type\":\"string\",\"description\":\"Directory to work in: absolute, ~/..., or relative to this session's; defaults to this session's\"}},"
+    "\"cwd\":{\"type\":\"string\",\"description\":\"Directory to work in: absolute, ~/..., or relative to this session's; defaults to this session's\"},"
+    "\"backend\":{\"type\":\"string\",\"enum\":[\"claude\",\"codex\",\"grok\",\"core\"],\"description\":\"Backend to run on; defaults to this session's\"},"
+    "\"model\":{\"type\":\"string\",\"description\":\"Model to use; defaults to this session's on the same backend, else that backend's default\"},"
+    "\"effort\":{\"type\":\"string\",\"description\":\"Reasoning effort such as low, medium, high or xhigh; defaults to the backend's default, not this session's\"}},"
     "\"required\":[\"task\"]}}}";
 
 static const char SA_DELEGATE[] =
@@ -609,7 +614,8 @@ typedef struct {
     const _Atomic int *halt;
     long timeout;
     int sub;
-    int (*agent_host)(void *ud, Backend *child, const char *task, const char *cwd, char **report);
+    int (*agent_host)(void *ud, Backend *child, const char *task, const char *cwd,
+                      const char *backend, const char *model, const char *effort, char **report);
     void *agent_ud;
     char drive[16];
     long view_seen;
@@ -2315,7 +2321,20 @@ static int sa_tool_agent(sa_agent *x, const cJSON *input, sa_buf *out, int *inte
         if (!sa_agent_cwd(x, want, dir, sizeof dir, out)) return 1;
         cwd = dir;
     }
-    backend_opts o = { .name = x->drive[0] ? x->drive : "core", .model = x->st.model, .effort = x->st.effort,
+    const char *mine = x->drive[0] ? x->drive : "core";
+    const char *backend = sa_jstr(input, "backend");
+    if (!backend || !*backend) backend = mine;
+    else if (strcmp(backend, "claude") && strcmp(backend, "codex") && strcmp(backend, "grok") &&
+             strcmp(backend, "core")) {
+        sa_printf(out, "backend %s cannot run a subagent: pick claude, codex, grok or core", backend);
+        return 1;
+    }
+    const char *model = sa_jstr(input, "model");
+    if (!model || !*model || !strcmp(model, "default"))
+        model = !strcmp(backend, mine) && !(model && *model) ? x->st.model : NULL;
+    const char *effort = sa_jstr(input, "effort");
+    if (effort && (!*effort || !strcmp(effort, "default"))) effort = NULL;
+    backend_opts o = { .name = backend, .model = model, .effort = effort,
                        .cwd = cwd, .system = x->st.system, .memory = 1, .memory_relay = x->relay,
                        .permission_mode = x->st.permission, .env = (const char *const *)x->st.env };
     Backend *b = core_agent_open(&o);
@@ -2329,7 +2348,7 @@ static int sa_tool_agent(sa_agent *x, const cJSON *input, sa_buf *out, int *inte
     oc_retain(x->mem);
     c->st.abort = x->st.abort;
     char *report = NULL;
-    int status = x->agent_host ? x->agent_host(x->agent_ud, b, task, cwd, &report) : BACKEND_AGENT_DECLINED;
+    int status = x->agent_host ? x->agent_host(x->agent_ud, b, task, cwd, backend, model, effort, &report) : BACKEND_AGENT_DECLINED;
     if (status == BACKEND_AGENT_STARTED) {
         sa_puts(out, report ? report : "subagent started in its own tab");
         free(report);
@@ -3151,7 +3170,9 @@ static void sa_rate_limit(Backend *b, backend_rate_limit *out) {
 }
 
 static void sa_set_agent_host(Backend *b,
-                              int (*host)(void *ud, Backend *child, const char *task, const char *cwd, char **report),
+                              int (*host)(void *ud, Backend *child, const char *task, const char *cwd,
+                                          const char *backend, const char *model, const char *effort,
+                                          char **report),
                               void *ud) {
     sa_agent *x = b->ctx;
     x->agent_host = host;

@@ -773,6 +773,57 @@ static void memory_test(void)
     free(log);
 }
 
+static char host_backend[32], host_model[64], host_effort[32];
+
+static int record_host(void *ud, Backend *child, const char *task, const char *cwd,
+                       const char *backend, const char *model, const char *effort, char **report)
+{
+    (void)ud, (void)task, (void)cwd;
+    snprintf(host_backend, sizeof host_backend, "%s", backend ? backend : "(null)");
+    snprintf(host_model, sizeof host_model, "%s", model ? model : "(null)");
+    snprintf(host_effort, sizeof host_effort, "%s", effort ? effort : "(null)");
+    child->close(child);
+    *report = strdup("recorded");
+    return BACKEND_AGENT_FAILED;
+}
+
+/* The agent tool hands the host the backend, model and effort asked for: the
+ * parent's backend and model by default, but never the parent's effort. */
+static void agent_choice_test(void)
+{
+    /* Its own memory: memory_test leaves a compactor call hanging in dir's. */
+    char own[300], cmd[700];
+    snprintf(own, sizeof own, "%s/choice", dir);
+    snprintf(cmd, sizeof cmd, "mkdir -p %s/agent && cp %s/agent/providers.json %s/agent/", own, dir, own);
+    CHECK(system(cmd) == 0);
+    setenv("SCRAP_CONFIG_DIR", own, 1);
+    backend_opts o = {.name = "core", .model = "fake/echo", .effort = "xhigh", .cwd = dir, .memory = 1};
+    Backend *b = backend_open_ex(&o);
+    b->set_event_cb(b, on_event, NULL);
+    b->set_abort_check(b, should_abort);
+    b->set_agent_host(b, record_host, NULL);
+    CHECK(b->start(b, NULL));
+    backend_result meta;
+
+    char *reply = ask(b, "tool: agent|{\"task\":\"t\"}", &meta);
+    CHECK(!strcmp(host_backend, "core") && !strcmp(host_model, "fake/echo") &&
+          !strcmp(host_effort, "(null)"));
+    free(reply);
+    reply = ask(b, "tool: agent|{\"task\":\"t\",\"effort\":\"low\",\"model\":\"default\"}", &meta);
+    CHECK(!strcmp(host_backend, "core") && !strcmp(host_model, "(null)") && !strcmp(host_effort, "low"));
+    free(reply);
+    reply = ask(b, "tool: agent|{\"task\":\"t\",\"backend\":\"codex\"}", &meta);
+    CHECK(!strcmp(host_backend, "codex") && !strcmp(host_model, "(null)"));
+    free(reply);
+    host_backend[0] = '\0';
+    reply = ask(b, "tool: agent|{\"task\":\"t\",\"backend\":\"nope\"}", &meta);
+    CHECK(last_failed && strstr(last_result, "backend nope cannot run a subagent") && !host_backend[0]);
+    free(reply);
+    CHECK(strstr(get_file("last-request.json"), "\"effort\":{\"type\":\"string\""));
+    b->close(b);
+    setenv("SCRAP_CONFIG_DIR", dir, 1);
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && !strcmp(argv[1], "--print"))
@@ -930,6 +981,7 @@ int main(int argc, char **argv)
     b->close(b);
 
     memory_test();
+    agent_choice_test();
     drive_test();
 
     kill(server, SIGKILL);
