@@ -596,7 +596,7 @@ typedef struct {
     long mcp_seq;
     oc_mem *mem;
     oc_compactor *compactor;
-    char compactor_backend[32], compactor_model[256];
+    char compactor_backend[32], compactor_model[256], compactor_log[4200];
     _Atomic int halting;
     const _Atomic int *halt;
     long timeout;
@@ -2620,7 +2620,8 @@ static void sa_curl_init(void) { curl_global_init(CURL_GLOBAL_DEFAULT); }
 
 static _Thread_local _Atomic int *sa_compactor_halt;
 static _Thread_local long sa_compactor_deadline;
-static _Thread_local char *(*sa_compactor_ask)(Backend *b, const char *user);
+static _Thread_local char *(*sa_compactor_ask)(Backend *b, const char *user, backend_result *meta);
+static _Thread_local const char *sa_compactor_log, *sa_compactor_model;
 
 static int sa_compactor_aborted(void) {
     return (sa_compactor_halt && *sa_compactor_halt) || (sa_compactor_deadline && sa_now_ms() > sa_compactor_deadline);
@@ -2628,8 +2629,17 @@ static int sa_compactor_aborted(void) {
 
 static char *sa_compactor_timed_ask(Backend *b, const char *user) {
     sa_compactor_deadline = sa_now_ms() + OC_TIMEOUT_S * 1000;
-    char *r = sa_compactor_ask(b, user);
+    backend_result u = {0};
+    long started = sa_now_ms();
+    char *r = sa_compactor_ask(b, user, &u);
     sa_compactor_deadline = 0;
+    FILE *f = fopen(sa_compactor_log, "a");
+    if (f) {
+        fprintf(f, "{\"t\":%ld,\"model\":\"%s\",\"ms\":%ld,\"input\":%ld,\"write\":%ld,\"read\":%ld,\"output\":%ld,\"ok\":%d}\n",
+                (long)time(NULL), sa_compactor_model, sa_now_ms() - started, u.input_tokens, u.cache_creation_tokens,
+                u.cache_read_tokens, u.output_tokens, r && !u.is_error);
+        fclose(f);
+    }
     return r;
 }
 
@@ -2640,9 +2650,11 @@ static Backend *sa_compactor_open(void *ud, const char *system) {
     if (strcmp(o.name, "core")) {
         Backend *b = backend_open_ex(&o);
         sa_compactor_halt = &x->halting;
+        sa_compactor_log = x->compactor_log;
+        sa_compactor_model = x->compactor_model;
         if (b) {
             b->set_abort_check(b, sa_compactor_aborted);
-            sa_compactor_ask = b->ask;
+            sa_compactor_ask = b->ask_ex;
             b->ask = sa_compactor_timed_ask;
         }
         return b;
@@ -2984,6 +2996,7 @@ static int sa_memory_open(sa_agent *x) {
         return 0;
     }
     snprintf(slash, sizeof dir - (size_t)(slash - dir), "/memory");
+    snprintf(x->compactor_log, sizeof x->compactor_log, "%s/usage.jsonl", dir);
     x->mem = oc_open(dir, 0, 0, x->err, sizeof x->err);
     if (!x->mem) return 0;
     const char *backend = sa_jstr(x->config, "compactor_backend"), *model = sa_jstr(x->config, "compactor_model");
