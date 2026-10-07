@@ -2526,6 +2526,10 @@ static int sa_memory_turn(sa_agent *x, const char *user, const sa_buf *reminder,
         oc_append(x->mem, "user", user);
         return 0;
     }
+    if (!x->sub && !oc_settled(x->mem)) {
+        char why[512];
+        if (x->compactor && oc_compactor_error(x->compactor, why, sizeof why)) sa_warn(x, why);
+    }
     /* Claude turns each start after /clear, so the view goes as one user
        message; claude.h turns its marks into blocks with one breakpoint on
        the last marked piece. That mark sits before </chat> so the next
@@ -2704,6 +2708,8 @@ static _Thread_local _Atomic int *sa_compactor_halt;
 static _Thread_local long sa_compactor_deadline;
 static _Thread_local char *(*sa_compactor_ask)(Backend *b, const char *user, backend_result *meta);
 static _Thread_local const char *sa_compactor_log, *sa_compactor_model;
+static _Thread_local const char *(*sa_compactor_last_error)(Backend *b);
+static _Thread_local char sa_compactor_why[300];
 
 static int sa_compactor_aborted(void) {
     return (sa_compactor_halt && *sa_compactor_halt) || (sa_compactor_deadline && sa_now_ms() > sa_compactor_deadline);
@@ -2722,9 +2728,16 @@ static char *sa_compactor_timed_ask(Backend *b, const char *user) {
                 u.cache_read_tokens, u.output_tokens, r && !u.is_error);
         fclose(f);
     }
-    /* An error's text is no summary; returning none makes it a failed try. */
+    /* An error's text is no summary; returning none makes it a failed try,
+       and the text is kept to say why. */
+    snprintf(sa_compactor_why, sizeof sa_compactor_why, "%s", u.is_error && r ? r : "");
     if (u.is_error) { free(r); return NULL; }
     return r;
+}
+
+static const char *sa_compactor_error(Backend *b) {
+    if (sa_compactor_why[0]) return sa_compactor_why;
+    return sa_compactor_last_error ? sa_compactor_last_error(b) : NULL;
 }
 
 static char *sa_compactor_core_ask(Backend *b, const char *user) {
@@ -2747,6 +2760,8 @@ static Backend *sa_compactor_open(void *ud, const char *system) {
             b->set_abort_check(b, sa_compactor_aborted);
             sa_compactor_ask = b->ask_ex;
             b->ask = sa_compactor_timed_ask;
+            sa_compactor_last_error = b->last_error;
+            b->last_error = sa_compactor_error;
         }
         return b;
     }

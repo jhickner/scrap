@@ -186,6 +186,7 @@ struct oc_mem {
     char            dir[4096];
     long            node, view;
     int             lock, skipped, refs, compactors;
+    int             busy, failing;  /* summaries in flight; failed, awaiting retry */
     oc_msg         *msgs;
     long            n, cap;
     oc_level        lev[OC_LEVELS];
@@ -463,10 +464,14 @@ static void oc_deadline(struct timespec *ts, long ms) {
     if (ts->tv_nsec >= 1000000000L) { ts->tv_sec++; ts->tv_nsec -= 1000000000L; }
 }
 
+/* Waits for the view's summaries, but not for ones that keep failing: once
+ * nothing is in flight and only failed jobs are left, they would hold every
+ * turn until they work (a rejected request can fail for hours), so the view
+ * goes as it is and they keep retrying behind it. */
 int oc_settle(oc_mem *m, int (*abort)(void *ud), void *ud) {
     pthread_mutex_lock(&m->mu);
     int ok = 1;
-    while (oc_first(m) != m->n && m->compactors) {
+    while (oc_first(m) != m->n && m->compactors && !(m->failing && !m->busy)) {
         if (abort && abort(ud)) { ok = 0; break; }
         struct timespec ts;
         oc_deadline(&ts, 50);
@@ -886,6 +891,7 @@ static void *oc_worker(void *arg) {
             continue;
         }
         c->busy[c->nbusy++] = r;
+        m->busy++;
         char *prompt = oc_context(m, r);
         long node = m->node;
         pthread_mutex_unlock(&m->mu);
@@ -894,9 +900,10 @@ static void *oc_worker(void *arg) {
         pthread_mutex_lock(&m->mu);
         for (int k = 0; k < c->nbusy; k++)
             if (oc_same(c->busy[k], r)) { c->busy[k] = c->busy[--c->nbusy]; break; }
+        m->busy--;
         int at = oc_retry_find(c, r);
         if (line && oc_put_locked(m, r.l, r.i, line)) {
-            if (at >= 0) c->retry[at] = c->retry[--c->nretry];
+            if (at >= 0) { c->retry[at] = c->retry[--c->nretry]; m->failing--; }
         } else {
             if (at < 0) {
                 if (c->nretry == c->cretry) {
@@ -905,6 +912,7 @@ static void *oc_worker(void *arg) {
                 }
                 at = c->nretry++;
                 c->retry[at].r = r;
+                m->failing++;
                 const char *why = !b ? "backend did not open" : b->last_error ? b->last_error(b) : NULL;
                 snprintf(c->err, sizeof c->err, "summary %ld+%ld failed: %s", oc_start(r), 1L << r.l,
                          why && *why ? why : line ? "could not save" : "no reply");
@@ -950,6 +958,9 @@ void oc_compactor_stop(oc_compactor *c) {
     pthread_cond_broadcast(&c->m->cond);
     pthread_mutex_unlock(&c->m->mu);
     for (int k = 0; k < c->jobs; k++) pthread_join(c->threads[k], NULL);
+    pthread_mutex_lock(&c->m->mu);
+    c->m->failing -= c->nretry;
+    pthread_mutex_unlock(&c->m->mu);
     free(c->threads);
     free(c->busy);
     free(c->retry);

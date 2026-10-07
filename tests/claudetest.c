@@ -148,6 +148,13 @@ static int mock_cli(int argc, char **argv)
             result(v ? v : "unset");
         }
 
+        else if (text && !strcmp(text, "cachettl")) {
+            const char *v = getenv("CLAUDE_CODE_PROMPT_CACHE_TTL");
+            char ttl[64];
+            snprintf(ttl, sizeof ttl, "%s%s", v ? v : "unset", getenv("FORCE_PROMPT_CACHING_5M") ? "+force5m" : "");
+            result(ttl);
+        }
+
         else if (text && !strcmp(text, "env")) {
             const char *v = getenv("CLAUDETEST_ENV");
             result(v ? v : "unset");
@@ -244,7 +251,8 @@ int main(int argc, char **argv)
     if (argc > 1 && (!strcmp(argv[1], "--print") || !strcmp(argv[1], "auth")))
         return mock_cli(argc, argv);
 
-    static const char *const child_env[] = {"CLAUDETEST_ENV=worker-7", NULL};
+    static const char *const child_env[] = {"CLAUDETEST_ENV=worker-7", "CLAUDE_CODE_PROMPT_CACHE_TTL=5m",
+                                            "FORCE_PROMPT_CACHING_5M=1", NULL};
     claude_opts opts = {
         .cli_path = argv[0],
         .env = child_env,
@@ -333,6 +341,18 @@ int main(int argc, char **argv)
     reply = claude_send(client, "gitctx");
     if (!reply || strcmp(reply, "1")) {
         fprintf(stderr, "claudetest: git status left in the CLI context (%s)\n", reply ? reply : "none");
+        free(reply);
+        claude_stop(client);
+        return 1;
+    }
+    free(reply);
+
+    /* Marked blocks ask for a 1 hour cache, and the API rejects one after
+       the CLI's own 5 minute breakpoints, which the CLI picks by itself off
+       a subscription or past its limits; so its TTL is pinned to match. */
+    reply = claude_send(client, "cachettl");
+    if (!reply || strcmp(reply, "1h")) {
+        fprintf(stderr, "claudetest: CLI cache TTL not pinned to 1h (%s)\n", reply ? reply : "none");
         free(reply);
         claude_stop(client);
         return 1;

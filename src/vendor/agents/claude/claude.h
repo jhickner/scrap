@@ -571,6 +571,16 @@ claude_client *claude_start(const claude_opts *opts) {
          * past the system prompt. This also drops the CLI's commit and PR
          * instructions, which come with the git status. */
         if (o.no_session_persistence) setenv("CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS", "1", 1);
+        /* Those are also the clients that send cache marks, as 1 hour
+         * breakpoints (cl_text_block), and the API rejects a 1 hour one after
+         * a 5 minute one. The CLI's own breakpoints on its tools and system
+         * prompt last 1 hour only on a subscription within its usage limits,
+         * else 5 minutes, so an account past its limits failed every marked
+         * request; pin them to 1 hour. */
+        if (o.no_session_persistence) {
+            setenv("CLAUDE_CODE_PROMPT_CACHE_TTL", "1h", 1);
+            unsetenv("FORCE_PROMPT_CACHING_5M");
+        }
 
         /* Build argv: headless, streaming both directions. */
         const char *argv[48];

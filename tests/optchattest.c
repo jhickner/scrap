@@ -171,6 +171,64 @@ static void compactor_test(void)
         failures++;
 }
 
+static char *fail_ask(Backend *b, const char *user)
+{
+    (void)b;
+    (void)user;
+    return strdup("API Error: 400 messages.0.content.3.cache_control.ttl: a ttl='1h' cache_control block must not come after a ttl='5m' cache_control block.");
+}
+
+static Backend *fail_open(void *ud, const char *system)
+{
+    (void)ud;
+    (void)system;
+    Backend *b = calloc(1, sizeof *b);
+    b->ask     = fail_ask;
+    b->reset   = fake_reset;
+    b->close   = fake_close;
+    return b;
+}
+
+static int three_seconds(void *ud)
+{
+    (void)ud;
+    return oc_ms() - started > 3000;
+}
+
+/* A summary that keeps failing must not hold the turn: settle returns once
+ * nothing is in flight and only failing jobs are left, unsettled. */
+static void failing_test(void)
+{
+    char dir[] = "/tmp/optchattest.XXXXXX";
+    char err[512];
+    if (!mkdtemp(dir)) {
+        failures++;
+        return;
+    }
+    oc_mem *m = oc_open(dir, NODE, VIEW, err, sizeof err);
+    CHECK(m);
+    if (!m)
+        return;
+    oc_compactor *c = oc_compactor_start(m, 4, fail_open, NULL);
+    CHECK(c);
+    char msg[200];
+    memset(msg, 'q', 150);
+    msg[150] = '\0';
+    CHECK(oc_append(m, "user", msg) == 0);
+    started = oc_ms();
+    CHECK(oc_settle(m, three_seconds, NULL));
+    CHECK(oc_ms() - started < 1000);
+    CHECK(!oc_settled(m));
+    char e[512];
+    CHECK(oc_compactor_error(c, e, sizeof e) >= 1 && strstr(e, "summary 0+1 failed"));
+    oc_compactor_stop(c);
+    oc_close(m);
+    char cmd[600];
+    snprintf(cmd, sizeof cmd, "rm -rf %s", dir);
+    if (system(cmd))
+        failures++;
+}
+
 static void marks_test(void)
 {
     char dir[] = "/tmp/optchattest.XXXXXX";
@@ -416,6 +474,7 @@ int main(void)
     if (system(cmd))
         failures++;
     compactor_test();
+    failing_test();
     marks_test();
     copy_test();
     CHECK(strlen(OC_SCALE) == OC_NODE);
