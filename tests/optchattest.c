@@ -326,7 +326,7 @@ int main(void)
     free(z);
 
     char  *prev     = NULL;
-    size_t shared   = 0, renders = 0;
+    size_t shared   = 0, renders = 0, whole = 0;
     for (int i = 3; i < 3000; i++) {
         oc_ref *old;
         int     np = oc_view(m, &old);
@@ -348,12 +348,17 @@ int main(void)
         if (prev && i > 1000) {
             shared += common(prev, cur);
             renders++;
+            /* Merges come in batches, so most renders only add lines
+               after the previous one and its cached prefix holds. */
+            whole += common(prev, cur) >= strlen(prev) - strlen("</chat>");
         }
         free(prev);
         prev = cur;
     }
     CHECK(renders && shared / renders > VIEW / 3);
-    fprintf(stderr, "avg shared prefix %zu of ~%d bytes\n", renders ? shared / renders : 0, VIEW);
+    CHECK(renders && whole * 2 > renders);
+    fprintf(stderr, "avg shared prefix %zu of ~%d bytes; whole prefix kept in %zu of %zu renders\n",
+            renders ? shared / renders : 0, VIEW, whole, renders);
     free(prev);
 
     long n = oc_count(m);

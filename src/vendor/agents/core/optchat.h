@@ -5,6 +5,7 @@
 
 #define OC_NODE 512
 #define OC_VIEW 128000
+#define OC_SLACK 4
 #define OC_JOBS 8
 #define OC_TRIES 5
 #define OC_AGENT "scrap"
@@ -191,6 +192,7 @@ struct oc_mem {
     oc_ref         *parts;
     int             np, pcap;
     long            size;
+    int             shrinking;
     pthread_mutex_t mu;
     pthread_cond_t  cond;
 };
@@ -300,10 +302,16 @@ static void oc_climb(oc_mem *m, int l, long i) {
     }
 }
 
+/* Over the budget, lines merge down to a low-water mark a 1/OC_SLACK below
+   it, not just under it: every merge rewrites the view from that line on,
+   so merging a little each turn would change the view near its top every
+   turn and no cached prefix would outlive a turn. In batches, the turns
+   between them only add lines at the end. */
 static void oc_fit(oc_mem *m) {
-    long size = 0;
+    long size = 0, low = m->view - m->view / OC_SLACK;
     for (int k = 0; k < m->np; k++) size += oc_part_len(m, m->parts[k]);
-    while (size > m->view) {
+    if (size > m->view) m->shrinking = 1;
+    while (m->shrinking && size > low) {
         int best = -1;
         double due = 0;
         for (int k = 0; k + 1 < m->np; k++) {
@@ -319,6 +327,7 @@ static void oc_fit(oc_mem *m) {
         memmove(m->parts + best + 1, m->parts + best + 2, (size_t)(m->np - best - 2) * sizeof *m->parts);
         m->np--;
     }
+    if (size <= low) m->shrinking = 0;
     m->size = size;
     pthread_cond_broadcast(&m->cond);
 }
