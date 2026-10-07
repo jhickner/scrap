@@ -573,11 +573,17 @@ claude_client *claude_start(const claude_opts *opts) {
         argv[n++] = "--verbose";
         /* --safe-mode drops every MCP server, --mcp-config ones too, so with
          * one to load the sandbox is built from flags that keep it: no settings
-         * files (hooks, plugins, permissions), skills, CLAUDE.md or other MCP. */
+         * files (hooks, plugins, permissions), CLAUDE.md or other MCP, and the
+         * Skill tool denied. Not --disable-slash-commands: it also disables the
+         * built-in /clear and /effort that claude_reset and set_effort send. */
+        const char *disallowed = o.disallowed_tools;
+        char disallowed_buf[256];
         if (!o.allow_customizations && o.mcp_config && *o.mcp_config) {
             argv[n++] = "--strict-mcp-config";
             argv[n++] = "--setting-sources"; argv[n++] = "";
-            argv[n++] = "--disable-slash-commands";
+            snprintf(disallowed_buf, sizeof disallowed_buf, "Skill%s%s",
+                     disallowed && *disallowed ? "," : "", disallowed ? disallowed : "");
+            disallowed = disallowed_buf;
             setenv("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1", 1);
             unsetenv("CLAUDE_CODE_SAFE_MODE");   /* inherited from a safe-mode parent */
         } else if (!o.allow_customizations) argv[n++] = "--safe-mode";
@@ -593,7 +599,7 @@ claude_client *claude_start(const claude_opts *opts) {
         if (o.system)                                { argv[n++] = "--system-prompt";        argv[n++] = o.system; }
         if (o.append_system && *o.append_system)     { argv[n++] = "--append-system-prompt"; argv[n++] = o.append_system; }
         if (o.tools)                                 { argv[n++] = "--tools";                argv[n++] = o.tools; }
-        if (o.disallowed_tools && *o.disallowed_tools) { argv[n++] = "--disallowedTools"; argv[n++] = o.disallowed_tools; }
+        if (disallowed && *disallowed)               { argv[n++] = "--disallowedTools";      argv[n++] = disallowed; }
         if (o.mcp_config && *o.mcp_config)           { argv[n++] = "--mcp-config";           argv[n++] = o.mcp_config;
                                                        argv[n++] = "--allowedTools";         argv[n++] = "mcp__optchat"; }
         if (o.permission_prompt)                     { argv[n++] = "--permission-prompt-tool"; argv[n++] = "stdio"; }
@@ -1583,8 +1589,10 @@ int claude_set_effort(claude_client *c, const char *effort) {
 int claude_reset(claude_client *c) {
     char *result = cl_send(c, "/clear", 1);
     if (!result) return 0;
+    /* With slash commands disabled the CLI answers instead of clearing. */
+    int ok = !strstr(result, "isn't available in this environment");
     free(result);
-    return 1;
+    return ok;
 }
 
 /* Poll for the child's exit for up to `ms`. Returns nonzero once reaped. */
