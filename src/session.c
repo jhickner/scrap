@@ -161,6 +161,8 @@ struct session {
     double          status_at;
     char           *status_last;
     int             status_open;
+    char           *turn_log;
+    size_t          turn_len;
     unsigned long   status_heard;
 
     struct sessionpresent present;
@@ -212,9 +214,55 @@ static int ground_target(const char *gone, char *out, size_t size);
 static int session_retarget(struct session *s, const char *model, const char *effort,
                             const char *cwd);
 
+#define TURN_LOG_MAX  (24 * 1024)
+#define TURN_LOG_CLIP 400
+#define SIDE_VIEW_MAX (16 * 1024)
+
+static void turn_log_add(struct session *s, const char *label, const char *text)
+{
+    if (!text || !*text)
+        return;
+    size_t n = strlen(text);
+    int clipped = n > TURN_LOG_CLIP;
+    if (clipped)
+        n = TURN_LOG_CLIP;
+    size_t want = s->turn_len + strlen(label) + n + 8;
+    char *grown = realloc(s->turn_log, want);
+    if (!grown)
+        return;
+    s->turn_log = grown;
+    s->turn_len += (size_t)snprintf(s->turn_log + s->turn_len, want - s->turn_len,
+                                    "%s%.*s%s\n", label, (int)n, text, clipped ? "..." : "");
+    if (s->turn_len <= TURN_LOG_MAX)
+        return;
+    char *cut = memchr(s->turn_log + s->turn_len - TURN_LOG_MAX, '\n', TURN_LOG_MAX);
+    size_t drop = cut ? (size_t)(cut + 1 - s->turn_log) : s->turn_len - TURN_LOG_MAX;
+    memmove(s->turn_log, s->turn_log + drop, s->turn_len - drop + 1);
+    s->turn_len -= drop;
+}
+
+static void turn_log_event(struct session *s, const backend_event *ev)
+{
+    if (ev->parent && *ev->parent)
+        return;
+    if (ev->kind == BACKEND_EV_ASSISTANT) {
+        turn_log_add(s, "agent: ", ev->text);
+    } else if (ev->kind == BACKEND_EV_TOOL) {
+        char arg[512] = "";
+        view_tool_argument(ev, s->cwd, arg, sizeof arg);
+        char line[768];
+        snprintf(line, sizeof line, "%s %s", ev->name ? ev->name : "tool", arg);
+        turn_log_add(s, "tool call: ", line);
+    } else if (ev->kind == BACKEND_EV_TOOL_RESULT) {
+        turn_log_add(s, ev->failed ? "tool failed: " : "tool result: ",
+                     ev->text && *ev->text ? ev->text : "(no output)");
+    }
+}
+
 static void render_event(struct session *s, const backend_event *ev)
 {
     s->heard++;
+    turn_log_event(s, ev);
     if (ev->kind != BACKEND_EV_TASK)
         s->spoke++;
 
@@ -997,6 +1045,7 @@ void session_free(struct session *s)
     sessionpresent_free(&s->present);
     free(s->prompt);
     free(s->status_last);
+    free(s->turn_log);
     free(s->permission);
     permission_clear(&s->perm);
     free(s->error_note);
@@ -2418,6 +2467,9 @@ static void turn_prepare(struct session *s, const char *text)
     s->status_at = s->started;
     s->status_heard = s->heard;
     replace(&s->status_last, NULL);
+    free(s->turn_log);
+    s->turn_log = NULL;
+    s->turn_len = 0;
     s->tool_open = 0;
     s->idle_busy = 1;
     s->stall_told = 0;
@@ -3026,6 +3078,50 @@ const char *session_addr(const struct session *s) { return s && s->addr ? s->add
 int session_can_resume(const struct session *s)
 {
     return s->agent && (s->agent->caps & BACKEND_CAP_RESUME);
+}
+
+char *session_side_context(const struct session *s)
+{
+    const char *id = session_id(s);
+    if (s->remote || (!s->memory && id && *id && session_can_resume(s)))
+        return NULL;
+
+    char *view = s->memory && s->agent && s->agent->memory_view
+                     ? s->agent->memory_view(s->agent) : NULL;
+    const char *tail = view;
+    if (view && strlen(view) > SIDE_VIEW_MAX) {
+        tail = view + strlen(view) - SIDE_VIEW_MAX;
+        const char *nl = strchr(tail, '\n');
+        if (nl)
+            tail = nl + 1;
+    }
+
+    const char *prompt = s->running || s->turn_log ? s->prompt : NULL;
+    size_t want = 512 + (tail ? strlen(tail) : 0) + (prompt ? strlen(prompt) : 0) +
+                  s->turn_len;
+    char *out = malloc(want);
+    if (!out) {
+        free(view);
+        return NULL;
+    }
+    size_t n = 0;
+    if (tail && *tail)
+        n += (size_t)snprintf(out + n, want - n,
+                              "The most recent part of the conversation, one summary "
+                              "line per message, oldest first:\n\n%s\n\n", tail);
+    if (prompt && *prompt)
+        n += (size_t)snprintf(out + n, want - n, "The user's message this turn:\n\n%s\n\n",
+                              prompt);
+    if (s->turn_log && *s->turn_log)
+        n += (size_t)snprintf(out + n, want - n,
+                              "What the agent has done this turn so far, oldest first:\n\n%s\n",
+                              s->turn_log);
+    free(view);
+    if (!n) {
+        free(out);
+        return NULL;
+    }
+    return out;
 }
 
 int session_restorable(const struct session *s)

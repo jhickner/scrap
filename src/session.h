@@ -149,6 +149,11 @@ void              session_agent_started(struct session *s);
 void              session_agent_poll(struct session *s);
 double            session_agent_idle(const struct session *s);
 char *session_memory_view(struct session *s);
+/* What a side turn needs to know when it cannot fork the session (memory mode,
+ * backends without resume): the memory view's recent tail, this turn's user
+ * message and the agent's text, tool calls and results so far. NULL when the
+ * side turn can fork the session itself, or there is nothing to say. */
+char *session_side_context(const struct session *s);
 long  session_memory_pending(struct session *s);
 const char *session_permission(const struct session *s);
 

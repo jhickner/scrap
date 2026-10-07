@@ -33,6 +33,9 @@ def reply(msgs):
         if "slowcompact" in content:
             time.sleep(3)
         return chunk({"content": "summary"})
+    if "status update on what the agent" in content:
+        saw = "tool call: bash sleep 9" in content and "run: sleep 9" in content
+        return chunk({"content": "status: " + ("sees the turn" if saw else "blind")})
     if last.get("role") == "tool":
         return chunk({"content": "tool said: " + content[:200]})
     if content.startswith("spawnin: "):

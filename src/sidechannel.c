@@ -13,6 +13,7 @@
 #include "md.h"
 #include "relay.h"
 #include "scrollback.h"
+#include "session.h"
 #include "sessionfork.h"
 #include "sidechannelcmd.h"
 #include "sidechannelview.h"
@@ -322,7 +323,17 @@ static int start(const struct session *s, const char *asked, const char *label,
     }
 
     slot_init(c);
-    if (!spawn(c, s, asked)) {
+    char *context = s ? session_side_context(s) : NULL;
+    char *with = NULL;
+    if (context) {
+        size_t want = strlen(context) + strlen(asked) + 2;
+        if ((with = malloc(want)))
+            snprintf(with, want, "%s\n%s", context, asked);
+        free(context);
+    }
+    int spawned = spawn(c, s, with ? with : asked);
+    free(with);
+    if (!spawned) {
         slot_free(c);
         if (loud) {
             ui_error("could not start the side turn");

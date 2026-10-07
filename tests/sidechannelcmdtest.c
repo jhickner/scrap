@@ -8,6 +8,7 @@
 struct session {
     const char *id;
     int can_resume;
+    int memory;
 };
 
 const char *sessionfork_program(void) { return "scrap"; }
@@ -15,6 +16,7 @@ const char *session_backend(const struct session *s) { (void)s; return "codex"; 
 const char *session_cwd(const struct session *s) { (void)s; return "/work"; }
 const char *session_id(const struct session *s) { return s->id; }
 int session_can_resume(const struct session *s) { return s->can_resume; }
+int session_memory(const struct session *s) { return s->memory; }
 const char *session_model(const struct session *s) { (void)s; return "default"; }
 const char *session_effort(const struct session *s) { (void)s; return "medium"; }
 
@@ -43,6 +45,14 @@ int main(void)
         return 1;
     }
 
+    struct session memory = {.id = "thread-1", .can_resume = 1, .memory = 1};
+    sidechannel_argv(&memory, "answer this", argv, 24);
+    if (has(argv, "--session") || has(argv, "--fork")) {
+        fprintf(stderr, "sidechannelcmdtest: memory-mode turn forked a stale session\n");
+        return 1;
+    }
+
+    sidechannel_argv(&resumed, "answer this", argv, 24);
     int p = 0;
     while (argv[p] && strcmp(argv[p], "-p"))
         p++;
