@@ -52,6 +52,7 @@ struct side {
     const struct session *owner;
     sidechannel_done done;
     void            *ud;
+    int              quiet;
 };
 
 #define STATUS_PREAMBLE                                                          \
@@ -64,6 +65,13 @@ struct side {
     "two sentence status update on what the agent has been doing and where it " \
     "is now, based on the conversation so far. Plain prose, no lists, no "      \
     "questions, no offers. Do not do any work yourself. "
+
+#define INBOX_PREAMBLE                                                          \
+    "You are a read-only fork of an agent in the middle of a turn. Another "    \
+    "session sent the message below to the agent. If the conversation so far " \
+    "is enough to answer it without doing any work (no tool calls, no reading " \
+    "files, no commands), reply with only the answer, addressed to the "        \
+    "sender. Otherwise output exactly SKIP and nothing else.\n\n"
 
 #define STATUS_AGAIN                                                             \
     "The previous update was:\n\n%s\n\nDo not repeat it; report only what has " \
@@ -186,7 +194,7 @@ static double spun_at;
 
 static int shown(const struct side *c)
 {
-    return c->pid && c->question && (!c->owner || c->owner == workspace_current() ||
+    return c->pid && c->question && !c->quiet && (!c->owner || c->owner == workspace_current() ||
                                      workspace_index_of(c->owner) < 0);
 }
 
@@ -302,7 +310,7 @@ static int spawn(struct side *c, const struct session *s, const char *prompt)
 }
 
 static int start(const struct session *s, const char *asked, const char *label,
-                 sidechannel_done done, void *ud, int loud)
+                 sidechannel_done done, void *ud, int loud, int quiet)
 {
     struct side *c = free_slot();
     if (!c) {
@@ -327,6 +335,7 @@ static int start(const struct session *s, const char *asked, const char *label,
     c->owner = s;
     c->done = done;
     c->ud = ud;
+    c->quiet = quiet;
     chrome_paint();
     return 1;
 }
@@ -344,7 +353,7 @@ int sidechannel_start(const struct session *s, const char *prompt, const char *l
         return 0;
     snprintf(asked, want, "%s%s", BTW_PREAMBLE, prompt);
 
-    int ok = start(s, asked, label, NULL, NULL, 1);
+    int ok = start(s, asked, label, NULL, NULL, 1, 0);
     free(asked);
     return ok;
 }
@@ -361,7 +370,7 @@ int sidechannel_status(const struct session *s, const char *prev,
     if (prev && *prev)
         snprintf(asked + n, want - (size_t)n, STATUS_AGAIN, prev);
 
-    int ok = start(s, asked, "status update", done, ud, 0);
+    int ok = start(s, asked, "status update", done, ud, 0, 0);
     free(asked);
     return ok;
 }
@@ -373,6 +382,25 @@ static void slot_kill(struct side *c)
     while (waitpid(c->pid, &status, 0) < 0 && errno == EINTR)
         ;
     slot_free(c);
+}
+
+int sidechannel_inbox(const struct session *s, const char *message,
+                      sidechannel_done done, void *ud)
+{
+    char *asked = malloc(sizeof INBOX_PREAMBLE + strlen(message));
+    if (!asked)
+        return 0;
+    sprintf(asked, "%s%s", INBOX_PREAMBLE, message);
+    int ok = start(s, asked, message, done, ud, 0, 1);
+    free(asked);
+    return ok;
+}
+
+void sidechannel_cancel(sidechannel_done done, void *ud)
+{
+    for (int i = 0; i < SIDE_MAX; i++)
+        if (slots[i].pid && slots[i].done == done && slots[i].ud == ud)
+            slot_kill(&slots[i]);
 }
 
 void sidechannel_forget(const struct session *s)
@@ -454,6 +482,8 @@ static void emit(struct side *c, int status)
 
     if (c->done)
         c->done(c->ud, failed ? NULL : answer);
+    if (c->quiet)
+        return;
 
     stream_side(c->owner, c->question, answer, failed);
     sidechannel_show(c->owner, c->question, answer, failed);

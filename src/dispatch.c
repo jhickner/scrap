@@ -181,13 +181,6 @@ static int pair_allowed(const char *from, const char *to, const char *kind, int 
     return 1;
 }
 
-static int deliver(int at, const char *line, const char *shown, int interrupt)
-{
-    if (!session_turn_running(workspace_at(at)))
-        workspace_render(at, echo_prompt, (void *)shown);
-    return interrupt ? workspace_send_now(at, line, shown) : workspace_send(at, line, shown);
-}
-
 static void send_session(int fd, const cJSON *o, const cJSON *send)
 {
     const char *line = cJSON_GetStringValue(send);
@@ -230,11 +223,9 @@ static void send_session(int fd, const cJSON *o, const cJSON *send)
     /* Interrupts past the cap queue instead, so two sessions cannot keep stopping each other. */
     int interrupt = sender && cJSON_IsTrue(cJSON_GetObjectItem((cJSON *)o, "interrupt")) &&
                     pair_allowed(from, id, "!", INTERRUPT_CAP);
-    char *framed = sender ? text_dsprintf("[from %s] %s", from, line) : NULL;
-    char *shown = sender ? text_dsprintf("from %s: %s", from, line) : NULL;
-    int   sent = sender ? framed && shown && deliver(at, framed, shown, interrupt) : dispatch_send(at, line);
-    free(framed);
-    free(shown);
+    int sent = sender ? workspace_message(at, from, line, interrupt,
+                                          cJSON_IsTrue(cJSON_GetObjectItem((cJSON *)o, "reply")))
+                      : dispatch_send(at, line);
     if (!sent)
         reply_error(fd, "could not send line", id);
     else {
@@ -337,7 +328,9 @@ int dispatch_spawn(const char *backend, const char *model, const char *effort, c
 
 int dispatch_send(int at, const char *line)
 {
-    return deliver(at, line, line, 0);
+    if (!session_turn_running(workspace_at(at)))
+        workspace_render(at, echo_prompt, (void *)line);
+    return workspace_send(at, line, line);
 }
 
 static char *(*serve_extra)(const cJSON *o, int fd, int *kept);

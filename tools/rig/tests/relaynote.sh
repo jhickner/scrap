@@ -2,7 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 R=./scraprig
-bin=$(mktemp -d)
+a=$($R start --fake)
+trap '$R stop $a' EXIT
+bin="$($R dir $a)/bin"
+rm "$bin/mem"
 cat > "$bin/mem" <<MEM
 #!/bin/sh
 case " \$* " in
@@ -12,8 +15,6 @@ case " \$* " in
 esac
 MEM
 chmod +x "$bin/mem"
-a=$(PATH="$bin:$PATH" $R start --fake)
-trap '$R stop $a; rm -rf "$bin"' EXIT
 printf 'token = rigtesttoken0123456789\nbind = 127.0.0.1\nport = %d\n' \
     $((20000 + RANDOM % 20000)) > "$($R dir $a)/state/config/relay"
 $R wait $a '❯'

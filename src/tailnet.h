@@ -30,7 +30,7 @@ void tailnet_resolve(const char *host, char *ip, size_t size);
 int tailnet_connect(const char *ip, int port, int timeout_s, char *err, size_t esize);
 
 int tailnet_send(const char *host, const char *from, const char *target, const char *text,
-                 int interrupt, char *msg, size_t size);
+                 int flags, char *msg, size_t size);
 
 char *tailnet_read(const char *host, const char *target, long turns, long bytes, char *msg,
                    size_t size);

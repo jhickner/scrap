@@ -417,7 +417,7 @@ static cJSON *directory(const char *ip, char *msg, size_t size)
 }
 
 int tailnet_send(const char *host, const char *from, const char *target, const char *text,
-                 int interrupt, char *msg, size_t size)
+                 int flags, char *msg, size_t size)
 {
     char ip[256];
     tailnet_resolve(host, ip, sizeof ip);
@@ -426,8 +426,10 @@ int tailnet_send(const char *host, const char *from, const char *target, const c
     cJSON_AddStringToObject(req, "to", target);
     if (from && *from)
         cJSON_AddStringToObject(req, "from", from);
-    if (interrupt)
+    if (flags & INTERCOM_INTERRUPT)
         cJSON_AddBoolToObject(req, "interrupt", 1);
+    if (flags & INTERCOM_REPLY)
+        cJSON_AddBoolToObject(req, "reply", 1);
     char   err[512];
     cJSON *r = ask(ip, tailnet_dir_port(), req, SEND_TIMEOUT, err, sizeof err);
     if (!r) {

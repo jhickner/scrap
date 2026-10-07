@@ -1,5 +1,6 @@
 #include "workspace.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +11,7 @@
 #include "chrome.h"
 #include "cmd.h"
 #include "gitinfo.h"
+#include "intercom.h"
 #include "prompt.h"
 #include "session.h"
 #include "sessionview.h"
@@ -31,9 +33,12 @@
 #define PENDING_MAX 8
 
 struct pending {
-    char *line;
-    char *shown;
-    int   typed;
+    char    *line;
+    char    *shown;
+    int      typed;
+    char    *from;
+    char    *text;
+    unsigned serial;
 };
 
 struct tab {
@@ -53,6 +58,19 @@ static int        cur;
 static int        safe;
 static void     (*on_finish)(struct session *s);
 static void     (*on_turn)(struct session *s);
+static unsigned   serials;
+
+static void inbox_done(void *ud, const char *answer);
+
+static void pending_free(struct pending *p)
+{
+    if (p->from)
+        sidechannel_cancel(inbox_done, (void *)(uintptr_t)p->serial);
+    free(p->line);
+    free(p->shown);
+    free(p->from);
+    free(p->text);
+}
 
 int workspace_spawn_remote(const char *target, char *why, size_t size)
 {
@@ -158,10 +176,8 @@ void workspace_end(void)
     for (int i = 0; i < ntabs; i++) {
         viewport_state_free(tabs[i].screen);
         session_free(tabs[i].s);
-        for (int j = 0; j < tabs[i].npending; j++) {
-            free(tabs[i].pending[j].line);
-            free(tabs[i].pending[j].shown);
-        }
+        for (int j = 0; j < tabs[i].npending; j++)
+            pending_free(&tabs[i].pending[j]);
         free(tabs[i].sticky);
         free(tabs[i].draft);
     }
@@ -471,10 +487,8 @@ static void drop(int index)
     viewport_state_free(tabs[index].screen);
 
     session_free(tabs[index].s);
-    for (int i = 0; i < tabs[index].npending; i++) {
-        free(tabs[index].pending[i].line);
-        free(tabs[index].pending[i].shown);
-    }
+    for (int i = 0; i < tabs[index].npending; i++)
+        pending_free(&tabs[index].pending[i]);
     tabs[index].npending = 0;
     free(tabs[index].sticky);
     tabs[index].sticky = NULL;
@@ -682,6 +696,32 @@ int workspace_busy(void)
     return 0;
 }
 
+static int join(char **dst, const char *text);
+
+static struct pending take_messages(struct tab *t)
+{
+    struct pending batch = {0};
+    int            kept = 0;
+    for (int i = 0; i < t->npending; i++) {
+        struct pending *p = &t->pending[i];
+        if (!p->from) {
+            t->pending[kept++] = *p;
+            continue;
+        }
+        if (!batch.line) {
+            batch.line = p->line;
+            batch.shown = p->shown;
+            p->line = p->shown = NULL;
+        } else {
+            join(&batch.line, p->line);
+            join(&batch.shown, p->shown);
+        }
+        pending_free(p);
+    }
+    t->npending = kept;
+    return batch;
+}
+
 static void send_next(int index, int hold)
 {
     struct tab *t = &tabs[index];
@@ -696,9 +736,13 @@ static void send_next(int index, int hold)
             return;
     }
     struct pending p = t->pending[0];
-    for (int i = 1; i < t->npending; i++)
-        t->pending[i - 1] = t->pending[i];
-    t->npending--;
+    if (p.from)
+        p = take_messages(t);
+    else {
+        for (int i = 1; i < t->npending; i++)
+            t->pending[i - 1] = t->pending[i];
+        t->npending--;
+    }
 
     if (cmd_is_command(p.line)) {
         enter_held(index, hold);
@@ -732,7 +776,7 @@ int workspace_send(int index, const char *line, const char *shown)
     if (session_turn_running(t->s)) {
         if (t->npending >= PENDING_MAX)
             return 0;
-        struct pending p = {strdup(line), shown ? strdup(shown) : NULL, 0};
+        struct pending p = {.line = strdup(line), .shown = shown ? strdup(shown) : NULL};
         if (!p.line || (shown && !p.shown)) {
             free(p.line);
             free(p.shown);
@@ -771,20 +815,100 @@ static int join(char **dst, const char *text)
     return 1;
 }
 
+static void put_first(struct tab *t, struct pending p)
+{
+    memmove(t->pending + 1, t->pending, (size_t)t->npending * sizeof *t->pending);
+    t->pending[0] = p;
+    t->npending++;
+    session_interrupt(t->s);
+}
+
 static int send_first(struct tab *t, const char *line, const char *shown, int typed)
 {
     if (t->npending >= PENDING_MAX)
         return 0;
-    struct pending p = {strdup(line), shown ? strdup(shown) : NULL, typed};
+    struct pending p = {.line = strdup(line), .shown = shown ? strdup(shown) : NULL, .typed = typed};
     if (!p.line || (shown && !p.shown)) {
         free(p.line);
         free(p.shown);
         return 0;
     }
-    memmove(t->pending + 1, t->pending, (size_t)t->npending * sizeof *t->pending);
-    t->pending[0] = p;
-    t->npending++;
-    session_interrupt(t->s);
+    put_first(t, p);
+    return 1;
+}
+
+static int frame(struct pending *p, const char *answer)
+{
+    char *line = answer ? text_dsprintf("[from %s; a fork of this session already replied: "
+                                        "\"%s\"] %s",
+                                        p->from, answer, p->text)
+                        : text_dsprintf("[from %s] %s", p->from, p->text);
+    char *shown = text_dsprintf(answer ? "from %s (answered): %s" : "from %s: %s", p->from,
+                                p->text);
+    if (!line || !shown) {
+        free(line);
+        free(shown);
+        return 0;
+    }
+    free(p->line);
+    free(p->shown);
+    p->line = line;
+    p->shown = shown;
+    return 1;
+}
+
+static void inbox_done(void *ud, const char *answer)
+{
+    unsigned serial = (unsigned)(uintptr_t)ud;
+    if (!answer || !strcmp(answer, "SKIP"))
+        return;
+    for (int i = 0; i < ntabs; i++)
+        for (int j = 0; j < tabs[i].npending; j++) {
+            struct pending *p = &tabs[i].pending[j];
+            if (p->serial != serial)
+                continue;
+            sidechannel_show(tabs[i].s, p->shown, answer, 0);
+            frame(p, answer);
+            if (session_name(tabs[i].s))
+                intercom_reply(session_name(tabs[i].s), p->from, answer);
+            return;
+        }
+}
+
+static void echo(struct session *s, void *ud)
+{
+    (void)s;
+    prompt_echo_message(ud);
+}
+
+int workspace_message(int index, const char *from, const char *text, int interrupt, int reply)
+{
+    if (index < 0 || index >= ntabs || !from || !text || !*text)
+        return 0;
+    struct tab    *t = &tabs[index];
+    struct pending p = {.from = strdup(from), .text = strdup(text), .serial = ++serials};
+    if (!p.from || !p.text || !frame(&p, NULL)) {
+        pending_free(&p);
+        return 0;
+    }
+    if (!session_turn_running(t->s)) {
+        workspace_render(index, echo, p.shown);
+        int ok = workspace_send(index, p.line, p.shown);
+        pending_free(&p);
+        return ok;
+    }
+    if (t->npending >= PENDING_MAX) {
+        pending_free(&p);
+        return 0;
+    }
+    if (interrupt && !session_remote(t->s)) {
+        put_first(t, p);
+        return 1;
+    }
+    t->pending[t->npending++] = p;
+    const char *id = session_id(t->s);
+    if (!reply && id && session_can_resume(t->s) && !session_remote(t->s))
+        sidechannel_inbox(t->s, p.line, inbox_done, (void *)(uintptr_t)p.serial);
     return 1;
 }
 
@@ -797,16 +921,6 @@ static int redirect(struct tab *t, const char *text, const char *full)
         t->npending--;
     }
     return send_first(t, full ? full : text, full ? text : NULL, 1);
-}
-
-int workspace_send_now(int index, const char *line, const char *shown)
-{
-    if (index < 0 || index >= ntabs || !line || !*line)
-        return 0;
-    struct tab *t = &tabs[index];
-    if (!session_turn_running(t->s) || session_remote(t->s))
-        return workspace_send(index, line, shown);
-    return send_first(t, line, shown, 0);
 }
 
 int workspace_send_typed(int index, const char *text, const char *full)
@@ -861,8 +975,7 @@ int workspace_dequeue(int index, const char *line)
         if (strcmp(t->pending[i].line, line) &&
             (!t->pending[i].shown || strcmp(t->pending[i].shown, line)))
             continue;
-        free(t->pending[i].line);
-        free(t->pending[i].shown);
+        pending_free(&t->pending[i]);
         for (int j = i + 1; j < t->npending; j++)
             t->pending[j - 1] = t->pending[j];
         t->npending--;
@@ -881,6 +994,7 @@ char *workspace_unqueue(int index)
     if (p->shown)
         free(p->line);
     p->line = p->shown = NULL;
+    pending_free(p);
     return back;
 }
 

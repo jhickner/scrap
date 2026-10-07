@@ -104,9 +104,12 @@ int workspace_send(int index, const char *line, const char *shown)
     snprintf(last_send, sizeof last_send, "%s", line ? line : "");
     return 1;
 }
-int workspace_send_now(int index, const char *line, const char *shown)
+int workspace_message(int index, const char *from, const char *text, int interrupt, int reply)
 {
-    return workspace_send(index, line, shown);
+    (void)from;
+    (void)interrupt;
+    (void)reply;
+    return workspace_send(index, text, NULL);
 }
 
 int workspace_spawn_env(const char *backend, const char *model, const char *effort,
