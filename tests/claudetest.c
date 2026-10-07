@@ -83,6 +83,7 @@ static int mock_cli(int argc, char **argv)
     char *line = NULL;
     size_t cap = 0;
     int effort_changes = 0;
+    int cleared = 0;
     while (getline(&line, &cap, stdin) >= 0) {
         cJSON *msg = cJSON_Parse(line);
         const char *type = msg ? cJSON_GetStringValue(
@@ -118,7 +119,13 @@ static int mock_cli(int argc, char **argv)
             cJSON_Delete(msg);
             continue;
         }
-        if (text && !strcmp(text, "/effort low") && effort_changes++ == 0)
+        if (text && !strcmp(text, "/clear")) {
+            cleared = 1;
+            result("");
+        }
+        else if (text && !strcmp(text, "cleared?"))
+            result(cleared ? "cleared" : "not cleared");
+        else if (text && !strcmp(text, "/effort low") && effort_changes++ == 0)
             result("Set effort level to low");
         else if (text && !strcmp(text, "/effort auto") && effort_changes++ == 1)
             result("Effort level set to auto");
@@ -291,6 +298,16 @@ int main(int argc, char **argv)
     }
     free(reply);
 
+    /* A block mark after the last cache mark starts a plain block. */
+    reply = claude_send(client, "head\n\x1e" "a\n\x1e" "tail\x1f" "retry");
+    if (!reply || strcmp(reply, "L|L*|T|T")) {
+        fprintf(stderr, "claudetest: block marks became %s\n", reply ? reply : "none");
+        free(reply);
+        claude_stop(client);
+        return 1;
+    }
+    free(reply);
+
     /* A long marked piece keeps its start (where a caller last ended) within
        the API's 20-block lookback: 18 line blocks plus the rest. */
     char longer[512] = "head\n\x1e";
@@ -421,6 +438,22 @@ int main(int argc, char **argv)
     }
     free(recovered);
     backend->close(backend);
+
+    /* Resetting a backend before its first ask still sends /clear, so the
+       first ask shares the prefix every ask after a /clear has. */
+    Backend *fresh = backend_open_ex(&backend_options);
+    char *state = fresh && fresh->reset(fresh) ? fresh->ask(fresh, "cleared?") : NULL;
+    if (!state || strcmp(state, "cleared")) {
+        fprintf(stderr, "claudetest: a fresh client skipped /clear (%s)\n", state ? state : "none");
+        free(state);
+        if (fresh) fresh->close(fresh);
+        free(test_path);
+        unlink(marker); unlink(cli_link); rmdir(auth_root);
+        claude_stop(client);
+        return 1;
+    }
+    free(state);
+    fresh->close(fresh);
     free(test_path);
     unlink(marker);
     unlink(cli_link);

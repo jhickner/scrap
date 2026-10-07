@@ -1704,15 +1704,16 @@ static void sa_cache_marks(cJSON *msgs, int cache) {
     cJSON *msg;
     cJSON_ArrayForEach(msg, msgs) {
         const char *c = sa_jstr(msg, "content");
-        if (!c || !strstr(c, BACKEND_CACHE_MARK)) continue;
+        if (!c || !strpbrk(c, BACKEND_CACHE_MARK BACKEND_BLOCK_MARK)) continue;
         cJSON *parts = cJSON_CreateArray();
         sa_buf flat = {0};
         for (const char *s = c, *e;; s = e + 1) {
-            e = strstr(s, BACKEND_CACHE_MARK);
+            e = strpbrk(s, BACKEND_CACHE_MARK BACKEND_BLOCK_MARK);
             size_t n = e ? (size_t)(e - s) : strlen(s);
+            int mark = e && *e == *BACKEND_CACHE_MARK;
             sa_put(&flat, s, n);
-            if (n) cJSON_AddItemToArray(parts, sa_text_part(s, n, e && budget > 0));
-            if (e && n && budget > 0) budget--;
+            if (n) cJSON_AddItemToArray(parts, sa_text_part(s, n, mark && budget > 0));
+            if (mark && n && budget > 0) budget--;
             if (!e) break;
         }
         if (cache) {
@@ -2669,6 +2670,15 @@ static char *sa_compactor_timed_ask(Backend *b, const char *user) {
                 u.cache_read_tokens, u.output_tokens, r && !u.is_error);
         fclose(f);
     }
+    /* An error's text is no summary; returning none makes it a failed try. */
+    if (u.is_error) { free(r); return NULL; }
+    return r;
+}
+
+static char *sa_compactor_core_ask(Backend *b, const char *user) {
+    backend_result u = {0};
+    char *r = sa_ask_ex(b, user, &u);
+    if (u.is_error) { free(r); return NULL; }
     return r;
 }
 
@@ -2693,6 +2703,7 @@ static Backend *sa_compactor_open(void *ud, const char *system) {
         sa_agent *h = b->ctx;
         h->halt = &x->halting;
         h->timeout = OC_TIMEOUT_S;
+        b->ask = sa_compactor_core_ask;
     }
     return b;
 }

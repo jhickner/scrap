@@ -80,7 +80,7 @@ static char *fake_ask(Backend *b, const char *user)
     (void)b;
     pthread_mutex_lock(&fmu);
     int n     = ++fcalls;
-    int retry = !strncmp(user, "That line is", 12);
+    int retry = strstr(user, BACKEND_BLOCK_MARK "\n\nYour line was") != NULL;
     fbad     += strstr(user, "not summarized yet") != NULL;
     fids     += strstr(user, "+1|") != NULL;
     fretries += retry;
@@ -254,9 +254,18 @@ static char *script_ask(Backend *b, const char *user)
     return strdup(script[nscript++]);
 }
 
+static int resets;
+
+static int count_reset(Backend *b)
+{
+    (void)b;
+    resets++;
+    return 1;
+}
+
 static void copy_test(void)
 {
-    Backend b = { .ask = script_ask, .reset = fake_reset };
+    Backend b = { .ask = script_ask, .reset = count_reset };
     char    longline[NODE + 40], cut[NODE + 1];
     memset(longline, 'k', sizeof longline - 1);
     longline[sizeof longline - 1] = '\0';
@@ -269,6 +278,9 @@ static void copy_test(void)
     CHECK(nscript == 3);
     CHECK(line && !strcmp(line, "short line"));
     CHECK(strstr(sent[2], "instead of copying the cut"));
+    /* Retries are fresh asks: reset, the prompt, then the cut in its own block. */
+    CHECK(resets == 3);
+    CHECK(!strncmp(sent[1], "prompt" BACKEND_BLOCK_MARK, 7) && strstr(sent[1], "| \xe2\x86\x90 LIMIT"));
     free(line);
 
     char marked[NODE + 20];
@@ -278,6 +290,20 @@ static void copy_test(void)
     line = oc_build(&b, NODE, "prompt");
     CHECK(nscript == 3);
     CHECK(line && !strcmp(line, "short line"));
+    free(line);
+
+    /* An API error is a failed try, never a line. */
+    const char *error = "API Error: 400 A maximum of 4 blocks with cache_control may be provided. Found 5.";
+    nscript = 0;
+    script[0] = error;
+    line = oc_build(&b, NODE, "prompt");
+    CHECK(nscript == 1 && !line);
+    free(line);
+    nscript = 0;
+    script[0] = "a line far too long";
+    script[1] = error;
+    line = oc_build(&b, 10, "prompt");
+    CHECK(nscript == 2 && line && !strcmp(line, "a line far too long"));
     free(line);
 }
 

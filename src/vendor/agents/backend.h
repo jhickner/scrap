@@ -24,6 +24,9 @@
 typedef struct Backend Backend;
 
 #define BACKEND_CACHE_MARK "\x1e"
+/* Starts a new block, without a cache breakpoint, in text after the last
+ * BACKEND_CACHE_MARK, so the text before it stays a block of its own. */
+#define BACKEND_BLOCK_MARK "\x1f"
 
 /* Nothing here is retained: a backend copies what it needs. */
 typedef struct {
@@ -641,7 +644,9 @@ static char *backend_claude_ask(Backend *b, const char *user) {
 static int backend_claude_reset(Backend *b) {
     backend_claude *x = b->ctx;
     x->live.context_tokens = x->live.context_window = 0;
-    if (!x->client) return backend_claude_ready(b);
+    /* A fresh client is cleared too: /clear adds blocks of its own to the
+     * context, so skipping it would start a prefix no later ask shares. */
+    if (!backend_claude_ready(b)) return 0;
     if (claude_reset(x->client)) return 1;
     claude_stop(x->client);
     x->client = NULL;

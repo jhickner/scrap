@@ -1449,6 +1449,7 @@ const char *claude_wake_owed(claude_client *c) { return c ? c->owed : NULL; }
 int claude_turn_open(claude_client *c) { return c ? c->turn_open : 0; }
 
 #define CL_CACHE_MARK '\x1e'
+#define CL_BLOCK_MARK '\x1f'
 #define CL_CACHE_LINES 19
 
 static void cl_text_block(cJSON *content, const char *s, size_t n, int cache) {
@@ -1467,10 +1468,11 @@ static void cl_text_block(cJSON *content, const char *s, size_t n, int cache) {
  * final lines are separate blocks so the API's lookback finds an entry a
  * previous turn wrote a few lines earlier. The piece's own start stays
  * within the lookback too, for callers that mark where they last ended.
+ * A block mark after the last cache mark splits the rest into plain blocks.
  * 1h matches the CLI's own marks. */
 static void cl_cache_content(cJSON *content, const char *text) {
     const char *last = strrchr(text, CL_CACHE_MARK);
-    for (const char *s = text, *e; s <= last; s = e + 1) {
+    for (const char *s = text, *e; last && s <= last; s = e + 1) {
         e = strchr(s, CL_CACHE_MARK);
         if (e != last) { cl_text_block(content, s, (size_t)(e - s), 0); continue; }
         const char *cut[CL_CACHE_LINES + 1];
@@ -1484,7 +1486,11 @@ static void cl_cache_content(cJSON *content, const char *text) {
         }
         cl_text_block(content, from, (size_t)(e - from), 1);
     }
-    cl_text_block(content, last + 1, strlen(last + 1), 0);
+    for (const char *s = last ? last + 1 : text, *e;; s = e + 1) {
+        e = strchr(s, CL_BLOCK_MARK);
+        cl_text_block(content, s, e ? (size_t)(e - s) : strlen(s), 0);
+        if (!e) break;
+    }
 }
 
 static char *cl_send(claude_client *c, const char *user_text, int content_block) {
@@ -1497,7 +1503,7 @@ static char *cl_send(claude_client *c, const char *user_text, int content_block)
     cJSON_AddStringToObject(msg, "type", "user");
     cJSON *inner = cJSON_AddObjectToObject(msg, "message");
     cJSON_AddStringToObject(inner, "role", "user");
-    if (strchr(user_text, CL_CACHE_MARK)) {
+    if (strchr(user_text, CL_CACHE_MARK) || strchr(user_text, CL_BLOCK_MARK)) {
         cl_cache_content(cJSON_AddArrayToObject(inner, "content"), user_text);
     } else if (content_block) {
         cJSON *content = cJSON_AddArrayToObject(inner, "content");

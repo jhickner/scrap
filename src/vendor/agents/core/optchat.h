@@ -822,6 +822,15 @@ static size_t oc_cut(const char *s, size_t n) {
     return n;
 }
 
+/* Some CLIs answer a failed request with the API's error as the reply. */
+static int oc_failed(const char *line) {
+    return !line || !*line || !strncmp(line, "API Error", 9);
+}
+
+/* Each retry is a fresh one-turn ask: the prompt again, then the cut in a
+ * block of its own. A follow-up turn would carry one more cache breakpoint,
+ * past the API's 4 on newer CLIs, and it would hold the rejected line; the
+ * fresh ask reads the first try's cache through the end of the prompt. */
 static char *oc_build(Backend *b, long node, const char *prompt) {
     char *best = NULL, *cut = NULL;
     b->reset(b);
@@ -830,7 +839,7 @@ static char *oc_build(Backend *b, long node, const char *prompt) {
         char *line = oc_trim(b->ask(b, msg));
         free(msg);
         msg = NULL;
-        if (!line || !*line) { free(line); break; }
+        if (oc_failed(line)) { free(line); break; }
         char *mark = strstr(line, "\xe2\x86\x90 LIMIT");
         if (mark) {
             while (mark > line && (mark[-1] == ' ' || mark[-1] == '|')) mark--;
@@ -845,8 +854,10 @@ static char *oc_build(Backend *b, long node, const char *prompt) {
         cut = strndup(best, oc_cut(best, (size_t)node));
         oc_buf r = {0};
         char head[200];
-        snprintf(head, sizeof head, "%sThat line is %zu bytes; the limit is %ld. It must end where it is cut here:\n",
+        snprintf(head, sizeof head, BACKEND_BLOCK_MARK "\n\n%sYour line was %zu bytes; the limit is %ld. It must end where it is cut here:\n",
                  copied ? "Rewrite the whole line shorter instead of copying the cut. " : "", strlen(best), node);
+        b->reset(b);
+        oc_cats(&r, prompt);
         oc_cats(&r, head);
         oc_cats(&r, cut);
         oc_cats(&r, "| \xe2\x86\x90 LIMIT");
