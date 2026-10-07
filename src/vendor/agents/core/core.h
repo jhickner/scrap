@@ -3014,7 +3014,10 @@ static char *sa_drive_ask(sa_agent *x, const char *user, backend_result *meta) {
         if (meta) { meta->interrupted = 1; snprintf(meta->subtype, sizeof meta->subtype, "interrupted"); }
         return strdup("");
     }
-    if (x->inner_used && !x->inner->reset(x->inner)) {
+    /* A claude drive is cleared before its first turn too: /clear leaves
+       blocks of its own at the head of the next message, so the first turn
+       would otherwise start a prefix that no later turn shares. */
+    if ((x->inner_used || !strcmp(x->drive, "claude")) && !x->inner->reset(x->inner)) {
         snprintf(x->err, sizeof x->err, "could not clear the %s context", x->drive);
         sa_free(&text);
         if (meta) { meta->is_error = 1; snprintf(meta->subtype, sizeof meta->subtype, "error"); }

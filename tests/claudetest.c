@@ -143,6 +143,11 @@ static int mock_cli(int argc, char **argv)
             result("done");
         }
 
+        else if (text && !strcmp(text, "gitctx")) {
+            const char *v = getenv("CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS");
+            result(v ? v : "unset");
+        }
+
         else if (text && !strcmp(text, "env")) {
             const char *v = getenv("CLAUDETEST_ENV");
             result(v ? v : "unset");
@@ -317,6 +322,17 @@ int main(int argc, char **argv)
     reply = claude_send(client, longer);
     if (!reply || strcmp(reply, "L|L|L|L|L|L|L|L|L|L|L|L|L|L|L|L|L|L|L|L*|T")) {
         fprintf(stderr, "claudetest: long marked piece became %s\n", reply ? reply : "none");
+        free(reply);
+        claude_stop(client);
+        return 1;
+    }
+    free(reply);
+
+    /* The CLI's git status reminder heads the first message after each
+       /clear, so an unsaved client turns it off to keep its cache prefix. */
+    reply = claude_send(client, "gitctx");
+    if (!reply || strcmp(reply, "1")) {
+        fprintf(stderr, "claudetest: git status left in the CLI context (%s)\n", reply ? reply : "none");
         free(reply);
         claude_stop(client);
         return 1;

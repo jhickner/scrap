@@ -563,6 +563,14 @@ claude_client *claude_start(const claude_opts *opts) {
         for (const char *const *e = o.env; e && *e; e++) putenv((char *)*e);
         if (o.use_subscription) unsetenv("ANTHROPIC_API_KEY");
         if (o.no_session_persistence) setenv("CLAUDE_CODE_ATTRIBUTION_HEADER", "0", 1);
+        /* An unsaved conversation is a helper or the memory drive, both of
+         * which /clear between turns, and after each /clear the CLI rebuilds
+         * its context reminder at the head of the first message, git status
+         * included. Any edit or commit in the repo then changed the prompt
+         * ahead of everything the turn sends, and no cached prefix reached
+         * past the system prompt. This also drops the CLI's commit and PR
+         * instructions, which come with the git status. */
+        if (o.no_session_persistence) setenv("CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS", "1", 1);
 
         /* Build argv: headless, streaming both directions. */
         const char *argv[48];

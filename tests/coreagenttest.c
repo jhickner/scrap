@@ -653,8 +653,11 @@ static void drive_test(void)
     char *log = get_file("drive/cli.log");
     CHECK(strstr(log, "SYSTEM \"You are scrap") && strstr(log, "tools of the optchat MCP server"));
     CHECK(strstr(log, "MCP \"{\\\"mcpServers\\\":{\\\"optchat\\\":{\\\"command\\\":\\\"relay\\\",\\\"args\\\":[\\\"mcp-memory\\\",\\\"/tmp/optchat-"));
+    /* Every turn, the first included, follows a /clear, so each starts with
+       the same blocks the CLI adds after one. */
     char *first = strstr(log, "PROMPT "), *clear = strstr(log, "CLEAR"), *second = first ? strstr(first + 1, "PROMPT ") : NULL;
-    CHECK(first && clear && second && first < clear && clear < second);
+    char *again = first ? strstr(first, "CLEAR") : NULL;
+    CHECK(first && clear && second && clear < first && again && again < second);
     CHECK(first && strstr(first, "<chat>\\n^|</chat>\\ndrive one\""));
     /* The breakpoint goes before </chat>, so the next turn's view, which only
        adds lines, starts with this one's cached prefix. */
