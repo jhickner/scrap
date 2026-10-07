@@ -533,13 +533,46 @@ static const char *shorten_path(const char *cwd, const char *value, char *scratc
     return value;
 }
 
+/* Memory mode's own tools: plain names from core, mcp__optchat__ ones from
+ * the CLIs. Their arguments are numbers, which the keys above never match. */
+static const char *memory_tool(const char *name)
+{
+    if (name && !strncmp(name, "mcp__optchat__", 14))
+        return name + 14;
+    return name;
+}
+
+static int memory_tool_argument(const char *name, const cJSON *input, char *out, size_t size)
+{
+    name = memory_tool(name);
+    if (!name)
+        return 0;
+    const cJSON *id = cJSON_GetObjectItem(input, "id"), *n = cJSON_GetObjectItem(input, "n");
+    if (!strcmp(name, "zoom") && cJSON_IsNumber(id) && cJSON_IsNumber(n)) {
+        snprintf(out, size, "%ld+%ld", (long)id->valuedouble, (long)n->valuedouble);
+        return 1;
+    }
+    if (!strcmp(name, "date") && cJSON_IsNumber(id)) {
+        snprintf(out, size, "%ld", (long)id->valuedouble);
+        return 1;
+    }
+    const char *task = cJSON_GetStringValue(cJSON_GetObjectItem(input, "task"));
+    if (!strcmp(name, "agent") && task && *task) {
+        text_block(task, out, size);
+        return 1;
+    }
+    return 0;
+}
+
 void view_tool_argument(const backend_event *ev, const char *cwd, char *out, size_t size)
 {
     char arg[4096] = "";
 
     if (ev->input_json) {
         cJSON *input = cJSON_Parse(ev->input_json);
-        if (input) {
+        if (input && memory_tool_argument(ev->name, input, arg, sizeof arg)) {
+            cJSON_Delete(input);
+        } else if (input) {
             const char *v = view_tool_arg_value(input);
             if (v) {
                 char scratch[1024];
@@ -614,7 +647,7 @@ static void tool_tag(const char *name, int background, char *out, size_t size)
     size_t t = 0;
     size_t mark = background ? 4 : 0;
     out[t++] = '[';
-    for (const char *p = name; *p && t + 2 + mark < size; p++)
+    for (const char *p = memory_tool(name); *p && t + 2 + mark < size; p++)
         out[t++] = (*p >= 'A' && *p <= 'Z') ? (char)(*p + 32) : *p;
     if (background) {
         memcpy(out + t, " \xe2\x86\x97", 4);

@@ -299,6 +299,28 @@ int main(void)
         return fail("view_tool_call flattened the command", out);
     free(out);
 
+    static const struct {
+        const char *name, *input, *arg;
+    } MEMORY_CALLS[] = {
+        {"mcp__optchat__zoom", "{\"id\":512,\"n\":1}", "512+1"},
+        {"zoom", "{\"id\":7,\"n\":4}", "7+4"},
+        {"mcp__optchat__date", "{\"id\":40}", "40"},
+        {"mcp__optchat__agent", "{\"task\":\"fix the bug\"}", "fix the bug"},
+    };
+    for (int i = 0; i < (int)(sizeof MEMORY_CALLS / sizeof *MEMORY_CALLS); i++) {
+        const backend_event call = {.name = MEMORY_CALLS[i].name,
+                                    .input_json = MEMORY_CALLS[i].input};
+        view_tool_argument(&call, NULL, arg, sizeof arg);
+        if (strcmp(arg, MEMORY_CALLS[i].arg) != 0)
+            return fail("a memory tool call lost its arguments", arg);
+    }
+    ui_capture_begin(80);
+    view_tool_call("mcp__optchat__zoom", "512+1");
+    out = ui_capture_end();
+    if (!out || !strstr(out, "[zoom] 512+1"))
+        return fail("an optchat call kept its MCP prefix", out);
+    free(out);
+
     ui_capture_begin(80);
     view_tool_error("failed: Exit code 1\n"
                     "Traceback (most recent call last):\n"
