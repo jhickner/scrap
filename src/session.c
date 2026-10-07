@@ -119,6 +119,7 @@ struct session {
     const struct task *task_change;
     int      task_repeat;
     unsigned long spoke;
+    unsigned long heard;
     double   work_at;
     double   stall_at;
     int      stall_seen;
@@ -158,6 +159,7 @@ struct session {
     double          status_at;
     char           *status_last;
     int             status_open;
+    unsigned long   status_heard;
 
     struct sessionpresent present;
 };
@@ -210,7 +212,7 @@ static int session_retarget(struct session *s, const char *model, const char *ef
 
 static void render_event(struct session *s, const backend_event *ev)
 {
-
+    s->heard++;
     if (ev->kind != BACKEND_EV_TASK)
         s->spoke++;
 
@@ -720,6 +722,7 @@ static void status_update_done(void *ud, const char *answer)
     struct session *s = ud;
     s->status_open = 0;
     s->status_at = now_seconds();
+    s->status_heard = s->heard;
     if (answer)
         replace(&s->status_last, answer);
 }
@@ -750,7 +753,7 @@ static void status_update_tick(struct session *s)
             since = s->work_at;
     }
     int every = settings_get_int(SETTING_STATUS_INTERVAL, STATUS_INTERVAL_DEFAULT);
-    if (every <= 0 || now_seconds() - since < every)
+    if (every <= 0 || now_seconds() - since < every || s->heard == s->status_heard)
         return;
     s->status_at = now_seconds();
     if (sidechannel_status(s, s->status_last, status_update_done, s))
@@ -2397,6 +2400,7 @@ static void turn_prepare(struct session *s, const char *text)
     s->started = now_seconds();
     s->heard_at = s->started;
     s->status_at = s->started;
+    s->status_heard = s->heard;
     replace(&s->status_last, NULL);
     s->tool_open = 0;
     s->idle_busy = 1;
