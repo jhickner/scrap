@@ -68,8 +68,12 @@ int tabs_parse(char *line, struct tab_args *t)
         else if (!strcmp(arg, "--attach"))
             t->remote = value;
     }
-    if (t->remote || !t->backend || !*t->backend || !t->id || !*t->id)
-        return t->remote != NULL;
+    if (t->remote)
+        return 1;
+    if (!t->backend || !*t->backend)
+        return 0;
+    if (!t->id || !*t->id)
+        return t->memory;
     char                chain[CHAIN_ID_MAX];
     struct chain_record r;
     if (chain_find(t->id, chain, sizeof chain) && chain_read(chain, &r)) {

@@ -158,9 +158,8 @@ static int tabs_dump(const struct session *front, const char *path)
 
     for (int i = 0; i < workspace_count(); i++) {
         struct session *s = workspace_at(i);
-        const char *id = session_id(s);
 
-        if (s == front || (!session_remote(s) && (!id || !*id || !session_can_resume(s))))
+        if (s == front || !session_restorable(s))
             continue;
         if (!f && !(f = fopen(path, "w")))
             return 0;
@@ -221,15 +220,28 @@ void restart_wake(struct session *s)
         workspace_send(workspace_index_of(s), text, "task notification from before the restart");
 }
 
+static struct session *restart_front(struct session *s)
+{
+    if (!session_subagent(s))
+        return s;
+    for (int i = 0; i < workspace_count(); i++) {
+        struct session *t = workspace_at(i);
+        if (!session_subagent(t) && session_restorable(t))
+            return t;
+    }
+    return s;
+}
+
 int restart_exec(struct session *s)
 {
     wanted = 0;
     pool_used = 0;
 
+    struct session *front = restart_front(s);
     char *argv[30];
     int   n = 0;
     argv[n++] = (char *)sessionfork_program();
-    n += session_argv(s, argv + n, SESSION_ARGV_MAX,
+    n += session_argv(front, argv + n, SESSION_ARGV_MAX,
                       SESSION_ARGV_CWD | SESSION_ARGV_RESUME | SESSION_ARGV_SAFE);
 
     for (int i = 0; i < extra_n; i++)
@@ -250,6 +262,8 @@ int restart_exec(struct session *s)
         argv[0] = arg;
     }
 
+    if (front != s)
+        workspace_show(workspace_index_of(front));
     hud_restarted();
     wake_dump();
 
@@ -265,7 +279,7 @@ int restart_exec(struct session *s)
     }
 
     char tabs[4096];
-    if (tabs_path(tabs, sizeof tabs) && tabs_dump(s, tabs)) {
+    if (tabs_path(tabs, sizeof tabs) && tabs_dump(front, tabs)) {
         char *arg = arg_copy(tabs);
         if (arg) {
             argv[n++] = "--tabs";

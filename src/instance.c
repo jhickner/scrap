@@ -34,8 +34,7 @@ int instance_save(const char *name)
     int n = 0;
     for (int i = 0; i < workspace_count(); i++) {
         struct session *s = workspace_at(i);
-        const char *id = session_id(s);
-        if (!session_remote(s) && (!id || !*id || !session_can_resume(s)))
+        if (!session_restorable(s))
             continue;
         tabs_write(f, s, "");
         n++;

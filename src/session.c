@@ -3011,6 +3011,14 @@ int session_can_resume(const struct session *s)
     return s->agent && (s->agent->caps & BACKEND_CAP_RESUME);
 }
 
+int session_restorable(const struct session *s)
+{
+    const char *id = session_id(s);
+    return s->remote || s->memory || (id && *id && session_can_resume(s));
+}
+
+int session_subagent(const struct session *s) { return s && s->subagent; }
+
 const char *session_cwd(const struct session *s)
 {
     const char *remote = session_remote_field(s, "cwd");

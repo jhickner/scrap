@@ -30,6 +30,8 @@ usage: scraprig <command> ...
                              received frame matches in time
   net    name                print the instance's tailscale ip and port
   broker name                print the pid of the instance's scrap hub broker
+  pid    name                print the pid of the instance's scrap
+  click  name text           left-click the first place text shows on the screen
   joblog name job regex [secs]   until the job's log matches (default 20s)
   machine                    print this machine's tailnet name
   wait   name regex [secs]   until the screen matches (default 10s)
@@ -240,6 +242,21 @@ cmd_joblog() {
     exit 1
 }
 
+cmd_click() {
+    local at
+    at="$(screen "$1" | python3 -c '
+import sys
+for row, line in enumerate(sys.stdin, 1):
+    col = line.find(sys.argv[1])
+    if col >= 0:
+        print(col + 1, row)
+        break
+' "$2")"
+    [ -n "$at" ] || { screen "$1" >&2; die "no '$2' on the screen"; }
+    set -- "$1" $at
+    tm "$1" send-keys -t rig -l $'\e[<0;'"$2;$3"'M'$'\e[<0;'"$2;$3"'m'
+}
+
 cmd_stop() {
     local name="$1" pid i
     pid="$(tm "$name" display -p -t rig '#{pane_pid}' 2>/dev/null || true)"
@@ -283,6 +300,8 @@ stream-cat)
     inst "${1:-}"; [ $# -eq 2 ] || usage
     cat "$ROOT/$1/streams/$2.out" 2>/dev/null || die "no stream '$2'" ;;
 broker) inst "${1:-}"; cmd_broker "$1" ;;
+pid)    inst "${1:-}"; tm "$1" display -p -t rig '#{pane_pid}' ;;
+click)  inst "${1:-}"; [ $# -eq 2 ] || usage; cmd_click "$@" ;;
 joblog) inst "${1:-}"; [ $# -ge 3 ] || usage; cmd_joblog "$@" ;;
 net)
     inst "${1:-}"
