@@ -1217,6 +1217,8 @@ struct session *session_agent_open(struct agent_job *j)
     s->agent       = j->child;
     s->job         = j;
     s->subagent    = 1;
+    s->thinking    = settings_get_int(SETTING_THINKING, 1);
+    s->compact     = settings_get_int(SETTING_COMPACT, 0);
     s->agent->set_event_cb(s->agent, on_event, s);
     s->agent->set_abort_check(s->agent, abort_check);
     claim_name(s);

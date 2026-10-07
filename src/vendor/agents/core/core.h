@@ -2462,8 +2462,11 @@ static int sa_start(Backend *b, const char *resume);
 static int sa_settle_abort(void *ud) { return sa_aborted(ud); }
 
 static int sa_memory_turn(sa_agent *x, const char *user, const sa_buf *reminder, sa_buf *out) {
-    if (!oc_settled(x->mem)) sa_warn(x, "waiting for memory summaries");
-    if (!oc_settle(x->mem, sa_settle_abort, x)) {
+    /* A subagent starts mid-turn, while the parent's latest lines (at least
+       its own agent call) are still being summarized; its task carries that
+       context and it can zoom, so it renders the view as it is. */
+    if (!x->sub && !oc_settled(x->mem)) sa_warn(x, "waiting for memory summaries");
+    if (!x->sub && !oc_settle(x->mem, sa_settle_abort, x)) {
         char why[512];
         if (x->compactor && oc_compactor_error(x->compactor, why, sizeof why)) sa_warn(x, why);
         oc_append(x->mem, "user", user);
