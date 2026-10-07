@@ -603,8 +603,27 @@ static void open_agents(void)
         if (!workspace_send(at, session_agent_task(s), NULL)) {
             session_agent_fail(s, "could not start the subagent");
             workspace_close(at);
-        }
+        } else
+            session_agent_started(s);
     }
+}
+
+/* A subagent's report goes to its parent like a message from another session:
+ * it starts a turn if the parent is idle and queues behind the current one. */
+static void deliver_report(struct session *s)
+{
+    struct session *to   = NULL;
+    char           *text = session_agent_report(s, &to);
+    if (!text)
+        return;
+    char from[INTERCOM_NAME_MAX + 2];
+    snprintf(from, sizeof from, "@%s", session_name(s) ? session_name(s) : "agent");
+    for (int i = 0; i < ntabs; i++)
+        if (tabs[i].s == to) {
+            workspace_message(i, from, text, 0, 1);
+            break;
+        }
+    free(text);
 }
 
 static void close_idle_agents(void)
@@ -641,6 +660,7 @@ static int pump(int hold, int screen)
             session_set_unseen(s, 1);
 
         session_agent_poll(s);
+        deliver_report(s);
         if (running && !session_turn_running(s)) {
             tabs[i].finished = 1;
             if (i != cur)

@@ -144,6 +144,8 @@ struct session {
     volatile int    abort_request;
     struct agent_job *job;
     int             subagent;
+    char           *agent_report;
+    struct session *report_to;
     double          idle_at;
     struct permission perm;
     volatile int    perm_state;
@@ -980,6 +982,7 @@ void session_free(struct session *s)
     free(s->effort);
     free(s->resolved);
     free(s->last_reply);
+    free(s->agent_report);
     free(s->ledger);
     free(s->failed_prompt);
     free(s->last_block);
@@ -1107,7 +1110,9 @@ struct agent_job {
     Backend          *child;
     char             *task, *cwd, *model, *effort, *backend;
     char             *report;
-    int               status, taken, abandoned, refs;
+    struct session   *parent;
+    char              name[INTERCOM_NAME_MAX];
+    int               status, taken, started, refs;
 };
 
 #define AGENT_PENDING (-2)
@@ -1129,18 +1134,12 @@ static void job_unref(struct agent_job *j)
     free(j);
 }
 
-static void job_unlink(struct agent_job *j)
-{
-    for (struct agent_job **p = &jobs; *p; p = &(*p)->next)
-        if (*p == j) {
-            *p = j->next;
-            return;
-        }
-}
-
 static void wake_write(struct session *s);
 static void claim_name(struct session *s);
 
+/* Fire and forget: returns once the subagent's tab is running its task, or
+ * at once if the parent is interrupted first. The tab keeps going either way,
+ * and its report reaches the parent as a message (session_agent_report). */
 static int host_agent(void *ud, Backend *child, const char *task, char **report)
 {
     struct session   *s = ud;
@@ -1153,6 +1152,7 @@ static int host_agent(void *ud, Backend *child, const char *task, char **report)
     j->model  = s->model ? strdup(s->model) : NULL;
     j->effort = s->effort ? strdup(s->effort) : NULL;
     j->backend = strdup(s->backend);
+    j->parent = s;
     j->status = AGENT_PENDING;
     j->refs   = 2;
 
@@ -1163,7 +1163,7 @@ static int host_agent(void *ud, Backend *child, const char *task, char **report)
     wake_write(s);
 
     pthread_mutex_lock(&job_mu);
-    while (j->status == AGENT_PENDING && !s->abort_request) {
+    while (j->status == AGENT_PENDING && !j->started && !s->abort_request) {
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
         ts.tv_nsec += 100 * 1000000L;
@@ -1174,22 +1174,19 @@ static int host_agent(void *ud, Backend *child, const char *task, char **report)
         pthread_cond_timedwait(&job_cond, &job_mu, &ts);
     }
     int status = j->status;
-    Backend *orphan = NULL;
     if (status == AGENT_PENDING) {
-        status       = BACKEND_AGENT_INTERRUPTED;
-        j->abandoned = 1;
-        if (!j->taken) {
-            job_unlink(j);
-            orphan = child;
-            j->refs--;
-        }
+        status  = BACKEND_AGENT_STARTED;
+        *report = j->name[0] ? text_dsprintf("started subagent @%s in its own tab; its report will "
+                                             "arrive later as a message from @%s",
+                                             j->name, j->name)
+                             : text_dsprintf("started a subagent in its own tab; its report will "
+                                             "arrive later as a message");
+    } else {
+        *report   = j->report;
+        j->report = NULL;
     }
-    *report   = j->report;
-    j->report = NULL;
     job_unref(j);
     pthread_mutex_unlock(&job_mu);
-    if (orphan)
-        orphan->close(orphan);
     return status;
 }
 
@@ -1208,7 +1205,7 @@ struct agent_job *session_agent_take(void)
 static void job_finish(struct agent_job *j, int status, const char *report)
 {
     pthread_mutex_lock(&job_mu);
-    if (j->status == AGENT_PENDING && !j->abandoned) {
+    if (j->status == AGENT_PENDING) {
         j->status = status;
         j->report = report ? strdup(report) : NULL;
     }
@@ -1231,6 +1228,9 @@ struct session *session_agent_open(struct agent_job *j)
     s->agent->set_event_cb(s->agent, on_event, s);
     s->agent->set_abort_check(s->agent, abort_check);
     claim_name(s);
+    pthread_mutex_lock(&job_mu);
+    snprintf(j->name, sizeof j->name, "%s", s->name);
+    pthread_mutex_unlock(&job_mu);
     snprintf(s->title, sizeof s->title, "agent: %.100s", j->task);
     for (char *c = s->title; *c; c++)
         if (*c == '\n' || *c == '\t')
@@ -1244,12 +1244,43 @@ const char *session_agent_task(const struct session *s)
     return s && s->job ? s->job->task : NULL;
 }
 
+void session_agent_started(struct session *s)
+{
+    if (!s || !s->job)
+        return;
+    pthread_mutex_lock(&job_mu);
+    s->job->started = 1;
+    pthread_cond_broadcast(&job_cond);
+    pthread_mutex_unlock(&job_mu);
+}
+
+/* Ends the job; once its host has returned, the report goes to the parent as
+ * a message instead. */
+static void agent_end(struct session *s, int status, const char *report)
+{
+    struct agent_job *j = s->job;
+    s->job = NULL;
+    if (j->started) {
+        free(s->agent_report);
+        s->agent_report = status == BACKEND_AGENT_DONE ? text_dsprintf("agent report: %s", report)
+                          : report ? text_dsprintf("agent %s: %s",
+                                                   status == BACKEND_AGENT_INTERRUPTED
+                                                       ? "interrupted, last reply"
+                                                       : "failed",
+                                                   report)
+                                   : text_dsprintf("agent %s", status == BACKEND_AGENT_INTERRUPTED
+                                                                   ? "interrupted with no report"
+                                                                   : "failed with no report");
+        s->report_to = j->parent;
+    }
+    job_finish(j, status, report);
+}
+
 void session_agent_fail(struct session *s, const char *why)
 {
     if (!s || !s->job)
         return;
-    job_finish(s->job, BACKEND_AGENT_FAILED, why);
-    s->job = NULL;
+    agent_end(s, BACKEND_AGENT_FAILED, why);
 }
 
 void session_agent_poll(struct session *s)
@@ -1258,12 +1289,6 @@ void session_agent_poll(struct session *s)
         return;
     if (s->running) {
         s->idle_at = 0;
-        int abandoned;
-        pthread_mutex_lock(&job_mu);
-        abandoned = s->job && s->job->abandoned;
-        pthread_mutex_unlock(&job_mu);
-        if (abandoned && !s->abort_request)
-            session_interrupt(s);
         return;
     }
     if (s->job) {
@@ -1271,11 +1296,20 @@ void session_agent_poll(struct session *s)
         int status = m->interrupted ? BACKEND_AGENT_INTERRUPTED
                      : m->is_error || !s->last_reply ? BACKEND_AGENT_FAILED
                                                      : BACKEND_AGENT_DONE;
-        job_finish(s->job, status, s->last_reply);
-        s->job = NULL;
+        agent_end(s, status, s->last_reply);
     }
     if (!s->idle_at)
         s->idle_at = now_seconds();
+}
+
+char *session_agent_report(struct session *s, struct session **to)
+{
+    char *r = s ? s->agent_report : NULL;
+    if (r) {
+        s->agent_report = NULL;
+        *to = s->report_to;
+    }
+    return r;
 }
 
 double session_agent_idle(const struct session *s)
