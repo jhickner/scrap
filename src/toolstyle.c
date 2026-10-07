@@ -314,7 +314,7 @@ static enum segment_class classify_segment(const char *segment, const char *end)
     return SEGMENT_UNKNOWN;
 }
 
-int toolstyle_shell_reads(const char *command)
+static int toolstyle_shell_reads(const char *command)
 {
     if (!command || !*command || has_disqualifier(command))
         return 0;

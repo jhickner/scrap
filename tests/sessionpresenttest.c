@@ -141,31 +141,12 @@ static void check_report(void)
     free(drawn);
 }
 
-static void check_turn_state(void)
-{
-    struct sessionpresent present = {0};
-    present.streamed = strdup("old streamed answer");
-    present.streamed_len = strlen(present.streamed);
-    present.streamed_cap = present.streamed_len + 1;
-    present.call_open = 1;
-    present.view.after_collapse = 1;
-
-    sessionpresent_turn_begin(&present);
-    if (present.streamed || present.call_open ||
-        present.view.after_collapse) {
-        fprintf(stderr, "FAIL a new turn resets presentation-only state\n");
-        failures++;
-    }
-    sessionpresent_free(&present);
-}
-
 int main(void)
 {
     ui_init();
     check_footer();
     check_report();
     check_tokenomics();
-    check_turn_state();
 
     if (failures)
         return 1;

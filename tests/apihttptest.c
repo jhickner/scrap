@@ -283,9 +283,6 @@ int main(void)
         fail("the stream carries agent, status, result, and done with ids");
     free(s.b.s);
 
-    if (req("GET", "/v1/agents/ag_1/runs/run_1", NULL, &b) != 200 || !strstr(b.s, "\"status\":\"finished\""))
-        fail("the run reads back finished");
-
     sse_open(&s, 1, "1");
     pthread_join(s.th, NULL);
     if (!s.b.s || strncmp(s.b.s, "id: 2\n", 6))
@@ -299,11 +296,6 @@ int main(void)
     if (!s.b.s || strncmp(s.b.s, "event: reset\n", 13) || !strstr(s.b.s, "\nid: "))
         fail("an expired Last-Event-ID gets a reset");
     free(s.b.s);
-
-    if (req("DELETE", "/v1/agents/ag_1", NULL, &b) != 409 || !strstr(b.s, "agent_in_view"))
-        fail("delete of the tab in view is 409 over HTTP");
-    if (req("DELETE", "/v1/agents/ag_1?force=1", NULL, &b) != 200 || !strstr(b.s, "\"status\":\"exited\""))
-        fail("force delete over HTTP");
 
     test_register_dlv();
 

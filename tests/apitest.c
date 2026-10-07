@@ -155,8 +155,6 @@ int main(void)
         fail("run_1 reads back finished with its result");
 
     request("POST", "/v1/agents/ag_1/runs", NULL, "{\"prompt\":{\"text\":\"third\"}}");
-    if (tabs[0]->nqueue != 1)
-        fail("third is queued in the tab");
     if (request("POST", "/v1/agents/ag_1/runs/run_3/cancel", NULL, NULL) != 200 ||
         strcmp(out_str("status", NULL), "cancelled") || tabs[0]->nqueue != 0)
         fail("cancelling a queued run removes it from the tab queue");

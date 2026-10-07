@@ -252,6 +252,8 @@ struct Backend {
     const char *(*wake_owed)(Backend *b);
     /* Whether a turn the agent started for itself is open between sends. */
     int  (*turn_open)(Backend *b);
+    /* Stop one background task by its id; NULL when the driver cannot. */
+    int  (*stop_task)(Backend *b, const char *task_id);
 
     /* NULL until known, or when the driver never reports it. */
     const char *(*session_id)(Backend *b);
@@ -708,6 +710,11 @@ static const char *backend_claude_error(Backend *b) {
     return x->client ? claude_last_error(x->client) : NULL;
 }
 
+static int backend_claude_stop_task(Backend *b, const char *task_id) {
+    backend_claude *x = b->ctx;
+    return x->client ? claude_stop_task(x->client, task_id) : 0;
+}
+
 static void backend_claude_close(Backend *b) {
     backend_claude *x = b->ctx;
     if (x->client) claude_stop(x->client);
@@ -741,6 +748,7 @@ static Backend *backend_claude_open(const backend_opts *o) {
     b->busy = backend_claude_busy;
     b->wake_owed = backend_claude_wake_owed;
     b->turn_open = backend_claude_turn_open;
+    b->stop_task = backend_claude_stop_task;
     b->session_id = backend_claude_session_id;
     b->model = backend_claude_model;
     b->effort = backend_claude_effort;

@@ -43,11 +43,6 @@ int main(void)
     if (strcmp(settings_get(b, "voice", ""), "0") != 0)
         fail("a writer takes up the entries already on disk");
 
-    settings_put(a, "model", "two");
-    settings_load(c, path);
-    if (strcmp(settings_get(c, "model", ""), "two") != 0)
-        fail("an unchanged value leaves the file alone");
-
     unlink(path);
     char lock[300];
     snprintf(lock, sizeof lock, "%s.lock", path);

@@ -1,6 +1,8 @@
 #include "intercom.h"
 
 #include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
 #include <stdio.h>
@@ -10,6 +12,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -22,6 +25,7 @@
 #include "livelist.h"
 #include "sessionlist.h"
 #include "session.h"
+#include "sessionfork.h"
 #include "sessionload.h"
 #include "text.h"
 #include "title.h"
@@ -903,7 +907,7 @@ static char *spill(const char *text)
 }
 
 int intercom_deliver(const char *host, const char *from, const char *target, const char *text,
-                     int interrupt, char *msg, size_t size)
+                     int flags, char *msg, size_t size)
 {
     struct entries l = {0};
     char           cwd[4096];
@@ -924,8 +928,10 @@ int intercom_deliver(const char *host, const char *from, const char *target, con
             cJSON_AddStringToObject(o, "name", e->name);
         if (from && *from)
             cJSON_AddStringToObject(o, "from", from);
-        if (interrupt)
+        if (flags & INTERCOM_INTERRUPT)
             cJSON_AddBoolToObject(o, "interrupt", 1);
+        if (flags & INTERCOM_REPLY)
+            cJSON_AddBoolToObject(o, "reply", 1);
         if (host && *host)
             cJSON_AddStringToObject(o, "host", host);
         else
@@ -948,14 +954,38 @@ int intercom_deliver(const char *host, const char *from, const char *target, con
     return rc;
 }
 
-int intercom_send(const char *from, const char *target, const char *text, int interrupt,
+int intercom_send(const char *from, const char *target, const char *text, int flags,
                   char *msg, size_t size)
 {
     char        host[TAILNET_HOST_MAX];
     const char *local, *name = route(target, host, sizeof host, &local);
     if (name)
-        return tailnet_send(host, from, name, text, interrupt, msg, size);
-    return intercom_deliver(NULL, from, local, text, interrupt, msg, size);
+        return tailnet_send(host, from, name, text, flags, msg, size);
+    return intercom_deliver(NULL, from, local, text, flags, msg, size);
+}
+
+void intercom_reply(const char *from, const char *to, const char *text)
+{
+    char *argv[] = {(char *)sessionfork_program(), "send", "--reply", "--from", (char *)from,
+                    (char *)to, (char *)text, NULL};
+    pid_t pid = fork();
+    if (pid == 0) {
+        setsid();
+        if (fork() != 0)
+            _exit(0);
+        unsetenv("MUX_SESSION_FILE");
+        int null = open("/dev/null", O_RDWR);
+        dup2(null, 0);
+        dup2(null, 1);
+        dup2(null, 2);
+        for (int i = 3; i < 1024; i++)
+            close(i);
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+    if (pid > 0)
+        while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
+            ;
 }
 
 static char *join_args(int argc, char **argv)
@@ -974,22 +1004,31 @@ static char *join_args(int argc, char **argv)
 
 static int cmd_send(int argc, char **argv)
 {
-    int interrupt = argc > 1 && !strcmp(argv[1], "--interrupt");
-    if (interrupt) {
-        argv++;
-        argc--;
-    }
+    char me[INTERCOM_NAME_MAX] = "";
+    int  flags = 0;
+    for (; argc > 1; argv++, argc--)
+        if (!strcmp(argv[1], "--interrupt"))
+            flags |= INTERCOM_INTERRUPT;
+        else if (!strcmp(argv[1], "--reply"))
+            flags |= INTERCOM_REPLY;
+        else if (!strcmp(argv[1], "--from") && argc > 2) {
+            snprintf(me, sizeof me, "%s", argv[2]);
+            argv++;
+            argc--;
+        } else
+            break;
     if (argc < 3) {
-        fprintf(stderr, "usage: scrap send [--interrupt] TARGET TEXT\n");
+        fprintf(stderr, "usage: scrap send [--interrupt] [--reply] [--from NAME] TARGET TEXT\n");
         return 2;
     }
     char *text = join_args(argc - 2, argv + 2);
     if (!text)
         return 1;
 
-    char me[INTERCOM_NAME_MAX], msg[1200];
-    self_name(me, sizeof me);
-    int rc = intercom_send(me, argv[1], text, interrupt, msg, sizeof msg);
+    char msg[1200];
+    if (!me[0])
+        self_name(me, sizeof me);
+    int rc = intercom_send(me, argv[1], text, flags, msg, sizeof msg);
     if (rc)
         fprintf(stderr, "scrap: %s\n", msg);
     else

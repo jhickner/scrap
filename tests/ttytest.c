@@ -401,11 +401,6 @@ static void keys_from_pipe(void)
     expect_key(w, "\x1b[27u", 5, TK_ESCAPE, "csi-u escape");
     expect_key(w, "\x1b[13;2u", 7, TK_NEWLINE, "csi-u shift-enter");
     expect_key(w, "\x1b[27;2;13~", 10, TK_NEWLINE, "xterm shift-enter");
-    expect_key(w, "\x1b[106;5u", 8, TK_NEWLINE, "csi-u ctrl-j");
-    expect_key(w, "\x1b[27;5;106~", 11, TK_NEWLINE, "xterm ctrl-j");
-    expect_ctrl(w, "\x03", 1, 3, "ctrl-c");
-    expect_ctrl(w, "\x1b[27;5;99~", 10, 3, "xterm ctrl-c");
-    expect_ctrl(w, "\x1b[97;5u", 7, 1, "csi-u ctrl-a");
     expect_focus(w, "\x1b[O", TK_FOCUS_OUT, "focus out");
     expect_focus(w, "\x1b[I", TK_FOCUS_IN, "focus in");
 

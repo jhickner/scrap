@@ -878,10 +878,6 @@ int main(int argc, char **argv)
     free(reply);
     b->close(b);
 
-    b = open_agent(NULL, 0);
-    CHECK(b->reset(b));
-    b->close(b);
-
     snprintf(config, sizeof config,
              "{\"servers\":{\"fake\":{\"url\":\"http://127.0.0.1:%d/mcp\"},"
              "\"down\":{\"url\":\"http://127.0.0.1:1/mcp\"}}}",

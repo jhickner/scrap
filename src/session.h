@@ -82,15 +82,24 @@ double session_turn_elapsed(const struct session *s);
 void session_turn_wait(struct session *s);
 
 void session_interrupt(struct session *s);
+/* -1 when the backend cannot stop a single task. */
+int  session_stop_task(struct session *s, const char *task_id);
 
 int  session_busy(const struct session *s);
 int  session_in_turn(const struct session *s);
 
 void session_set_unseen(struct session *s, int on);
 
-void        session_on_permission(int (*fn)(struct session *s, const char *question));
-const char *session_permission_pending(struct session *s);
-void        session_permission_answer(struct session *s, int allow);
+struct permission {
+    char *tool;
+    char *detail;
+    char *about;
+};
+
+void session_on_permission(int (*fn)(struct session *s, const struct permission *p));
+const struct permission *session_permission_pending(struct session *s);
+int  session_permission_waiting(const struct session *s);
+void session_permission_answer(struct session *s, int allow);
 void session_republish(const struct session *s);
 int  session_unseen(const struct session *s);
 

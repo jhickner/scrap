@@ -22,7 +22,6 @@ struct vncinset_source {
 };
 
 #define VNCINSET_STUB_FPS 5
-struct vncinset_source *vncinset_stub_open(void);
 
 typedef struct vncinset_source *(*vncinset_open_fn)(const char *bot);
 void vncinset_set_opener(vncinset_open_fn fn);

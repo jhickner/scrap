@@ -6,6 +6,7 @@ build/
 TODO.md
 .codex/
 .grok/
-.claude/worktrees
+.claude/
+tools/
 testimages/
 map/

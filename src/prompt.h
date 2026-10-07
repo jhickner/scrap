@@ -43,7 +43,8 @@ void prompt_paint_queued(struct prompt *p, int room);
 
 void prompt_set_queued_source(struct prompt *p, int (*count)(void *ud),
                               const char *(*at)(void *ud, int i),
-                              char *(*take_last)(void *ud), void *ud);
+                              char *(*take_last)(void *ud),
+                              int (*drop)(void *ud, const char *line), void *ud);
 
 void prompt_set_replay(struct prompt *p, void (*fn)(void *ud), void *ud);
 

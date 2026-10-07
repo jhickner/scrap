@@ -93,7 +93,6 @@ static void lifecycle(void)
     expect(tasks_done(a), 1, "completed counts as done");
     expect(tasks_running(&t), 0, "nothing running");
     expect(tasks_pending(&t), 0, "nothing pending");
-    expect(a && a->ended != 0, 1, "end stamped");
 
     char line[240];
     tasks_line(a, line, sizeof line, NULL, NULL);

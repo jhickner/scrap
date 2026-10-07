@@ -11,6 +11,9 @@ int sidechannel_start(const struct session *s, const char *prompt, const char *l
 typedef void (*sidechannel_done)(void *ud, const char *answer);
 int  sidechannel_status(const struct session *s, const char *prev,
                         sidechannel_done done, void *ud);
+int  sidechannel_inbox(const struct session *s, const char *message,
+                       sidechannel_done done, void *ud);
+void sidechannel_cancel(sidechannel_done done, void *ud);
 void sidechannel_forget(const struct session *s);
 
 void sidechannel_show(const struct session *owner, const char *question,

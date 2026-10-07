@@ -144,7 +144,7 @@ struct session {
     struct agent_job *job;
     int             subagent;
     double          idle_at;
-    char           *perm_question;
+    struct permission perm;
     volatile int    perm_state;
     int             perm_allow;
     pthread_mutex_t lock;
@@ -759,14 +759,22 @@ static void status_update_tick(struct session *s)
 
 static __thread struct session *owner;
 
-static int (*permission_hook)(struct session *s, const char *question);
+static int (*permission_hook)(struct session *s, const struct permission *p);
 
-void session_on_permission(int (*fn)(struct session *s, const char *question))
+void session_on_permission(int (*fn)(struct session *s, const struct permission *p))
 {
     permission_hook = fn;
 }
 
-static char *permission_question(const backend_permission *req)
+static void permission_clear(struct permission *p)
+{
+    free(p->tool);
+    free(p->detail);
+    free(p->about);
+    *p = (struct permission){0};
+}
+
+static void permission_fill(struct permission *p, const backend_permission *req)
 {
     static const char *const keys[] = {"command", "file_path", "notebook_path", "url",
                                        "pattern", "path"};
@@ -777,32 +785,33 @@ static char *permission_question(const backend_permission *req)
         if (v && *v)
             detail = v;
     }
+    const char *about = cJSON_GetStringValue(cJSON_GetObjectItem(input, "description"));
+    if (!about || !*about)
+        about = req->description;
     if (!detail)
-        detail = req->description ? req->description : req->path;
+        detail = req->path;
 
-    char buf[600];
-    snprintf(buf, sizeof buf, "allow %s%s%.400s?", req->tool ? req->tool : "tool call",
-             detail ? ": " : "", detail ? detail : "");
+    permission_clear(p);
+    p->tool = strdup(req->tool && *req->tool ? req->tool : "tool call");
+    p->detail = detail && *detail ? strdup(detail) : NULL;
+    p->about = about && *about ? strdup(about) : NULL;
     cJSON_Delete(input);
-    return strdup(buf);
 }
 
 static int on_permission(void *ud, const backend_permission *req)
 {
     struct session *s = ud;
-    char *question = permission_question(req);
-    if (!question)
-        return 0;
 
     if (owner != s) {
-        int allow = permission_hook && permission_hook(s, question);
-        free(question);
+        struct permission p = {0};
+        permission_fill(&p, req);
+        int allow = permission_hook && permission_hook(s, &p);
+        permission_clear(&p);
         return allow;
     }
 
     pthread_mutex_lock(&s->lock);
-    free(s->perm_question);
-    s->perm_question = question;
+    permission_fill(&s->perm, req);
     s->perm_allow = 0;
     s->perm_state = 1;
     pthread_mutex_unlock(&s->lock);
@@ -819,14 +828,14 @@ static int on_permission(void *ud, const backend_permission *req)
     return allow;
 }
 
-const char *session_permission_pending(struct session *s)
+const struct permission *session_permission_pending(struct session *s)
 {
-    if (!s || s->perm_state != 1)
-        return NULL;
-    pthread_mutex_lock(&s->lock);
-    const char *q = s->perm_state == 1 ? s->perm_question : NULL;
-    pthread_mutex_unlock(&s->lock);
-    return q;
+    return session_permission_waiting(s) ? &s->perm : NULL;
+}
+
+int session_permission_waiting(const struct session *s)
+{
+    return s && s->perm_state == 1;
 }
 
 void session_permission_answer(struct session *s, int allow)
@@ -978,7 +987,7 @@ void session_free(struct session *s)
     free(s->prompt);
     free(s->status_last);
     free(s->permission);
-    free(s->perm_question);
+    permission_clear(&s->perm);
     free(s->error_note);
     free(s->system_extra);
     free(s->handoff);
@@ -2659,6 +2668,13 @@ void session_interrupt(struct session *s)
         s->autobackend_due = 0;
         s->abort_request = 1;
     }
+}
+
+int session_stop_task(struct session *s, const char *task_id)
+{
+    if (!s || !s->agent || !s->agent->stop_task)
+        return -1;
+    return s->agent->stop_task(s->agent, task_id);
 }
 
 void session_set_unseen(struct session *s, int on)

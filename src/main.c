@@ -15,7 +15,6 @@
 #include "askform.h"
 #include "bash.h"
 #include "chrome.h"
-#include "newsession.h"
 #include "cmd.h"
 #include "frontend.h"
 #include "pick.h"
@@ -313,14 +312,6 @@ static void blank_line(void *ud)
 static int clicked(void *ud, int row, int col)
 {
     int tab = tabbar_hit(row, col);
-    if (tab == TABBAR_NEW) {
-        if (!chrome_modal_active()) {
-            newsession_run();
-            viewport_flush();
-            ui_flush();
-        }
-        return 1;
-    }
     if (tab >= 0) {
         if (tab != workspace_index())
             workspace_show(tab);
@@ -490,13 +481,13 @@ static void ask_run_form(void)
     free(answer);
 }
 
-static int ask_permission(struct session *s, const char *question)
+static int ask_permission(struct session *s, const struct permission *p)
 {
     if (s == workspace_current())
-        return confirm_run(question);
-    char buf[700];
-    snprintf(buf, sizeof buf, "@%s: %s", session_name(s), question);
-    return confirm_run(buf);
+        return confirm_permission(NULL, p);
+    char from[256];
+    snprintf(from, sizeof from, "@%s", session_name(s));
+    return confirm_permission(from, p);
 }
 
 static int takeover_pending(void *ud)
@@ -518,9 +509,9 @@ static void takeover_run(void *ud)
         return;
     }
     struct session *s = workspace_current();
-    const char *question = session_permission_pending(s);
-    if (question) {
-        session_permission_answer(s, confirm_run(question));
+    const struct permission *p = session_permission_pending(s);
+    if (p) {
+        session_permission_answer(s, confirm_permission(NULL, p));
         return;
     }
     if (ask_ready()) {
@@ -647,6 +638,12 @@ static char *tab_unqueue(void *ud)
 {
     (void)ud;
     return workspace_unqueue(workspace_index());
+}
+
+static int tab_dequeue(void *ud, const char *line)
+{
+    (void)ud;
+    return workspace_dequeue(workspace_index(), line);
 }
 
 static int live_command(void *ud, const char *line)
@@ -1018,7 +1015,7 @@ int main(int argc, char **argv)
     chrome_bind(prompt);
     chrome_modal_interrupt(handoff_wanted);
     prompt_set_live_command(prompt, live_command, NULL);
-    prompt_set_queued_source(prompt, tab_queued, tab_queued_at, tab_unqueue, NULL);
+    prompt_set_queued_source(prompt, tab_queued, tab_queued_at, tab_unqueue, tab_dequeue, NULL);
     prompt_set_echo_filter(prompt, echo_filter, NULL);
     prompt_set_idle(prompt, idle_fds, idle_render, idle_poll, NULL);
     prompt_set_restart(prompt, restart_pending, idle_restart, NULL);

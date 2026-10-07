@@ -21,11 +21,11 @@ CHECKS := kittywraptest overlaytest viewporttest imagerowtest chrometest imagefi
           groktest filedifftest pitest agenttabstest statustest transcripttest \
           sessionviewtest sessionloadtest highlighttest telegramtest \
           modelstest sessionpresenttest \
-          workspacetest replboxtest ttytest gitinfotest sidechannelviewtest \
+          workspacetest replboxtest ttytest \
           sidechannelcmdtest taskstest voicetest filelocktest prompttest \
           dispatchtest grokbottailtest vncinsettest grokvnctest \
           settingstest
-CHECKS += spawnfdtest agentsynctest sessionaddrtest apitest apihttptest activelogtest proxyprototest coreagenttest scheduletest askblocktest chaintest optchattest
+CHECKS += spawnfdtest apitest apihttptest activelogtest proxyprototest coreagenttest scheduletest askblocktest chaintest optchattest
 MANUAL_TOOLS := imagetest keydump pastetest spintest vncprobe
 
 # A harness is classified by the directory it sits in: tests/ runs unattended,
@@ -128,7 +128,7 @@ FORCE:
 tests: $(TOOLS)
 manual: $(MANUAL_BINS)
 
-FULL_LIB_TOOLS := spintest chrometest ttytest keydump gitinfotest \
+FULL_LIB_TOOLS := spintest chrometest ttytest keydump \
                   telegramtest workspacetest replboxtest
 JPEG_TOOLS := imagerowtest vncinsettest imagefittest imagetest mdtest sessionpresenttest
 
@@ -153,7 +153,7 @@ $(BUILD)/statustest: tests/statustest.c tests/stubs/tabbar.c tests/stubs/keyhelp
 
 $(BUILD)/prompttest: tests/prompttest.c tests/stubs/tabbar.c tests/stubs/keyhelp.c tests/stubs/taskrows.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/bash.o $(BUILD)/block.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
-$(BUILD)/chrometest: tests/chrometest.c $(BUILD)/confirm.o $(BUILD)/frontend.o tests/stubs/tabbar.c tests/stubs/keyhelp.c tests/stubs/taskrows.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
+$(BUILD)/chrometest: tests/chrometest.c $(BUILD)/confirm.o $(BUILD)/highlight.o $(BUILD)/toolstyle.o $(BUILD)/frontend.o tests/stubs/tabbar.c tests/stubs/keyhelp.c tests/stubs/taskrows.c $(BUILD)/status.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/prompt.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/bash.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o $(BUILD)/text.o | $(BUILD)
 
 $(BUILD)/imagerowtest: tests/imagerowtest.c $(BUILD)/image.o $(BUILD)/viewport.o $(BUILD)/ui.o $(BUILD)/tty.o $(BUILD)/settings.o $(BUILD)/scrollback.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
@@ -169,13 +169,9 @@ $(BUILD)/ttytest: tests/ttytest.c $(BUILD)/tty.o $(BUILD)/viewport.o $(BUILD)/ui
 
 $(BUILD)/keydump: tools/keydump.c $(BUILD)/tty.o $(BUILD)/viewport.o $(BUILD)/ui.o $(BUILD)/settings.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/gitinfotest: tests/gitinfotest.c $(BUILD)/gitinfo.o $(BUILD)/gitcmd.o $(BUILD)/text.o | $(BUILD)
-
 $(BUILD)/imagefittest: tests/imagefittest.c $(BUILD)/image.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/reflowtest: tests/reflowtest.c $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
-
-$(BUILD)/sidechannelviewtest: tests/sidechannelviewtest.c $(BUILD)/sidechannelview.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 $(BUILD)/sidechannelcmdtest: tests/sidechannelcmdtest.c $(BUILD)/sidechannelcmd.o | $(BUILD)
 
@@ -193,8 +189,6 @@ $(BUILD)/filedifftest: tests/filedifftest.c $(BUILD)/filediff.o $(BUILD)/ui.o $(
 
 $(BUILD)/taskstest: tests/taskstest.c $(BUILD)/tasks.o $(BUILD)/text.o $(BUILD)/toolstyle.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-
-$(BUILD)/agentsynctest: tests/agentsynctest.c $(BUILD)/agentsync.o $(BUILD)/text.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 
 $(BUILD)/claudetest: tests/claudetest.c $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
@@ -242,8 +236,6 @@ $(BUILD)/workspacetest: tests/workspacetest.c tests/stubs/tabbar.c tests/stubs/k
 
 
 
-
-$(BUILD)/sessionaddrtest: tests/sessionaddrtest.c $(BUILD)/sessionaddr.o $(BUILD)/text.o | $(BUILD)
 
 $(BUILD)/proxyprototest: tests/proxyprototest.c $(BUILD)/proxyproto.o | $(BUILD)
 

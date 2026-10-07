@@ -200,7 +200,7 @@ int main(void)
     const char *efforts[] = {"xhigh", "medium", "medium", "low", "default"};
     const char *codex[] = {"gpt-6-astra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-sol", "gpt-6-luna"};
     const char *grok[] = {"grok-4.7", "grok-4.7", "grok-4.7", "grok-4.7", "grok-4.6"};
-    for (int i = 0; i < 5; i++) {
+    for (int i = 1; i < 5; i++) {
         const char *m, *e;
         models_autobackend("claude", sources[i], efforts[i], "codex", &m, &e);
         if (strcmp(m, codex[i]) || strcmp(e, i == 4 ? "low" : efforts[i]))

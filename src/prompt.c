@@ -17,6 +17,7 @@
 #include "settings.h"
 #include "sidechannel.h"
 #include "status.h"
+#include "taskrows.h"
 #include "tty.h"
 #include "ui.h"
 #include "viewport.h"
@@ -44,7 +45,10 @@ struct prompt {
     int        (*q_count)(void *ud);
     const char *(*q_at)(void *ud, int i);
     char      *(*q_take)(void *ud);
+    int        (*q_drop)(void *ud, const char *line);
     void        *q_ud;
+    int          focus;
+    int          focus_at;
     char        *file_root;
     char      *(*external)(void *ud);
     void        *external_ud;
@@ -215,13 +219,15 @@ static void paint_bars(const char *text, size_t budget, enum ui_role role, int c
 
 void prompt_set_queued_source(struct prompt *p, int (*count)(void *ud),
                               const char *(*at)(void *ud, int i),
-                              char *(*take_last)(void *ud), void *ud)
+                              char *(*take_last)(void *ud),
+                              int (*drop)(void *ud, const char *line), void *ud)
 {
     if (!p)
         return;
     p->q_count = count;
     p->q_at = at;
     p->q_take = take_last;
+    p->q_drop = drop;
     p->q_ud = ud;
 }
 
@@ -244,6 +250,113 @@ static int queued_cap(struct prompt *p, const char *line)
     return cap > QUEUED_LINES ? cap : QUEUED_LINES;
 }
 
+enum { FOCUS_NONE, FOCUS_QUEUED, FOCUS_TASKS, FOCUS_REGIONS };
+
+static void toggle_queued(struct prompt *p, int index)
+{
+    const char *line = queued_line(p, index);
+    int open = p->queued_open && !strcmp(p->queued_open, line);
+    free(p->queued_open);
+    p->queued_open = open ? NULL : strdup(line);
+}
+
+static void drop_queued(struct prompt *p, int index)
+{
+    int theirs = p->q_count ? p->q_count(p->q_ud) : 0;
+    if (index < theirs) {
+        if (p->q_drop)
+            p->q_drop(p->q_ud, p->q_at(p->q_ud, index));
+        return;
+    }
+    index -= theirs;
+    free(p->queued[index]);
+    memmove(p->queued + index, p->queued + index + 1,
+            (size_t)(--p->queued_count - index) * sizeof *p->queued);
+}
+
+static int focus_items(struct prompt *p, int region)
+{
+    if (region == FOCUS_QUEUED)
+        return queued_total(p);
+    if (region == FOCUS_TASKS)
+        return taskrows_items();
+    return 0;
+}
+
+static void focus_step(struct prompt *p, int dir)
+{
+    int r = p->focus;
+    do
+        r = (r + dir + FOCUS_REGIONS) % FOCUS_REGIONS;
+    while (r != FOCUS_NONE && !focus_items(p, r));
+    p->focus = r;
+    p->focus_at = 0;
+}
+
+static void focus_sync(struct prompt *p)
+{
+    int n = focus_items(p, p->focus);
+    if (p->focus && !n)
+        focus_step(p, 1);
+    n = focus_items(p, p->focus);
+    if (p->focus_at >= n)
+        p->focus_at = n - 1;
+    if (p->focus_at < 0)
+        p->focus_at = 0;
+    taskrows_focus(p->focus == FOCUS_TASKS ? p->focus_at : -1);
+}
+
+static int focus_key(struct prompt *p, const tty_event *ev)
+{
+    focus_sync(p);
+    if (!p->focus)
+        return 0;
+    switch (ev->key) {
+    case TK_TAB:
+        focus_step(p, 1);
+        break;
+    case TK_PREV_TAB:
+        focus_step(p, -1);
+        break;
+    case TK_UP:
+        p->focus_at--;
+        break;
+    case TK_DOWN:
+        p->focus_at++;
+        break;
+    case TK_ENTER:
+        if (p->focus == FOCUS_QUEUED)
+            toggle_queued(p, p->focus_at);
+        else
+            taskrows_toggle(p->focus_at);
+        break;
+    case TK_ESCAPE:
+        p->focus = FOCUS_NONE;
+        break;
+    case TK_CHAR:
+        if (ev->cp == 'x') {
+            if (p->focus == FOCUS_QUEUED)
+                drop_queued(p, p->focus_at);
+            else if (taskrows_stop(p->focus_at) < 0)
+                ui_note("this backend cannot stop a single task");
+            break;
+        }
+        /* fallthrough */
+    default:
+        if (ev->key == TK_RESIZE || ev->key == TK_FOCUS_IN || ev->key == TK_FOCUS_OUT ||
+            ev->key == TK_MOUSE_DOWN || ev->key == TK_SCROLL_UP || ev->key == TK_SCROLL_DOWN ||
+            ev->key == TK_PAGE_UP || ev->key == TK_PAGE_DOWN)
+            return 0;
+        p->focus = FOCUS_NONE;
+        focus_sync(p);
+        chrome_paint();
+        return 0;
+    }
+    focus_sync(p);
+    chrome_paint();
+    return 1;
+}
+
 static int queued_click(struct prompt *p, int row, int col)
 {
     char *url = viewport_link_at(row, col);
@@ -253,10 +366,7 @@ static int queued_click(struct prompt *p, int row, int col)
     free(url);
     if (index < 0 || index >= queued_total(p))
         return 0;
-    const char *line = queued_line(p, index);
-    int open = p->queued_open && !strcmp(p->queued_open, line);
-    free(p->queued_open);
-    p->queued_open = open ? NULL : strdup(line);
+    toggle_queued(p, index);
     chrome_paint();
     return 1;
 }
@@ -275,6 +385,8 @@ int prompt_queued_rows(struct prompt *p, int cols)
 
 void prompt_paint_queued(struct prompt *p, int room)
 {
+    if (p)
+        focus_sync(p);
     int n = p ? queued_total(p) : 0;
     if (n == 0)
         return;
@@ -296,7 +408,8 @@ void prompt_paint_queued(struct prompt *p, int room)
             snprintf(link, sizeof link, "\x1b]8;;scrap-queue:%d\x1b\\", i);
             ui_esc(link);
         }
-        paint_bars(line, budget, UI_DIM, queued_cap(p, line), NULL);
+        enum ui_role role = p->focus == FOCUS_QUEUED && p->focus_at == i ? UI_ACCENT : UI_DIM;
+        paint_bars(line, budget, role, queued_cap(p, line), NULL);
         if (folds)
             ui_esc("\x1b]8;;\x1b\\");
     }
@@ -305,7 +418,7 @@ void prompt_paint_queued(struct prompt *p, int room)
 static void emit_input(struct prompt *p, int rows)
 {
     int synthetic = caret_is_synthetic(&p->repl);
-    int focused = tty_focused();
+    int focused = tty_focused() && !p->focus;
 
     for (int y = 0; y < rows; y++) {
         ui_esc(UI_ERASE_EOL);
@@ -371,6 +484,8 @@ void prompt_paint_input(struct prompt *p, int rows, int *caret_row, int *caret_c
 {
     *caret_row = 0;
     *caret_col = 0;
+    if (p)
+        focus_sync(p);
     if (!p || !p->frame_ok) {
         ui_put("");
         return;
@@ -703,8 +818,6 @@ enum key_result {
 #define KEY_CTRL(c) ((c) - 'A' + 1)
 
 static const struct prompt_key SHORTCUTS[] = {
-    {"SESSIONS", "tab", "sessions list",
-     "accept the completion, else open /sessions", PROMPT_KEY_ALWAYS},
     {"SESSIONS", "left", "sessions list (empty line)",
      "on an empty line, open /sessions", PROMPT_KEY_ALWAYS},
     {"SESSIONS", "ctrl-o/p", "back / forward",
@@ -717,6 +830,17 @@ static const struct prompt_key SHORTCUTS[] = {
      "open a shell split in this directory", PROMPT_KEY_ALWAYS},
     {"SESSIONS", "ctrl-d", "close (empty line)",
      "on an empty line, close the session (quit on the last one)", PROMPT_KEY_ALWAYS},
+    {"FOCUS", "tab", "focus queue / tasks (empty line)",
+     "on an empty line, focus the queued lines and task rows; tab and shift-tab move between them",
+     PROMPT_KEY_ALWAYS},
+    {"FOCUS", "up/down", "move",
+     "move the focus within the queued lines or task rows", PROMPT_KEY_ALWAYS},
+    {"FOCUS", "enter", "expand",
+     "expand or collapse the focused queued line or task command", PROMPT_KEY_ALWAYS},
+    {"FOCUS", "x", "drop line / stop task",
+     "drop the focused queued line, or stop the focused background task", PROMPT_KEY_ALWAYS},
+    {"FOCUS", "esc", "back to the prompt",
+     "return the focus to the prompt", PROMPT_KEY_ALWAYS},
     {"EDIT", "ctrl-a/e", "line start / end",
      "jump to the start / end of the line", PROMPT_KEY_ALWAYS},
     {"EDIT", "ctrl-w", "delete word",
@@ -904,6 +1028,8 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
         p->history_follow();
     if (ev->key != TK_CHAR || ev->cp != KEY_CTRL(']'))
         p->command_nth = 0;
+    if (p->focus && focus_key(p, ev))
+        return KEY_OK;
     switch (ev->key) {
     case TK_EOF:
         return KEY_EOF;
@@ -1040,14 +1166,10 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
             return KEY_OK;
         }
 
-        if (p->switcher && p->repl.len == 0 && !overlay_open(p)) {
-            if (live)
-                status_pause();
-            viewport_defer();
-            chrome_clear();
-            p->switcher(p->switcher_ud);
-            if (live)
-                status_resume();
+        if (p->repl.len == 0 && !overlay_open(p)) {
+            focus_step(p, 1);
+            focus_sync(p);
+            chrome_paint();
         }
         return KEY_OK;
 
@@ -1534,7 +1656,7 @@ void prompt_set_live_command(struct prompt *p, prompt_live_fn fn, void *ud)
 int prompt_live_key(void *ud, tty_event *ev)
 {
     struct prompt *p = ud;
-    if (ev->key == TK_UP && recall_queued(p))
+    if (ev->key == TK_UP && !p->focus && recall_queued(p))
         return 0;
     switch (feed_key(p, ev, 1)) {
     case KEY_SUBMIT: {

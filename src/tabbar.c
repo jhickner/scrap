@@ -14,7 +14,6 @@
 
 #define NAME_CELLS 14
 #define STATUS_CELLS 32
-#define BUTTON_W   4
 
 #define CHECK "\xe2\x9c\x93"
 #define BAR "\xe2\x94\x82"
@@ -79,6 +78,10 @@ static const char *mark(const struct session *s, enum ui_role *role)
 {
     const char *status = workspace_status(s);
 
+    if (!strcmp(status, "waiting")) {
+        *role = UI_ACCENT;
+        return "?";
+    }
     if (session_in_turn(s)) {
         *role = UI_SPIN;
         return spin_glyph(frame);
@@ -136,7 +139,6 @@ struct tab {
 static struct tab tabs[WORKSPACE_MAX];
 static int        ntabs;
 static int        box_col = -1;
-static int        box_w;
 static int        col_glyph, col_name, col_status, col_meter;
 
 static void rule(int cells)
@@ -179,18 +181,9 @@ static void paint_row(void *ud, int line, int w)
             ui_pad(col_meter);
         }
         ui_pad(w - 2 - col_glyph - col_name - (col_status ? 1 + col_status : 0) - col_meter);
-    } else if (at == ntabs) {
-        ui_put("\xe2\x95\xb0");
-        rule(w - 1 - BUTTON_W);
-        ui_put("\xe2\x94\xac");
-        rule(BUTTON_W - 1);
-    } else if (at == ntabs + 1) {
-        ui_put(BAR " ");
-        ui_esc(ui_style(UI_ACCENT));
-        ui_put("+ ");
     } else {
         ui_put("\xe2\x95\xb0");
-        rule(BUTTON_W - 1);
+        rule(w - 1);
     }
     ui_esc(ui_style(UI_RESET));
 }
@@ -203,13 +196,13 @@ void tabbar_cover(char **rows, int n, int cols)
     box_col = -1;
     spin_advance(&frame, &frame_at);
     painted = digest();
-    if (count < 1 || cur < 0 || n < 4)
+    if (count < 1 || cur < 0 || n < 2)
         return;
     if (count == 1 && (!settings_get_int(SETTING_NAME_BADGE, 1) ||
                        (!session_remote(workspace_at(cur)) && !session_name(workspace_at(cur))[0])))
         return;
 
-    ntabs = count < n - 3 ? count : n - 3;
+    ntabs = count < n - 1 ? count : n - 1;
     col_glyph = col_name = col_status = col_meter = 0;
     for (int i = 0; i < ntabs; i++) {
         struct tab           *t = &tabs[i];
@@ -232,17 +225,13 @@ void tabbar_cover(char **rows, int n, int cols)
     }
     int widest = col_glyph + col_name + (col_status ? 1 + col_status : 0) + col_meter;
     int w = widest + 3;
-    if (w < BUTTON_W + 2)
-        w = BUTTON_W + 2;
     if (w > cols)
         return;
 
-    int height = ntabs + 3;
+    int height = ntabs + 1;
     int            r;
     struct overlay o = {.col = cols - w, .w = w, .rows = 1, .paint_row = paint_row, .ud = &r};
     for (r = 0; r < height; r++) {
-        o.w = r > ntabs ? BUTTON_W : w;
-        o.col = cols - o.w;
         ui_sink_begin();
         overlay_put(rows[r] ? rows[r] : "", &o);
         char *out = ui_sink_end();
@@ -255,7 +244,6 @@ void tabbar_cover(char **rows, int n, int cols)
         rows[r] = out;
     }
     box_col = cols - w;
-    box_w = w;
 }
 
 int tabbar_hit(int row, int col)
@@ -267,7 +255,5 @@ int tabbar_hit(int row, int col)
         return TABBAR_NONE;
     if (at < ntabs)
         return tabs[at].index;
-    if (at == ntabs + 1 && x >= box_w - BUTTON_W)
-        return TABBAR_NEW;
     return TABBAR_NONE;
 }

@@ -99,6 +99,11 @@ def main():
             emit({"type": "control_response", "response": {
                 "subtype": "success", "request_id": msg.get("request_id"),
                 "response": {}}})
+            req = msg.get("request", {})
+            if req.get("subtype") == "stop_task":
+                emit({"type": "system", "subtype": "task_notification",
+                      "task_id": req.get("task_id"), "status": "stopped",
+                      "output_file": "", "summary": "stopped"})
         elif kind == "user":
             text = prompt_text(msg)
             emit({"type": "system", "subtype": "init", "model": MODEL,
@@ -156,6 +161,11 @@ def main():
                       "modelUsage": {MODEL: {"contextWindow": 1000}},
                       "result": "ctx %d" % used})
                 continue
+            elif "Otherwise output exactly SKIP" in text:
+                msg = re.sub(r"^\[from [^\]]*\] ", "", text.rsplit("\n\n", 1)[-1])
+                if "slowfork" in msg:
+                    time.sleep(8)
+                text = "SKIP" if "skipme" in msg else "fork: " + msg
             elif text == "askme":
                 text = "Pick one.\n\n@ask\n1. Color?\n- red\n- blue"
             elif text.startswith("run: "):

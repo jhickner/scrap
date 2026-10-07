@@ -106,8 +106,9 @@ static void row_status(struct row *r, const char *status)
 {
     r->spin = status && !strcmp(status, "working");
     int errored = status && !strcmp(status, "errored");
-    snprintf(r->mark, sizeof r->mark, "%s", errored ? "e" : "");
-    r->role = errored ? UI_ERROR : UI_OK;
+    int waiting = status && !strcmp(status, "waiting");
+    snprintf(r->mark, sizeof r->mark, "%s", errored ? "e" : waiting ? "?" : "");
+    r->role = errored ? UI_ERROR : waiting ? UI_ACCENT : UI_OK;
 }
 
 static long last_active(const char *chain)
