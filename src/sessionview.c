@@ -60,6 +60,7 @@ struct keep {
     int            error;
     int            collapses;
     int            background;
+    int            lookup;
     int            nested;
     char          *label;
     char          *row;
@@ -105,7 +106,7 @@ int view_collapsed(void) { return view_state()->collapsed; }
 
 static int keep_drops(const struct keep *k)
 {
-    return k->kind == KEEP_DIFF || (k->kind == KEEP_OUTPUT && !k->error);
+    return k->kind == KEEP_DIFF || (k->kind == KEEP_OUTPUT && !k->error && !k->lookup);
 }
 
 static size_t row_prefix(const char *row)
@@ -239,6 +240,8 @@ static char *keep_encode(void *ud)
     cJSON_AddNumberToObject(o, "error", k->error);
     cJSON_AddNumberToObject(o, "collapses", k->collapses);
     cJSON_AddNumberToObject(o, "background", k->background);
+    if (k->lookup)
+        cJSON_AddNumberToObject(o, "lookup", k->lookup);
     if (k->nested) {
         cJSON_AddNumberToObject(o, "nested", k->nested);
         if (k->label)
@@ -317,6 +320,7 @@ void view_keep_load(const cJSON *st)
     k->error = scrollback_int(st, "error");
     k->collapses = scrollback_int(st, "collapses");
     k->background = scrollback_int(st, "background");
+    k->lookup = scrollback_int(st, "lookup");
     if (!k->a || !k->b) {
         keep_free(k);
         return;
@@ -389,6 +393,19 @@ void view_keep_output(const char *text, enum ui_role role, int error)
     k->a = strdup(text);
     k->role = role;
     k->error = error;
+    keep(k);
+}
+
+void view_keep_lookup(const char *text, enum ui_role role)
+{
+    if (!text || !*text)
+        return;
+    struct keep *k = keep_new(KEEP_OUTPUT);
+    if (!k)
+        return;
+    k->a = strdup(text);
+    k->role = role;
+    k->lookup = 1;
     keep(k);
 }
 
@@ -562,6 +579,12 @@ static int memory_tool_argument(const char *name, const cJSON *input, char *out,
         return 1;
     }
     return 0;
+}
+
+int view_tool_is_lookup(const char *name)
+{
+    name = memory_tool(name);
+    return name && (!strcmp(name, "zoom") || !strcmp(name, "date"));
 }
 
 const char *view_tool_value(const char *name, const cJSON *input, char *scratch, size_t size)

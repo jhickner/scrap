@@ -48,6 +48,10 @@ void view_keep_break(void);
 
 void view_keep_output(const char *text, enum ui_role role, int error);
 
+/* A memory lookup's result (zoom, date): kept on screen in compact mode too. */
+int  view_tool_is_lookup(const char *name);
+void view_keep_lookup(const char *text, enum ui_role role);
+
 void view_keep_diff(char *patch);
 
 int  view_collapsed(void);

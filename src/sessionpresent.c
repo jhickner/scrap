@@ -59,6 +59,8 @@ void sessionpresent_turn_begin(struct sessionpresent *p)
     stream_reset(p);
     p->view.after_collapse = 0;
     p->call_open = 0;
+    p->lookups = 0;
+    p->calls = 0;
     view_keep_break();
 }
 
@@ -240,8 +242,14 @@ void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
             status_pause();
             paused = 1;
         }
-        if (!nested)
+        if (!nested) {
             p->call_open = 1;
+            if (p->calls < 32) {
+                if (view_tool_is_lookup(name))
+                    p->lookups |= 1u << p->calls;
+                p->calls++;
+            }
+        }
         view_keep_tool_call_bg(name, arg, collapses, toolstyle_background(ev->input_json),
                                ev->id);
 
@@ -254,7 +262,13 @@ void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
         break;
     }
 
-    case BACKEND_EV_TOOL_RESULT:
+    case BACKEND_EV_TOOL_RESULT: {
+        int lookup = 0;
+        if (!nested && p->calls) {
+            lookup = p->lookups & 1;
+            p->lookups >>= 1;
+            p->calls--;
+        }
         if (ev->failed) {
             if (hide) {
                 status_pause();
@@ -296,10 +310,14 @@ void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
                 view_keep_diff(patch);
             } else {
                 free(patch);
-                view_keep_output(ev->text, UI_DIM, 0);
+                if (lookup)
+                    view_keep_lookup(ev->text, UI_DIM);
+                else
+                    view_keep_output(ev->text, UI_DIM, 0);
             }
         }
         break;
+    }
     }
 
     if (ev->kind == BACKEND_EV_TOOL_RESULT && !nested) {

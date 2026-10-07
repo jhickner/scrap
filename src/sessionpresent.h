@@ -21,6 +21,10 @@ struct sessionpresent {
     int    task_held;
     double task_held_at;
     int    call_open;
+    /* which of the open top-level calls are memory lookups, oldest in bit 0;
+     * results come back in call order */
+    unsigned lookups;
+    int      calls;
     struct turnview view;
     struct filediff_snapshot filediff;
 };
