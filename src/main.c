@@ -637,6 +637,12 @@ static char *tab_unqueue(void *ud)
     return workspace_unqueue(workspace_index());
 }
 
+static int tab_dequeue(void *ud, const char *line)
+{
+    (void)ud;
+    return workspace_dequeue(workspace_index(), line);
+}
+
 static int live_command(void *ud, const char *line)
 {
     (void)ud;
@@ -972,7 +978,7 @@ int main(int argc, char **argv)
     chrome_bind(prompt);
     chrome_modal_interrupt(handoff_wanted);
     prompt_set_live_command(prompt, live_command, NULL);
-    prompt_set_queued_source(prompt, tab_queued, tab_queued_at, tab_unqueue, NULL);
+    prompt_set_queued_source(prompt, tab_queued, tab_queued_at, tab_unqueue, tab_dequeue, NULL);
     prompt_set_echo_filter(prompt, echo_filter, NULL);
     prompt_set_idle(prompt, idle_fds, idle_render, idle_poll, NULL);
     prompt_set_restart(prompt, restart_pending, idle_restart, NULL);

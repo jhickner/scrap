@@ -82,6 +82,8 @@ double session_turn_elapsed(const struct session *s);
 void session_turn_wait(struct session *s);
 
 void session_interrupt(struct session *s);
+/* -1 when the backend cannot stop a single task. */
+int  session_stop_task(struct session *s, const char *task_id);
 
 int  session_busy(const struct session *s);
 int  session_in_turn(const struct session *s);

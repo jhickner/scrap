@@ -99,6 +99,11 @@ def main():
             emit({"type": "control_response", "response": {
                 "subtype": "success", "request_id": msg.get("request_id"),
                 "response": {}}})
+            req = msg.get("request", {})
+            if req.get("subtype") == "stop_task":
+                emit({"type": "system", "subtype": "task_notification",
+                      "task_id": req.get("task_id"), "status": "stopped",
+                      "output_file": "", "summary": "stopped"})
         elif kind == "user":
             text = prompt_text(msg)
             emit({"type": "system", "subtype": "init", "model": MODEL,

@@ -2446,6 +2446,13 @@ void session_interrupt(struct session *s)
     }
 }
 
+int session_stop_task(struct session *s, const char *task_id)
+{
+    if (!s || !s->agent || !s->agent->stop_task)
+        return -1;
+    return s->agent->stop_task(s->agent, task_id);
+}
+
 void session_set_unseen(struct session *s, int on)
 {
     on = on ? 1 : 0;

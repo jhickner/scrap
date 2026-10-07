@@ -25,6 +25,7 @@ static struct {
     char id[40];
 } hits[64];
 static int nhits;
+static int focus_at = -1;
 
 static int is_open(const struct task *a)
 {
@@ -109,6 +110,14 @@ int taskrows_count(int cols)
     return rows;
 }
 
+static void toggle(const char *id)
+{
+    if (!strcmp(open_id, id))
+        open_id[0] = '\0';
+    else
+        snprintf(open_id, sizeof open_id, "%s", id);
+}
+
 int taskrows_click(int row)
 {
     int top = viewport_chrome_top();
@@ -117,13 +126,36 @@ int taskrows_click(int row)
     for (int i = 0; i < nhits; i++) {
         if (hits[i].line != row - 1 - top)
             continue;
-        if (!strcmp(open_id, hits[i].id))
-            open_id[0] = '\0';
-        else
-            snprintf(open_id, sizeof open_id, "%s", hits[i].id);
+        toggle(hits[i].id);
         return 1;
     }
     return 0;
+}
+
+int taskrows_items(void)
+{
+    const struct task *v[ROWS_MAX];
+    int                total;
+    return collect(v, ROWS_MAX, &total);
+}
+
+void taskrows_focus(int i) { focus_at = i; }
+
+void taskrows_toggle(int i)
+{
+    const struct task *v[ROWS_MAX];
+    int                total;
+    if (i >= 0 && i < collect(v, ROWS_MAX, &total) && v[i]->cmd[0])
+        toggle(v[i]->id);
+}
+
+int taskrows_stop(int i)
+{
+    const struct task *v[ROWS_MAX];
+    int                total;
+    if (i < 0 || i >= collect(v, ROWS_MAX, &total) || tasks_done(v[i]))
+        return 0;
+    return session_stop_task(workspace_current(), v[i]->id);
 }
 
 static long signature(int rows)
@@ -176,7 +208,12 @@ void taskrows_paint(int cols)
 
         ui_put("\n");
         hit(a);
-        ui_put("  ");
+        if (i == focus_at) {
+            ui_esc(ui_style(UI_ACCENT));
+            ui_put("\xe2\x96\xb8 ");
+        } else {
+            ui_put("  ");
+        }
         if (done && !strcmp(a->status, "completed")) {
             ui_esc(ui_style(UI_OK));
             ui_put("\xe2\x9c\x93");

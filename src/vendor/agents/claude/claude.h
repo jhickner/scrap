@@ -223,6 +223,8 @@ int claude_turn_open(claude_client *c);
  * request). The turn still ends with a result event, so the stream stays usable
  * for the next send. Returns nonzero on success. */
 int claude_interrupt(claude_client *c);
+/* Ask the CLI to stop one background task by its task_id. */
+int claude_stop_task(claude_client *c, const char *task_id);
 
 /* Register an abort predicate, polled while a turn is in flight. When it first
  * returns nonzero the client interrupts the turn and keeps reading until the
@@ -1057,6 +1059,8 @@ static int cl_handle_line(claude_client *c, const char *line, char **out) {
 }
 
 /* Serialize `msg` (consumed) as one JSONL line on the child's stdin. */
+static pthread_mutex_t cl_write_lock = PTHREAD_MUTEX_INITIALIZER;
+
 static int cl_write_json(claude_client *c, cJSON *msg) {
     char *json = cJSON_PrintUnformatted(msg);
     cJSON_Delete(msg);
@@ -1067,13 +1071,16 @@ static int cl_write_json(claude_client *c, cJSON *msg) {
     if (!withnl) { free(json); return 0; }
     json = withnl; json[jl] = '\n'; json[jl + 1] = '\0';
 
+    int ok = 1;
+    pthread_mutex_lock(&cl_write_lock);
     for (size_t off = 0; off < jl + 1; ) {
         ssize_t w = write(c->in_fd, json + off, (jl + 1) - off);
-        if (w < 0) { if (errno == EINTR) continue; free(json); return 0; }
+        if (w < 0) { if (errno == EINTR) continue; ok = 0; break; }
         off += (size_t)w;
     }
+    pthread_mutex_unlock(&cl_write_lock);
     free(json);
-    return 1;
+    return ok;
 }
 
 /* Read one complete JSONL message during startup. The worker is the only stdout
@@ -1264,6 +1271,18 @@ int claude_interrupt(claude_client *c) {
     cJSON_AddStringToObject(msg, "request_id", "claude_h_interrupt");
     cJSON *req = cJSON_AddObjectToObject(msg, "request");
     cJSON_AddStringToObject(req, "subtype", "interrupt");
+    return cl_write_json(c, msg);
+}
+
+int claude_stop_task(claude_client *c, const char *task_id) {
+    if (!c || !task_id || !*task_id) return 0;
+    cJSON *msg = cJSON_CreateObject();
+    if (!msg) return 0;
+    cJSON_AddStringToObject(msg, "type", "control_request");
+    cJSON_AddStringToObject(msg, "request_id", "claude_h_stop_task");
+    cJSON *req = cJSON_AddObjectToObject(msg, "request");
+    cJSON_AddStringToObject(req, "subtype", "stop_task");
+    cJSON_AddStringToObject(req, "task_id", task_id);
     return cl_write_json(c, msg);
 }
 
