@@ -234,8 +234,8 @@ struct Backend {
      * task to run where it can be watched, such as a tab. The host returns a
      * BACKEND_AGENT_* status and owns the child, unless it returns
      * BACKEND_AGENT_DECLINED. BACKEND_AGENT_STARTED means the child runs on
-     * by itself and its report reaches the agent later as a message; *report
-     * then says where it runs. Other statuses end the child's first turn.
+     * by itself and reports back only as its task says; *report then says
+     * where it runs. Other statuses end the child's first turn.
      * *report is malloc'd or NULL. Called on the turn thread. NULL for
      * drivers without subagents. */
     void (*set_agent_host)(Backend *b,

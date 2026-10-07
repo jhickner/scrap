@@ -142,27 +142,28 @@ static const char SA_MEMORY_TOOLS[] =
 static const char SA_AGENT_TOOL[] =
     "{\"type\":\"function\",\"function\":{\"name\":\"agent\",\"description\":"
     "\"Start a subagent on a task in its own tab. The call returns at once; the subagent "
-    "keeps running even if this turn ends or is interrupted, and its report arrives later as a "
-    "message from it. The subagent starts from this view, including this turn so far, and has "
-    "the same tools, so give it the task, not the background. Its steps stay out of the chat; "
-    "only its report enters it.\","
+    "keeps running even if this turn ends or is interrupted. It does not report back by itself, "
+    "so end the task by telling it to send its report with scrap send @<your session name>. The "
+    "subagent starts from this view, including this turn so far, and has the same tools, so give "
+    "it the task, not the background. Its steps stay out of the chat; only its report enters it.\","
     "\"parameters\":{\"type\":\"object\",\"properties\":{"
-    "\"task\":{\"type\":\"string\",\"description\":\"What the subagent is to do and report\"}},"
+    "\"task\":{\"type\":\"string\",\"description\":\"What the subagent is to do, ending with how to report back (scrap send @<your session name>)\"}},"
     "\"required\":[\"task\"]}}}";
 
 static const char SA_DELEGATE[] =
     "Give work that takes many tool calls, such as searching, reading several files, or running "
     "and fixing builds and tests, to a subagent with agent: its steps stay out of the chat and "
-    "only its report enters the view. agent returns at once and the report comes later as a "
-    "message, so end the turn or go on with other work rather than wait for it. Do work of one "
-    "or two tool calls yourself.\n\n";
+    "only its report enters the view. agent returns at once, and the subagent sends its report "
+    "with scrap send only if its task says to, so always end the task with that instruction; "
+    "then end the turn or go on with other work rather than wait for it. Do work of one or two "
+    "tool calls yourself.\n\n";
 
 static const char SA_SUBAGENT[] =
     "You are a subagent of " OC_AGENT ". The view is " OC_AGENT "'s chat; the first message after "
     "it is your task from " OC_AGENT ", and later ones come from the user. Do not stop to ask: do "
     "the task, then reply with a report for " OC_AGENT ": what you did, what you found and what is left. "
-    "Your final reply is sent to " OC_AGENT " as a message by itself, so you need not send it. "
-    "Your steps are not kept, so the report must hold everything that matters.\n\n";
+    "Your final reply goes nowhere by itself: as your last step, send the report with scrap "
+    "send to the address your task gives. Your steps are not kept, so the report must hold everything that matters.\n\n";
 
 static const char SA_DRIVE_TOOLS[] =
     "zoom and date are tools of the optchat MCP server.\n\n";
@@ -2295,7 +2296,7 @@ static int sa_tool_agent(sa_agent *x, const cJSON *input, sa_buf *out, int *inte
     char *report = NULL;
     int status = x->agent_host ? x->agent_host(x->agent_ud, b, task, &report) : BACKEND_AGENT_DECLINED;
     if (status == BACKEND_AGENT_STARTED) {
-        sa_puts(out, report ? report : "subagent started; its report will arrive later as a message");
+        sa_puts(out, report ? report : "subagent started in its own tab");
         free(report);
         return 0;
     }

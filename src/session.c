@@ -144,8 +144,6 @@ struct session {
     volatile int    abort_request;
     struct agent_job *job;
     int             subagent;
-    char           *agent_report;
-    struct session *report_to;
     double          idle_at;
     struct permission perm;
     volatile int    perm_state;
@@ -982,7 +980,6 @@ void session_free(struct session *s)
     free(s->effort);
     free(s->resolved);
     free(s->last_reply);
-    free(s->agent_report);
     free(s->ledger);
     free(s->failed_prompt);
     free(s->last_block);
@@ -1110,7 +1107,6 @@ struct agent_job {
     Backend          *child;
     char             *task, *cwd, *model, *effort, *backend;
     char             *report;
-    struct session   *parent;
     char              name[INTERCOM_NAME_MAX];
     int               status, taken, started, refs;
 };
@@ -1138,8 +1134,8 @@ static void wake_write(struct session *s);
 static void claim_name(struct session *s);
 
 /* Fire and forget: returns once the subagent's tab is running its task, or
- * at once if the parent is interrupted first. The tab keeps going either way,
- * and its report reaches the parent as a message (session_agent_report). */
+ * at once if the parent is interrupted first. The tab keeps going either way;
+ * its task tells it how to report back, such as with scrap send. */
 static int host_agent(void *ud, Backend *child, const char *task, char **report)
 {
     struct session   *s = ud;
@@ -1152,7 +1148,6 @@ static int host_agent(void *ud, Backend *child, const char *task, char **report)
     j->model  = s->model ? strdup(s->model) : NULL;
     j->effort = s->effort ? strdup(s->effort) : NULL;
     j->backend = strdup(s->backend);
-    j->parent = s;
     j->status = AGENT_PENDING;
     j->refs   = 2;
 
@@ -1176,11 +1171,8 @@ static int host_agent(void *ud, Backend *child, const char *task, char **report)
     int status = j->status;
     if (status == AGENT_PENDING) {
         status  = BACKEND_AGENT_STARTED;
-        *report = j->name[0] ? text_dsprintf("started subagent @%s in its own tab; its report will "
-                                             "arrive later as a message from @%s",
-                                             j->name, j->name)
-                             : text_dsprintf("started a subagent in its own tab; its report will "
-                                             "arrive later as a message");
+        *report = j->name[0] ? text_dsprintf("started subagent @%s in its own tab", j->name)
+                             : strdup("started a subagent in its own tab");
     } else {
         *report   = j->report;
         j->report = NULL;
@@ -1254,33 +1246,12 @@ void session_agent_started(struct session *s)
     pthread_mutex_unlock(&job_mu);
 }
 
-/* Ends the job; once its host has returned, the report goes to the parent as
- * a message instead. */
-static void agent_end(struct session *s, int status, const char *report)
-{
-    struct agent_job *j = s->job;
-    s->job = NULL;
-    if (j->started) {
-        free(s->agent_report);
-        s->agent_report = status == BACKEND_AGENT_DONE ? text_dsprintf("agent report: %s", report)
-                          : report ? text_dsprintf("agent %s: %s",
-                                                   status == BACKEND_AGENT_INTERRUPTED
-                                                       ? "interrupted, last reply"
-                                                       : "failed",
-                                                   report)
-                                   : text_dsprintf("agent %s", status == BACKEND_AGENT_INTERRUPTED
-                                                                   ? "interrupted with no report"
-                                                                   : "failed with no report");
-        s->report_to = j->parent;
-    }
-    job_finish(j, status, report);
-}
-
 void session_agent_fail(struct session *s, const char *why)
 {
     if (!s || !s->job)
         return;
-    agent_end(s, BACKEND_AGENT_FAILED, why);
+    job_finish(s->job, BACKEND_AGENT_FAILED, why);
+    s->job = NULL;
 }
 
 void session_agent_poll(struct session *s)
@@ -1296,20 +1267,11 @@ void session_agent_poll(struct session *s)
         int status = m->interrupted ? BACKEND_AGENT_INTERRUPTED
                      : m->is_error || !s->last_reply ? BACKEND_AGENT_FAILED
                                                      : BACKEND_AGENT_DONE;
-        agent_end(s, status, s->last_reply);
+        job_finish(s->job, status, s->last_reply);
+        s->job = NULL;
     }
     if (!s->idle_at)
         s->idle_at = now_seconds();
-}
-
-char *session_agent_report(struct session *s, struct session **to)
-{
-    char *r = s ? s->agent_report : NULL;
-    if (r) {
-        s->agent_report = NULL;
-        *to = s->report_to;
-    }
-    return r;
 }
 
 double session_agent_idle(const struct session *s)

@@ -118,7 +118,6 @@ const char *session_agent_task(const struct session *s) { (void)s; return NULL; 
 void session_agent_fail(struct session *s, const char *why) { (void)s; (void)why; }
 void session_agent_poll(struct session *s) { (void)s; }
 void session_agent_started(struct session *s) { (void)s; }
-char *session_agent_report(struct session *s, struct session **to) { (void)s; (void)to; return NULL; }
 double session_agent_idle(const struct session *s) { (void)s; return -1; }
 void session_set_customizations(struct session *s, int on) { (void)s; (void)on; }
 void session_set_thinking(struct session *s, int on) { (void)s; (void)on; }

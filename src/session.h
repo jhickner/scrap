@@ -146,7 +146,6 @@ struct session   *session_agent_open(struct agent_job *j);
 const char       *session_agent_task(const struct session *s);
 void              session_agent_fail(struct session *s, const char *why);
 void              session_agent_started(struct session *s);
-char             *session_agent_report(struct session *s, struct session **to);
 void              session_agent_poll(struct session *s);
 double            session_agent_idle(const struct session *s);
 char *session_memory_view(struct session *s);
