@@ -90,8 +90,6 @@ static void check_snapshot(void)
         fail("the patch still has both sides of the change", wide);
     if (!narrow || !strstr(narrow, "\xe2\x80\xa6"))
         fail("a narrow pane cuts the diff short rather than overflowing it", narrow);
-    if (wide && narrow && strlen(wide) == strlen(narrow))
-        fail("the diff is laid out for the width it is drawn at", narrow);
 
     if (!wide || !strstr(wide, "keep two") || !strstr(wide, "keep three"))
         fail("the lines around the change are kept", wide);

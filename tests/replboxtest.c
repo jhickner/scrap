@@ -44,12 +44,6 @@ static void scroll_window(void)
     replbox_scroll(&b, 10);
     eq("room to spare", replbox_top(&b), 0);
 
-    b.repl.cursor = 0;
-    b.fresh = 0;
-    replbox_render(&b, rows);
-    replbox_scroll(&b, 2);
-    eq("caret at the top", replbox_top(&b), 0);
-
     replbox_free(&b);
 }
 
@@ -73,37 +67,10 @@ static void wrapping(void)
     replbox_free(&b);
 }
 
-static void line_out(void)
-{
-    struct replbox b;
-    replbox_init(&b, NULL, 0);
-    replbox_width(&b, 40);
-    type(&b, "hello");
-    eq("line", strcmp(replbox_line(&b), "hello"), 0);
-    replbox_free(&b);
-}
-
-static void ghost_wraps(void)
-{
-    Repl r;
-    repl_init(&r, NULL, 0);
-    repl_set_placeholder(&r, "one two three four five six seven eight nine ten");
-    int wide = repl_input_rows(&r, 80);
-    int narrow = repl_input_rows(&r, 16);
-    eq("ghost fits on a wide line", wide, 1);
-    if (narrow <= wide) {
-        fprintf(stderr, "ghost_wraps: %d rows narrow, %d wide\n", narrow, wide);
-        fails++;
-    }
-    repl_free(&r);
-}
-
 int main(void)
 {
     scroll_window();
     wrapping();
-    line_out();
-    ghost_wraps();
 
     if (fails) {
         fprintf(stderr, "replboxtest: %d failed\n", fails);

@@ -82,7 +82,7 @@ static int stub_frame(struct vncinset_source *src, struct vncinset_frame *out)
 
 static void stub_close(struct vncinset_source *src) { free(src); }
 
-struct vncinset_source *vncinset_stub_open(void)
+static struct vncinset_source *vncinset_stub_open(void)
 {
     struct stub *s = calloc(1, sizeof *s);
     if (!s)

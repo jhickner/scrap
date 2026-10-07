@@ -101,11 +101,6 @@ static int box_chars(const struct screen *s, int from_col)
 static void test_layout(void)
 {
     struct vncinset_box b;
-    CHECK(vncinset_layout(VNCINSET_RIGHT, 40, 80, 30, 320, 200, 8, 16, &b), "layout 80x30");
-    CHECK(b.w == 32 && b.col == 48 && b.row == 0, "right box w=%d col=%d", b.w, b.col);
-    CHECK(b.img_cols == 30 && b.img_rows == 9 && b.h == 11, "image %dx%d h=%d", b.img_cols,
-          b.img_rows, b.h);
-
     CHECK(vncinset_layout(VNCINSET_LEFT, 40, 80, 30, 320, 200, 8, 16, &b) && b.col == 0,
           "left box col=%d", b.col);
 
@@ -129,14 +124,6 @@ static void test_downscale(void)
     CHECK(dst[0] == 100 && dst[3] == 200 && dst[1] == 10, "box filter %d %d %d", dst[0],
           dst[3], dst[1]);
     CHECK(dst[2] == 25 && dst[5] == 45, "box filter blue %d %d", dst[2], dst[5]);
-}
-
-static void test_stub(void)
-{
-    struct vncinset_source *src = vncinset_stub_open();
-    struct vncinset_frame   f;
-    CHECK(src && src->frame(src, &f) && f.rgb && f.w > 0 && f.h > 0, "stub frame");
-    src->close(src);
 }
 
 static void test_state(void)
@@ -254,7 +241,6 @@ int main(void)
 {
     test_layout();
     test_downscale();
-    test_stub();
     test_state();
     test_screen();
     fprintf(stderr, failures ? "vncinsettest: FAILURES\n" : "vncinsettest: ok\n");

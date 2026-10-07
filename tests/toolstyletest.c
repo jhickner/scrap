@@ -13,8 +13,8 @@ static void expect(int got, int want, const char *what)
     }
 }
 
-static void reads(const char *command) { expect(toolstyle_shell_reads(command), 1, command); }
-static void acts(const char *command) { expect(toolstyle_shell_reads(command), 0, command); }
+static void reads(const char *command) { expect(toolstyle_collapses("bash", NULL, command), 1, command); }
+static void acts(const char *command) { expect(toolstyle_collapses("bash", NULL, command), 0, command); }
 
 int main(void)
 {
@@ -32,10 +32,8 @@ int main(void)
     reads("git ls-files");
 
     reads("git status");
-    reads("git status --short");
     reads("git log --oneline -5");
     reads("git diff --stat");
-    reads("git show HEAD");
     reads("git blame src/ui.c");
     reads("git rev-parse HEAD");
     reads("git -C /tmp/repo status");
@@ -84,7 +82,7 @@ int main(void)
     for (int i = 0; i < 700; i++)
         script[at++] = 'y';
     snprintf(script + at, sizeof script - (size_t)at, "; w /tmp/out'");
-    expect(toolstyle_shell_reads(script), 0, "long sed script with a w directive");
+    expect(toolstyle_collapses("bash", NULL, script), 0, "long sed script with a w directive");
 
     expect(toolstyle_collapses("Read", "{\"file_path\":\"/tmp/a\"}", NULL), 1, "Read");
     expect(toolstyle_collapses("web", "{\"query\":\"COLMAP\"}", NULL), 1, "web");

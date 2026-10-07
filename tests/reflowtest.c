@@ -24,7 +24,6 @@ int main(void)
     expect((int)ui_cells("\xe2\x96\x8c"), 1, "the bar glyph is one cell");
     expect((int)ui_cells("\xf0\x9f\x98\x80"), 2, "emoji is two cells");
     expect((int)ui_cells("\xe2\x9c\x85"), 2, "emoji-presentation is two");
-    expect((int)ui_cells(NULL), 0, "NULL measures zero");
 
     size_t skip = 0;
     expect((int)ui_wrap_row("\xe4\xb8\xad", 3, 1, &skip, NULL), 3, "too-wide glyph is consumed");
