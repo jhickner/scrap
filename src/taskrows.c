@@ -99,12 +99,17 @@ static int collect(const struct task **out, int max, int *total)
     return n;
 }
 
+static long compacting(void)
+{
+    return session_memory_pending(workspace_current());
+}
+
 int taskrows_count(int cols)
 {
     const struct task *v[ROWS_MAX];
     int                total;
     int                n = collect(v, ROWS_MAX, &total);
-    int                rows = n + (total > n);
+    int                rows = n + (total > n) + (compacting() > 0);
     for (int i = 0; i < n; i++)
         rows += cmd_rows(v[i], cols);
     return rows;
@@ -254,6 +259,18 @@ void taskrows_paint(int cols)
         snprintf(more, sizeof more, "\n    +%d more", total - n);
         ui_esc(ui_style(UI_DIM));
         ui_put(more);
+        ui_esc(ui_style(UI_RESET));
+    }
+    long left = compacting();
+    if (left > 0) {
+        char line[64];
+        snprintf(line, sizeof line, " compacting memory \xc2\xb7 %ld left", left);
+        ui_put("\n  ");
+        ui_esc(ui_style(UI_SPIN));
+        ui_put(spin_glyph((int)frame));
+        ui_esc(ui_style(UI_RESET));
+        ui_esc(ui_style(UI_DIM));
+        ui_put(line);
         ui_esc(ui_style(UI_RESET));
     }
 }

@@ -1999,6 +1999,13 @@ char *session_memory_view(struct session *s)
     return s->agent && s->agent->memory_view ? s->agent->memory_view(s->agent) : NULL;
 }
 
+long session_memory_pending(struct session *s)
+{
+    if (!s || s->remote || !s->agent || !s->agent->memory_pending)
+        return -1;
+    return s->agent->memory_pending(s->agent);
+}
+
 int session_set_memory(struct session *s, int on)
 {
     int previous = s->memory;

@@ -3070,6 +3070,11 @@ static char *sa_memory_view(Backend *b) {
     return x->mem ? oc_render(x->mem, 0) : NULL;
 }
 
+static long sa_memory_pending(Backend *b) {
+    sa_agent *x = b->ctx;
+    return x->mem ? oc_pending(x->mem) : -1;
+}
+
 static int sa_set_effort(Backend *b, const char *effort) {
     sa_agent *x = b->ctx;
     if (x->inner && !x->inner->set_effort(x->inner, effort)) return 0;
@@ -3160,6 +3165,7 @@ Backend *core_agent_open(const backend_opts *o) {
     b->set_agent_host = sa_set_agent_host;
     b->session_id = sa_session_id;
     b->memory_view = sa_memory_view;
+    b->memory_pending = sa_memory_pending;
     b->model = sa_model;
     b->effort = backend_stored_effort;
     b->auth_source = backend_none;

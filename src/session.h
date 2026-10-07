@@ -148,6 +148,7 @@ void              session_agent_fail(struct session *s, const char *why);
 void              session_agent_poll(struct session *s);
 double            session_agent_idle(const struct session *s);
 char *session_memory_view(struct session *s);
+long  session_memory_pending(struct session *s);
 const char *session_permission(const struct session *s);
 
 int         session_permission_count(void);

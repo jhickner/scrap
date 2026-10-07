@@ -606,6 +606,7 @@ static void do_memory(struct session *s, const char *arg)
         reply_error("could not restart with memory %s", on ? "on" : "off");
         return;
     }
+    hud_refresh(s);
     reply_note("memory %s", on ? "on: one endless chat, rebuilt from memory each turn" : "off");
     if (on)
         memory_view(s);

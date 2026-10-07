@@ -199,6 +199,10 @@ struct Backend {
      * memory mode is off. NULL for drivers without memory mode. */
     char *(*memory_view)(Backend *b);
 
+    /* Summaries memory mode still has to build; -1 when memory mode is off.
+     * NULL for drivers without memory mode. */
+    long (*memory_pending)(Backend *b);
+
     /* Persist this folder as trusted in the backend's user configuration.
      * NULL for backends without a project trust model. */
     int (*trust_project)(Backend *b, const char *path);

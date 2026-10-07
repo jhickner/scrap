@@ -30,6 +30,8 @@ def reply(msgs):
     last = msgs[-1] if msgs else {}
     content = text_of(last)
     if system.startswith("You write the memory"):
+        if "slowcompact" in content:
+            time.sleep(3)
         return chunk({"content": "summary"})
     if last.get("role") == "tool":
         return chunk({"content": "tool said: " + content[:200]})

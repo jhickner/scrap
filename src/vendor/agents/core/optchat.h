@@ -39,6 +39,7 @@ const char *oc_node(oc_mem *m, int l, long i);
 int         oc_put(oc_mem *m, int l, long i, const char *text);
 int         oc_due(oc_mem *m, oc_ref *out, int max);
 int         oc_settled(oc_mem *m);
+long        oc_pending(oc_mem *m);
 int         oc_settle(oc_mem *m, int (*abort)(void *ud), void *ud);
 int         oc_view(oc_mem *m, oc_ref **parts);
 long        oc_view_size(oc_mem *m);
@@ -421,6 +422,16 @@ int oc_put(oc_mem *m, int l, long i, const char *text) {
 int oc_due(oc_mem *m, oc_ref *out, int max) {
     pthread_mutex_lock(&m->mu);
     int k = oc_due_locked(m, out, max);
+    pthread_mutex_unlock(&m->mu);
+    return k;
+}
+
+long oc_pending(oc_mem *m) {
+    pthread_mutex_lock(&m->mu);
+    long k = 0;
+    for (int l = 0; l < OC_LEVELS - 1 && (1L << l) <= m->n; l++)
+        for (long i = m->lev[l].low; (i + 1) << l <= m->n; i++)
+            if (!oc_get(m, l, i)) k++;
     pthread_mutex_unlock(&m->mu);
     return k;
 }

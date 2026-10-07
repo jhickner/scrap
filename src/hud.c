@@ -132,6 +132,8 @@ static void row_identity(const struct session *s, struct row *r)
         row_add(r, UI_OK, SEP "%s", im_label());
     if (voice_label())
         row_add(r, UI_OK, SEP "%s", voice_label());
+    if (session_memory(s))
+        row_add(r, UI_OK, SEP "memory");
     if (api_active())
         row_add(r, UI_OK, SEP "api");
     int percent = session_context_percent(s);
