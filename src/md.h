@@ -18,4 +18,9 @@ void md_render_kept(const char *text, int indent);
 #define MD_KEPT_KIND "md"
 void md_kept_load(const cJSON *st);
 
+/* A kept item's text, and hiding a byte span of it: shown again when
+ * to <= from; keep makes the cut part of what the scrollback saves. */
+const char *md_kept_text(unsigned mark);
+void        md_kept_hide(unsigned mark, size_t from, size_t to, int keep);
+
 #endif

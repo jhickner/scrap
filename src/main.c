@@ -452,9 +452,28 @@ static int ask_interrupted(void)
     return ask_stale || handoff_wanted() || relay_pending();
 }
 
+/* The form stands in for the reply's @ask block, so the block leaves the
+ * transcript while the form is up; it comes back unless an answer was sent. */
+static unsigned ask_hide_block(int keep)
+{
+    unsigned mark = viewport_item_find(MD_KEPT_KIND);
+    size_t   from, to;
+    if (!mark || !askblock_span(md_kept_text(mark), &from, &to))
+        return 0;
+    md_kept_hide(mark, from, to, keep);
+    return mark;
+}
+
+static void ask_show_block(unsigned mark)
+{
+    if (mark)
+        md_kept_hide(mark, 0, 0, 0);
+}
+
 static void ask_run_form(void)
 {
     enum askform_exit how;
+    unsigned          block = ask_hide_block(0);
     chrome_modal_interrupt(ask_interrupted);
     asking = 1;
     char *answer = askform_run(asked, &how);
@@ -462,20 +481,27 @@ static void ask_run_form(void)
     chrome_modal_interrupt(handoff_wanted);
     if (ask_stale) {
         ask_stale = 0;
+        ask_show_block(block);
         drop_asked();
         free(answer);
         return;
     }
     if (how == ASKFORM_NEW_TAB) {
+        ask_show_block(block);
         another(NULL);
         return;
     }
     if (how != ASKFORM_DONE) {
+        ask_show_block(block);
         workspace_cycle(how == ASKFORM_NEXT_TAB ? 1 : -1);
         return;
     }
     session_set_ask_open(asked_by, 0);
     drop_asked();
+    if (answer && *answer)
+        ask_hide_block(1);
+    else
+        ask_show_block(block);
     if (answer && *answer) {
         prompt_echo_message(answer);
         workspace_send(workspace_index(), answer, answer);

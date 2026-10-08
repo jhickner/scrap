@@ -60,12 +60,11 @@ static int add_option(struct askq *q, const char *s)
     return 1;
 }
 
-struct askblock *askblock_parse(const char *reply)
+/* The last "@ask" line: returns where it starts and sets *body to the line after. */
+static const char *ask_line(const char *reply, const char **body)
 {
-    if (!reply)
-        return NULL;
-
-    const char *at = NULL;
+    const char *line = NULL;
+    *body = NULL;
     for (const char *p = reply; p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
         const char *s = p;
         while (*s == ' ' || *s == '\t')
@@ -75,10 +74,55 @@ struct askblock *askblock_parse(const char *reply)
         s += 4;
         while (*s == ' ' || *s == '\t' || *s == '\r')
             s++;
-        if (*s == '\n' || !*s)
-            at = *s ? s + 1 : s;
+        if (*s == '\n' || !*s) {
+            line = p;
+            *body = *s ? s + 1 : s;
+        }
     }
-    if (!at)
+    return line;
+}
+
+int askblock_span(const char *reply, size_t *from, size_t *to)
+{
+    const char *at;
+    const char *line = reply ? ask_line(reply, &at) : NULL;
+    if (!line)
+        return 0;
+
+    const char *end = NULL;
+    int         questions = 0;
+    for (const char *p = at; *p;) {
+        const char *nl = strchr(p, '\n');
+        size_t      len = nl ? (size_t)(nl - p) : strlen(p);
+        char       *t = trimmed(p, len);
+        p = nl ? nl + 1 : p + len;
+        if (!t)
+            break;
+        int ok = 1;
+        if (numbered(t))
+            questions++;
+        else if (*t && !(bulleted(t) && questions))
+            ok = 0;
+        if (ok && *t)
+            end = p;
+        free(t);
+        if (!ok)
+            break;
+    }
+    if (!questions)
+        return 0;
+    *from = (size_t)(line - reply);
+    *to = (size_t)(end - reply);
+    return 1;
+}
+
+struct askblock *askblock_parse(const char *reply)
+{
+    if (!reply)
+        return NULL;
+
+    const char *at;
+    if (!ask_line(reply, &at))
         return NULL;
 
     struct askblock *b = calloc(1, sizeof *b);

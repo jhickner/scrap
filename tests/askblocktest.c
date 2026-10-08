@@ -39,5 +39,18 @@ int main(void)
     b = askblock_parse("@ask\n1. a\nend of block\n2. b\n");
     assert(b && b->n == 1);
     askblock_free(b);
+
+    /* The span covers the @ask line through the block's last line, and only it. */
+    size_t      from, to;
+    const char *r = "Pick.\n\n  @ask\n1. Which?\n- red\n\n2. Why?\nAfter.\n";
+    assert(askblock_span(r, &from, &to));
+    assert(from == strlen("Pick.\n\n") && to == strlen(r) - strlen("After.\n"));
+    r = "Go.\n@ask\n1. q\n- a";
+    assert(askblock_span(r, &from, &to) && from == 4 && to == strlen(r));
+    assert(!askblock_span("text\n@ask\n", &from, &to));
+    assert(!askblock_span("no block", &from, &to));
+    r = "@ask\n1. old\n\nthen\n@ask\n1. new\n";
+    assert(askblock_span(r, &from, &to) && from == strlen("@ask\n1. old\n\nthen\n") &&
+           to == strlen(r));
     return 0;
 }

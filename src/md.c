@@ -1081,15 +1081,33 @@ static void render_mermaid(const char *src, int indent)
 }
 
 struct kept {
-    char *text;
-    int   indent;
+    char  *text;
+    int    indent;
+    size_t hide_from, hide_to;
+    int    hide_kept;
 };
+
+/* The text as shown: without its hidden span, if it has one. */
+static char *kept_shown(const struct kept *k)
+{
+    size_t n = strlen(k->text);
+    if (k->hide_to <= k->hide_from || k->hide_to > n)
+        return strdup(k->text);
+    char *s = malloc(n - (k->hide_to - k->hide_from) + 1);
+    if (!s)
+        return NULL;
+    memcpy(s, k->text, k->hide_from);
+    strcpy(s + k->hide_from, k->text + k->hide_to);
+    return s;
+}
 
 static void kept_render(void *ud, int cols)
 {
     (void)cols;
     const struct kept *k = ud;
-    md_render(k->text, k->indent);
+    char *shown = kept_shown(k);
+    md_render(shown ? shown : k->text, k->indent);
+    free(shown);
 }
 
 static void kept_free(void *ud)
@@ -1105,11 +1123,34 @@ static char *kept_encode(void *ud)
     cJSON *o = cJSON_CreateObject();
     if (!o)
         return NULL;
-    cJSON_AddStringToObject(o, "text", k->text ? k->text : "");
+    char *shown = k->hide_kept ? kept_shown(k) : NULL;
+    cJSON_AddStringToObject(o, "text", shown ? shown : k->text ? k->text : "");
+    free(shown);
     cJSON_AddNumberToObject(o, "indent", k->indent);
     char *out = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     return out;
+}
+
+const char *md_kept_text(unsigned mark)
+{
+    const struct kept *k = viewport_item_data(mark);
+    return k ? k->text : NULL;
+}
+
+void md_kept_hide(unsigned mark, size_t from, size_t to, int keep)
+{
+    struct kept *k = viewport_item_data(mark);
+    if (!k)
+        return;
+    if (to <= from)
+        from = to = keep = 0;
+    if (k->hide_from == from && k->hide_to == to && k->hide_kept == keep)
+        return;
+    k->hide_from = from;
+    k->hide_to = to;
+    k->hide_kept = keep;
+    viewport_item_stale(mark);
 }
 
 void md_kept_load(const cJSON *st)
@@ -1119,7 +1160,7 @@ void md_kept_load(const cJSON *st)
 
 void md_render_kept(const char *text, int indent)
 {
-    struct kept *k = malloc(sizeof *k);
+    struct kept *k = calloc(1, sizeof *k);
     if (k) {
         k->text = strdup(text ? text : "");
         k->indent = indent;
