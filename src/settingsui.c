@@ -7,6 +7,7 @@
 #include "app.h"
 #include "ask.h"
 #include "cmd.h"
+#include "hud.h"
 #include "image.h"
 #include "pick.h"
 #include "session.h"
@@ -48,6 +49,10 @@ static const struct entry ENTRIES[] = {
      .off = "full blocks with output", .on = "one row each"},
     {.name = "permission", .kind = S_PERMISSION,
      .about = "how the CLI gates tool calls"},
+    {.name = "auto-approve", .kind = S_FLAG,
+     .about = "answer permission prompts yes, once each, without asking",
+     .off = "off", .on = "on",
+     .key = SETTING_AUTO_APPROVE, .def = 0},
     {.name = "floating prompt", .kind = S_FLAG,
      .about = "keep what you typed above the spinner",
      .off = "off", .on = "on"},
@@ -145,6 +150,10 @@ static void flag_set(struct session *s, int at, int on)
             return;
         }
         settings_set_int(e->key, on);
+        if (!strcmp(e->key, SETTING_AUTO_APPROVE)) {
+            session_set_auto_approve(on);
+            hud_refresh(s);
+        }
         return;
     }
     switch (at) {

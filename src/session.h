@@ -100,6 +100,8 @@ void session_on_permission(int (*fn)(struct session *s, const struct permission 
 const struct permission *session_permission_pending(struct session *s);
 int  session_permission_waiting(const struct session *s);
 void session_permission_answer(struct session *s, int allow);
+int  session_auto_approve(void);
+void session_set_auto_approve(int on);
 void session_republish(const struct session *s);
 int  session_unseen(const struct session *s);
 

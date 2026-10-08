@@ -5,6 +5,7 @@
 #define SETTING_THINKING   "thinking"
 #define SETTING_PERMISSION "permission"
 #define SETTING_COMPACT    "compact"
+#define SETTING_AUTO_APPROVE "auto_approve"
 #define SETTING_STICKY     "sticky"
 #define SETTING_IMAGE_ROWS "image_rows"
 #define SETTING_ECHO_ROWS  "echo_rows"

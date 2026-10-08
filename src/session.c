@@ -858,9 +858,45 @@ static void permission_fill(struct permission *p, const backend_permission *req)
     cJSON_Delete(input);
 }
 
+/* Read from turn threads, so cached here rather than in settings. */
+static volatile int auto_approve;
+
+int session_auto_approve(void)
+{
+    return auto_approve;
+}
+
+void session_set_auto_approve(int on)
+{
+    auto_approve = on != 0;
+}
+
+/* Answer a request ourselves, once: no picker opens, so nothing can nest in
+ * a pump. A visible line says what ran. Claude Code's own deny rules never
+ * get here, so they still deny. */
+static int approve_itself(struct session *s, const backend_permission *req)
+{
+    struct permission p = {0};
+    permission_fill(&p, req);
+    char tool[64], text[4400];
+    snprintf(tool, sizeof tool, "%s", p.tool);
+    for (char *c = tool; *c; c++)
+        *c = (char)tolower((unsigned char)*c);
+    const char *what = p.detail ? p.detail : p.about;
+    snprintf(text, sizeof text, "[%s] auto-approved%s%s", tool, what ? ": " : "",
+             what ? what : "");
+    permission_clear(&p);
+    backend_event ev = {.kind = BACKEND_EV_WARNING, .text = text};
+    on_event(s, &ev);
+    return 1;
+}
+
 static int on_permission(void *ud, const backend_permission *req)
 {
     struct session *s = ud;
+
+    if (auto_approve)
+        return approve_itself(s, req);
 
     if (owner != s) {
         struct permission p = {0};

@@ -137,6 +137,8 @@ static void row_identity(const struct session *s, struct row *r)
         row_add(r, UI_OK, SEP "memory");
     if (api_active())
         row_add(r, UI_OK, SEP "api");
+    if (session_auto_approve())
+        row_add(r, UI_ERROR, SEP "auto-approve");
     if (restart_wanted())
         row_add(r, UI_ERROR, SEP "restart pending");
     int percent = session_context_percent(s);

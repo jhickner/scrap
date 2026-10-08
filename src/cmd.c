@@ -643,6 +643,18 @@ static void do_memory(struct session *s, const char *arg)
         memory_view(s);
 }
 
+static void do_autoapprove(struct session *s, const char *arg)
+{
+    int on = toggle_arg(arg, "on", "off", session_auto_approve(), "/autoapprove");
+    if (on < 0)
+        return;
+
+    session_set_auto_approve(on);
+    settings_set_int(SETTING_AUTO_APPROVE, on);
+    hud_refresh(s);
+    reply_note("auto-approve %s", on ? "on: permission prompts are answered yes, once each" : "off");
+}
+
 static void do_tools(struct session *s, const char *arg)
 {
     int compact = toggle_arg(arg, "compact", "full", session_compact(s), "/tools");
@@ -1732,6 +1744,8 @@ static const struct cmd COMMANDS[] = {
     {"/voice", "read replies aloud", "[on|off|volume N|rate N|complete on|off]", CMD_LIVE, do_voice},
     {"/image", "tallest an inline image may be drawn", "[rows]", CMD_LIVE, do_image},
     {"/permission", "how the CLI gates tool calls", "[mode]", 0, do_permission},
+    {"/autoapprove", "answer permission prompts yes without asking", "[on|off]", CMD_LIVE,
+     do_autoapprove},
     {"/settings", "show and change every setting", NULL, 0, do_settings},
     {"/resume", "resume a past conversation", NULL, 0, do_resume},
     {"/sessions", "sessions in every window, and on other tailnet machines", NULL,

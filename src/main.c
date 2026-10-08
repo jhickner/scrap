@@ -1086,6 +1086,7 @@ int main(int argc, char **argv)
     prompt_set_restart(prompt, restart_pending, idle_restart, NULL);
     prompt_set_takeover(prompt, takeover_pending, takeover_run, prompt);
     session_on_permission(ask_permission);
+    session_set_auto_approve(settings_get_int(SETTING_AUTO_APPROVE, 0));
     prompt_set_switcher(prompt, switcher, prompt);
     prompt_set_click(prompt, clicked, prompt);
     prompt_set_command(prompt, reply_command, NULL);
