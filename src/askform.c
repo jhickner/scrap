@@ -6,7 +6,9 @@
 
 #include "block.h"
 #include "chrome.h"
+#include "docview.h"
 #include "frontend.h"
+#include "imageview.h"
 #include "replbox.h"
 #include "tty.h"
 #include "ui.h"
@@ -343,8 +345,12 @@ char *askform_run(const struct askblock *b, enum askform_exit *how)
             (ev.key == TK_CHAR && (ev.cp == KEY_CTRL('C') || ev.cp == KEY_CTRL('D'))))
             return finish(&f, 0);
 
+        /* Only keys aimed at the form bring the transcript back down; scrolling,
+         * clicks into it and terminal focus or resize leave it where it is. */
         int scroll = ev.key == TK_PAGE_UP || ev.key == TK_PAGE_DOWN ||
-                     ev.key == TK_SCROLL_UP || ev.key == TK_SCROLL_DOWN;
+                     ev.key == TK_SCROLL_UP || ev.key == TK_SCROLL_DOWN ||
+                     ev.key == TK_MOUSE_DOWN || ev.key == TK_RESIZE ||
+                     ev.key == TK_FOCUS_IN || ev.key == TK_FOCUS_OUT || ev.key == TK_NONE;
         if (!scroll && viewport_scrolled())
             viewport_scroll_end();
 
@@ -385,6 +391,15 @@ char *askform_run(const struct askblock *b, enum askform_exit *how)
 
         case TK_SCROLL_DOWN:
             viewport_scroll(-3);
+            break;
+
+        case TK_MOUSE_DOWN:
+            /* An image or document clicked in the transcript opens over the
+             * form; put the form back, transcript unpinned, when it closes. */
+            if (imageview_click(ev.row, ev.col) || docview_click(ev.row, ev.col)) {
+                chrome_modal(paint, &f);
+                block_pin(0);
+            }
             break;
 
         default:
