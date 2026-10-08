@@ -299,25 +299,70 @@ static void cell_pixels(int *cw, int *ch, int *rows)
         *ch = 16;
 }
 
-static uint32_t next_id(void)
+#define ID_SPACE (1u << 18)
+#define PLACEMENT 1
+
+static uint32_t *taken;
+static size_t    ntaken, taken_cap;
+
+static int id_taken(uint32_t id)
 {
-    static unsigned counter;
-    unsigned pid = (unsigned)getpid();
-    return (uint32_t)(0x40 | (pid & 0x3F)) << 16 |
-           (uint32_t)(0x40 | ((pid >> 6) & 0x3F)) << 8 |
-           (uint32_t)(0x40 | (counter++ & 0x3F));
+    for (size_t i = 0; i < ntaken; i++)
+        if (taken[i] == id)
+            return 1;
+    return 0;
 }
 
-static uint32_t full_id(void)
+static void id_take(uint32_t id)
 {
-    unsigned pid = (unsigned)getpid();
-    return (uint32_t)(0x40 | (pid & 0x3F)) << 16 |
-           (uint32_t)(0x40 | ((pid >> 6) & 0x3F)) << 8 | 0x3F;
+    if (!id || id_taken(id))
+        return;
+    if (ntaken == taken_cap) {
+        size_t    cap = taken_cap ? taken_cap * 2 : 64;
+        uint32_t *grown = realloc(taken, cap * sizeof *grown);
+        if (!grown)
+            return;
+        taken = grown;
+        taken_cap = cap;
+    }
+    taken[ntaken++] = id;
+}
+
+static uint32_t id_at(unsigned n)
+{
+    return (uint32_t)(0x40 | ((n >> 12) & 0x3F)) << 16 |
+           (uint32_t)(0x40 | ((n >> 6) & 0x3F)) << 8 | (uint32_t)(0x40 | (n & 0x3F));
+}
+
+uint32_t image_new_id(void)
+{
+    static unsigned at;
+    static int      seeded;
+    if (!seeded) {
+        at = arc4random_uniform(ID_SPACE);
+        seeded = 1;
+    }
+    for (unsigned tries = 0; tries < ID_SPACE; tries++) {
+        uint32_t id = id_at(at++ % ID_SPACE);
+        if (!id_taken(id)) {
+            id_take(id);
+            return id;
+        }
+    }
+    return id_at(at++ % ID_SPACE);
+}
+
+uint32_t image_full_id(void)
+{
+    static uint32_t id;
+    if (!id)
+        id = image_new_id();
+    return id;
 }
 
 static void write_placeholders(uint32_t id, int indent, int cols, int rows, int trail)
 {
-    kg_virtual_place(id, cols, rows);
+    kg_virtual_place_p(id, PLACEMENT, cols, rows);
     for (int r = 0; r < rows; r++) {
         for (int i = 0; i < indent; i++)
             ui_put(" ");
@@ -484,6 +529,7 @@ void image_placed_load(const cJSON *st)
     if (!p)
         return;
     p->id = (uint32_t)scrollback_int(st, "id");
+    id_take(p->id);
     p->indent = scrollback_int(st, "indent");
     p->img_w = scrollback_int(st, "w");
     p->img_h = scrollback_int(st, "h");
@@ -566,7 +612,7 @@ static int transmit(const char *path, uint32_t id, int px_w, int px_h, int *img_
 
 static int show_png(const char *path, time_t mtime, int indent)
 {
-    uint32_t id = next_id();
+    uint32_t id = image_new_id();
     int img_w = 0, img_h = 0;
     if (!transmit(path, id, 0, 0, &img_w, &img_h))
         return 0;
@@ -595,7 +641,7 @@ static int show_decoded(const char *path, time_t mtime, int indent)
     int cw, ch, term_rows;
     cell_pixels(&cw, &ch, &term_rows);
 
-    uint32_t id = next_id();
+    uint32_t id = image_new_id();
     int img_w = 0, img_h = 0;
     if (!transmit(path, id, cols * cw, rows * ch, &img_w, &img_h))
         return 0;
@@ -635,7 +681,7 @@ static int start_convert(const char *path, time_t mtime, int indent)
         return 0;
     }
 
-    uint32_t id = next_id();
+    uint32_t id = image_new_id();
     pending[slot].live = 1;
     pending[slot].id = id;
     pending[slot].pid = pid;
@@ -720,14 +766,14 @@ static uint32_t load_as(uint32_t id, const char *path, int cols_box, int rows_bo
 
 uint32_t image_load(const char *path, int cols_box, int rows_box, int *cols, int *rows)
 {
-    return load_as(full_id(), path, cols_box, rows_box, cols, rows);
+    return load_as(image_full_id(), path, cols_box, rows_box, cols, rows);
 }
 
 uint32_t image_thumb(const char *path, int cols_box, int rows_box, int *cols, int *rows)
 {
-    uint32_t id = load_as(next_id(), path, cols_box, rows_box, cols, rows);
+    uint32_t id = load_as(image_new_id(), path, cols_box, rows_box, cols, rows);
     if (id)
-        kg_virtual_place(id, *cols, *rows);
+        kg_virtual_place_p(id, PLACEMENT, *cols, *rows);
     return id;
 }
 
@@ -747,9 +793,10 @@ int image_cells_max(void) { return KG_DIACRITIC_COUNT; }
 
 uint32_t image_inset_id(void)
 {
-    unsigned pid = (unsigned)getpid();
-    return (uint32_t)(0x40 | (pid & 0x3F)) << 16 |
-           (uint32_t)(0x40 | ((pid >> 6) & 0x3F)) << 8 | 0x3E;
+    static uint32_t id;
+    if (!id)
+        id = image_new_id();
+    return id;
 }
 
 void image_frame(uint32_t id, const uint8_t *rgb, int w, int h, int cols, int rows)
@@ -772,7 +819,7 @@ void image_frame(uint32_t id, const uint8_t *rgb, int w, int h, int cols, int ro
         kg_transmit_z(id, z, zlen, w, h, 3);
     else
         kg_transmit_ex(id, rgb, w, h, 3);
-    kg_virtual_place(id, cols, rows);
+    kg_virtual_place_p(id, PLACEMENT, cols, rows);
 }
 
 void image_place_row(uint32_t id, int row, int cols)

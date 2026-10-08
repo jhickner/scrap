@@ -41,6 +41,8 @@ void     image_cell_size(int *cw, int *ch);
 int      image_cells_max(void);
 
 uint32_t image_inset_id(void);
+uint32_t image_full_id(void);
+uint32_t image_new_id(void);
 
 void image_frame(uint32_t id, const uint8_t *rgb, int w, int h, int cols, int rows);
 

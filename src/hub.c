@@ -187,6 +187,12 @@ static void rename_session(int fd, cJSON *o)
     cJSON_AddStringToObject(o, "to", renamed ? renamed : "");
     long        pid = intercom_owner(o, msg, sizeof msg);
     const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(o, "session"));
+    const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(o, "name"));
+    char        at[200];
+    if (pid > 0 && (!id || !*id) && name && *name) {
+        snprintf(at, sizeof at, "@%s", name);
+        id = at;
+    }
     if (pid <= 0 || !id || !*id) {
         fail(fd, msg[0] ? msg : "no such session");
         return;

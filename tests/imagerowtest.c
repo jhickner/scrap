@@ -14,18 +14,27 @@ static int failures;
 static int tap_read = -1;
 static int sync_begin;
 static int sync_end;
+static int places;
+static int places_unnamed;
 
 static void pump(struct screen *s)
 {
     fflush(stdout);
-    char    buf[1 << 20];
-    ssize_t n;
+    static char buf[1 << 20];
+    ssize_t     n;
     while ((n = read(tap_read, buf, sizeof buf)) > 0) {
         for (ssize_t i = 0; i + 8 <= n; i++) {
             if (!memcmp(buf + i, "\x1b[?2026h", 8))
                 sync_begin++;
             if (!memcmp(buf + i, "\x1b[?2026l", 8))
                 sync_end++;
+            if (!memcmp(buf + i, "\x1b_Ga=p,U=1,", 9)) {
+                places++;
+                const char *end = memchr(buf + i, '\\', (size_t)(n - i));
+                const char *named = memmem(buf + i, end ? (size_t)(end - (buf + i)) : 0, ",p=", 3);
+                if (!named)
+                    places_unnamed++;
+            }
         }
         feed(s, buf, (size_t)n);
     }
@@ -103,6 +112,169 @@ static void check_uniform(struct screen *s, const char *what)
     }
 }
 
+static int screens_differ(const struct screen *a, const struct screen *b)
+{
+    for (int r = 0; r < a->rows; r++)
+        for (int c = 0; c < a->cols; c++)
+            if (strcmp(a->cell[r][c], b->cell[r][c]))
+                return r;
+    return -1;
+}
+
+static int placeholder_rows(const struct screen *s)
+{
+    int n = 0;
+    for (int r = 0; r < s->rows; r++) {
+        int last;
+        if (row_cells((struct screen *)s, r, &last))
+            n++;
+    }
+    return n;
+}
+
+static void match_fresh(struct screen *s, const char *what)
+{
+    static struct screen fresh;
+    pump(s);
+    screen_init(&fresh, s->rows, s->cols);
+    viewport_forget();
+    viewport_paint();
+    pump(&fresh);
+    int r = screens_differ(s, &fresh);
+    if (r >= 0) {
+        fprintf(stderr, "FAIL scroll %s: row %d differs from a full repaint\n  have %s\n  want %s\n",
+                what, r, row_text(s, r), row_text(&fresh, r));
+        failures++;
+    }
+    memcpy(s, &fresh, sizeof fresh);
+}
+
+static void place_image(int w, int h);
+
+static void lines(const char *tag, int n)
+{
+    char line[64];
+    for (int i = 0; i < n; i++) {
+        snprintf(line, sizeof line, "%s %d", tag, i);
+        say(line);
+    }
+}
+
+static void scroll_paths(void)
+{
+    static struct screen s;
+    set_size(80, 30);
+    screen_init(&s, 30, 80);
+    viewport_clear();
+    viewport_forget();
+    lines("above", 40);
+    place_image(1404, 1872);
+    lines("below", 40);
+    viewport_paint();
+    match_fresh(&s, "bottom");
+
+    int seen = 0;
+    for (int i = 0; i < 70; i++) {
+        viewport_scroll(1);
+        match_fresh(&s, "line up");
+        seen |= placeholder_rows(&s) > 0;
+    }
+    if (!seen) {
+        fprintf(stderr, "FAIL scroll: the image never came into view\n");
+        failures++;
+    }
+    for (int i = 0; i < 70; i++) {
+        viewport_scroll(-1);
+        match_fresh(&s, "line down");
+    }
+    for (int i = 0; i < 6; i++) {
+        viewport_scroll(i < 3 ? 27 : -27);
+        match_fresh(&s, i < 3 ? "page up" : "page down");
+    }
+    viewport_scroll(45);
+    match_fresh(&s, "into the image");
+    say("arrives while scrolled back");
+    viewport_paint();
+    match_fresh(&s, "new output while scrolled back");
+    set_size(70, 30);
+    screen_init(&s, 30, 70);
+    viewport_paint();
+    match_fresh(&s, "resize while scrolled back");
+    viewport_scroll_end();
+    match_fresh(&s, "back to the bottom");
+    lines("more", 10);
+    viewport_paint();
+    match_fresh(&s, "new output at the bottom");
+}
+
+static void placements(void)
+{
+    static struct screen s;
+    set_size(80, 30);
+    screen_init(&s, 30, 80);
+    viewport_clear();
+    viewport_forget();
+    pump(&s);
+    places = places_unnamed = 0;
+    place_image(800, 600);
+    say("after");
+    viewport_paint();
+    pump(&s);
+    const int W[] = {60, 90, 60};
+    for (int i = 0; i < 3; i++) {
+        set_size(W[i], 30);
+        screen_init(&s, 30, W[i]);
+        viewport_forget();
+        viewport_paint();
+        pump(&s);
+    }
+    if (!places || places_unnamed) {
+        fprintf(stderr, "FAIL placements: %d of %d virtual placements carry no placement id, "
+                        "so each redraw at a new size adds another one\n",
+                places_unnamed, places);
+        failures++;
+    }
+}
+
+static void ids(void)
+{
+    enum { N = 300 };
+    static uint32_t got[N];
+    uint32_t        full = image_full_id(), inset = image_inset_id();
+    cJSON          *o = cJSON_CreateObject();
+    uint32_t        restored = 0;
+    for (int i = 0; i < N; i++) {
+        got[i] = image_new_id();
+        if (i == 5) {
+            restored = got[i] + 1;
+            cJSON_AddNumberToObject(o, "id", restored);
+            cJSON_AddNumberToObject(o, "w", 10);
+            cJSON_AddNumberToObject(o, "h", 10);
+            image_placed_load(o);
+        }
+        for (int j = 0; j < i; j++)
+            if (got[j] == got[i]) {
+                fprintf(stderr, "FAIL ids: image %d reuses the id of image %d (%06x)\n", i, j,
+                        got[i]);
+                failures++;
+                cJSON_Delete(o);
+                return;
+            }
+        if (got[i] == full || got[i] == inset || (i > 5 && got[i] == restored)) {
+            fprintf(stderr, "FAIL ids: image %d got a reserved id %06x\n", i, got[i]);
+            failures++;
+            cJSON_Delete(o);
+            return;
+        }
+        for (int b = 0; b < 3; b++)
+            if (((got[i] >> (8 * b)) & 0xFF) < 0x40) {
+                fprintf(stderr, "FAIL ids: %06x has a low byte\n", got[i]);
+                failures++;
+            }
+    }
+    cJSON_Delete(o);
+}
+
 static void place_image(int w, int h)
 {
     cJSON *o = cJSON_CreateObject();
@@ -116,6 +288,7 @@ static void place_image(int w, int h)
 
 int main(void)
 {
+    setenv("TMUX", "/tmp/imagerowtest,1,0", 1);
     set_size(80, 30);
 
     char path[] = "/tmp/scrap-imagerowtest-XXXXXX";
@@ -161,6 +334,10 @@ int main(void)
         check_uniform(&s, "after resize");
         report(&s, "after resize");
     }
+
+    scroll_paths();
+    placements();
+    ids();
 
     fflush(stdout);
     fprintf(stderr, failures ? "imagerowtest: FAILURES\n" : "imagerowtest: ok\n");

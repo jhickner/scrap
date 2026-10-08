@@ -1053,7 +1053,7 @@ static int cmd_status(int argc, char **argv)
         fprintf(stderr, "scrap: status runs inside a scrap session\n");
         return 1;
     }
-    if (!self_id(id, sizeof id) || id[0] == '@') {
+    if (!self_id(id, sizeof id) || (id[0] == '@' && !intercom_name_valid(id + 1))) {
         fprintf(stderr, "scrap: this session has no id yet\n");
         return 1;
     }

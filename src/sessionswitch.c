@@ -169,7 +169,7 @@ static void live_rows(struct row *rows, int *n, const struct live_session *live,
 {
     for (int i = 0; i < count && *n < MAX_ROWS; i++) {
         const struct live_session *v = &live[i];
-        if (v->mine || !v->id[0])
+        if (v->mine || (!v->id[0] && !v->name[0]))
             continue;
 
         struct row *r = &rows[(*n)++];

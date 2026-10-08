@@ -322,7 +322,7 @@ snap)
 expect) inst "${1:-}"; [ $# -ge 2 ] || usage; cmd_expect "$@" ;;
 tab)
     inst "${1:-}"
-    screen "$1" -e | grep '│' | grep -oE $'\e\\[38;2;34;162;201m[^ \e]*@[a-z0-9_:.-]+' | head -1 | sed $'s/\e\\[[0-9;]*m//' ;;
+    screen "$1" -e | grep '│' | grep -oE $'\e\\[38;2;34;162;201m(\\? )?[^ \e]*@[a-z0-9_:.-]+' | head -1 | sed -e $'s/\e\\[[0-9;]*m//' -e 's/^? //' ;;
 log) inst "${1:-}"; cat "$ROOT/$1/stderr" ;;
 dir) inst "${1:-}"; echo "$ROOT/$1" ;;
 stop) inst "${1:-}"; cmd_stop "$1" ;;

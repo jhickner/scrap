@@ -76,7 +76,12 @@ struct session {
     int busy;
     const char *cwd;
     int finish;
+    int ask;
 };
+
+int session_ask_open(const struct session *s) { return s && s->ask; }
+static int restarting;
+int restart_wanted(void) { return restarting; }
 
 static int quota_blocked;
 int session_autobackend(struct session *s) { (void)s; return quota_blocked ? -1 : 0; }
@@ -320,7 +325,7 @@ int main(void)
             fail("no tab remains");
     }
 
-    struct session z = {0, 0, 0, "/z", 0}, m = {0, 0, 0, "/m", 0}, q = {0, 0, 0, "/a", 0};
+    struct session z = {.cwd = "/z"}, m = {.cwd = "/m"}, q = {.cwd = "/a"};
     if (!workspace_begin(&z, 0))
         fail("open the first tab of the sorted set");
     else if (workspace_open(&m) != 0 || workspace_open(&q) != 0)
@@ -390,6 +395,41 @@ int main(void)
                 fail("a queued line is echoed once when its turn starts");
         }
         unlink(dump);
+        while (workspace_count())
+            workspace_close(0);
+    }
+
+    {
+        struct session asker = {0};
+        if (!workspace_begin(&asker, 0))
+            fail("open a tab for the ask hold");
+        else {
+            asker.ask = 1;
+            if (!workspace_message(0, "@sub", "done", 0, 0))
+                fail("a message reaches a tab with an open ask");
+            if (asker.running)
+                fail("a message does not start a turn over an open ask");
+            if (workspace_queued(0) != 1 || !workspace_holding(0))
+                fail("the message waits while the ask is open");
+            workspace_pump();
+            if (asker.running || workspace_queued(0) != 1)
+                fail("the pump keeps holding while the ask is open");
+            asker.ask = 0;
+            workspace_pump();
+            if (!asker.running || workspace_queued(0) || workspace_holding(0))
+                fail("the held message goes once the ask closes");
+
+            asker.running = 0;
+            asker.ask = 1;
+            if (!workspace_message(0, "@sub", "again", 1, 0) || asker.running ||
+                workspace_queued(0) != 1)
+                fail("an interrupting message waits for the ask too");
+            restarting = 1;
+            workspace_pump();
+            if (!asker.running || workspace_queued(0))
+                fail("a pending restart sends held messages rather than waiting on the ask");
+            restarting = 0;
+        }
         while (workspace_count())
             workspace_close(0);
     }

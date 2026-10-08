@@ -221,6 +221,12 @@ void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
                 status_pause();
                 paused = 1;
             }
+            if (ev->name && *ev->name) {
+                char line[4400];
+                text_one_line(ev->text, line, sizeof line);
+                view_keep_lookup(line, UI_DIM);
+                break;
+            }
             viewport_item_begin(VIEWPORT_ROWS(1, 1));
             ui_note("%s", ev->text);
             viewport_item_end();

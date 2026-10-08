@@ -443,14 +443,26 @@ static void publish(const struct session *s, const char *status)
     livelist_publish(s, status);
 }
 
+static const char *title_key(const struct session *s, char *buf, size_t size)
+{
+    if (s->id[0])
+        return s->id;
+    if (!s->name[0])
+        return NULL;
+    snprintf(buf, size, "@%s", s->name);
+    return buf;
+}
+
 static void tab_busy(struct session *s, int busy)
 {
     busy = busy ? 1 : 0;
     if (busy == s->idle_busy)
         return;
     s->idle_busy = busy;
-    if (!busy && !s->running && !tasks_pending(&s->tasks) && !s->remote && s->id[0]) {
-        title_clear(s->id);
+    char        at[sizeof s->name + 1];
+    const char *key = title_key(s, at, sizeof at);
+    if (!busy && !s->running && !tasks_pending(&s->tasks) && !s->remote && key) {
+        title_clear(key);
         s->title[0] = '\0';
         if (s == live)
             status_set_note(NULL);
@@ -658,8 +670,9 @@ static void usage_poll(struct session *s)
 
 static int adopt_title(struct session *s)
 {
-    char found[sizeof s->title];
-    if (!title_lookup(s->id, found, sizeof found) || !strcmp(found, s->title))
+    char        found[sizeof s->title], at[sizeof s->name + 1];
+    const char *key = title_key(s, at, sizeof at);
+    if (!key || !title_lookup(key, found, sizeof found) || !strcmp(found, s->title))
         return 0;
     snprintf(s->title, sizeof s->title, "%s", found);
     if (s == live)
@@ -675,9 +688,10 @@ static void name_poll(struct session *s)
 
     if (!s->id[0]) {
         const char *id = s->agent->session_id(s->agent);
-        if (!id)
+        if (id)
+            set_id(s, id);
+        else if (!s->name[0])
             return;
-        set_id(s, id);
     }
 
     double now = now_seconds();
@@ -891,7 +905,7 @@ static int approve_itself(struct session *s, const backend_permission *req)
     snprintf(text, sizeof text, "[%s] auto-approved%s%s", tool, what ? ": " : "",
              what ? what : "");
     permission_clear(&p);
-    backend_event ev = {.kind = BACKEND_EV_WARNING, .text = text};
+    backend_event ev = {.kind = BACKEND_EV_WARNING, .text = text, .name = tool};
     on_event(s, &ev);
     return 1;
 }

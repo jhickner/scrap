@@ -50,12 +50,22 @@ def prompt_text(msg):
     return "".join(b.get("text", "") for b in content if b.get("type") == "text")
 
 
-def run(cmd):
+def run(cmd, ask=False):
     global CALLS
     CALLS += 1
     call, task = "tu-%d" % CALLS, "bash-%d" % CALLS
     emit({"type": "assistant", "message": {"role": "assistant", "model": MODEL, "content": [
         {"type": "tool_use", "id": call, "name": "Bash", "input": {"command": cmd}}]}})
+    if ask:
+        emit({"type": "control_request", "request_id": "perm-%d" % CALLS, "request": {
+            "subtype": "can_use_tool", "tool_name": "Bash",
+            "input": {"command": cmd}, "description": "run a command"}})
+        reply = json.loads(sys.stdin.readline())
+        if reply["response"]["response"]["behavior"] != "allow":
+            emit({"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": call, "content": "denied",
+                 "is_error": True}]}})
+            return "denied: " + cmd
     emit({"type": "system", "subtype": "task_started", "task_id": task, "tool_use_id": call,
           "description": cmd, "is_backgrounded": False, "task_type": "local_bash"})
     out, status = bash(cmd)
@@ -191,6 +201,11 @@ def main():
                       "duration_ms": 1, "num_turns": 1, "total_cost_usd": 0,
                       "usage": {"input_tokens": 1, "output_tokens": 1}, "result": text})
                 continue
+            elif "memrun: " in text:
+                text = "ran: " + run(text.rsplit("memrun: ", 1)[1].split("\n")[0].strip())
+            elif text.startswith("permrun: "):
+                outs = [run(c.strip(), ask=True) for c in text[9:].split(" && ")]
+                text = "ran: " + " / ".join(outs)
             elif text.startswith("run: "):
                 out = run(text[5:])
                 text = out if out.startswith("interrupted: ") else "ran: " + out

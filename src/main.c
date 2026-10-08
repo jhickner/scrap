@@ -443,7 +443,8 @@ static int ask_ready(void)
             session_ask_release(s, 1);
         return 0;
     }
-    if (session_turn_running(s) || workspace_queued(workspace_index())) {
+    if (session_turn_running(s) ||
+        (workspace_queued(workspace_index()) && !workspace_holding(workspace_index()))) {
         session_set_ask_open(s, 0);
         return 0;
     }
@@ -661,7 +662,9 @@ static void turn_done(struct session *s)
 {
     if (s == asked_by)
         drop_asked();
-    session_set_ask_open(s, !session_last_result(s)->interrupted);
+    size_t from, to;
+    session_set_ask_open(s, !session_last_result(s)->interrupted &&
+                                askblock_span(session_last_block(s), &from, &to));
     api_turn_done(s);
     relay_turn_done(s);
     stream_turn_done(s);

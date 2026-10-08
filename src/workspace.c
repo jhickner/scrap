@@ -25,6 +25,7 @@
 #include "tty.h"
 #include "tg.h"
 #include "relay.h"
+#include "restart.h"
 #include "im.h"
 #include "ui.h"
 #include "viewport.h"
@@ -50,6 +51,7 @@ struct tab {
     char                  *draft;
     int                    draft_cursor;
     int                    finished;
+    int                    held;
 };
 
 static struct tab tabs[WORKSPACE_MAX];
@@ -544,6 +546,12 @@ int workspace_fds(int *out, int max)
 
 static void send_next(int index, int hold);
 
+static int ask_holds(const struct tab *t)
+{
+    return t->npending && t->pending[0].from && !session_turn_running(t->s) &&
+           session_ask_open(t->s) && !restart_wanted();
+}
+
 static const char STALL_PROMPT[] =
     "The background work you started here ended without reporting back, so no "
     "turn was run for it. Check what those tasks left behind and carry on from "
@@ -650,6 +658,8 @@ static int pump(int hold, int screen)
                 stamp_show();
         }
         settle_finished(i, hold);
+        if (tabs[i].held && !hold && !ask_holds(&tabs[i]))
+            send_next(i, hold);
     }
 
     if (screen) {
@@ -772,7 +782,8 @@ static struct pending take_messages(struct tab *t)
 static void send_next(int index, int hold)
 {
     struct tab *t = &tabs[index];
-    if (!t->npending || session_turn_running(t->s))
+    t->held = ask_holds(t);
+    if (!t->npending || session_turn_running(t->s) || t->held)
         return;
 
     if (!cmd_is_command(t->pending[0].line)) {
@@ -938,7 +949,7 @@ int workspace_message(int index, const char *from, const char *text, int interru
         pending_free(&p);
         return 0;
     }
-    if (!session_turn_running(t->s)) {
+    if (!session_turn_running(t->s) && !session_ask_open(t->s)) {
         workspace_render(index, echo, p.shown);
         int ok = workspace_send(index, p.line, p.shown);
         pending_free(&p);
@@ -950,12 +961,14 @@ int workspace_message(int index, const char *from, const char *text, int interru
     }
     if (interrupt && !session_remote(t->s)) {
         put_first(t, p);
+        send_next(index, 0);
         return 1;
     }
     t->pending[t->npending++] = p;
     const char *id = session_id(t->s);
     if (!reply && id && session_can_resume(t->s) && !session_remote(t->s))
         sidechannel_inbox(t->s, p.line, inbox_done, (void *)(uintptr_t)p.serial);
+    send_next(index, 0);
     return 1;
 }
 
@@ -1005,6 +1018,11 @@ int workspace_queued(int index)
     return index >= 0 && index < ntabs ? tabs[index].npending : 0;
 }
 
+int workspace_holding(int index)
+{
+    return index >= 0 && index < ntabs ? tabs[index].held : 0;
+}
+
 const char *workspace_pending_at(int index, int i)
 {
     if (index < 0 || index >= ntabs || i < 0 || i >= tabs[index].npending)
@@ -1049,7 +1067,7 @@ const char *workspace_status(const struct session *s)
 {
     if (!s)
         return "finished";
-    if (session_permission_waiting(s))
+    if (session_permission_waiting(s) || (session_ask_open(s) && !session_turn_running(s)))
         return "waiting";
     if (session_busy(s))
         return "working";
