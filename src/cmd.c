@@ -749,14 +749,17 @@ static void do_relay(struct session *s, const char *arg)
         return;
     if (!on) {
         relay_stop();
+        hud_refresh(s);
         reply_note("relay off");
     } else if (relay_session() == s) {
         reply_note("relay already on in this tab");
     } else {
-        if (relay_start(s))
+        if (relay_start(s)) {
+            hud_refresh(s);
             workspace_republish();
-        else
-            reply_error("could not start relay");
+        } else {
+            reply_error("%s", relay_error());
+        }
     }
 }
 

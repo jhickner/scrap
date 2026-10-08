@@ -1,6 +1,7 @@
 #include "relay.h"
 
 #include <ctype.h>
+#include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -1855,6 +1856,20 @@ static void terminal_note(const char *fmt, ...)
     ui_flush();
 }
 
+__attribute__((format(printf, 1, 2)))
+static void terminal_error(const char *fmt, ...)
+{
+    char line[900];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    viewport_item_begin(VIEWPORT_ROWS(1, 1));
+    ui_error("%s", line);
+    viewport_item_end();
+    ui_flush();
+}
+
 static void uploads_remove(void)
 {
     if (!rt.upload_dir[0])
@@ -1918,6 +1933,23 @@ static void cleanup(void)
     }
 }
 
+/* Why the last relay_start failed, worded for the user. */
+static char start_error[600];
+
+__attribute__((format(printf, 1, 2)))
+static void fail_why(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(start_error, sizeof start_error, fmt, ap);
+    va_end(ap);
+}
+
+const char *relay_error(void)
+{
+    return start_error[0] ? start_error : "relay: could not start";
+}
+
 int relay_start(struct session *s)
 {
     if (rt.active) {
@@ -1930,15 +1962,24 @@ int relay_start(struct session *s)
         }
         return 1;
     }
+    start_error[0] = '\0';
     char cfgpath[4200];
-    if (path_config_file(cfgpath, sizeof cfgpath, "relay"))
-        settings_load(&cfg, cfgpath);
-    else
-        settings_load(&cfg, "");
+    if (!path_config_file(cfgpath, sizeof cfgpath, "relay"))
+        snprintf(cfgpath, sizeof cfgpath, "~/.config/" APP_NAME "/relay");
+    int have = access(cfgpath, R_OK) == 0;
+    settings_load(&cfg, have ? cfgpath : "");
 
     const char *token = cfg_get("token", NULL);
-    if (!token || strlen(token) < 16) {
-        fprintf(stderr, APP_NAME ": relay needs `token` (16+ chars) in %s\n", cfgpath);
+    if (!have) {
+        fail_why("relay: no config at %s; create it with a line token=<16+ chars>", cfgpath);
+        return 0;
+    }
+    if (!token || !*token) {
+        fail_why("relay: no token in %s; add a line token=<16+ chars>", cfgpath);
+        return 0;
+    }
+    if (strlen(token) < 16) {
+        fail_why("relay: token in %s is %zu chars; it needs 16 or more", cfgpath, strlen(token));
         return 0;
     }
     snprintf(rt.token, sizeof rt.token, "%s", token);
@@ -1950,16 +1991,21 @@ int relay_start(struct session *s)
     if (!bind) {
         bind = wsd_tailscale_ip();
         if (!bind) {
-            fprintf(stderr, APP_NAME ": relay: no tailscale address; set `bind` in the config\n");
+            fail_why("relay: no tailscale address (is tailscale up?); or set bind=<ip> in %s", cfgpath);
             return 0;
         }
     }
     snprintf(rt.bind, sizeof rt.bind, "%s", !strcmp(bind, "*") ? "" : bind);
+    struct in_addr probe;
+    if (rt.bind[0] && inet_pton(AF_INET, rt.bind, &probe) != 1) {
+        fail_why("relay: bind=%s in %s is not an IPv4 address; use one, or * for all", bind, cfgpath);
+        return 0;
+    }
     snprintf(rt.label, sizeof rt.label, "relay");
     snprintf(rt.server, sizeof rt.server, "%lx-%lx", (long)getpid(), (long)time(NULL));
 
     if (pipe(rt.wake) != 0) {
-        fprintf(stderr, APP_NAME ": relay wake pipe: %s\n", strerror(errno));
+        fail_why("relay: wake pipe: %s", strerror(errno));
         goto fail;
     }
     for (int i = 0; i < 2; i++) {
@@ -1979,10 +2025,15 @@ int relay_start(struct session *s)
         rt.upload_dir[0] = '\0';
     wsd_opts o = {.bind_ip = rt.bind, .port = rt.port, .token = rt.token,
                   .max_message = MESSAGE_MAX, .max_queue = QUEUE_MAX};
+    errno = 0;
     rt.ws = wsd_start(&o, on_text, on_state, NULL);
     if (!rt.ws) {
-        fprintf(stderr, APP_NAME ": relay: can't listen on %s:%d\n",
-                rt.bind[0] ? rt.bind : "*", rt.port);
+        int e = errno;
+        fail_why("relay: can't listen on %s:%d (%s); %s in %s",
+                 rt.bind[0] ? rt.bind : "*", rt.port,
+                 e == EADDRINUSE ? "port already in use" : e ? strerror(e) : "bad bind address",
+                 e == EADDRINUSE ? "stop the other listener or set port=<n>" : "check bind and port",
+                 cfgpath);
         goto fail;
     }
     set_note(s, 1);
@@ -2033,6 +2084,8 @@ void relay_resume_poll(void)
         resume_id[0] = '\0';
         if (relay_start(workspace_at(at)))
             workspace_republish();
+        else
+            terminal_error("%s; relay not restored (/relay on to retry)", relay_error());
     } else if (!tabs_pending()) {
         resume_id[0] = '\0';
     }

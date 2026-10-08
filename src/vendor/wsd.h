@@ -535,7 +535,7 @@ wsd *wsd_start(const wsd_opts *opts, wsd_text_fn on_text, wsd_state_fn on_state,
     sa.sin_family = AF_INET;
     sa.sin_port = htons((uint16_t)opts->port);
     sa.sin_addr.s_addr = INADDR_ANY;
-    if (w->bind_ip[0] && inet_pton(AF_INET, w->bind_ip, &sa.sin_addr) != 1) goto fail;
+    if (w->bind_ip[0] && inet_pton(AF_INET, w->bind_ip, &sa.sin_addr) != 1) { errno = EINVAL; goto fail; }
     if (bind(w->listen_fd, (struct sockaddr *)&sa, sizeof sa) || listen(w->listen_fd, 4)) goto fail;
     fcntl(w->listen_fd, F_SETFD, FD_CLOEXEC);
     if (pipe(w->wake)) goto fail;
@@ -545,12 +545,14 @@ wsd *wsd_start(const wsd_opts *opts, wsd_text_fn on_text, wsd_state_fn on_state,
     }
     if (pthread_create(&w->thread, NULL, wsd_loop, w)) goto fail;
     return w;
-fail:
+fail:;
+    int e = errno;
     if (w->listen_fd >= 0) close(w->listen_fd);
     if (w->wake[0] >= 0) close(w->wake[0]);
     if (w->wake[1] >= 0) close(w->wake[1]);
     pthread_mutex_destroy(&w->lock);
     free(w);
+    errno = e;
     return NULL;
 }
 
