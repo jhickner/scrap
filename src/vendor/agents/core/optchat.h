@@ -8,6 +8,7 @@
 #define OC_SLACK 4
 #define OC_JOBS 8
 #define OC_TRIES 5
+#define OC_OVER 15 /* percent over the node limit a reply may run and still be kept */
 #define OC_AGENT "scrap"
 #define OC_COMPACT_BACKEND "claude"
 #define OC_COMPACT_MODEL "claude-sonnet-5-5"
@@ -827,6 +828,11 @@ static int oc_failed(const char *line) {
     return !line || !*line || !strncmp(line, "API Error", 9);
 }
 
+/* Prompts ask for at most node bytes, but a reply a little over is kept:
+   models miss a byte target by a few percent, and retrying such a line
+   only made it fail every try. Lines live on the heap, so nothing breaks. */
+static long oc_over(long node) { return node + node * OC_OVER / 100; }
+
 static char *oc_build(Backend *b, long node, const char *prompt) {
     char *best = NULL;
     b->reset(b);
@@ -847,14 +853,14 @@ static char *oc_build(Backend *b, long node, const char *prompt) {
         size_t len = strlen(line);
         int copied = strstr(line, "\xe2\x86\x90 LIMIT") != NULL ||
                      (best && (!strncmp(best, line, len) || !strncmp(best, line, strlen(best))));
-        if (!copied && (long)len <= node) { free(best); return line; }
+        if (!copied && (long)len <= oc_over(node)) { free(best); return line; }
         if (!best || (!copied && len < strlen(best))) { free(best); best = line; }
         else free(line);
         if (t + 1 == OC_TRIES) break;
         oc_buf r = {0};
         char head[400];
-        snprintf(head, sizeof head, BACKEND_BLOCK_MARK "\n\nYour line was %zu bytes; the limit is %ld. Rewrite the whole line shorter, preserving complete thoughts. Return only the complete line, without markup or a limit marker. The rejected reply follows in full:\n",
-                 strlen(best), node);
+        snprintf(head, sizeof head, BACKEND_BLOCK_MARK "\n\nYour line was %zu bytes; the limit is %ld. Rewrite the whole line noticeably shorter, about %ld bytes, preserving complete thoughts. Return only the complete line, without markup or a limit marker. The rejected reply follows in full:\n",
+                 strlen(best), node, node * 9 / 10);
         b->reset(b);
         oc_cats(&r, prompt);
         oc_cats(&r, head);

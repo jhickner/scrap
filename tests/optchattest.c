@@ -152,7 +152,7 @@ static void compactor_test(void)
     tiles(m);
 
     for (long i = 0; i < 400; i++)
-        CHECK(oc_node(m, 0, i) && strlen(oc_node(m, 0, i)) <= NODE);
+        CHECK(oc_node(m, 0, i) && strlen(oc_node(m, 0, i)) <= NODE + NODE * 15 / 100);
     CHECK(oc_node(m, 8, 0));
     CHECK(fbad == 0);
     CHECK(fids == 0);
@@ -376,6 +376,89 @@ static void copy_test(void)
     free(line);
 }
 
+/* A reply a little over the limit is kept; a retry is asked only past
+   ~15% over, and says how long the line was. */
+static void over_test(void)
+{
+    Backend b = { .ask = script_ask, .reset = count_reset };
+    long    ok = NODE + NODE * 15 / 100;
+    char    near[NODE + 40], far[NODE + 40];
+    memset(near, 'n', (size_t)ok);
+    near[ok] = '\0';
+    memset(far, 'f', (size_t)ok + 1);
+    far[ok + 1] = '\0';
+    nscript = 0;
+    script[0] = near;
+    char *line = oc_build(&b, NODE, "prompt");
+    CHECK(nscript == 1 && line && !strcmp(line, near));
+    free(line);
+
+    char said[64];
+    snprintf(said, sizeof said, "Your line was %ld bytes", ok + 1);
+    nscript = 0;
+    script[0] = far;
+    script[1] = near;
+    line = oc_build(&b, NODE, "prompt");
+    CHECK(nscript == 2 && line && !strcmp(line, near));
+    CHECK(strstr(sent[1], said) && strstr(sent[1], far));
+    free(line);
+}
+
+/* Lines over the stated limit store, render, reload and zoom whole, at the
+   real 512-byte size: nothing holds a line in a node-sized buffer. */
+static void long_line_test(void)
+{
+    char dir[] = "/tmp/optchattest.XXXXXX";
+    char err[512];
+    if (!mkdtemp(dir)) {
+        failures++;
+        return;
+    }
+    oc_mem *m = oc_open(dir, OC_NODE, 0, err, sizeof err);
+    CHECK(m);
+    if (!m)
+        return;
+    char msg[700], line[3][581];
+    memset(msg, 'm', sizeof msg - 1);
+    msg[sizeof msg - 1] = '\0';
+    for (int k = 0; k < 3; k++) {
+        memset(line[k], 'A' + k, 579);
+        line[k][0] = '0' + k;
+        line[k][579] = 'Z';
+        line[k][580] = '\0';
+    }
+    for (int i = 0; i < 4; i++)
+        CHECK(oc_append(m, "echo", msg) == i);
+    CHECK(oc_put(m, 0, 0, line[0]) && oc_put(m, 0, 1, line[1]));
+    CHECK(oc_put(m, 0, 2, line[0]) && oc_put(m, 0, 3, line[1]));
+    CHECK(oc_put(m, 1, 0, line[2]) && oc_put(m, 1, 1, line[2]));
+    CHECK(oc_put(m, 2, 0, line[0]));
+    for (int pass = 0; pass < 2; pass++) {
+        char want[1400];
+        char *z = oc_zoom(m, 0, 2);
+        snprintf(want, sizeof want, "0+1|%s\n1+1|%s", line[0], line[1]);
+        CHECK(!strcmp(z, want));
+        free(z);
+        z = oc_zoom(m, 0, 4);
+        snprintf(want, sizeof want, "0+2|%s\n2+2|%s", line[2], line[2]);
+        CHECK(!strcmp(z, want));
+        free(z);
+        char *v = oc_render(m, 0);
+        CHECK(strstr(v, line[0]) || strstr(v, line[2]));
+        free(v);
+        oc_close(m);
+        m = oc_open(dir, OC_NODE, 0, err, sizeof err);
+        CHECK(m);
+        if (!m)
+            return;
+    }
+    oc_close(m);
+    char cmd[600];
+    snprintf(cmd, sizeof cmd, "rm -rf %s", dir);
+    if (system(cmd))
+        failures++;
+}
+
 int main(void)
 {
     char dir[] = "/tmp/optchattest.XXXXXX";
@@ -488,6 +571,8 @@ int main(void)
     failing_test();
     marks_test();
     copy_test();
+    over_test();
+    long_line_test();
     CHECK(strlen(OC_SCALE) == OC_NODE);
     if (failures)
         fprintf(stderr, "%d failure(s)\n", failures);
