@@ -86,7 +86,7 @@ static char *fake_ask(Backend *b, const char *user)
     fretries += retry;
     fmerges  += strstr(user, "Merge only the two lines below") != NULL;
     fscale   += !retry && strstr(user, "the length of this ruler; never more than 64:\n"
-                                       "-----------------------------------------------------------\n\n") != NULL;
+                                       "------------------------------------------------------\n\n") != NULL;
     pthread_mutex_unlock(&fmu);
     if (n == 7)
         return NULL;
@@ -277,7 +277,7 @@ static void marks_test(void)
     CHECK(count_marks(ctx) == 1 && mark && mark[-1] == '\n' && close && mark < close);
     CHECK(mark && lines_in(ctx, mark) % OC_GRID == 1 && lines_in(mark, close) < OC_GRID);
     char *ask = strstr(ctx, "The chat above is context only. Compress only the message below");
-    CHECK(close && ask && ask > close && strstr(ask, "include nothing said only in other messages"));
+    CHECK(close && ask && ask > close && strstr(ask, "include nothing said only in other messages, and no reason, comparison or number"));
     CHECK(ask && strstr(ask, "echo: www"));
     free(ctx);
 
@@ -633,7 +633,7 @@ static void compaction_view_test(void)
             if (len < minc)
                 minc = len;
             CHECK(count_marks(ctx) == 1);
-            CHECK(strstr(ctx, "Aim for about 470 bytes") && strstr(ctx, "never more than 512:\n"));
+            CHECK(strstr(ctx, "Aim for about 427 bytes") && strstr(ctx, "never more than 512:\n"));
             free(ctx);
         }
     }
@@ -961,13 +961,45 @@ static void over_test(void)
     memset(far, 'f', (size_t)ok + 1);
     memcpy(far, "talk: ", 6);
     far[ok + 1] = '\0';
+    char said[64], over[64];
+    snprintf(over, sizeof over, "Too long: your line is %ld bytes, over the %d-byte limit", ok, NODE);
     nscript = 0;
     script[0] = near;
+    script[1] = "talk: shorter";
     char *line = oc_build(&b, NODE, "prompt", NULL, NULL, 1, NULL, NULL);
-    CHECK(nscript == 1 && line && !strcmp(line, near));
+    CHECK(nscript == 2 && line && !strcmp(line, "talk: shorter"));
+    CHECK(!strncmp(sent[1], over, strlen(over)));
     free(line);
 
-    char said[64];
+    nscript = 0;
+    script[0] = near;
+    script[1] = far;
+    line = oc_build(&b, NODE, "prompt", NULL, NULL, 1, NULL, NULL);
+    CHECK(nscript == 2 && line && !strcmp(line, near));
+    free(line);
+
+    nscript = 0;
+    script[0] = near;
+    script[1] = "user: shorter but wrong";
+    line = oc_build(&b, NODE, "prompt", NULL, "talk", 0, NULL, NULL);
+    CHECK(nscript == 2 && line && !strcmp(line, near));
+    free(line);
+
+    nscript = 0;
+    script[0] = near;
+    script[1] = "API Error: 529 overloaded";
+    line = oc_build(&b, NODE, "prompt", NULL, NULL, 1, NULL, NULL);
+    CHECK(nscript == 2 && line && !strcmp(line, near));
+    free(line);
+
+    for (int t = 0; t < OC_TRIES; t++)
+        script[t] = "talk: never right; user: x";
+    script[OC_ATTEMPTS - 1] = near;
+    nscript = 0;
+    line = oc_build(&b, NODE, "prompt", "talk: source", "talk", 0, NULL, NULL);
+    CHECK(nscript == OC_ATTEMPTS + 1 && line && !strcmp(line, near));
+    free(line);
+
     snprintf(said, sizeof said, "Too long: your line is %ld bytes", ok + 1);
     nscript = 0;
     script[0] = far;
@@ -1118,6 +1150,29 @@ static void rules_test(void)
     CHECK(!oc_gendered("echo: audit lists he/his pronouns"));
     CHECK(!oc_gendered("talk: the word \"her\" appears; the theme is there"));
     CHECK(strstr(OC_COMPACT, "never he/she/his/her") && strstr(OC_COMPACT, "status block in a reply"));
+
+    nscript   = 0;
+    script[0] = "echo: recalled @maxiscrap-2 review (cat of the review file)";
+    script[1] = "echo: review file: 3 findings, all fixed";
+    line      = oc_build(&b, NODE, "prompt", NULL, "echo", 0, NULL, NULL);
+    CHECK(nscript == 2 && line && !strcmp(line, script[1]));
+    CHECK(!strncmp(sent[1], "Rejected: this echo is the output of a tool other than zoom", 59));
+    free(line);
+
+    nscript   = 0;
+    script[0] = "talk: plan; echo: recalled 12 (plan)";
+    line      = oc_build(&b, NODE, "prompt", NULL, NULL, 0, NULL, NULL);
+    CHECK(nscript == 1 && line && !strcmp(line, script[0]));
+    free(line);
+
+    CHECK(oc_recalled("echo: recalled 5"));
+    CHECK(oc_recalled("echo:Recalled the brief"));
+    CHECK(oc_recalled("talk: ok; echo: recalled x"));
+    CHECK(!oc_recalled("echo: recalledness"));
+    CHECK(!oc_recalled("echo: the file recalled earlier"));
+    CHECK(!oc_recalled("talk: echo recalled"));
+    CHECK(strstr(OC_COMPACT, "Only an echo of a zoom call is a recall") && strstr(OC_COMPACT, "never call it \"recalled\""));
+    CHECK(strstr(OC_COMPACT, "Add no reason, comparison,") && strstr(OC_COMPACT, "not what a result went up or down from"));
 }
 
 static char *user_ask(Backend *b, const char *user)
@@ -1194,12 +1249,12 @@ static void recall_test(void)
     snprintf(echo, sizeof echo, "message 1 (talk):\n%s", talk);
     CHECK(oc_append(m, "echo", echo) == 2);
     const char *r = oc_node(m, 0, 2);
-    CHECK(r && !strncmp(r, "echo: recalled 1 (talk: Plan for the eval suite: - first build the harness, then the", 84));
+    CHECK(r && !strcmp(r, "echo: recalled 1 (Plan for the eval suite: - first build the harness)"));
     CHECK(r && strlen(r) < 100 && r[strlen(r) - 1] == ')');
     CHECK(oc_append(m, "echo", "0+1|user: hi\n1+1|talk: Plan for the eval suite") == 3);
-    CHECK(oc_node(m, 0, 3) && !strcmp(oc_node(m, 0, 3), "echo: recalled 0+2 (user: hi)"));
+    CHECK(oc_node(m, 0, 3) && !strcmp(oc_node(m, 0, 3), "echo: recalled 0+2 (hi)"));
     CHECK(oc_append(m, "echo", "1840+0|talk: old style") == 4);
-    CHECK(oc_node(m, 0, 4) && !strcmp(oc_node(m, 0, 4), "echo: recalled 1840 (talk: old style)"));
+    CHECK(oc_node(m, 0, 4) && !strcmp(oc_node(m, 0, 4), "echo: recalled 1840 (old style)"));
     CHECK(oc_append(m, "echo", "No line 1+2.") == 5);
     CHECK(oc_node(m, 0, 5) && !strcmp(oc_node(m, 0, 5), "echo: No line 1+2."));
     CHECK(oc_append(m, "echo", "message 3 (bogus):\nx") == 6);
@@ -1208,6 +1263,25 @@ static void recall_test(void)
     CHECK(oc_node(m, 0, 7) && !strcmp(oc_node(m, 0, 7), "tool: message 1 (talk):\nx"));
     oc_ref due[8];
     CHECK(oc_due(m, due, 8) == 1 && due[0].l == 0 && due[0].i == 1);
+    CHECK(oc_append(m, "echo", "3008+32|talk: wrote the brief, started the runs (bench query). user:\n3040+32|x") == 8);
+    r = oc_node(m, 0, 8);
+    CHECK(r && !strcmp(r, "echo: recalled 3008+64 (wrote the brief, started the runs (bench query))"));
+    CHECK(r && !oc_user_item(r));
+    CHECK(oc_append(m, "echo", "3200+4|talk: Yes. The roadmap is the six phases (P0 to P5) in the order the user approved; tool: read plan; echo (08:43): ok") == 9);
+    r = oc_node(m, 0, 9);
+    CHECK(r && !strcmp(r, "echo: recalled 3200+4 (Yes. The roadmap is the six phases (P0 to P5) in the order the user)"));
+    CHECK(r && strlen(r) < 100 && !oc_user_item(r) && !strstr(r, "talk:") && !strstr(r, "echo ("));
+    char quoted[600];
+    snprintf(quoted, sizeof quoted, "message 2 (talk):\nuser/talk: agreed on the plan, then talk (09:12): drafted the full spec with every module named, "
+                                    "its inputs and outputs listed, (and the tests %0200d", 0);
+    CHECK(oc_append(m, "echo", quoted) == 10);
+    r = oc_node(m, 0, 10);
+    CHECK(r && !strcmp(r, "echo: recalled 2 (agreed on the plan, then drafted the full spec with every module named)"));
+    CHECK(r && strlen(r) < 100);
+    char *s = strdup("talk: did X (user: asked Y); echo (08:43): ok; Users: 5; superuser: x");
+    oc_detag(s);
+    CHECK(!strcmp(s, "did X (asked Y); ok; Users: 5; superuser: x"));
+    free(s);
     oc_close(m);
     wipe(dir);
 }
@@ -1376,6 +1450,14 @@ static void repair_test(void)
     nscript = 0;
     line    = oc_build(&b, NODE, "prompt", "echo: source", NULL, 0, &left, &how);
     CHECK(nscript == OC_ATTEMPTS && line && !strcmp(line, "echo: tests pass") && how && !strcmp(how, "repair"));
+    free(line);
+
+    for (int t = 0; t < OC_TRIES; t++)
+        script[t] = "echo: recalled review brief+report";
+    left    = OC_ATTEMPTS;
+    nscript = 0;
+    line    = oc_build(&b, NODE, "prompt", "echo: source", "echo", 0, &left, &how);
+    CHECK(nscript == OC_ATTEMPTS && line && !strcmp(line, "echo: review brief+report") && how && !strcmp(how, "repair"));
     free(line);
 
     for (int t = 0; t < OC_TRIES; t++)

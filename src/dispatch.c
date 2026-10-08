@@ -218,14 +218,24 @@ static void send_session(int fd, const cJSON *o, const cJSON *send)
     }
     /* A session sending a command to itself runs it, e.g. /clear once its turn ends. */
     const char *from_id = field(o, "from_id"), *own = session_id(workspace_at(at));
+    const char *mine = session_name(workspace_at(at));
+    char        self[200];
+    if ((!own || !*own) && mine && *mine) {
+        snprintf(self, sizeof self, "@%s", mine);
+        own = self;
+    }
     if (!host && from_id && own && !strcmp(from_id, own) && cmd_is_command(line))
         sender = NULL;
+    int script = !field(o, "from") && !cmd_is_command(line);
+    if (script)
+        snprintf(from, sizeof from, "%s%sscript", host ? host : "", host ? ":" : "");
     /* Interrupts past the cap queue instead, so two sessions cannot keep stopping each other. */
     int interrupt = sender && cJSON_IsTrue(cJSON_GetObjectItem((cJSON *)o, "interrupt")) &&
                     pair_allowed(from, id, "!", INTERRUPT_CAP);
-    int sent = sender ? workspace_message(at, from, line, interrupt,
-                                          cJSON_IsTrue(cJSON_GetObjectItem((cJSON *)o, "reply")))
-                      : dispatch_send(at, line);
+    int sent = sender || script
+                   ? workspace_message(at, from, line, interrupt,
+                                       script || cJSON_IsTrue(cJSON_GetObjectItem((cJSON *)o, "reply")))
+                   : dispatch_send(at, line);
     if (!sent)
         reply_error(fd, "could not send line", id);
     else {

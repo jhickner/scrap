@@ -434,6 +434,11 @@ static void publish(const struct session *s, const char *status)
 {
     if (s->remote)
         return;
+    if (!s->id[0] && s->name[0]) {
+        char who[sizeof s->name + 1];
+        snprintf(who, sizeof who, "@%s", s->name);
+        sessionaddr_write(s->addr, who);
+    }
     agenttabs_publish(s, session_backend(s), status, tabs_provider(s));
     livelist_publish(s, status);
 }
@@ -1323,6 +1328,8 @@ struct session *session_agent_open(struct agent_job *j)
     }
     s->agent       = j->child;
     s->job         = j;
+    if (s->addr && s->agent->set_session_file)
+        s->agent->set_session_file(s->agent, s->addr);
     s->subagent    = 1;
     s->customizations = j->customizations;
     s->thinking    = settings_get_int(SETTING_THINKING, 1);

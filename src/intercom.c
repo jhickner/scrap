@@ -879,7 +879,11 @@ static void self_name(char *out, size_t size)
 {
     char id[4096];
     out[0] = '\0';
-    if (self_id(id, sizeof id))
+    if (!self_id(id, sizeof id))
+        return;
+    if (id[0] == '@' && intercom_name_valid(id + 1))
+        snprintf(out, size, "%s", id + 1);
+    else
         intercom_name_of(id, out, size);
 }
 
@@ -1049,7 +1053,7 @@ static int cmd_status(int argc, char **argv)
         fprintf(stderr, "scrap: status runs inside a scrap session\n");
         return 1;
     }
-    if (!self_id(id, sizeof id)) {
+    if (!self_id(id, sizeof id) || id[0] == '@') {
         fprintf(stderr, "scrap: this session has no id yet\n");
         return 1;
     }

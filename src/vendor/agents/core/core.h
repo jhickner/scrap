@@ -882,16 +882,52 @@ static void sa_write_line(sa_agent *x, const cJSON *line) {
     free(s);
 }
 
-static char *sa_unboiler(const char *text) {
+static char *sa_unescape(const char *text) {
+    sa_buf b = {0};
+    for (const char *p = text; *p;) {
+        if (*p != '\x1b') {
+            size_t n = strcspn(p, "\x1b");
+            sa_put(&b, p, n);
+            p += n;
+            continue;
+        }
+        p++;
+        if (*p == '[') {
+            for (p++; *p >= 0x30 && *p <= 0x3f; p++) {}
+            for (; *p >= 0x20 && *p <= 0x2f; p++) {}
+            if (*p >= 0x40 && *p <= 0x7e) p++;
+        } else if (*p == ']' || *p == 'P' || *p == '_' || *p == '^') {
+            for (p++; *p && *p != '\a' && !(*p == '\x1b' && p[1] == '\\'); p++) {}
+            if (*p == '\a') p++;
+            else if (*p) p += 2;
+        } else {
+            for (; *p >= 0x20 && *p <= 0x2f; p++) {}
+            if (*p >= 0x30 && *p <= 0x7e) p++;
+        }
+    }
+    char *s = strdup(sa_str(&b));
+    sa_free(&b);
+    return s;
+}
+
+static char *sa_unboiler(const char *raw) {
     static const char state[] = "(file state is current in your context \xe2\x80\x94 no need to Read it back)";
+    static const char created[] = "File created successfully at: ";
+    char *text = sa_unescape(raw);
     sa_buf b = {0};
     for (const char *p = text; *p;) {
         size_t len = strcspn(p, "\n");
         int drop = !strncmp(p, "Shell cwd was reset to ", 23) ||
                    (len == 31 && !strncmp(p, "(Bash completed with no output)", 31));
-        if (!drop) sa_put(&b, p, len + (p[len] == '\n'));
+        if (!drop && len > sizeof created - 1 && !strncmp(p, created, sizeof created - 1)) {
+            sa_put(&b, "created ", 8);
+            sa_put(&b, p + sizeof created - 1, len - (sizeof created - 1) + (p[len] == '\n'));
+        } else if (!drop) {
+            sa_put(&b, p, len + (p[len] == '\n'));
+        }
         p += len + (p[len] == '\n');
     }
+    free(text);
     char *s = strdup(sa_str(&b));
     sa_free(&b);
     for (char *at; (at = strstr(s, state));) {
@@ -901,7 +937,7 @@ static char *sa_unboiler(const char *text) {
     size_t n = strlen(s);
     while (n && (s[n - 1] == '\n' || s[n - 1] == ' ')) n--;
     s[n] = '\0';
-    if (!n && *text) {
+    if (!n && *raw) {
         free(s);
         s = strdup("(no output)");
     }
@@ -3131,6 +3167,24 @@ static int sa_drive_start(sa_agent *x) {
     return 1;
 }
 
+static void sa_drive_drain(sa_agent *x) {
+    Backend *in = x->inner;
+    if (!in || !in->idle_fd || !in->idle_pump) return;
+    long quiet = sa_now_ms();
+    for (;;) {
+        int fd = in->idle_fd(in);
+        if (fd < 0) return;
+        in->idle_pump(in);
+        int open = in->turn_open && in->turn_open(in);
+        int owed = in->wake_owed && in->wake_owed(in);
+        if (!open && !owed) return;
+        if (x->st.abort && x->st.abort()) return;
+        struct pollfd p = { .fd = fd, .events = POLLIN };
+        if (poll(&p, 1, 20) > 0) { quiet = sa_now_ms(); continue; }
+        if (sa_now_ms() - quiet > (open ? 60000 : 2000)) return;
+    }
+}
+
 static char *sa_drive_ask(sa_agent *x, const char *user, backend_result *meta) {
     backend_result res = {0};
     if (meta) memset(meta, 0, sizeof *meta);
@@ -3139,6 +3193,7 @@ static char *sa_drive_ask(sa_agent *x, const char *user, backend_result *meta) {
         return NULL;
     }
     x->err[0] = '\0';
+    sa_drive_drain(x);
     sa_buf text = {0}, none = {0};
     if (!sa_memory_turn(x, user ? user : "", &none, &text)) {
         if (meta) { meta->interrupted = 1; snprintf(meta->subtype, sizeof meta->subtype, "interrupted"); }
@@ -3257,6 +3312,11 @@ static void sa_set_agent_host(Backend *b,
     x->agent_ud = ud;
 }
 
+static void sa_set_session_file(Backend *b, const char *path) {
+    sa_agent *x = b->ctx;
+    backend_set(&x->st.session_file, path);
+}
+
 static char *sa_memory_view(Backend *b) {
     sa_agent *x = b->ctx;
     return x->mem ? oc_render(x->mem, 0) : NULL;
@@ -3358,6 +3418,7 @@ Backend *core_agent_open(const backend_opts *o) {
     b->session_id = sa_session_id;
     b->memory_view = sa_memory_view;
     b->memory_pending = sa_memory_pending;
+    b->set_session_file = sa_set_session_file;
     b->model = sa_model;
     b->effort = backend_stored_effort;
     b->auth_source = backend_none;

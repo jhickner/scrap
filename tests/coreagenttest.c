@@ -558,6 +558,7 @@ static int mock_claude(int argc, char **argv)
 {
     cli_log("SYSTEM", arg_after(argc, argv, "--append-system-prompt") ?: "");
     cli_log("MCP", arg_after(argc, argv, "--mcp-config") ?: "");
+    cli_log("ENV", getenv("MUX_SESSION_FILE") ?: "");
     char *line = NULL;
     size_t cap = 0;
     while (getline(&line, &cap, stdin) >= 0) {
@@ -609,7 +610,10 @@ static int mock_claude(int argc, char **argv)
                        "{\"type\":\"tool_result\",\"tool_use_id\":\"t4\",\"content\":\"The file /a.c has been updated successfully. "
                        "(file state is current in your context \xe2\x80\x94 no need to Read it back)\"},"
                        "{\"type\":\"tool_result\",\"tool_use_id\":\"t5\",\"content\":\"(Bash completed with no output)\\nShell cwd was reset to /tmp\"},"
-                       "{\"type\":\"tool_result\",\"tool_use_id\":\"t6\",\"content\":[{\"type\":\"image\",\"source\":{}}]}]}}\n");
+                       "{\"type\":\"tool_result\",\"tool_use_id\":\"t6\",\"content\":[{\"type\":\"image\",\"source\":{}}]},"
+                       "{\"type\":\"tool_result\",\"tool_use_id\":\"t7\",\"content\":\"\\u001b[1;34msrc\\u001b[39;49m\\u001b[0m\\n"
+                       "README \\u001b]8;;file:///x\\u0007link\\u001b]8;;\\u0007 \\u001b(Bdone\"},"
+                       "{\"type\":\"tool_result\",\"tool_use_id\":\"t8\",\"content\":\"File created successfully at: /tmp/brief.txt\"}]}}\n");
             fflush(stdout);
             if (text && strstr(text, "SLOW"))
                 usleep(300000);
@@ -617,6 +621,20 @@ static int mock_claude(int argc, char **argv)
             char *zoom = text && strstr(text, "PAR") ? cli_parallel(mcp) : text && strstr(text, "ZOOM") ? cli_zoom(mcp) : NULL;
             cli_result(zoom ? zoom : "done");
             free(zoom);
+            if (text && strstr(text, "</chat>\nWAKE")) {
+                printf("{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"mock\"}\n"
+                       "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":["
+                       "{\"type\":\"text\",\"text\":\"monitor woke me\"},"
+                       "{\"type\":\"tool_use\",\"id\":\"w1\",\"name\":\"Bash\",\"input\":{\"command\":\"date\"}}]}}\n"
+                       "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":["
+                       "{\"type\":\"tool_result\",\"tool_use_id\":\"w1\",\"content\":\"03:14\"}]}}\n");
+                fflush(stdout);
+                usleep(400000);
+                printf("{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":["
+                       "{\"type\":\"text\",\"text\":\"rerun finished, launched @w\"}]}}\n");
+                fflush(stdout);
+                cli_result("rerun finished, launched @w");
+            }
         }
         free(joined);
         cJSON_Delete(msg);
@@ -726,11 +744,56 @@ static void boiler_test(void)
     const char *want = "user: BOILER|talk: cli says hi|tool: Bash `echo x`|echo: x-out|"
                        "tool: Bash `make`|tool: Edit file_path=/a.c, old_string=x\n, new_string=y, replace_all=false|"
                        "tool: Bash `` (Nothing)|echo: built|echo: The file /a.c has been updated successfully.|"
-                       "echo: (no output)|echo: image|";
+                       "echo: (no output)|echo: image|echo: src\nREADME link done|echo: created /tmp/brief.txt|";
     CHECK(!strcmp(got, want));
     if (strcmp(got, want))
         fprintf(stderr, "boiler log: %s\n", got);
     free(log);
+}
+
+static void wake_test(void)
+{
+    char home[512];
+    snprintf(home, sizeof home, "%s/wake", dir);
+    mkdir(home, 0700);
+    mkdir(strcat(home, "/agent"), 0700);
+    put_file("wake/agent/providers.json", get_file("agent/providers.json"));
+    snprintf(home, sizeof home, "%s/wake", dir);
+    setenv("SCRAP_CONFIG_DIR", home, 1);
+    backend_opts o = {.name = "claude", .cwd = dir, .memory = 1, .memory_relay = "relay"};
+    Backend *b = backend_open_ex(&o);
+    b->set_event_cb(b, on_event, NULL);
+    b->set_abort_check(b, should_abort);
+    CHECK(b->set_session_file);
+    b->set_session_file(b, "/tmp/scrap-addr-wake");
+    CHECK(b->start(b, NULL));
+    backend_result meta;
+    char *reply = ask(b, "WAKE later", &meta);
+    CHECK(reply && !strcmp(reply, "done"));
+    free(reply);
+    reply = ask(b, "[from @w] D3 review done", &meta);
+    CHECK(reply && !strcmp(reply, "done"));
+    free(reply);
+    b->close(b);
+    char cmd[600];
+    snprintf(cmd, sizeof cmd, "cat %s/wake/memory/main/*.jsonl > %s/wake.jsonl", dir, dir);
+    CHECK(system(cmd) == 0);
+    char *log = strdup(get_file("wake.jsonl")), got[2048] = "";
+    for (char *line = strtok(log, "\n"); line; line = strtok(NULL, "\n")) {
+        cJSON *j = cJSON_Parse(line);
+        const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(j, "kind"));
+        const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(j, "text"));
+        snprintf(got + strlen(got), sizeof got - strlen(got), "%s: %s|", kind ? kind : "?", text ? text : "?");
+        cJSON_Delete(j);
+    }
+    const char *want = "user: WAKE later|talk: cli says hi|tool: Bash `echo x`|echo: x-out|"
+                       "talk: monitor woke me|tool: Bash `date`|echo: 03:14|talk: rerun finished, launched @w|"
+                       "work: [from @w] D3 review done|talk: cli says hi|tool: Bash `echo x`|echo: x-out|";
+    CHECK(!strcmp(got, want));
+    if (strcmp(got, want))
+        fprintf(stderr, "wake log: %s\n", got);
+    free(log);
+    CHECK(strstr(get_file("wake/cli.log"), "ENV \"/tmp/scrap-addr-wake\""));
 }
 
 static void memory_test(void)
@@ -940,6 +1003,11 @@ int main(int argc, char **argv)
     CHECK(reply && !strcmp(reply, "tool said: hi\n"));
     free(reply);
 
+    b->set_session_file(b, "/tmp/scrap-addr-child");
+    reply = ask(b, "run: echo $MUX_SESSION_FILE", &meta);
+    CHECK(!strcmp(last_result, "/tmp/scrap-addr-child\n"));
+    free(reply);
+
     reply = ask(b, "run: echo forbidden", &meta);
     CHECK(last_failed && strstr(last_result, "blocked by hook: nope"));
     free(reply);
@@ -1052,6 +1120,7 @@ int main(int argc, char **argv)
     agent_choice_test();
     drive_test();
     boiler_test();
+    wake_test();
 
     kill(server, SIGKILL);
     waitpid(server, NULL, 0);

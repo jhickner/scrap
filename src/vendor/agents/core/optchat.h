@@ -100,6 +100,8 @@ const char OC_COMPACT[] =
     "back whole, and \"id+n|\" heads a summary line; their kinds are those of the\n"
     "recalled messages, not of the echo. Record it as a recall, such as \"echo:\n"
     "recalled 1840 (talk: plan for X)\", never as new words of the recalled kind.\n"
+    "Only an echo of a zoom call is a recall: any other echo, such as a file\n"
+    "read again with cat, is new output, so never call it \"recalled\".\n"
     "\n"
     "Over the messages grows a binary tree of one-line summaries. First, each\n"
     "message is compressed alone into a line (a short message is its own\n"
@@ -121,7 +123,10 @@ const char OC_COMPACT[] =
     "detail of your stretch that your input lost. It is context only: your\n"
     "line covers your stretch alone, so never put into it what was said\n"
     "only in messages outside your stretch, such as the question a reply\n"
-    "answers or the reason behind a tool call.\n"
+    "answers or the reason behind a tool call. Add no reason, comparison,\n"
+    "earlier value, time or number that the messages you summarize do not\n"
+    "contain themselves: not what a result went up or down from, not when\n"
+    "something was last checked, not a cost said elsewhere.\n"
     "\n"
     "Goal: let " OC_AGENT " work later as well as if it remembered the whole stretch.\n"
     "Space is scarce, so it goes by value:\n"
@@ -258,7 +263,7 @@ static void oc_cut(char *s, long max) {
 
 static long oc_start(oc_ref p) { return p.i << p.l; }
 
-static long oc_aim(long node) { return node - node / 12; }
+static long oc_aim(long node) { return node - node / 6; }
 
 static const char *oc_get(const oc_mem *m, int l, long i) {
     if (l < 0 || l >= OC_LEVELS || i < 0 || i >= m->lev[l].cap) return NULL;
@@ -342,19 +347,60 @@ static int oc_kindword(const char *s, size_t n) {
     return 0;
 }
 
+static void oc_detag(char *s) {
+    char *w = s;
+    for (const char *p = s; *p;) {
+        int start = w == s || strchr(" ;([,/|", w[-1]);
+        if (start && oc_kindword(p, 4) && !isalnum((unsigned char)p[4])) {
+            const char *q = p + 4;
+            while (*q == '/' && oc_kindword(q + 1, 4) && !isalnum((unsigned char)q[5])) q += 5;
+            const char *paren = *q == ' ' && q[1] == '(' ? q + 1 : *q == '(' ? q : NULL;
+            const char *close = paren ? strchr(paren, ')') : NULL;
+            if (close && close - paren < 24 && close[1] == ':') q = close + 1;
+            if (*q == ':') {
+                for (q++; *q == ' '; q++) {}
+                p = q;
+                continue;
+            }
+        }
+        *w++ = *p++;
+    }
+    *w = '\0';
+}
+
+static void oc_clause(char *s, long max) {
+    long n = (long)strlen(s);
+    if (n > max) {
+        long k = max;
+        while (k > max / 2 && !(strchr(";,.:", s[k - 1]) && s[k] == ' ')) k--;
+        if (k > max / 2) s[k - 1] = '\0';
+        else oc_cut(s, max);
+    }
+    int depth = 0;
+    long open = -1;
+    for (long j = 0; s[j]; j++) {
+        if (s[j] == '(' && !depth++) open = j;
+        else if (s[j] == ')' && depth) depth--;
+    }
+    if (depth && open >= 0) s[open] = '\0';
+    n = (long)strlen(s);
+    while (n && strchr(" ;,.:-(", s[n - 1])) n--;
+    s[n] = '\0';
+}
+
 static char *oc_recall(const oc_mem *m, long i) {
     const char *t = m->msgs[i].text, *p = t, *topic = NULL;
     char ids[64];
     long a, b, h, h2;
     oc_buf top = {0};
+    int whole = 0;
     if (!strncmp(p, "message ", 8) && (p += 8, oc_num(&p, &a)) && !strncmp(p, " (", 2)) {
         const char *k = p + 2, *e = k;
         while (*e >= 'a' && *e <= 'z') e++;
         if (strncmp(e, "):\n", 3) || !oc_kindword(k, (size_t)(e - k))) return NULL;
         snprintf(ids, sizeof ids, "%ld", a);
-        oc_cat(&top, k, (size_t)(e - k));
-        oc_cats(&top, ": ");
         topic = e + 3;
+        whole = 1;
     } else if (oc_num(&p, &a) && *p == '+' && (p++, oc_num(&p, &h)) && *p == '|') {
         topic = p + 1;
         const char *q = strchr(topic, '\n');
@@ -365,7 +411,7 @@ static char *oc_recall(const oc_mem *m, long i) {
     } else {
         return NULL;
     }
-    size_t len = top.n ? strlen(topic) : strcspn(topic, "\n"), w = 0;
+    size_t len = whole ? strlen(topic) : strcspn(topic, "\n"), w = 0;
     oc_cat(&top, topic, len < 400 ? len : 400);
     for (size_t j = 0; j < top.n; j++) {
         char ch = top.p[j] == '\n' || top.p[j] == '\t' || top.p[j] == '\r' ? ' ' : top.p[j];
@@ -373,12 +419,15 @@ static char *oc_recall(const oc_mem *m, long i) {
     }
     while (w && top.p[w - 1] == ' ') w--;
     top.p[w] = '\0';
+    oc_detag(top.p);
+    size_t lead = strspn(top.p, " ;,.:-");
+    memmove(top.p, top.p + lead, strlen(top.p + lead) + 1);
     oc_buf out = {0};
     oc_cats(&out, "echo: recalled ");
     oc_cats(&out, ids);
     long room = OC_RECALL - 1 - (long)out.n - 3;
+    if (room > 8 && *top.p) oc_clause(top.p, room);
     if (room > 8 && *top.p) {
-        oc_cut(top.p, room);
         oc_cats(&out, " (");
         oc_cats(&out, top.p);
         oc_cats(&out, ")");
@@ -1107,20 +1156,20 @@ static char *oc_context(const oc_mem *m, oc_ref r) {
         if (k + 1 == grid) oc_cats(&b, BACKEND_CACHE_MARK);
     }
     oc_cats(&b, "</chat>\n\n");
-    char head[256];
+    char head[384];
     long aim = oc_aim(m->node);
     snprintf(head, sizeof head, "Aim for about %ld bytes (about %ld words), the length of this ruler; never more than %ld:\n",
              aim, aim / 7, m->node);
     oc_cats(&b, head);
     oc_ruler(&b, aim);
     if (r.l == 0) {
-        snprintf(head, sizeof head, "\n\nThe chat above is context only. Compress only the message below into one line, in about %ld bytes; include nothing said only in other messages:\n", aim);
+        snprintf(head, sizeof head, "\n\nThe chat above is context only. Compress only the message below into one line, in about %ld bytes; include nothing said only in other messages, and no reason, comparison or number the message does not contain:\n", aim);
         oc_cats(&b, head);
         oc_cats(&b, m->msgs[r.i].kind);
         oc_cats(&b, ": ");
         oc_cats(&b, m->msgs[r.i].text);
     } else {
-        snprintf(head, sizeof head, "\n\nThe chat above is context only. Merge only the two lines below into one, in about %ld bytes; include nothing that is not in these two lines or the messages they cover:\n", aim);
+        snprintf(head, sizeof head, "\n\nThe chat above is context only. Merge only the two lines below into one, in about %ld bytes; include nothing that is not in these two lines or the messages they cover, and no reason, comparison or number from elsewhere:\n", aim);
         oc_cats(&b, head);
         oc_flat(&b, oc_get(m, r.l - 1, 2 * r.i));
         oc_cats(&b, "\n");
@@ -1254,6 +1303,29 @@ static char *oc_unuser(char *s) {
     return b.p;
 }
 
+static int oc_recalled(const char *line) {
+    for (const char *p = line; *p; p++) {
+        if (strncasecmp(p, "echo:", 5) || (p > line && isalnum((unsigned char)p[-1]))) continue;
+        const char *q = p + 5;
+        while (*q == ' ') q++;
+        if (!strncasecmp(q, "recalled", 8) && !isalnum((unsigned char)q[8])) return 1;
+    }
+    return 0;
+}
+
+static char *oc_unrecall(char *line) {
+    for (char *p = line; *p; p++) {
+        if (strncasecmp(p, "echo:", 5) || (p > line && isalnum((unsigned char)p[-1]))) continue;
+        char *q = p + 5;
+        while (*q == ' ') q++;
+        if (strncasecmp(q, "recalled", 8) || isalnum((unsigned char)q[8])) continue;
+        char *rest = q + 8;
+        while (*rest == ' ') rest++;
+        memmove(q, rest, strlen(rest) + 1);
+    }
+    return line;
+}
+
 static int oc_content(const char *line) {
     for (const char *p = line + 4; *p; p++)
         if (isalnum((unsigned char)*p)) return 1;
@@ -1275,6 +1347,7 @@ static char *oc_repair(char *line, const char *kind, int user, long node) {
         line = b.p;
     }
     if (!user) line = oc_unuser(line);
+    if (kind && !strcmp(kind, "echo")) oc_unrecall(line);
     oc_cut(line, node);
     if (oc_fits(line, kind, user)) return line;
     free(line);
@@ -1318,8 +1391,8 @@ static char *oc_source(const oc_mem *m, oc_ref r) {
 
 static char *oc_build(Backend *b, long node, const char *prompt, const char *source, const char *kind, int user,
                       int *left, const char **how) {
-    char *best = NULL, *soft = NULL, *last = NULL;
-    int cap = OC_ATTEMPTS, *rest = left ? left : &cap;
+    char *best = NULL, *soft = NULL, *last = NULL, *near = NULL;
+    int cap = OC_ATTEMPTS, *rest = left ? left : &cap, asked = 0;
     const char *none;
     if (!how) how = &none;
     *how = NULL;
@@ -1329,9 +1402,21 @@ static char *oc_build(Backend *b, long node, const char *prompt, const char *sou
         char *line = oc_trim(b->ask(b, msg));
         free(msg);
         msg = NULL;
+        if (oc_failed(line) && near) { free(line); free(best); free(soft); free(last); return near; }
         if (oc_failed(line)) { free(line); free(best); free(soft); free(last); return NULL; }
         oc_untag(line);
         size_t len = strlen(line);
+        int echo = kind && !strcmp(kind, "echo");
+        if (near) {
+            int ok = oc_tagged(line) && !strstr(line, "\xe2\x86\x90 LIMIT") && (!kind || oc_lead(line, kind)) &&
+                     (user || !oc_user_item(line)) && !(echo && oc_recalled(line)) && !oc_gendered(line) &&
+                     len < strlen(near);
+            free(ok ? near : line);
+            free(best);
+            free(soft);
+            free(last);
+            return ok ? line : near;
+        }
         oc_buf r = {0};
         int bad = 1;
         if (!oc_tagged(line) || strstr(line, "\xe2\x86\x90 LIMIT")) {
@@ -1342,17 +1427,21 @@ static char *oc_build(Backend *b, long node, const char *prompt, const char *sou
             oc_cats(&r, head);
         } else if (!user && oc_user_item(line)) {
             oc_cats(&r, "Rejected: no message in your stretch is the user's, so no item may be tagged \"user:\"; what the user said elsewhere in <chat> is context only. Write the whole line again for the same input.");
+        } else if (echo && oc_recalled(line)) {
+            oc_cats(&r, "Rejected: this echo is the output of a tool other than zoom, so it is not a recall, even when it shows something read before; never call it \"recalled\". Write the whole line again for the same input.");
         } else if (oc_gendered(line)) {
             if (!soft || len < strlen(soft)) { free(soft); soft = strdup(line); }
             oc_cats(&r, "Rejected: call the user \"the user\" or they/them, never he/she/his/her. Write the whole line again for the same input.");
-        } else if ((long)len <= oc_over(node)) {
+        } else if ((long)len <= oc_over(node) && ((long)len <= node || asked || t + 1 >= OC_TRIES || *rest <= 0)) {
             free(best);
             free(soft);
             free(last);
             return line;
         } else {
             bad = 0;
-            if (!best || len < strlen(best)) { free(best); best = line; }
+            asked = 1;
+            if ((long)len <= oc_over(node)) near = line;
+            else if (!best || len < strlen(best)) { free(best); best = line; }
             else free(line);
             char head[200];
             snprintf(head, sizeof head, "Too long: your line is %zu bytes, over the %ld-byte limit, the length of this ruler:\n", len, node);
@@ -1369,6 +1458,12 @@ static char *oc_build(Backend *b, long node, const char *prompt, const char *sou
         else free(r.p);
     }
     free(msg);
+    if (near) {
+        free(best);
+        free(soft);
+        free(last);
+        return near;
+    }
     if (best) {
         free(soft);
         free(last);

@@ -34,6 +34,9 @@ static char           last_model[64];
 static char           last_cwd[256];
 static char           last_echo[256];
 static char           last_send[256];
+static char           last_from[64];
+static int            last_reply = -1;
+static int            message_n;
 
 static int failures;
 
@@ -45,7 +48,7 @@ static void fail(const char *what)
 
 const char *cmd_default_backend(void) { return "claude"; }
 int cmd_check_choice(const char *backend, const char *effort, char *why, size_t size) { (void)backend; (void)effort; (void)why; (void)size; return 1; }
-int cmd_is_command(const char *line) { (void)line; return 0; }
+int cmd_is_command(const char *line) { return line && !strncmp(line, "/restart", 8); }
 void        prompt_echo_message(const char *text)
 {
     echo_n++;
@@ -107,9 +110,10 @@ int workspace_send(int index, const char *line, const char *shown)
 }
 int workspace_message(int index, const char *from, const char *text, int interrupt, int reply)
 {
-    (void)from;
     (void)interrupt;
-    (void)reply;
+    message_n++;
+    last_reply = reply;
+    snprintf(last_from, sizeof last_from, "%s", from ? from : "");
     return workspace_send(index, text, NULL);
 }
 
@@ -133,10 +137,10 @@ const char *session_id(const struct session *s)
         return spawned_id;
     return NULL;
 }
+static char spawned_name[64];
 const char *session_name(const struct session *s)
 {
-    (void)s;
-    return "";
+    return s == &spawned ? spawned_name : "";
 }
 void session_replay(struct session *s) { (void)s; }
 const char *session_title(const struct session *s) { (void)s; return ""; }
@@ -183,7 +187,9 @@ static void reset_case(void)
     echo_n = 0;
     last_render_at = last_send_at = -1;
     last_title[0] = last_backend[0] = last_model[0] = last_cwd[0] = '\0';
-    last_echo[0] = last_send[0] = '\0';
+    last_echo[0] = last_send[0] = last_from[0] = '\0';
+    last_reply = -1;
+    message_n = 0;
     close_n = 0;
     closed_at = -1;
     in_view = 0;
@@ -333,10 +339,50 @@ int main(void)
     poll_once();
     if (send_n != 1 || last_send_at != spawn_at || strcmp(last_send, "idle follow-up"))
         fail("idle send delivers the line by id");
-    if (render_n != 1 || last_render_at != spawn_at || echo_n != 1 ||
-        strcmp(last_echo, "idle follow-up"))
-        fail("idle send echoes once as a user turn");
+    if (message_n != 1 || strcmp(last_from, "script") || last_reply != 1 || render_n || echo_n)
+        fail("an anonymous send arrives as a message from script, with no inbox reply");
     expect_res(dir, "idle-send", "\"ok\":true", "send by id replies ok");
+
+    reset_case();
+    drop_req(dir, "self-command", "{\"send\":\"/restart\",\"session\":\"sess-1\"}");
+    poll_once();
+    if (send_n != 1 || message_n || strcmp(last_send, "/restart") || render_n != 1 || echo_n != 1)
+        fail("an anonymous command still runs as typed input");
+    expect_res(dir, "self-command", "\"ok\":true", "an anonymous command replies ok");
+
+    reset_case();
+    drop_req(dir, "named-send", "{\"send\":\"report\",\"session\":\"sess-1\",\"from\":\"w\"}");
+    poll_once();
+    if (message_n != 1 || strcmp(last_from, "@w") || last_reply != 0)
+        fail("a named send arrives from @name");
+
+    reset_case();
+    drop_req(dir, "remote-script", "{\"send\":\"done\",\"session\":\"sess-1\",\"host\":\"mba\"}");
+    poll_once();
+    if (message_n != 1 || strcmp(last_from, "mba:script"))
+        fail("an anonymous remote send arrives from host:script");
+
+    snprintf(spawned_name, sizeof spawned_name, "cogstream");
+    char kept_id[64];
+    snprintf(kept_id, sizeof kept_id, "%s", spawned_id);
+    spawned_id[0] = '\0';
+    reset_case();
+    drop_req(dir, "noid-command", "{\"send\":\"/restart\",\"name\":\"cogstream\",\"from\":\"cogstream\",\"from_id\":\"@cogstream\"}");
+    poll_once();
+    if (send_n != 1 || message_n || strcmp(last_send, "/restart"))
+        fail("a session with no id runs a command it sends itself");
+    reset_case();
+    drop_req(dir, "noid-send", "{\"send\":\"status report\",\"name\":\"cogstream\",\"from\":\"cogstream\",\"from_id\":\"@cogstream\"}");
+    poll_once();
+    if (message_n != 1 || strcmp(last_from, "@cogstream"))
+        fail("a session with no id sends as @name");
+    reset_case();
+    drop_req(dir, "other-command", "{\"send\":\"/restart\",\"name\":\"cogstream\",\"from\":\"w\",\"from_id\":\"@w\"}");
+    poll_once();
+    if (message_n != 1 || strcmp(last_from, "@w"))
+        fail("another session's command arrives as a message");
+    spawned_name[0] = '\0';
+    snprintf(spawned_id, sizeof spawned_id, "%s", kept_id);
 
     reset_case();
     turn_running = 1;

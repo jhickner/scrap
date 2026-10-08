@@ -274,6 +274,7 @@ struct Backend {
     int  (*turn_open)(Backend *b);
     /* Stop one background task by its id; NULL when the driver cannot. */
     int  (*stop_task)(Backend *b, const char *task_id);
+    void (*set_session_file)(Backend *b, const char *path);
 
     /* NULL until known, or when the driver never reports it. */
     const char *(*session_id)(Backend *b);
