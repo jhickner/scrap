@@ -990,8 +990,8 @@ int main(int argc, char **argv)
             session_set_remote(session, attach_arg);
     }
 
-    const char *wanted[] = {telegram ? "telegram" : NULL, api_on ? "api" : NULL};
-    for (int i = 0; i < 2 && session; i++) {
+    const char *wanted[] = {telegram ? "telegram" : NULL};
+    for (int i = 0; i < 1 && session; i++) {
         char msg[300];
         if (wanted[i] && !bridges_set(wanted[i], 1, msg, sizeof msg))
             fprintf(stderr, APP_NAME ": %s\n", msg);
@@ -1124,7 +1124,18 @@ int main(int argc, char **argv)
     if (attach_arg && !restore_arg)
         sessionpresent_replay(session_transcript(session));
 
-    if (api_on && interactive) {
+    char api_msg[300];
+    if (api_on && interactive && !bridges_set("api", 1, api_msg, sizeof api_msg)) {
+        viewport_item_begin(VIEWPORT_ROWS(1, 1));
+        ui_error("%s", api_msg);
+        viewport_item_end();
+        ui_flush();
+    } else if (api_on && interactive && !api_active()) {
+        viewport_item_begin(VIEWPORT_ROWS(1, 1));
+        ui_note("%s", api_msg);
+        viewport_item_end();
+        ui_flush();
+    } else if (api_on && interactive) {
         viewport_item_begin(VIEWPORT_ROWS(1, 1));
         char *conn = api_connect_json();
         ui_note("worker API %s", api_url());

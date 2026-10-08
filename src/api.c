@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <microhttpd.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -346,20 +347,46 @@ static void request_done(void *cls, struct MHD_Connection *c, void **ctx, enum M
     }
 }
 
+/* Why the last api_start failed, worded for the user. */
+static char start_error[600];
+
+__attribute__((format(printf, 1, 2)))
+static void fail_why(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(start_error, sizeof start_error, fmt, ap);
+    va_end(ap);
+}
+
+const char *api_start_error(void)
+{
+    return start_error[0] ? start_error : "api: could not start";
+}
+
 int api_start(void)
 {
     if (api.active)
         return 1;
+    start_error[0] = '\0';
     char path[4200];
     struct settings cfg;
     if (!path_config_file(path, sizeof path, "api")) {
-        fputs(APP_NAME ": --api: no config directory\n", stderr);
+        fail_why("api: no config directory; set HOME or XDG_CONFIG_HOME");
         return 0;
     }
     settings_load(&cfg, path);
     const char *token = settings_get(&cfg, "token", NULL);
-    if (!token || strlen(token) < TOKEN_MIN) {
-        fprintf(stderr, APP_NAME ": --api needs `token` (%d+ chars) in %s\n", TOKEN_MIN, path);
+    if ((!token || !*token) && access(path, R_OK) != 0) {
+        fail_why("api: no config at %s; create it with a line token=<%d+ chars>", path, TOKEN_MIN);
+        return 0;
+    }
+    if (!token || !*token) {
+        fail_why("api: no token in %s; add a line token=<%d+ chars>", path, TOKEN_MIN);
+        return 0;
+    }
+    if (strlen(token) < TOKEN_MIN) {
+        fail_why("api: token in %s is %zu chars; it needs %d or more", path, strlen(token), TOKEN_MIN);
         return 0;
     }
     snprintf(api.token, sizeof api.token, "%s", token);
@@ -372,16 +399,16 @@ int api_start(void)
     if (!bind || !*bind)
         bind = wsd_tailscale_ip();
     if (!bind) {
-        fprintf(stderr, APP_NAME ": --api: no tailscale address; set `bind` in %s\n", path);
+        fail_why("api: no tailscale address (is tailscale up?); or set bind=<ip> in %s", path);
         return 0;
     }
     struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
     if (inet_pton(AF_INET, bind, &addr.sin_addr) != 1) {
-        fprintf(stderr, APP_NAME ": --api: bind must be an IPv4 address, got %s\n", bind);
+        fail_why("api: bind=%s in %s is not an IPv4 address; use one", bind, path);
         return 0;
     }
     if (pipe(api.wake) != 0) {
-        fprintf(stderr, APP_NAME ": --api: wake pipe: %s\n", strerror(errno));
+        fail_why("api: wake pipe: %s", strerror(errno));
         return 0;
     }
     for (int i = 0; i < 2; i++) {
@@ -390,11 +417,16 @@ int api_start(void)
     }
     api.stopping = 0;
     apicore_init(on_reply, on_emit);
+    errno = 0;
     api.daemon = MHD_start_daemon(MHD_USE_THREAD_PER_CONNECTION | MHD_USE_INTERNAL_POLLING_THREAD, (uint16_t)port,
                                   NULL, NULL, handle, NULL, MHD_OPTION_SOCK_ADDR, &addr,
                                   MHD_OPTION_NOTIFY_COMPLETED, request_done, NULL, MHD_OPTION_END);
     if (!api.daemon) {
-        fprintf(stderr, APP_NAME ": --api: can't listen on %s:%d\n", bind, port);
+        int e = errno;
+        fail_why("api: can't listen on %s:%d (%s); %s in %s", bind, port,
+                 e == EADDRINUSE ? "port already in use" : e ? strerror(e) : "bad bind address",
+                 e == EADDRINUSE ? "stop the other listener or set port=<n>" : "check bind and port",
+                 path);
         close(api.wake[0]);
         close(api.wake[1]);
         api.wake[0] = api.wake[1] = -1;

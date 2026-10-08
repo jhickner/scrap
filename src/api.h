@@ -5,6 +5,7 @@
 
 int  api_start(void);
 void api_stop(void);
+const char *api_start_error(void);
 int  api_active(void);
 const char *api_url(void);
 
