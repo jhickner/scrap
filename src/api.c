@@ -521,9 +521,12 @@ static cJSON *dlv_call(const char *base, const char *key, const char *verb, cons
 int api_register_dlv(char *msg, size_t n)
 {
     char path[4200];
-    const char *home = getenv("HOME");
-    snprintf(path, sizeof path, "%s/.config/dlv/client.json", home ? home : ".");
-    FILE *f = api.active ? fopen(path, "rb") : NULL;
+    const char *home = getenv("HOME"), *over = getenv("SCRAP_DLV_CONFIG");
+    if (over)
+        snprintf(path, sizeof path, "%s", over);
+    else
+        snprintf(path, sizeof path, "%s/.config/dlv/client.json", home ? home : ".");
+    FILE *f = api.active && *path ? fopen(path, "rb") : NULL;
     if (!f)
         return 0;
     char text[8192];

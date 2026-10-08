@@ -138,7 +138,7 @@ cmd_start() {
         path="$dir/bin:$PATH"
     fi
     local cmd
-    cmd="$(printf '%q ' env "PATH=$path" "SCRAPRIG_FIXTURE=$fixture" \
+    cmd="$(printf '%q ' env "PATH=$path" "SCRAPRIG_FIXTURE=$fixture" "SCRAP_DLV_CONFIG=$dir/state/dlv-client.json" \
         "$scrap" --state "$dir/state" "$@")2>$(printf '%q' "$dir/stderr")"
     tm "$name" -f /dev/null new-session -d -s rig -x "${size%x*}" -y "${size#*x}" \
         -c "$dir/work" "exec $cmd" \; \
@@ -189,7 +189,7 @@ cmd_expect() {
 
 cli_env() {
     local d="$ROOT/$1/state"
-    printf '%q ' env "SCRAP_CONFIG_DIR=$d/config" "AGENT_TABS_STATE_DIR=$d/tabs" "TMPDIR=$d/tmp" \
+    printf '%q ' env "SCRAP_CONFIG_DIR=$d/config" "AGENT_TABS_STATE_DIR=$d/tabs" "TMPDIR=$d/tmp" "SCRAP_DLV_CONFIG=$d/dlv-client.json" \
         "$(cat "$ROOT/$1/scrap")"
 }
 
@@ -283,7 +283,7 @@ say)
 cli)
     inst "${1:-}"
     d="$ROOT/$1/state"
-    env "SCRAP_CONFIG_DIR=$d/config" "AGENT_TABS_STATE_DIR=$d/tabs" "TMPDIR=$d/tmp" \
+    env "SCRAP_CONFIG_DIR=$d/config" "AGENT_TABS_STATE_DIR=$d/tabs" "TMPDIR=$d/tmp" "SCRAP_DLV_CONFIG=$d/dlv-client.json" \
         "$(cat "$ROOT/$1/scrap")" "${@:2}" ;;
 stream) inst "${1:-}"; [ $# -eq 3 ] || usage; cmd_stream "$@" ;;
 relay)
