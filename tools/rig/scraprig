@@ -126,7 +126,10 @@ cmd_start() {
         printf '{"default":"fake/echo","providers":{"fake":{"base_url":"http://127.0.0.1:%s/v1","list":false,"models":{"echo":{"context":20000}}}},"compactor_backend":"core","compactor_model":"fake/echo"}\n' \
             "$(cat "$dir/openai.port")" > "$conf/agent/providers.json"
     fi
-    local path="$PATH"
+    mkdir -p "$dir/clip"
+    local t
+    for t in pbcopy pbpaste xclip wl-copy; do ln -s "$RIG_HOME/fake-pbcopy" "$dir/clip/$t"; done
+    local path="$dir/clip:$PATH"
     if [ "$fake" = 1 ]; then
         ln -s "$RIG_HOME/fake-claude" "$dir/bin/claude"
         ln -s "$RIG_HOME/fake-backend" "$dir/bin/codex"
@@ -135,10 +138,10 @@ cmd_start() {
         ln -s "$RIG_HOME/fake-jev" "$dir/bin/jev"
         ln -s "$RIG_HOME/fake-mem" "$dir/bin/mem"
         ln -s "$scrap" "$dir/bin/scrap"
-        path="$dir/bin:$PATH"
+        path="$dir/bin:$path"
     fi
     local cmd
-    cmd="$(printf '%q ' env "PATH=$path" "SCRAPRIG_FIXTURE=$fixture" "SCRAP_DLV_CONFIG=$dir/state/dlv-client.json" \
+    cmd="$(printf '%q ' env "PATH=$path" "SCRAPRIG_FIXTURE=$fixture" "SCRAPRIG_CLIPBOARD=$dir/clipboard" "SCRAP_DLV_CONFIG=$dir/state/dlv-client.json" \
         "$scrap" --state "$dir/state" "$@")2>$(printf '%q' "$dir/stderr")"
     tm "$name" -f /dev/null new-session -d -s rig -x "${size%x*}" -y "${size#*x}" \
         -c "$dir/work" "exec $cmd" \; \

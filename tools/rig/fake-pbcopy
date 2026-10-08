@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Rig stand-in for the clipboard tools: keeps scrap off the user's real pasteboard.
+# Named pbcopy/xclip/wl-copy it stores stdin in $SCRAPRIG_CLIPBOARD; named pbpaste it prints it.
+clip="${SCRAPRIG_CLIPBOARD:?SCRAPRIG_CLIPBOARD not set}"
+case "${0##*/}" in
+pbpaste) cat "$clip" 2>/dev/null; exit 0 ;;
+*) cat > "$clip" ;;
+esac
