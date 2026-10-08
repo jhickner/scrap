@@ -430,14 +430,20 @@ int tailnet_send(const char *host, const char *from, const char *target, const c
         cJSON_AddBoolToObject(req, "interrupt", 1);
     if (flags & INTERCOM_REPLY)
         cJSON_AddBoolToObject(req, "reply", 1);
+    if (flags & INTERCOM_STEER)
+        cJSON_AddBoolToObject(req, "steer", 1);
     char   err[512];
     cJSON *r = ask(ip, tailnet_dir_port(), req, SEND_TIMEOUT, err, sizeof err);
     if (!r) {
         snprintf(msg, size, "%s: %s", host, err);
         return 1;
     }
+    const char *note = cJSON_GetStringValue(cJSON_GetObjectItem(r, "note"));
+    if (note)
+        snprintf(msg, size, "sent to %s:%s (%s)", host, target, note);
+    else
+        snprintf(msg, size, "sent to %s:%s", host, target);
     cJSON_Delete(r);
-    snprintf(msg, size, "sent to %s:%s", host, target);
     return 0;
 }
 

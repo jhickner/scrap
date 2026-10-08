@@ -500,6 +500,7 @@ static void entries_load(struct log *l, int keep)
 }
 
 static void mirror_prompt(struct log *l);
+static cJSON *user_entry(struct log *l, const char *p);
 
 static struct log *log_find(const struct session *s)
 {
@@ -574,9 +575,31 @@ static cJSON *live_obj(struct session *s)
     if (pct > 0)
         cJSON_AddNumberToObject(o, "context", pct);
     cJSON *q = cJSON_AddArrayToObject(o, "queue");
+    cJSON *items = cJSON_AddArrayToObject(o, "items");
     int tab = workspace_index_of(s);
-    for (int i = 0; i < workspace_queued(tab); i++)
-        cJSON_AddItemToArray(q, cJSON_CreateString(workspace_pending_at(tab, i)));
+    for (int i = 0; i < workspace_queued(tab); i++) {
+        static const char *const STATES[] = {[WSQ_QUEUED] = "queued", [WSQ_STEER] = "steer",
+                                             [WSQ_SENT] = "sent"};
+        int    state;
+        char  *tool;
+        double since;
+        char  *text = workspace_pending_item(tab, i, &state, &tool, &since);
+        if (!text) {
+            free(tool);
+            continue;
+        }
+        cJSON_AddItemToArray(q, cJSON_CreateString(text));
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "text", text);
+        cJSON_AddStringToObject(e, "state", STATES[state]);
+        if (tool) {
+            cJSON_AddStringToObject(e, "tool", tool);
+            cJSON_AddNumberToObject(e, "since", since);
+        }
+        cJSON_AddItemToArray(items, e);
+        free(text);
+        free(tool);
+    }
     /* The window's tabs, as the terminal's tab box shows them. */
     cJSON *tabs = cJSON_AddArrayToObject(o, "tabs");
     for (int i = 0; i < workspace_count(); i++) {
@@ -861,6 +884,10 @@ static void on_event(void *ud, struct session *s, const backend_event *ev)
         if (ev->text && *ev->text)
             entry_add(l, entry_new("note", ev->text));
         break;
+    case BACKEND_EV_USER:
+        if (ev->text && *ev->text)
+            entry_add(l, user_entry(l, ev->text));
+        break;
     default:
         break;
     }
@@ -883,6 +910,11 @@ static void mirror_prompt(struct log *l)
     const char *p = session_prompt(s);
     if (!p || !*p)
         return;
+    entry_add(l, user_entry(l, p));
+}
+
+static cJSON *user_entry(struct log *l, const char *p)
+{
     cJSON *e = entry_new("user", p);
     for (int i = 0; l == rt.cur && i < rt.nsent; i++) {
         if (!strstr(p, rt.sent[i].text))
@@ -893,7 +925,7 @@ static void mirror_prompt(struct log *l)
         rt.nsent--;
         break;
     }
-    entry_add(l, e);
+    return e;
 }
 
 void relay_turn_done(struct session *s)
@@ -986,6 +1018,7 @@ struct submit_ctx {
     const char *req;
     const char *text;
     cJSON      *res;
+    int         queue;
 };
 
 /* A list the command would have shown; the client answers with `command` and a label. */
@@ -1020,7 +1053,7 @@ static void submit(struct session *s, void *ud)
     if (!command) {
         rt.cur->repeat_task = 0;
         remember_sent(c->req, line);
-        cmd_submit(s, line);
+        cmd_submit_ex(s, line, c->queue);
         frontend_pop();
         c->res = res_ok(c->req);
         return;
@@ -1085,7 +1118,7 @@ static void shell(struct session *s, void *ud)
     free(out);
 }
 
-static cJSON *run_line(const char *req, const char *text)
+static cJSON *run_line(const char *req, const char *text, int queue)
 {
     struct session *s = relay_session();
     if (!text)
@@ -1099,7 +1132,7 @@ static cJSON *run_line(const char *req, const char *text)
         workspace_render(workspace_index_of(s), shell, (void *)text);
         return res_ok(req);
     }
-    struct submit_ctx c = {req, text, NULL};
+    struct submit_ctx c = {req, text, NULL, queue};
     workspace_render(workspace_index_of(s), submit, &c);
     return c.res ? c.res : res_error(req, "failed", "not submitted");
 }
@@ -1123,7 +1156,7 @@ static cJSON *do_answer(const char *req, const cJSON *msg)
         }
         char *line = askblock_answer(rt.ask, choice, text,
                                      cJSON_GetStringValue(cJSON_GetObjectItem(msg, "reply")));
-        res = line && *line ? run_line(req, line) : res_error(req, "invalid", "no answer given");
+        res = line && *line ? run_line(req, line, 0) : res_error(req, "invalid", "no answer given");
         free(line);
     }
     free(choice);
@@ -1363,7 +1396,9 @@ static void run_request(int client, const cJSON *msg)
 
     cJSON *res;
     if (!strcmp(op, "send"))
-        res = run_line(req, cJSON_GetStringValue(cJSON_GetObjectItem(msg, "text")));
+        res = run_line(req, cJSON_GetStringValue(cJSON_GetObjectItem(msg, "text")),
+                       cJSON_IsString(cJSON_GetObjectItem(msg, "mode")) &&
+                           !strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(msg, "mode")), "queue"));
     else if (!strcmp(op, "answer"))
         res = do_answer(req, msg);
     else if (!strcmp(op, "stop")) {

@@ -17,7 +17,6 @@
 #include "sessionview.h"
 #include "settings.h"
 #include "sidechannel.h"
-#include "sideroute.h"
 #include "status.h"
 #include "stamp.h"
 #include "tabbar.h"
@@ -545,6 +544,31 @@ int workspace_fds(int *out, int max)
 }
 
 static void send_next(int index, int hold);
+static int  join(char **dst, const char *text);
+
+static void absorb_steers(int index)
+{
+    struct tab *t = &tabs[index];
+    char       *line, *shown;
+    if (!session_steer_leftover(t->s, &line, &shown))
+        return;
+    if (t->npending >= PENDING_MAX) {
+        struct pending *first = &t->pending[0];
+        if (join(&line, first->line) && (!shown || join(&shown, first->shown ? first->shown : first->line))) {
+            free(first->line);
+            free(first->shown);
+            first->line = line;
+            first->shown = shown;
+            return;
+        }
+        free(line);
+        free(shown);
+        return;
+    }
+    memmove(t->pending + 1, t->pending, (size_t)t->npending * sizeof *t->pending);
+    t->pending[0] = (struct pending){.line = line, .shown = shown};
+    t->npending++;
+}
 
 static int ask_holds(const struct tab *t)
 {
@@ -651,6 +675,7 @@ static int pump(int hold, int screen)
 
         session_agent_poll(s);
         if (running && !session_turn_running(s)) {
+            absorb_steers(i);
             tabs[i].finished = 1;
             if (i != cur)
                 session_set_unseen(s, 1);
@@ -713,6 +738,7 @@ void workspace_settle(struct session *s)
 
     enter(at);
     session_turn_wait(s);
+    absorb_steers(at);
     tabs[at].finished = 0;
     if (on_finish)
         on_finish(s);
@@ -731,6 +757,7 @@ void workspace_wait_turn(int index)
 
     enter(index);
     session_turn_wait(s);
+    absorb_steers(index);
     tabs[index].finished = 0;
     if (on_finish)
         on_finish(s);
@@ -881,20 +908,6 @@ static void put_first(struct tab *t, struct pending p)
     session_interrupt(t->s);
 }
 
-static int send_first(struct tab *t, const char *line, const char *shown, int typed)
-{
-    if (t->npending >= PENDING_MAX)
-        return 0;
-    struct pending p = {.line = strdup(line), .shown = shown ? strdup(shown) : NULL, .typed = typed};
-    if (!p.line || (shown && !p.shown)) {
-        free(p.line);
-        free(p.shown);
-        return 0;
-    }
-    put_first(t, p);
-    return 1;
-}
-
 static int frame(struct pending *p, const char *answer)
 {
     char *line = answer ? text_dsprintf("[from %s; a fork of this session already replied: "
@@ -939,51 +952,50 @@ static void echo(struct session *s, void *ud)
     prompt_echo_message(ud);
 }
 
-int workspace_message(int index, const char *from, const char *text, int interrupt, int reply)
+int workspace_message(int index, const char *from, const char *text, int interrupt, int reply,
+                      int steer)
 {
     if (index < 0 || index >= ntabs || !from || !text || !*text)
-        return 0;
+        return WSMSG_FAILED;
     struct tab    *t = &tabs[index];
     struct pending p = {.from = strdup(from), .text = strdup(text), .serial = ++serials};
     if (!p.from || !p.text || !frame(&p, NULL)) {
         pending_free(&p);
-        return 0;
+        return WSMSG_FAILED;
     }
     if (!session_turn_running(t->s) && !session_ask_open(t->s)) {
         workspace_render(index, echo, p.shown);
         int ok = workspace_send(index, p.line, p.shown);
         pending_free(&p);
-        return ok;
+        return ok ? WSMSG_STARTED : WSMSG_FAILED;
+    }
+    if (steer && session_turn_running(t->s) && session_steer(t->s, p.line, p.shown)) {
+        pending_free(&p);
+        return WSMSG_STEERED;
     }
     if (t->npending >= PENDING_MAX) {
         pending_free(&p);
-        return 0;
+        return WSMSG_FAILED;
     }
     if (interrupt && !session_remote(t->s)) {
         put_first(t, p);
         send_next(index, 0);
-        return 1;
+        return WSMSG_QUEUED;
     }
     t->pending[t->npending++] = p;
     const char *id = session_id(t->s);
     if (!reply && id && session_can_resume(t->s) && !session_remote(t->s))
         sidechannel_inbox(t->s, p.line, inbox_done, (void *)(uintptr_t)p.serial);
     send_next(index, 0);
-    return 1;
-}
-
-static int redirect(struct tab *t, const char *text, const char *full)
-{
-    struct pending *last = t->npending ? &t->pending[t->npending - 1] : NULL;
-    if (last && last->typed) {
-        prompt_hold(last->shown ? last->shown : last->line);
-        free(last->shown ? last->line : NULL);
-        t->npending--;
-    }
-    return send_first(t, full ? full : text, full ? text : NULL, 1);
+    return WSMSG_QUEUED;
 }
 
 int workspace_send_typed(int index, const char *text, const char *full)
+{
+    return workspace_send_typed_ex(index, text, full, 0);
+}
+
+int workspace_send_typed_ex(int index, const char *text, const char *full, int queue)
 {
     if (index < 0 || index >= ntabs || !text || !*text)
         return 0;
@@ -991,16 +1003,8 @@ int workspace_send_typed(int index, const char *text, const char *full)
     if (!session_turn_running(t->s))
         return workspace_send(index, full ? full : text, full ? text : NULL);
 
-    enum sideroute route = session_remote(t->s)
-                               ? SIDEROUTE_QUEUE
-                               : sideroute_classify(session_prompt(t->s), text);
-    if (route == SIDEROUTE_SIDE) {
-        char label[4096];
-        snprintf(label, sizeof label, "/btw %s", text);
-        if (sidechannel_start(t->s, text, label))
-            return 1;
-    }
-    if (route == SIDEROUTE_REDIRECT && redirect(t, text, full))
+    if (!queue && session_can_steer(t->s) &&
+        session_steer(t->s, full ? full : text, full ? text : NULL))
         return 1;
 
     struct pending *last = t->npending ? &t->pending[t->npending - 1] : NULL;
@@ -1015,7 +1019,9 @@ int workspace_send_typed(int index, const char *text, const char *full)
 
 int workspace_queued(int index)
 {
-    return index >= 0 && index < ntabs ? tabs[index].npending : 0;
+    return index >= 0 && index < ntabs
+               ? tabs[index].npending + session_steer_count(tabs[index].s)
+               : 0;
 }
 
 int workspace_holding(int index)
@@ -1025,10 +1031,37 @@ int workspace_holding(int index)
 
 const char *workspace_pending_at(int index, int i)
 {
-    if (index < 0 || index >= ntabs || i < 0 || i >= tabs[index].npending)
+    if (index < 0 || index >= ntabs || i < 0)
+        return NULL;
+    int steers = session_steer_count(tabs[index].s);
+    if (i < steers)
+        return session_steer_label(tabs[index].s, i);
+    i -= steers;
+    if (i >= tabs[index].npending)
         return NULL;
     const struct pending *p = &tabs[index].pending[i];
     return p->shown ? p->shown : p->line;
+}
+
+char *workspace_pending_item(int index, int i, int *state, char **tool, double *since)
+{
+    *state = WSQ_QUEUED;
+    *tool = NULL;
+    *since = 0;
+    if (index < 0 || index >= ntabs || i < 0)
+        return NULL;
+    int steers = session_steer_count(tabs[index].s);
+    if (i < steers) {
+        char *text;
+        int   st = session_steer_item(tabs[index].s, i, &text, tool, since);
+        *state = st == STEER_PENDING ? WSQ_STEER : st == STEER_SENT ? WSQ_SENT : WSQ_QUEUED;
+        return text;
+    }
+    i -= steers;
+    if (i >= tabs[index].npending)
+        return NULL;
+    const struct pending *p = &tabs[index].pending[i];
+    return strdup(p->shown ? p->shown : p->line);
 }
 
 int workspace_dequeue(int index, const char *line)
@@ -1036,6 +1069,8 @@ int workspace_dequeue(int index, const char *line)
     if (index < 0 || index >= ntabs || !line)
         return 0;
     struct tab *t = &tabs[index];
+    if (session_steer_drop(t->s, line))
+        return 1;
     for (int i = 0; i < t->npending; i++) {
         if (strcmp(t->pending[i].line, line) &&
             (!t->pending[i].shown || strcmp(t->pending[i].shown, line)))
@@ -1051,8 +1086,10 @@ int workspace_dequeue(int index, const char *line)
 
 char *workspace_unqueue(int index)
 {
-    if (index < 0 || index >= ntabs || !tabs[index].npending)
+    if (index < 0 || index >= ntabs)
         return NULL;
+    if (!tabs[index].npending)
+        return session_steer_recall(tabs[index].s);
     struct pending *p = &tabs[index].pending[--tabs[index].npending];
 
     char *back = p->shown ? p->shown : p->line;

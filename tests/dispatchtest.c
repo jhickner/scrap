@@ -108,9 +108,11 @@ int workspace_send(int index, const char *line, const char *shown)
     snprintf(last_send, sizeof last_send, "%s", line ? line : "");
     return 1;
 }
-int workspace_message(int index, const char *from, const char *text, int interrupt, int reply)
+int workspace_message(int index, const char *from, const char *text, int interrupt, int reply,
+                      int steer)
 {
     (void)interrupt;
+    (void)steer;
     message_n++;
     last_reply = reply;
     snprintf(last_from, sizeof last_from, "%s", from ? from : "");
@@ -145,6 +147,8 @@ const char *session_name(const struct session *s)
 void session_replay(struct session *s) { (void)s; }
 const char *session_title(const struct session *s) { (void)s; return ""; }
 const char *session_remote(const struct session *s) { (void)s; return NULL; }
+const char *session_backend(const struct session *s) { (void)s; return "claude"; }
+int session_can_steer(const struct session *s) { (void)s; return 0; }
 void workspace_replay(int index) { (void)index; }
 int cmd_attach_tab(const char *target, char *why, size_t size) { (void)target; (void)why; (void)size; return -1; }
 int session_set_name(struct session *s, const char *name)

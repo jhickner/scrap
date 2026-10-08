@@ -47,11 +47,18 @@ int  workspace_close(int index);
 
 int  workspace_send(int index, const char *line, const char *shown);
 int  workspace_send_typed(int index, const char *text, const char *full);
-int  workspace_message(int index, const char *from, const char *text, int interrupt, int reply);
+int  workspace_send_typed_ex(int index, const char *text, const char *full, int queue);
+enum { WSMSG_FAILED, WSMSG_QUEUED, WSMSG_STARTED, WSMSG_STEERED };
+
+int  workspace_message(int index, const char *from, const char *text, int interrupt, int reply,
+                       int steer);
 int  workspace_queued(int index);
 int  workspace_holding(int index);
 
 const char *workspace_pending_at(int index, int i);
+
+enum { WSQ_QUEUED, WSQ_STEER, WSQ_SENT };
+char *workspace_pending_item(int index, int i, int *state, char **tool, double *since);
 
 char *workspace_unqueue(int index);
 

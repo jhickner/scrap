@@ -97,6 +97,7 @@ typedef enum {
     CODEX_EV_TRUST,         /* text: project path awaiting trust approval   */
     CODEX_EV_WARNING,       /* text: actionable app-server config warning  */
     CODEX_EV_TASK,          /* id + name (status) + text: a sub-agent      */
+    CODEX_EV_USER,
 } codex_event_kind;
 
 typedef struct {
@@ -114,6 +115,8 @@ void codex_set_event_cb(codex_client *c,
                         void (*cb)(void *ud, const codex_event *ev),
                         void *ud);
 void codex_set_abort_check(codex_client *c, int (*cb)(void));
+void codex_set_steer(codex_client *c, int (*take)(void *ud, char **id, char **text),
+                     void (*refuse)(void *ud, const char *id), void *ud);
 /* Sub-agents run past the turn that spawned them, and a config warning can
  * arrive while app-server is warming. Watch this fd between turns and pump it
  * on the UI thread; the pump reports whether sub-agent work is still running. */
@@ -214,6 +217,12 @@ struct codex_client {
     pthread_t warm_thread;
     int warm_joinable;
     atomic_int warm_state;     /* 0 while starting, 1 ready, -1 failed */
+    int  (*steer_take)(void *ud, char **id, char **text);
+    void (*steer_refuse)(void *ud, const char *id);
+    void *steer_ud;
+    char steer_turn[128];
+    struct { char *id, *text; int req; } steers[16];
+    int nsteers;
 };
 
 static char *cx_dup(const char *s) { return (s && *s) ? strdup(s) : NULL; }
@@ -607,11 +616,75 @@ static int cx_fill(codex_client *c, int timeout_ms) {
     return 1;
 }
 
+static void cx_steer_drop(codex_client *c, int i, int refuse) {
+    if (refuse && c->steer_refuse) c->steer_refuse(c->steer_ud, c->steers[i].id);
+    free(c->steers[i].id);
+    free(c->steers[i].text);
+    memmove(c->steers + i, c->steers + i + 1, (size_t)(c->nsteers - i - 1) * sizeof c->steers[0]);
+    c->nsteers--;
+}
+
+static void cx_steer_pull(codex_client *c) {
+    char *id, *text;
+    while (c->steer_take && c->nsteers < 16 && c->steer_take(c->steer_ud, &id, &text)) {
+        if (!id || !text || !*text) {
+            if (id && c->steer_refuse) c->steer_refuse(c->steer_ud, id);
+            free(id); free(text);
+            continue;
+        }
+        cJSON *p = cJSON_CreateObject(), *input = cJSON_CreateArray(), *t = cJSON_CreateObject();
+        cJSON_AddStringToObject(t, "type", "text");
+        cJSON_AddStringToObject(t, "text", text);
+        cJSON_AddItemToArray(input, t);
+        cJSON_AddStringToObject(p, "threadId", c->session_id);
+        cJSON_AddItemToObject(p, "input", input);
+        cJSON_AddStringToObject(p, "expectedTurnId", c->steer_turn);
+        cJSON_AddStringToObject(p, "clientUserMessageId", id);
+        int req = cx_request(c, "turn/steer", p);
+        if (!req) {
+            if (c->steer_refuse) c->steer_refuse(c->steer_ud, id);
+            free(id); free(text);
+            continue;
+        }
+        c->steers[c->nsteers].id = id;
+        c->steers[c->nsteers].text = text;
+        c->steers[c->nsteers].req = req;
+        c->nsteers++;
+    }
+}
+
+static int cx_steer_response(codex_client *c, cJSON *msg) {
+    cJSON *jid = cJSON_GetObjectItemCaseSensitive(msg, "id");
+    if (!cJSON_IsNumber(jid)) return 0;
+    for (int i = 0; i < c->nsteers; i++) {
+        if (c->steers[i].req != jid->valueint) continue;
+        if (cJSON_GetObjectItemCaseSensitive(msg, "error")) cx_steer_drop(c, i, 1);
+        else c->steers[i].req = 0;
+        return 1;
+    }
+    return 0;
+}
+
+static void cx_steer_landed(codex_client *c, cJSON *params) {
+    cJSON *item = params ? cJSON_GetObjectItemCaseSensitive(params, "item") : NULL;
+    const char *type = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "type"));
+    const char *id = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(item, "clientId"));
+    if (!type || strcmp(type, "userMessage") || !id) return;
+    for (int i = 0; i < c->nsteers; i++) {
+        if (strcmp(c->steers[i].id, id)) continue;
+        codex_event ev = { .kind = CODEX_EV_USER, .id = c->steers[i].id, .text = c->steers[i].text };
+        cx_emit(c, &ev);
+        cx_steer_drop(c, i, 0);
+        return;
+    }
+}
+
 static int cx_read(codex_client *c, cJSON **out, int honor_abort) {
     *out = NULL;
     for (;;) {
         if (cx_line(c, out)) return 1;
         if (honor_abort && c->abort && c->abort()) return 0;
+        if (honor_abort && c->steer_turn[0]) cx_steer_pull(c);
         if (cx_fill(c, CX_TICK_MS) < 0) return -1;
     }
 }
@@ -1526,6 +1599,7 @@ static char *cx_send_ex(codex_client *c, const char *user_text, int continuation
     cJSON_Delete(response);
     if (!turn_id[0]) return NULL;
     c->effort_changed = 0;
+    if (c->steer_take) snprintf(c->steer_turn, sizeof c->steer_turn, "%s", turn_id);
 
     char *answer = NULL, *fallback = NULL;
     int completed = 0, failed = 0, interrupted = 0;
@@ -1548,6 +1622,7 @@ static char *cx_send_ex(codex_client *c, const char *user_text, int continuation
         cJSON *params = cJSON_GetObjectItemCaseSensitive(msg, "params");
         if (jid && method) {
             cx_reject_server_request(c, msg);
+        } else if (jid && cx_steer_response(c, msg)) {
         } else if (method && cx_handle_notification(c, msg)) {
             /* accounting notification retained above */
         } else if (method && !strcmp(method, "item/agentMessage/delta")) {
@@ -1555,6 +1630,7 @@ static char *cx_send_ex(codex_client *c, const char *user_text, int continuation
                 cJSON_GetObjectItemCaseSensitive(params, "delta")) : NULL;
             if (d) { cx_append(&answer, d); cx_text_event(c, CODEX_EV_ASSISTANT, d); }
         } else if (method && !strcmp(method, "item/started")) {
+            cx_steer_landed(c, params);
             cx_item_event(c, params, 1, &fallback);
         } else if (method && !strcmp(method, "item/completed")) {
             cx_item_event(c, params, 0, &fallback);
@@ -1578,6 +1654,8 @@ static char *cx_send_ex(codex_client *c, const char *user_text, int continuation
         }
         cJSON_Delete(msg);
     }
+    c->steer_turn[0] = '\0';
+    while (c->nsteers) cx_steer_drop(c, c->nsteers - 1, 1);
     if (!answer && fallback) { answer = fallback; fallback = NULL; }
     free(fallback);
     if (failed || !completed) { free(answer); return NULL; }
@@ -1590,6 +1668,14 @@ static char *cx_send_ex(codex_client *c, const char *user_text, int continuation
         meta->cache_creation_tokens = c->total_cache_write - c->mark_cache_write;
     }
     return answer ? answer : strdup("");
+}
+
+void codex_set_steer(codex_client *c, int (*take)(void *ud, char **id, char **text),
+                     void (*refuse)(void *ud, const char *id), void *ud) {
+    if (!c) return;
+    c->steer_take = take;
+    c->steer_refuse = refuse;
+    c->steer_ud = ud;
 }
 
 char *codex_send_ex(codex_client *c, const char *user_text, codex_result *meta) {
@@ -1619,6 +1705,7 @@ static int cx_reap_within(codex_client *c, int ms) {
 
 void codex_stop(codex_client *c) {
     if (!c) return;
+    while (c->nsteers) cx_steer_drop(c, c->nsteers - 1, 0);
     if (c->in_fd >= 0) close(c->in_fd);     /* EOF on stdin asks it to exit */
     /* The startup worker reaps the child and zeroes c->pid when stdout closes;
      * racing it here would turn the kill below into kill(0, SIGKILL). */

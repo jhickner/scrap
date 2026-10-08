@@ -1599,6 +1599,53 @@ static void cap_passes_test(void)
     wipe(dir);
 }
 
+static void replay_fixture_test(void)
+{
+    const char *fixture = "tests/data/optchat-replay";
+    char dir[] = "/tmp/optchattest.XXXXXX";
+    char err[512], cmd[700], path[600];
+    if (!mkdtemp(dir)) {
+        failures++;
+        return;
+    }
+    snprintf(cmd, sizeof cmd, "cp -R %s/memory/. %s/", fixture, dir);
+    if (system(cmd)) {
+        failures++;
+        wipe(dir);
+        return;
+    }
+    oc_mem *m = oc_open(dir, 0, 0, err, sizeof err);
+    CHECK(m);
+    if (!m) {
+        wipe(dir);
+        return;
+    }
+    char *plain = oc_render(m, 0), *marked = oc_render(m, 1);
+    size_t n = strlen(plain) + strlen(marked) + 32;
+    char *got = malloc(n);
+    snprintf(got, n, "%s\n--- marked\n%s\n", plain, marked);
+    snprintf(path, sizeof path, "%s/render.txt", fixture);
+    if (getenv("OPTCHAT_REPLAY_UPDATE")) {
+        FILE *f = fopen(path, "w");
+        CHECK(f);
+        if (f) {
+            fputs(got, f);
+            fclose(f);
+        }
+    } else {
+        size_t len;
+        char *want = oc_slurp(path, &len);
+        CHECK(want && !strcmp(want, got));
+        free(want);
+    }
+    CHECK(oc_count(m) == 12);
+    free(got);
+    free(plain);
+    free(marked);
+    oc_close(m);
+    wipe(dir);
+}
+
 int main(void)
 {
     char dir[] = "/tmp/optchattest.XXXXXX";
@@ -1733,6 +1780,7 @@ int main(void)
     repair_test();
     cap_test();
     cap_passes_test();
+    replay_fixture_test();
     CHECK(strstr(OC_COMPACT, "\"message N (kind):\"") && strstr(OC_COMPACT, "a recall"));
     if (failures)
         fprintf(stderr, "%d failure(s)\n", failures);

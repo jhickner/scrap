@@ -249,6 +249,8 @@ char *intercom_note(const char *name)
         "- `scrap send --interrupt TARGET TEXT` stops the session's current turn and delivers "
         "the message now. Use it only when the message changes what that session should be "
         "doing right now.\n"
+        "- `scrap send --steer TARGET TEXT` adds the message to the session's running turn "
+        "at its next tool step, without stopping it; it queues when the session cannot steer.\n"
         "- `scrap send @%s /COMMAND` runs a scrap command such as /clear on this session "
         "once the current turn ends; only this session can do this to itself.\n"
         "- `scrap open TARGET` resumes a past session in a new tab.\n"
@@ -937,6 +939,8 @@ int intercom_deliver(const char *host, const char *from, const char *target, con
             cJSON_AddBoolToObject(o, "interrupt", 1);
         if (flags & INTERCOM_REPLY)
             cJSON_AddBoolToObject(o, "reply", 1);
+        if (flags & INTERCOM_STEER)
+            cJSON_AddBoolToObject(o, "steer", 1);
         if (host && *host)
             cJSON_AddStringToObject(o, "host", host);
         else
@@ -944,8 +948,11 @@ int intercom_deliver(const char *host, const char *from, const char *target, con
         if (request(e->pid, o, reply, sizeof reply)) {
             cJSON      *r = cJSON_Parse(reply);
             const char *error = cJSON_GetStringValue(cJSON_GetObjectItem(r, "error"));
+            const char *note = cJSON_GetStringValue(cJSON_GetObjectItem(r, "note"));
             if (error)
                 snprintf(msg, size, "%s", error);
+            else if (note)
+                snprintf(msg, size, "sent to @%s (%s)", e->name[0] ? e->name : e->id, note);
             else
                 snprintf(msg, size, "sent to @%s", e->name[0] ? e->name : e->id);
             rc = error ? 1 : 0;
@@ -1016,14 +1023,17 @@ static int cmd_send(int argc, char **argv)
             flags |= INTERCOM_INTERRUPT;
         else if (!strcmp(argv[1], "--reply"))
             flags |= INTERCOM_REPLY;
+        else if (!strcmp(argv[1], "--steer"))
+            flags |= INTERCOM_STEER;
         else if (!strcmp(argv[1], "--from") && argc > 2) {
             snprintf(me, sizeof me, "%s", argv[2]);
             argv++;
             argc--;
         } else
             break;
-    if (argc < 3) {
-        fprintf(stderr, "usage: scrap send [--interrupt] [--reply] [--from NAME] TARGET TEXT\n");
+    if (argc < 3 || ((flags & INTERCOM_STEER) && (flags & INTERCOM_INTERRUPT))) {
+        fprintf(stderr,
+                "usage: scrap send [--interrupt | --steer] [--reply] [--from NAME] TARGET TEXT\n");
         return 2;
     }
     char *text = join_args(argc - 2, argv + 2);
@@ -1409,6 +1419,8 @@ static int cmd_attach(int argc, char **argv)
             cJSON *o = cJSON_CreateObject();
             if (!strcmp(typed, "!interrupt"))
                 cJSON_AddBoolToObject(o, "interrupt", 1);
+            else if (!strncmp(typed, "!steer ", 7))
+                cJSON_AddStringToObject(o, "steer", typed + 7);
             else
                 cJSON_AddStringToObject(o, "prompt", typed);
             char *json = cJSON_PrintUnformatted(o);

@@ -38,6 +38,17 @@ def reply(msgs):
         return chunk({"content": "status: " + ("sees the turn" if saw else "blind")})
     if last.get("role") == "tool":
         return chunk({"content": "tool said: " + content[:200]})
+    tail = []
+    for m in reversed(msgs):
+        if m.get("role") != "user":
+            break
+        tail.insert(0, text_of(m))
+    if len(tail) > 1 or (len(msgs) > len(tail) and msgs[-len(tail) - 1].get("role") == "tool"):
+        return chunk({"content": "steered: " + " | ".join(t[:200] for t in tail)})
+    if content.startswith("slow: "):
+        secs, said = content[6:].split(" ", 1)
+        time.sleep(float(secs))
+        return chunk({"content": "slowdone: " + said})
     if content.startswith("spawnin: "):
         cwd, task = content[9:].split(" ", 1)
         return tool_call("agent", {"task": task, "cwd": cwd})

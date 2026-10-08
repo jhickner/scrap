@@ -125,6 +125,7 @@ typedef enum {
     GROK_EV_TASK,        /* id, name (status), text (description or result),
                             arg (subagent type), task_type: a background
                             subagent or command, which outlives its turn     */
+    GROK_EV_USER,
 } grok_event_kind;
 
 typedef struct {
@@ -176,6 +177,8 @@ int grok_interrupt(grok_client *c);
  * still polled during the handshake so it can tick a UI, but cancel waits
  * until a session exists. */
 void grok_set_abort_check(grok_client *c, int (*cb)(void));
+void grok_set_steer(grok_client *c, int (*take)(void *ud, char **id, char **text),
+                    void (*refuse)(void *ud, const char *id), void *ud);
 
 /* The tail of anything the CLI wrote to stderr, or NULL if it has been quiet.
  * The child's stderr is captured rather than passed through, so a log line
@@ -279,10 +282,22 @@ struct grok_client {
     int   n_tasks;
     int   turn_open;          /* a turn grok started itself is running      */
     char *owed;               /* finished work no turn has answered yet     */
+    int  (*steer_take)(void *ud, char **id, char **text);
+    void (*steer_refuse)(void *ud, const char *id);
+    void *steer_ud;
+    struct { char *id, *text; int req, acked; } steers[16];
+    int   nsteers;
 };
 
 void grok_set_verbose(grok_client *c, int on) { if (c) c->verbose = on; }
 void grok_set_abort_check(grok_client *c, int (*cb)(void)) { if (c) c->abort = cb; }
+void grok_set_steer(grok_client *c, int (*take)(void *ud, char **id, char **text),
+                    void (*refuse)(void *ud, const char *id), void *ud) {
+    if (!c) return;
+    c->steer_take = take;
+    c->steer_refuse = refuse;
+    c->steer_ud = ud;
+}
 void grok_set_event_cb(grok_client *c,
                        void (*cb)(void *ud, const grok_event *ev),
                        void *ud) {
@@ -340,7 +355,8 @@ static void gk_emit(grok_client *c, const grok_event *ev) {
             ev->kind == GROK_EV_TOOL        ? "tool"      :
             ev->kind == GROK_EV_TOOL_RESULT ? "tool-result" :
             ev->kind == GROK_EV_CWD         ? "cwd"         :
-            ev->kind == GROK_EV_TASK        ? "task"        : "?";
+            ev->kind == GROK_EV_TASK        ? "task"        :
+            ev->kind == GROK_EV_USER        ? "user"        : "?";
         const char *text = ev->text ? ev->text : ev->name ? ev->name : "";
         fprintf(stderr, "  [%s] %.400s%s\n", kind, text, strlen(text) > 400 ? " ..." : "");
     }
@@ -375,6 +391,71 @@ int grok_interrupt(grok_client *c) {
     cJSON_AddStringToObject(p, "sessionId", c->session_id);
     c->cancelling = 1;
     return gk_write(c, n);
+}
+
+static void gk_steer_drop(grok_client *c, int i, int refuse) {
+    if (refuse && c->steer_refuse) c->steer_refuse(c->steer_ud, c->steers[i].id);
+    free(c->steers[i].id);
+    free(c->steers[i].text);
+    memmove(c->steers + i, c->steers + i + 1, (size_t)(c->nsteers - i - 1) * sizeof c->steers[0]);
+    c->nsteers--;
+}
+
+static void gk_steer_pull(grok_client *c) {
+    char *id, *text;
+    while (c->steer_take && c->nsteers < 16 && c->steer_take(c->steer_ud, &id, &text)) {
+        if (!id || !text || !*text) {
+            if (id && c->steer_refuse) c->steer_refuse(c->steer_ud, id);
+            free(id); free(text);
+            continue;
+        }
+        int req = c->next_id++;
+        cJSON *r = cJSON_CreateObject();
+        cJSON_AddStringToObject(r, "jsonrpc", "2.0");
+        cJSON_AddNumberToObject(r, "id", req);
+        cJSON_AddStringToObject(r, "method", "_x.ai/interject");
+        cJSON *p = cJSON_AddObjectToObject(r, "params");
+        cJSON_AddStringToObject(p, "sessionId", c->session_id);
+        cJSON_AddStringToObject(p, "text", text);
+        cJSON_AddStringToObject(p, "interjectionId", id);
+        if (!gk_write(c, r)) {
+            if (c->steer_refuse) c->steer_refuse(c->steer_ud, id);
+            free(id); free(text);
+            continue;
+        }
+        c->steers[c->nsteers].id = id;
+        c->steers[c->nsteers].text = text;
+        c->steers[c->nsteers].req = req;
+        c->steers[c->nsteers].acked = 0;
+        c->nsteers++;
+    }
+}
+
+static int gk_steer_response(grok_client *c, cJSON *ev) {
+    cJSON *idj = cJSON_GetObjectItem(ev, "id");
+    if (!cJSON_IsNumber(idj)) return 0;
+    for (int i = 0; i < c->nsteers; i++) {
+        if (!c->steers[i].req || c->steers[i].req != (int)cJSON_GetNumberValue(idj)) continue;
+        if (!cJSON_GetObjectItem(ev, "result")) gk_steer_drop(c, i, 1);
+        else c->steers[i].req = 0;
+        return 1;
+    }
+    return 0;
+}
+
+static void gk_steer_acked(grok_client *c, cJSON *params) {
+    const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(params, "interjectionId"));
+    for (int i = 0; id && i < c->nsteers; i++)
+        if (!strcmp(c->steers[i].id, id)) c->steers[i].acked = 1;
+}
+
+static void gk_steer_land(grok_client *c, int all) {
+    for (int i = 0; i < c->nsteers; ) {
+        if (!c->steers[i].acked && !(all && !c->steers[i].req)) { i++; continue; }
+        grok_event e = { .kind = GROK_EV_USER, .id = c->steers[i].id, .text = c->steers[i].text };
+        gk_emit(c, &e);
+        gk_steer_drop(c, i, 0);
+    }
 }
 
 static void gk_reset_tools(grok_client *c) {
@@ -1038,6 +1119,13 @@ static int gk_handle(grok_client *c, cJSON *ev, int want_id, char **acc, int *ok
             gk_task_update(c, params ? cJSON_GetObjectItem(params, "update") : NULL);
             return 0;
         }
+        if (strcmp(method->valuestring, "_x.ai/session/interjection") == 0) {
+            cJSON *params = cJSON_GetObjectItem(ev, "params");
+            const char *sid = params ? gk_str(params, "sessionId") : NULL;
+            if (!c->session_id[0] || !sid || !strcmp(sid, c->session_id))
+                gk_steer_acked(c, params);
+            return 0;
+        }
         if (strcmp(method->valuestring, "_x.ai/queue/changed") == 0) {
             cJSON *params = cJSON_GetObjectItem(ev, "params");
             const char *sid = params ? gk_str(params, "sessionId") : NULL;
@@ -1083,11 +1171,15 @@ static int gk_handle(grok_client *c, cJSON *ev, int want_id, char **acc, int *ok
                 } else if (!strcmp(su, "tool_call") || !strcmp(su, "tool_call_update")) {
                     c->tools_since_text = 1;
                     gk_tool_update(c, u);
+                    const char *st = gk_str(u, "status");
+                    if (st && !strcmp(st, "completed")) gk_steer_land(c, 0);
                 }
             }
         }
         return 0;
     }
+
+    if (gk_steer_response(c, ev)) return 0;
 
     /* response to one of our requests */
     if (idj && cJSON_IsNumber(idj) && (int)cJSON_GetNumberValue(idj) == want_id) {
@@ -1303,6 +1395,7 @@ static int gk_await(grok_client *c, int want_id, char **acc,
             if (c->meta) c->meta->interrupted = 1;
             grok_interrupt(c);
         }
+        if (allow_cancel && !c->cancelling && c->session_id[0]) gk_steer_pull(c);
         struct pollfd pfds[2] = {
             { c->out_fd, POLLIN, 0 }, { c->err_fd, POLLIN, 0 }
         };
@@ -1665,6 +1758,8 @@ char *grok_send_ex(grok_client *c, const char *user_text, grok_result *meta) {
     gk_reset_tools(c);
     char *acc = NULL;
     int ok = gk_await(c, id, &acc, NULL, 0, 1);
+    if (ok && !c->cancelling) gk_steer_land(c, 1);
+    while (c->nsteers) gk_steer_drop(c, 0, 1);
     c->meta = NULL;
     c->cancelling = 0;
     c->abort_latched = 0;
@@ -1724,6 +1819,7 @@ static int gk_reap_within(grok_client *c, int ms) {
 
 void grok_stop(grok_client *c) {
     if (!c) return;
+    while (c->nsteers) gk_steer_drop(c, c->nsteers - 1, 0);
     if (c->in_fd >= 0) close(c->in_fd);     /* EOF on stdin asks it to exit */
     if (c->pid > 0) {
         /* We only stop between turns, so the CLI has nothing left to finish.

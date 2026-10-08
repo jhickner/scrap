@@ -16,7 +16,6 @@
 #include "stamp.h"
 #include "intercom.h"
 #include "sidechannel.h"
-#include "sideroute.h"
 #include "status.h"
 #include "relay.h"
 #include "tg.h"
@@ -34,7 +33,6 @@ void sidechannel_poll(void) {}
 int  sidechannel_busy(void) { return 0; }
 void sidechannel_close_all(void) {}
 int  sidechannel_fds(int *out, int max) { (void)out; (void)max; return 0; }
-enum sideroute sideroute_classify(const char *running, const char *queued) { (void)running; (void)queued; return SIDEROUTE_QUEUE; }
 
 void gitinfo_forget(void) {}
 void tg_refocus(void) {}
@@ -94,6 +92,14 @@ int sidechannel_inbox(const struct session *s, const char *message, sidechannel_
 void sidechannel_cancel(sidechannel_done done, void *ud) { (void)done; (void)ud; }
 void sidechannel_show(const struct session *owner, const char *question, const char *answer, int failed) { (void)owner; (void)question; (void)answer; (void)failed; }
 int session_can_resume(const struct session *s) { (void)s; return 0; }
+int session_can_steer(const struct session *s) { (void)s; return 0; }
+int session_steer(struct session *s, const char *line, const char *shown) { (void)s; (void)line; (void)shown; return 0; }
+int session_steer_count(const struct session *s) { (void)s; return 0; }
+const char *session_steer_label(struct session *s, int i) { (void)s; (void)i; return NULL; }
+int session_steer_drop(struct session *s, const char *label) { (void)s; (void)label; return 0; }
+int session_steer_item(struct session *s, int i, char **text, char **tool, double *since) { (void)s; (void)i; *text = *tool = NULL; *since = 0; return -1; }
+char *session_steer_recall(struct session *s) { (void)s; return NULL; }
+int session_steer_leftover(struct session *s, char **line, char **shown) { (void)s; *line = *shown = NULL; return 0; }
 void intercom_reply(const char *from, const char *to, const char *text) { (void)from; (void)to; (void)text; }
 int session_work_count(const struct session *s) { return s ? s->work : 0; }
 int session_busy(const struct session *s) { return s && (s->busy || s->running); }
@@ -405,7 +411,7 @@ int main(void)
             fail("open a tab for the ask hold");
         else {
             asker.ask = 1;
-            if (!workspace_message(0, "@sub", "done", 0, 0))
+            if (!workspace_message(0, "@sub", "done", 0, 0, 0))
                 fail("a message reaches a tab with an open ask");
             if (asker.running)
                 fail("a message does not start a turn over an open ask");
@@ -421,7 +427,7 @@ int main(void)
 
             asker.running = 0;
             asker.ask = 1;
-            if (!workspace_message(0, "@sub", "again", 1, 0) || asker.running ||
+            if (!workspace_message(0, "@sub", "again", 1, 0, 0) || asker.running ||
                 workspace_queued(0) != 1)
                 fail("an interrupting message waits for the ask too");
             restarting = 1;

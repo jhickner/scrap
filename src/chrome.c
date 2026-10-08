@@ -114,7 +114,7 @@ static struct heights above_measure(int cols)
     h.side = sidechannel_rows();
     h.sticky = status_sticky_measure();
     h.queued = prompt_queued_rows(bound, cols);
-    h.held = bash_held_label() || prompt_held_label();
+    h.held = bash_held_label() != NULL;
     return h;
 }
 
@@ -326,8 +326,6 @@ void chrome_paint(void)
     }
     if (a.held && h.held > 0) {
         const char *label = bash_held_label();
-        if (!label)
-            label = prompt_held_label();
         if (drawn)
             ui_put("\n");
         ui_esc(UI_ERASE_EOL);

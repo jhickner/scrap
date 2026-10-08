@@ -18,7 +18,7 @@ $R relay $a '[
   {"wait": "\"t\":\"res\",\"id\":\"r1\",\"ok\":true"},
   {"wait": "\"kind\":\"user\",\"ts\":[0-9.]+,\"text\":\"run: sleep 2\",\"req\":\"r1\""},
   {"wait": "\"busy\":true"},
-  {"t": "req", "op": "send", "text": "while running"},
+  {"t": "req", "op": "send", "text": "while running", "mode": "queue"},
   {"wait": "echo: while running", "secs": 6},
   {"wait": "\"kind\":\"end\",\"ts\":[0-9.]+,\"secs\":[0-9.]+"},
   {"wait": "\"busy\":false"},

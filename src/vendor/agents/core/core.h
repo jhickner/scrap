@@ -599,6 +599,7 @@ typedef struct {
     char path[4096];
     FILE *fp;
     cJSON *msgs;
+    int turn_at;
     char *system;
     sa_buf hook_context;
     long ctx_tokens, window;
@@ -2145,6 +2146,7 @@ static int sa_compact(sa_agent *x) {
         const char *role = sa_role(l);
         if (role && !strcmp(role, "user") && !cJSON_IsTrue(cJSON_GetObjectItem(l, "isMeta"))) { cut = i; break; }
     }
+    if (x->turn_at > 0 && x->turn_at < cut) cut = x->turn_at;
     if (cut > 0) {
         size_t tail = 0;
         for (int i = cut; i < n; i++) {
@@ -2187,6 +2189,7 @@ static int sa_compact(sa_agent *x) {
     cJSON_ArrayForEach(l, next) if (i++ > 0) sa_write_line(x, l);
     cJSON_Delete(x->msgs);
     x->msgs = next;
+    x->turn_at = x->turn_at == cut ? 1 : 0;
     x->ctx_tokens = 0;
     sa_resp_free(&r);
     sa_session_start(x, "compact");
@@ -2614,6 +2617,22 @@ static const char *sa_user_kind(const char *user) {
     return strncmp(user, "[from ", 6) ? "user" : "work";
 }
 
+static int sa_take_steers(sa_agent *x) {
+    int n = 0;
+    char *id, *text;
+    while (!sa_aborted(x) && backend_steer_take(&x->st, &id, &text)) {
+        sa_store(x, sa_user_line(text, 0));
+        if (x->mem && !x->sub) oc_append(x->mem, sa_user_kind(text), text);
+        backend_flush(&x->st);
+        backend_event ev = { .kind = BACKEND_EV_USER, .id = id, .text = text };
+        backend_emit(&x->st, &ev);
+        free(id);
+        free(text);
+        n++;
+    }
+    return n;
+}
+
 static int sa_memory_turn(sa_agent *x, const char *user, const sa_buf *reminder, sa_buf *out) {
     /* A subagent starts mid-turn, while the parent's latest lines (at least
        its own agent call) are still being summarized; its task carries that
@@ -2697,6 +2716,7 @@ static char *sa_ask_ex(Backend *b, const char *user, backend_result *meta) {
     } else {
         if (reminder.n) sa_store(x, sa_user_line(sa_str(&reminder), 1));
         sa_store(x, sa_user_line(user ? user : "", 0));
+        x->turn_at = cJSON_GetArraySize(x->msgs) - 1;
     }
     sa_free(&reminder);
 
@@ -2742,6 +2762,7 @@ static char *sa_ask_ex(Backend *b, const char *user, backend_result *meta) {
         if (r.text.n) { free(reply); reply = strdup(sa_str(&r.text)); }
         if (!r.ncalls) {
             sa_resp_free(&r);
+            if (sa_take_steers(x)) continue;
             sa_buf reason = {0};
             cJSON *p = sa_payload();
             cJSON_AddBoolToObject(p, "stop_hook_active", stop_hook_active);
@@ -2770,6 +2791,7 @@ static char *sa_ask_ex(Backend *b, const char *user, backend_result *meta) {
             snprintf(res.subtype, sizeof res.subtype, "interrupted");
             break;
         }
+        sa_take_steers(x);
     }
     if (x->mem) {
         cJSON_Delete(x->msgs);
@@ -3115,7 +3137,9 @@ static void sa_drive_event(void *ud, const backend_event *ev) {
     sa_agent *x = ud;
     backend_emit(&x->st, ev);
     if (!x->mem || x->sub || ev->parent) return;
-    if (ev->kind == BACKEND_EV_ASSISTANT && ev->text) {
+    if (ev->kind == BACKEND_EV_USER && ev->text) {
+        oc_append(x->mem, sa_user_kind(ev->text), ev->text);
+    } else if (ev->kind == BACKEND_EV_ASSISTANT && ev->text) {
         oc_append(x->mem, "talk", ev->text);
     } else if (ev->kind == BACKEND_EV_TOOL) {
         sa_buf b = {0};
@@ -3156,6 +3180,8 @@ static int sa_drive_start(sa_agent *x) {
     }
     x->inner->set_event_cb(x->inner, sa_drive_event, x);
     x->inner->set_abort_check(x->inner, x->st.abort);
+    if (x->inner->set_steer)
+        x->inner->set_steer(x->inner, x->st.steer_take, x->st.steer_refuse, x->st.steer_ud);
     if (x->st.on_permission && x->inner->set_permission_cb)
         x->inner->set_permission_cb(x->inner, x->st.on_permission, x->st.permission_ud);
     if (!x->inner->start(x->inner, NULL)) {
@@ -3289,6 +3315,13 @@ static void sa_set_abort(Backend *b, int (*cb)(void)) {
     if (x->inner) x->inner->set_abort_check(x->inner, cb);
 }
 
+static void sa_set_steer(Backend *b, int (*take)(void *ud, char **id, char **text),
+                         void (*refuse)(void *ud, const char *id), void *ud) {
+    sa_agent *x = b->ctx;
+    backend_set_steer_generic(b, take, refuse, ud);
+    if (x->inner && x->inner->set_steer) x->inner->set_steer(x->inner, take, refuse, ud);
+}
+
 static void sa_set_permission_cb(Backend *b, int (*cb)(void *ud, const backend_permission *req), void *ud) {
     sa_agent *x = b->ctx;
     x->st.on_permission = cb;
@@ -3397,8 +3430,10 @@ Backend *core_agent_open(const backend_opts *o) {
         x->relay = o->memory_relay ? strdup(o->memory_relay) : NULL;
     }
     b->ctx = x;
-    b->caps = x->drive[0] ? BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT
-                          : BACKEND_CAP_RESUME | BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT;
+    b->caps = x->drive[0] ? BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT | BACKEND_CAP_STEER
+                          : BACKEND_CAP_RESUME | BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT |
+                                BACKEND_CAP_STEER;
+    b->set_steer = sa_set_steer;
     b->ask = sa_ask;
     b->reset = sa_reset;
     b->close = sa_close;

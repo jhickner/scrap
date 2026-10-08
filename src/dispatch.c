@@ -28,6 +28,7 @@
 #define PAIR_WINDOW   60
 #define PAIR_CAP      6
 #define INTERRUPT_CAP 2
+#define STEER_CAP     3
 #define PAIR_SLOTS    64
 
 int dispatch_dir(char *out, size_t size)
@@ -232,9 +233,13 @@ static void send_session(int fd, const cJSON *o, const cJSON *send)
     /* Interrupts past the cap queue instead, so two sessions cannot keep stopping each other. */
     int interrupt = sender && cJSON_IsTrue(cJSON_GetObjectItem((cJSON *)o, "interrupt")) &&
                     pair_allowed(from, id, "!", INTERRUPT_CAP);
+    int want_steer = (sender || script) && !interrupt &&
+                     cJSON_IsTrue(cJSON_GetObjectItem((cJSON *)o, "steer"));
+    int steer = want_steer && pair_allowed(from, id, "~", STEER_CAP);
     int sent = sender || script
                    ? workspace_message(at, from, line, interrupt,
-                                       script || cJSON_IsTrue(cJSON_GetObjectItem((cJSON *)o, "reply")))
+                                       script || cJSON_IsTrue(cJSON_GetObjectItem((cJSON *)o, "reply")),
+                                       steer)
                    : dispatch_send(at, line);
     if (!sent)
         reply_error(fd, "could not send line", id);
@@ -242,6 +247,23 @@ static void send_session(int fd, const cJSON *o, const cJSON *send)
         cJSON *r = cJSON_CreateObject();
         cJSON_AddBoolToObject(r, "ok", 1);
         cJSON_AddStringToObject(r, "session", id);
+        if (want_steer) {
+            struct session *s = workspace_at(at);
+            char note[160];
+            if (sent == WSMSG_STEERED && session_remote(s))
+                snprintf(note, sizeof note, "steer passed to the remote session");
+            else if (sent == WSMSG_STEERED)
+                snprintf(note, sizeof note, "steered");
+            else if (sent == WSMSG_STARTED)
+                snprintf(note, sizeof note, "delivered: idle, started a turn");
+            else if (!steer)
+                snprintf(note, sizeof note, "queued: too many steers to this session in the last minute");
+            else if (session_turn_running(s) && !session_can_steer(s))
+                snprintf(note, sizeof note, "queued: %s cannot steer", session_backend(s));
+            else
+                snprintf(note, sizeof note, "queued");
+            cJSON_AddStringToObject(r, "note", note);
+        }
         char *json = cJSON_PrintUnformatted(r);
         reply(fd, json ? json : "{\"ok\":true}");
         free(json);

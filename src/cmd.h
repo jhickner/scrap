@@ -28,6 +28,7 @@ enum cmd_result {
 enum cmd_result cmd_dispatch(struct session *s, const char *line);
 
 enum cmd_result cmd_submit(struct session *s, const char *line);
+enum cmd_result cmd_submit_ex(struct session *s, const char *line, int queue);
 
 int cmd_runs_mid_turn(const char *line);
 

@@ -11,7 +11,9 @@ $R wait $b '❯'
 
 $R say $b 'run: sleep 5' 'thinking'
 $R say $a 'run: scrap send @b skipme one; scrap send @b skipme two' 'ran: sent to @b'
-$R say $b 'typed line' '▌ typed line'
+$R type $b 'typed line'
+$R send $b M-Enter
+$R wait $b '▌ typed line'
 $R wait $b 'echo: \[from @a\] skipme one'
 $R wait $b '^ *\[from @a\] skipme two'
 $R wait $b 'echo: typed line'

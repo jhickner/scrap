@@ -5,6 +5,9 @@ SESSION = "fake-%d" % os.getpid()
 NOTES = 0
 CHAIN = 0
 CALLS = 0
+QUEUED = []
+STEERED = []
+FOLLOW = []
 MODEL = sys.argv[sys.argv.index("--model") + 1] if "--model" in sys.argv else "fake"
 
 
@@ -74,6 +77,7 @@ def run(cmd, ask=False):
     emit({"type": "user", "message": {"role": "user", "content": [
         {"type": "tool_result", "tool_use_id": call, "content": out,
          "is_error": status != "completed"}]}})
+    deliver()
     return out
 
 
@@ -88,12 +92,31 @@ def bash(cmd):
             proc.wait()
             break
         msg = json.loads(line)
+        if msg.get("type") == "user" and msg.get("uuid"):
+            QUEUED.append(msg)
+            emit({"type": "command_lifecycle", "command_uuid": msg["uuid"], "state": "queued"})
+            continue
         if msg.get("request", {}).get("subtype") == "interrupt":
             proc.kill()
+            FOLLOW.extend(QUEUED)
             emit({"type": "control_response", "response": {
-                "subtype": "success", "request_id": msg.get("request_id"), "response": {}}})
+                "subtype": "success", "request_id": msg.get("request_id"),
+                "response": {"still_queued": [q["uuid"] for q in QUEUED]}}})
+            del QUEUED[:]
             return "interrupted: " + cmd, "killed"
     return proc.stdout.read().strip(), "completed"
+
+
+def deliver():
+    for q in QUEUED:
+        emit({"type": "command_lifecycle", "command_uuid": q["uuid"], "state": "started"})
+        STEERED.append(q)
+    del QUEUED[:]
+
+
+def finish(steered):
+    for q in steered:
+        emit({"type": "command_lifecycle", "command_uuid": q["uuid"], "state": "completed"})
 
 
 def main():
@@ -116,6 +139,8 @@ def main():
                       "output_file": "", "summary": "stopped"})
         elif kind == "user":
             text = prompt_text(msg)
+            if msg.get("uuid"):
+                emit({"type": "command_lifecycle", "command_uuid": msg["uuid"], "state": "started"})
             emit({"type": "system", "subtype": "init", "model": MODEL,
                   "cwd": os.getcwd(), "apiKeySource": "none"})
             if text == "/clear":
@@ -209,8 +234,16 @@ def main():
             elif text.startswith("run: "):
                 out = run(text[5:])
                 text = out if out.startswith("interrupted: ") else "ran: " + out
+            elif text.startswith("slow: "):
+                secs, said = text[6:].split(" ", 1)
+                time.sleep(float(secs))
+                text = "slowdone: " + said
             else:
                 text = "echo: " + text
+            steered = STEERED[:]
+            del STEERED[:]
+            if steered:
+                text = "steered: " + " | ".join(prompt_text(q) for q in steered)
             canned = bool(turns)
             events = turns.pop(0) if turns else [{
                 "type": "assistant",
@@ -224,7 +257,23 @@ def main():
                       "usage": {"input_tokens": 1, "output_tokens": 1}}
             if not canned:
                 result["result"] = text
+            finish(steered)
             emit(result)
+            if msg.get("uuid"):
+                finish([msg])
+            follow = FOLLOW[:]
+            del FOLLOW[:]
+            for q in follow:
+                said = prompt_text(q)
+                emit({"type": "command_lifecycle", "command_uuid": q["uuid"], "state": "started"})
+                emit({"type": "system", "subtype": "init", "model": MODEL,
+                      "cwd": os.getcwd(), "apiKeySource": "none"})
+                emit({"type": "assistant", "message": {"role": "assistant", "model": MODEL,
+                      "content": [{"type": "text", "text": "echo: " + said}]}})
+                emit({"type": "result", "subtype": "success", "is_error": False,
+                      "duration_ms": 1, "num_turns": 1, "total_cost_usd": 0,
+                      "usage": {"input_tokens": 5, "output_tokens": 7}, "result": "echo: " + said})
+                finish([q])
 
 
 if __name__ == "__main__":

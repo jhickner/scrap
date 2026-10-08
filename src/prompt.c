@@ -94,6 +94,9 @@ struct prompt {
     void        *collapse_ud;
     int        (*cancel)(void *ud);
     void        *cancel_ud;
+    int        (*queue_key)(void *ud);
+    void        *queue_ud;
+    int          submit_queue;
     int          stopped;
     int          frame_ok;
 };
@@ -892,10 +895,16 @@ static const struct prompt_key SHORTCUTS[] = {
      "close the completion, else stop the reply being read aloud", PROMPT_KEY_IDLE},
     {"INPUT", "ctrl-c", "clear the line",
      "clear the prompt line", PROMPT_KEY_IDLE},
-    {"TURN", "enter", "queue the line",
+    {"INPUT", "shift-enter", "new line",
+     "insert a line break", PROMPT_KEY_ALWAYS},
+    {"TURN", "enter", "steer the turn",
+     "add the line to the running turn at its next tool step; queues when the backend cannot steer",
+     PROMPT_KEY_TURN},
+    {"TURN", "alt-enter", "queue the line",
      "queue the prompt until the running turn ends", PROMPT_KEY_TURN},
     {"TURN", "esc", "interrupt",
-     "close the completion, else stop the reply being read aloud, else interrupt the model", PROMPT_KEY_TURN},
+     "close the completion, else stop the reply being read aloud, else interrupt the model; "
+     "steers not yet taken run next", PROMPT_KEY_TURN},
     {"TURN", "ctrl-c", "clear, else interrupt",
      "clear the prompt line, else interrupt the running turn", PROMPT_KEY_TURN},
 };
@@ -966,51 +975,9 @@ static enum key_result edit_key(struct prompt *p, tty_event *ev)
     return KEY_OK;
 }
 
-static char *held_prompt;
-static int   held_keep;
-
-void prompt_hold(char *text)
-{
-    free(held_prompt);
-    held_prompt = text;
-    held_keep = 1;
-}
-
-void prompt_drop_held(void)
-{
-    if (held_keep) {
-        held_keep = 0;
-        return;
-    }
-    free(held_prompt);
-    held_prompt = NULL;
-}
-
-static char *take_prompt_held(void)
-{
-    char *out = held_prompt;
-    held_prompt = NULL;
-    held_keep = 0;
-    return out;
-}
-
-const char *prompt_held_label(void)
-{
-    static char label[192];
-    if (!held_prompt)
-        return NULL;
-    size_t first = strcspn(held_prompt, "\n");
-    size_t shown = first < 120 ? first : 120;
-    snprintf(label, sizeof label, "queued: %.*s%s \xc2\xb7 ctrl-x paste", (int)shown,
-             held_prompt, held_prompt[shown] ? " \xe2\x80\xa6" : "");
-    return label;
-}
-
 static void paste_held(struct prompt *p)
 {
     char *text = bash_take_held();
-    if (!text)
-        text = take_prompt_held();
     if (!text)
         return;
     if (p->repl.cursor > 0 && p->repl.buf[p->repl.cursor - 1] != '\n')
@@ -1032,6 +999,15 @@ static enum key_result feed_key(struct prompt *p, tty_event *ev, int live)
         p->command_nth = 0;
     if (p->focus && focus_key(p, ev))
         return KEY_OK;
+    if (ev->key == TK_NEWLINE && ev->cp == TTY_ALT_ENTER && !overlay_open(p) && p->repl.len &&
+        p->queue_key && p->queue_key(p->queue_ud)) {
+        const char *line = repl_line(&p->repl);
+        if (!line || !*line)
+            return KEY_OK;
+        p->submit_queue = 1;
+        viewport_scroll_end();
+        return KEY_SUBMIT;
+    }
     switch (ev->key) {
     case TK_EOF:
         return KEY_EOF;
@@ -1322,6 +1298,20 @@ void prompt_set_cancel(struct prompt *p, int (*fn)(void *ud), void *ud)
 {
     p->cancel = fn;
     p->cancel_ud = ud;
+}
+
+void prompt_set_queue_key(struct prompt *p, int (*fn)(void *ud), void *ud)
+{
+    p->queue_key = fn;
+    p->queue_ud = ud;
+}
+
+int prompt_take_queue_flag(struct prompt *p)
+{
+    int was = p && p->submit_queue;
+    if (p)
+        p->submit_queue = 0;
+    return was;
 }
 
 void prompt_set_click(struct prompt *p, int (*fn)(void *ud, int row, int col),
@@ -1679,6 +1669,7 @@ int prompt_live_key(void *ud, tty_event *ev)
         return 0;
     switch (feed_key(p, ev, 1)) {
     case KEY_SUBMIT: {
+        p->submit_queue = 0;
         char *line = take_line(p);
         if (line && p->live_command && p->live_command(p->live_ud, line))
             free(line);

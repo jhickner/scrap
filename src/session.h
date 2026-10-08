@@ -82,6 +82,19 @@ double session_turn_elapsed(const struct session *s);
 void session_turn_wait(struct session *s);
 
 void session_interrupt(struct session *s);
+
+int         session_can_steer(const struct session *s);
+int         session_steer(struct session *s, const char *line, const char *shown);
+int         session_steer_id(struct session *s, const char *line, const char *shown,
+                             const char *id);
+int         session_steer_count(const struct session *s);
+const char *session_steer_label(struct session *s, int i);
+int         session_steer_drop(struct session *s, const char *label);
+enum { STEER_PENDING, STEER_SENT, STEER_REFUSED };
+int         session_steer_item(struct session *s, int i, char **text, char **tool,
+                               double *since);
+char       *session_steer_recall(struct session *s);
+int         session_steer_leftover(struct session *s, char **line, char **shown);
 /* -1 when the backend cannot stop a single task. */
 int  session_stop_task(struct session *s, const char *task_id);
 

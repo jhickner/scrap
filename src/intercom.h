@@ -10,6 +10,7 @@
 
 #define INTERCOM_INTERRUPT 1
 #define INTERCOM_REPLY     2
+#define INTERCOM_STEER     4
 
 void intercom_name_new(char *out, size_t size);
 

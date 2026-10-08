@@ -703,6 +703,8 @@ static void decode_modified(tty_event *ev, int key, int mods, int shifted)
     }
     if (key == 13) {
         emit(ev, shortcuts ? TK_NEWLINE : TK_ENTER);
+        if (shortcuts == 2)
+            ev->cp = TTY_ALT_ENTER;
         return;
     }
     if (key == 9) {
@@ -896,7 +898,8 @@ static void decode_escape(tty_event *ev)
     switch (b) {
     case 'b': emit(ev, TK_WORD_LEFT); return;
     case 'f': emit(ev, TK_WORD_RIGHT); return;
-    case '\r': case '\n': emit(ev, TK_NEWLINE); return;
+    case '\r': emit(ev, TK_NEWLINE); ev->cp = TTY_ALT_ENTER; return;
+    case '\n': emit(ev, TK_NEWLINE); return;
     case 0x7f: emit(ev, TK_WORD_LEFT); return;
     case '\\': emit(ev, TK_NONE); return;
     default: emit(ev, TK_ESCAPE); return;

@@ -139,6 +139,15 @@ static enum role line_message(const cJSON *ev, const cJSON **content)
 
     const cJSON *body = ev;
     const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "type"));
+    if (type && !strcmp(type, "attachment")) {
+        const cJSON *a = cJSON_GetObjectItem(ev, "attachment");
+        const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(a, "type"));
+        const char *mode = cJSON_GetStringValue(cJSON_GetObjectItem(a, "commandMode"));
+        if (!kind || strcmp(kind, "queued_command") || !mode || strcmp(mode, "prompt"))
+            return ROLE_NONE;
+        *content = cJSON_GetObjectItem(a, "prompt");
+        return cJSON_IsString(*content) ? ROLE_USER : ROLE_NONE;
+    }
     if (type && !strcmp(type, "response_item"))
         body = cJSON_GetObjectItem(ev, "payload");
     const cJSON *message = body ? cJSON_GetObjectItem(body, "message") : NULL;
@@ -539,7 +548,17 @@ int sessionload_fill(struct transcript *t, const char *backend, const char *cwd,
 
         const cJSON *content = NULL;
         enum role role = line_message(ev, &content);
-        if (role == ROLE_USER) {
+        const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "type"));
+        const char *why = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "synthetic_reason"));
+        int         steer = (type && !strcmp(type, "attachment")) ||
+                    (why && !strcmp(why, "interjection"));
+        if (role == ROLE_USER && user && steer) {
+            char *got = user_from(content);
+            size_t ulen = strlen(user), ucap = ulen + 1;
+            if (got && grow_text(&user, &ulen, &ucap, "\n\n"))
+                grow_text(&user, &ulen, &ucap, got);
+            free(got);
+        } else if (role == ROLE_USER) {
             char *got = user_from(content);
             if (got) {
                 if (user && assistant)

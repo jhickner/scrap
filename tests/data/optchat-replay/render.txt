@@ -1,0 +1,29 @@
+<chat>
+0+1|user: run: echo first
+1+1|tool: bash `echo first`
+2+1|echo: first
+3+1|talk: tool said: first 
+4+1|user: hello there
+5+1|talk: echo: hello there
+6+1|user: run: printf "a\nb\n"
+7+1|tool: bash `printf "a\nb\n"`
+8+1|echo: a b
+9+1|talk: tool said: a b 
+10+1|user: last words
+11+1|talk: echo: last words
+</chat>
+--- marked
+<chat>
+0+1|user: run: echo first
+1+1|tool: bash `echo first`
+2+1|echo: first
+3+1|talk: tool said: first 
+4+1|user: hello there
+5+1|talk: echo: hello there
+6+1|user: run: printf "a\nb\n"
+7+1|tool: bash `printf "a\nb\n"`
+8+1|echo: a b
+9+1|talk: tool said: a b 
+10+1|user: last words
+11+1|talk: echo: last words
+</chat>

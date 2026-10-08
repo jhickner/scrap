@@ -1,0 +1,12 @@
+{"i":0,"kind":"user","text":"run: echo first","size":21,"date":"2026-10-08T13:23:42-0700"}
+{"i":1,"kind":"tool","text":"bash `echo first`","size":23,"date":"2026-10-08T13:23:42-0700"}
+{"i":2,"kind":"echo","text":"first","size":11,"date":"2026-10-08T13:23:42-0700"}
+{"i":3,"kind":"talk","text":"tool said: first\n","size":23,"date":"2026-10-08T13:23:42-0700"}
+{"i":4,"kind":"user","text":"hello there","size":17,"date":"2026-10-08T13:23:42-0700"}
+{"i":5,"kind":"talk","text":"echo: hello there","size":23,"date":"2026-10-08T13:23:42-0700"}
+{"i":6,"kind":"user","text":"run: printf \"a\\nb\\n\"","size":26,"date":"2026-10-08T13:23:43-0700"}
+{"i":7,"kind":"tool","text":"bash `printf \"a\\nb\\n\"`","size":28,"date":"2026-10-08T13:23:43-0700"}
+{"i":8,"kind":"echo","text":"a\nb","size":9,"date":"2026-10-08T13:23:43-0700"}
+{"i":9,"kind":"talk","text":"tool said: a\nb\n","size":21,"date":"2026-10-08T13:23:43-0700"}
+{"i":10,"kind":"user","text":"last words","size":16,"date":"2026-10-08T13:23:43-0700"}
+{"i":11,"kind":"talk","text":"echo: last words","size":22,"date":"2026-10-08T13:23:43-0700"}

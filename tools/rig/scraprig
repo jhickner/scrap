@@ -135,7 +135,6 @@ cmd_start() {
         ln -s "$RIG_HOME/fake-backend" "$dir/bin/codex"
         ln -s "$RIG_HOME/fake-backend" "$dir/bin/grok"
         ln -s "$RIG_HOME/fake-pvsay" "$dir/bin/pvsay"
-        ln -s "$RIG_HOME/fake-jev" "$dir/bin/jev"
         ln -s "$RIG_HOME/fake-mem" "$dir/bin/mem"
         ln -s "$scrap" "$dir/bin/scrap"
         path="$dir/bin:$path"

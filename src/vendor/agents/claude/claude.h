@@ -165,6 +165,7 @@ typedef enum {
     CLAUDE_EV_INIT,        /* name: the model the CLI resolved                 */
     CLAUDE_EV_CWD,         /* text: the directory the session works in now     */
     CLAUDE_EV_TASK,        /* id + name (status) + text: a background task     */
+    CLAUDE_EV_USER,
 } claude_event_kind;
 
 typedef struct {
@@ -240,6 +241,9 @@ int claude_stop_task(claude_client *c, const char *task_id);
  * doubles as a UI tick: it is called roughly every 80ms. */
 void claude_set_abort_check(claude_client *c, int (*cb)(void));
 
+void claude_set_steer(claude_client *c, int (*take)(void *ud, char **id, char **text),
+                      void (*refuse)(void *ud, const char *id), void *ud);
+
 /* The CLI runs turns of its own between sends: a finished background task or
  * subagent wakes the model with no prompt from here. Their events sit unread in
  * the pipe until the next send, which is both a lost display and a stream the
@@ -311,6 +315,8 @@ void claude_stop(claude_client *c);
  * client decides none is coming. Only the CLI's own dispatch latency, so short. */
 #define CL_NOTIFY_WAIT_TICKS (2000 / CL_TICK_MS)
 
+#define CL_STEER_QUIET_TICKS (2000 / CL_TICK_MS)
+
 struct claude_client {
     pid_t pid;
     char  cli[4096];          /* executable used for this client and auth login */
@@ -341,6 +347,13 @@ struct claude_client {
     int   awaiting;           /* a send is out and has not been given its turn */
     int   turn_mine;          /* the open turn answers this client's send      */
     char  stall[160];         /* why a send came back with no turn of its own  */
+    int  (*steer_take)(void *ud, char **id, char **text);
+    void (*steer_refuse)(void *ud, const char *id);
+    void *steer_ud;
+    int   steering;
+    int   meta_parts;
+    struct { char *id, *text; int started; } steers[16];
+    int   nsteers;
     char *buf;                /* line-assembly buffer for out_fd       */
     size_t len, cap;
     int   scanning;           /* a line is being handled: buf is in use */
@@ -753,6 +766,7 @@ static const char *cl_kind_label(claude_event_kind k) {
     case CLAUDE_EV_INIT:        return "init";
     case CLAUDE_EV_TASK:        return "task";
     case CLAUDE_EV_CWD:         return "cwd";
+    case CLAUDE_EV_USER:        return "user";
     }
     return "?";
 }
@@ -766,6 +780,84 @@ static void cl_sink(claude_client *c, const claude_event *ev) {
         fprintf(stderr, "  [%s] %.400s%s\n", cl_kind_label(ev->kind), shown,
                 strlen(shown) > 400 ? " ..." : "");
     if (c->on_event) c->on_event(c->on_event_ud, ev);
+}
+
+static int cl_steer_find(claude_client *c, const char *id) {
+    for (int i = 0; id && i < c->nsteers; i++)
+        if (!strcmp(c->steers[i].id, id)) return i;
+    return -1;
+}
+
+static void cl_steer_drop(claude_client *c, int i) {
+    free(c->steers[i].id);
+    free(c->steers[i].text);
+    memmove(c->steers + i, c->steers + i + 1, (size_t)(c->nsteers - i - 1) * sizeof c->steers[0]);
+    c->nsteers--;
+}
+
+static int cl_steer_waiting(claude_client *c) {
+    int n = 0;
+    for (int i = 0; i < c->nsteers; i++) n += !c->steers[i].started;
+    return n;
+}
+
+static void cl_steer_refuse_waiting(claude_client *c) {
+    for (int i = c->nsteers - 1; i >= 0; i--) {
+        if (c->steers[i].started) continue;
+        if (c->steer_refuse) c->steer_refuse(c->steer_ud, c->steers[i].id);
+        cl_steer_drop(c, i);
+    }
+}
+
+static void cl_steer_clear(claude_client *c) {
+    cl_steer_refuse_waiting(c);
+    while (c->nsteers) cl_steer_drop(c, c->nsteers - 1);
+}
+
+static void cl_steer_started(claude_client *c, const char *id) {
+    int i = cl_steer_find(c, id);
+    if (i < 0 || c->steers[i].started) return;
+    c->steers[i].started = 1;
+    claude_event out = {.kind = CLAUDE_EV_USER, .id = c->steers[i].id, .text = c->steers[i].text};
+    cl_sink(c, &out);
+}
+
+static void cl_steer_lifecycle(claude_client *c, cJSON *ev) {
+    const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "command_uuid"));
+    const char *state = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "state"));
+    int i = cl_steer_find(c, id);
+    if (i < 0 || !state) return;
+    if (!strcmp(state, "started")) {
+        cl_steer_started(c, id);
+    } else if (!strcmp(state, "cancelled") && !c->steers[i].started) {
+        if (c->steer_refuse) c->steer_refuse(c->steer_ud, c->steers[i].id);
+        cl_steer_drop(c, i);
+    }
+}
+
+static int cl_write_json(claude_client *c, cJSON *msg);
+
+static void cl_steer_pull(claude_client *c) {
+    char *id, *text;
+    while (c->steer_take && c->nsteers < 16 && c->steer_take(c->steer_ud, &id, &text)) {
+        if (!id || !text) { free(id); free(text); continue; }
+        cJSON *msg = cJSON_CreateObject();
+        cJSON_AddStringToObject(msg, "type", "user");
+        cJSON *inner = cJSON_AddObjectToObject(msg, "message");
+        cJSON_AddStringToObject(inner, "role", "user");
+        cJSON_AddStringToObject(inner, "content", text);
+        cJSON_AddStringToObject(msg, "uuid", id);
+        cJSON_AddStringToObject(msg, "priority", "next");
+        if (!cl_write_json(c, msg)) {
+            if (c->steer_refuse) c->steer_refuse(c->steer_ud, id);
+            free(id); free(text);
+            continue;
+        }
+        c->steers[c->nsteers].id = id;
+        c->steers[c->nsteers].text = text;
+        c->steers[c->nsteers].started = 0;
+        c->nsteers++;
+    }
 }
 
 /* The tool_result content block is either a plain string or an array of typed
@@ -948,14 +1040,18 @@ static void cl_fill_result(claude_client *c, cJSON *ev) {
     claude_result *m = c->meta;
     if (!m) return;
     cJSON *usage = cJSON_GetObjectItemCaseSensitive(ev, "usage");
-    m->duration_ms = cl_long(ev, "duration_ms");
-    m->num_turns = (int)cl_long(ev, "num_turns");
+    if (!c->meta_parts++) {
+        m->duration_ms = m->num_turns = 0;
+        m->input_tokens = m->output_tokens = m->cache_read_tokens = m->cache_creation_tokens = 0;
+    }
+    m->duration_ms += cl_long(ev, "duration_ms");
+    m->num_turns += (int)cl_long(ev, "num_turns");
     cJSON *cost = cJSON_GetObjectItemCaseSensitive(ev, "total_cost_usd");
     m->cost_usd = (cost && cJSON_IsNumber(cost)) ? cost->valuedouble : 0.0;
-    m->input_tokens = cl_long(usage, "input_tokens");
-    m->output_tokens = cl_long(usage, "output_tokens");
-    m->cache_read_tokens = cl_long(usage, "cache_read_input_tokens");
-    m->cache_creation_tokens = cl_long(usage, "cache_creation_input_tokens");
+    m->input_tokens += cl_long(usage, "input_tokens");
+    m->output_tokens += cl_long(usage, "output_tokens");
+    m->cache_read_tokens += cl_long(usage, "cache_read_input_tokens");
+    m->cache_creation_tokens += cl_long(usage, "cache_creation_input_tokens");
     m->context_window = cl_context_window(c, ev);
     m->is_error = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(ev, "is_error"));
     const char *sub = cJSON_GetStringValue(cJSON_GetObjectItem(ev, "subtype"));
@@ -1103,6 +1199,9 @@ static int cl_handle_line(claude_client *c, const char *line, char **out) {
         if (sub && strcmp(sub, "can_use_tool") == 0) cl_answer_permission(c, ev);
     }
     if (strcmp(ts, "rate_limit_event") == 0) cl_note_rate_limit(c, ev);
+    if (strcmp(ts, "command_lifecycle") == 0) cl_steer_lifecycle(c, ev);
+    if (strcmp(ts, "user") == 0 && cJSON_IsTrue(cJSON_GetObjectItem(ev, "isReplay")))
+        cl_steer_started(c, cJSON_GetStringValue(cJSON_GetObjectItem(ev, "uuid")));
     cl_note_context(c, ev, ts);
     if ((c->verbose || c->on_event) && *ts) cl_emit(c, ev, ts);
     int is_result = strcmp(ts, "result") == 0;
@@ -1567,8 +1666,8 @@ static char *cl_send(claude_client *c, const char *user_text, int content_block)
     /* Read events until this turn's result. Turns the CLI started on its own
      * still stream through the event callback, but their results are not this
      * send's answer, so the loop reads past them. */
-    char *result = NULL;
-    int interrupted = 0, quiet = 0;
+    char *result = NULL, *held = NULL;
+    int interrupted = 0, quiet = 0, after = 0;
     struct timespec kill_at = {0};
     for (;;) {
         /* Abort mid-turn: ask the CLI to abandon the turn, then keep reading to
@@ -1593,11 +1692,31 @@ static char *cl_send(claude_client *c, const char *user_text, int content_block)
         /* The abort predicate doubles as a UI tick, and a caller that echoes
          * typing from it cannot answer a keystroke sooner than this timeout, so
          * it is set by what feels immediate rather than by the spinner. */
+        if (c->steering && !interrupted) cl_steer_pull(c);
         int r = cl_fill(c, CL_TICK_MS);
         if (r < 0) break;
         int lines = cl_scan_lines(c, &result);
-        if (result) { c->awaiting = 0; return result; }
-        if (r > 0 || lines) { quiet = 0; continue; }
+        if (result && c->steering && cl_steer_waiting(c)) {
+            free(held);
+            held = result;
+            result = NULL;
+            c->awaiting = 1;
+            after = 0;
+            if (interrupted) interrupted = 3;
+            continue;
+        }
+        if (result) {
+            free(held);
+            c->awaiting = 0;
+            cl_steer_clear(c);
+            return result;
+        }
+        if (r > 0 || lines) { quiet = 0; after = 0; continue; }
+        if (held && !c->turn_open && ++after > CL_STEER_QUIET_TICKS) {
+            c->awaiting = 0;
+            cl_steer_clear(c);
+            return held;
+        }
 
         /* The turn this send is owed opens within a tick of the write, so going
          * quiet with none open and none arriving means the CLI folded the send
@@ -1609,6 +1728,8 @@ static char *cl_send(claude_client *c, const char *user_text, int content_block)
          * thing from a turn that ran and said nothing. */
         if (!c->turn_open && ++quiet > CL_STRAY_QUIET_TICKS) {
             c->awaiting = 0;
+            cl_steer_clear(c);
+            if (held) return held;
             snprintf(c->stall, sizeof c->stall,
                      "the CLI never opened a turn for this message (%d seconds "
                      "of silence)", (CL_STRAY_QUIET_TICKS * CL_TICK_MS) / 1000);
@@ -1616,6 +1737,9 @@ static char *cl_send(claude_client *c, const char *user_text, int content_block)
         }
     }
     c->awaiting = 0;
+    cl_steer_clear(c);
+    if (!result) return held;
+    free(held);
     return result;   /* NULL unless a result slipped in just before EOF */
 }
 
@@ -1627,9 +1751,20 @@ char *claude_send_ex(claude_client *c, const char *user_text, claude_result *met
     if (!c) return NULL;
     if (meta) memset(meta, 0, sizeof *meta);
     c->meta = meta;
+    c->meta_parts = 0;
+    c->steering = c->steer_take != NULL;
     char *r = cl_send(c, user_text, 0);
+    c->steering = 0;
     c->meta = NULL;
     return r;
+}
+
+void claude_set_steer(claude_client *c, int (*take)(void *ud, char **id, char **text),
+                      void (*refuse)(void *ud, const char *id), void *ud) {
+    if (!c) return;
+    c->steer_take = take;
+    c->steer_refuse = refuse;
+    c->steer_ud = ud;
 }
 
 int claude_set_effort(claude_client *c, const char *effort) {
@@ -1687,6 +1822,7 @@ void claude_stop(claude_client *c) {
     }
     if (c->out_fd >= 0) close(c->out_fd);
     if (c->err_fd >= 0) close(c->err_fd);
+    while (c->nsteers) cl_steer_drop(c, c->nsteers - 1);
     free(c->buf);
     free(c->owed);
     free(c);

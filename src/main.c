@@ -652,6 +652,13 @@ static int turn_running(void *ud)
     return session_turn_running(workspace_current());
 }
 
+static int turn_steerable(void *ud)
+{
+    (void)ud;
+    struct session *s = workspace_current();
+    return session_turn_running(s) && session_can_steer(s);
+}
+
 static char *serve_extra(const cJSON *o, int fd, int *kept)
 {
     *kept = stream_serve(o, fd);
@@ -682,7 +689,6 @@ static void turn_begin(struct session *s)
         drop_asked();
     session_set_ask_open(s, 0);
     bash_drop_held();
-    prompt_drop_held();
 }
 
 static int tab_queued(void *ud)
@@ -1102,6 +1108,7 @@ int main(int argc, char **argv)
     prompt_set_collapse(prompt, collapse_tools, NULL);
     view_collapse(session_compact(session));
     prompt_set_cancel(prompt, cancel_turn, NULL);
+    prompt_set_queue_key(prompt, turn_steerable, NULL);
     workspace_on_finish(turn_done);
 
     workspace_on_turn(turn_begin);
@@ -1269,7 +1276,7 @@ int main(int argc, char **argv)
             continue;
         }
 
-        enum cmd_result r = cmd_submit(session, line);
+        enum cmd_result r = cmd_submit_ex(session, line, prompt_take_queue_flag(prompt));
         if (r == CMD_QUIT) {
             free(line);
             break;

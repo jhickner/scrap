@@ -215,6 +215,18 @@ void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
         break;
     }
 
+    case BACKEND_EV_USER:
+        if (nested || !ev->text || !*ev->text)
+            break;
+        if (hide) {
+            status_pause();
+            paused = 1;
+        }
+        view_keep_break();
+        prompt_echo_message(ev->text);
+        p->view.after_collapse = 0;
+        break;
+
     case BACKEND_EV_WARNING:
         if (ev->text && *ev->text) {
             if (hide) {

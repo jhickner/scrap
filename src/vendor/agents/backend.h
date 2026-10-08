@@ -83,6 +83,7 @@ typedef enum {
                                arg (subagent type or workflow name), task_type:
                                a background task the agent
                                started, which outlives the turn that started it */
+    BACKEND_EV_USER,
 } backend_event_kind;
 
 typedef struct {
@@ -155,6 +156,7 @@ typedef struct {
 #define BACKEND_CAP_EFFORT      2u /* set_effort() is supported            */
 #define BACKEND_CAP_LIVE_EFFORT 4u /* set_effort() preserves the process   */
 #define BACKEND_CAP_TASKS       8u /* reports BACKEND_EV_TASK per subagent  */
+#define BACKEND_CAP_STEER      16u
 
 enum { BACKEND_AGENT_DECLINED = -1, BACKEND_AGENT_FAILED, BACKEND_AGENT_DONE, BACKEND_AGENT_INTERRUPTED,
        BACKEND_AGENT_STARTED };
@@ -224,6 +226,9 @@ struct Backend {
      * for a caller painting its own display and the point at which a caller
      * that keeps its input live can pick up a keystroke. */
     void (*set_abort_check)(Backend *b, int (*cb)(void));
+
+    void (*set_steer)(Backend *b, int (*take)(void *ud, char **id, char **text),
+                      void (*refuse)(void *ud, const char *id), void *ud);
 
     /* Approver for tool calls the permission mode would ask about, called on
      * the thread reading the stream (ask() or idle_pump()) and allowed to
@@ -344,6 +349,9 @@ typedef struct {
     int (*on_permission)(void *ud, const backend_permission *req);
     void *permission_ud;
     int (*abort)(void);
+    int (*steer_take)(void *ud, char **id, char **text);
+    void (*steer_refuse)(void *ud, const char *id);
+    void *steer_ud;
     /* Assistant and reasoning text arriving in fragments, held until the block
      * it belongs to is complete. */
     backend_event_kind pending_kind;
@@ -436,6 +444,23 @@ static void backend_delta(backend_state *st, backend_event_kind kind, const char
     st->pending_len += n;
 }
 
+static void backend_set_steer_generic(Backend *b, int (*take)(void *ud, char **id, char **text),
+                                      void (*refuse)(void *ud, const char *id), void *ud) {
+    backend_state *st = b->ctx;
+    st->steer_take = take;
+    st->steer_refuse = refuse;
+    st->steer_ud = ud;
+}
+
+static int backend_steer_take(backend_state *st, char **id, char **text) {
+    *id = *text = NULL;
+    if (!st->steer_take || !st->steer_take(st->steer_ud, id, text)) return 0;
+    if (*id && *text) return 1;
+    free(*id); free(*text);
+    *id = *text = NULL;
+    return 0;
+}
+
 static void backend_set_model_generic(Backend *b, const char *model) {
     backend_set(&((backend_state *)b->ctx)->model, model);
 }
@@ -491,9 +516,17 @@ static void backend_claude_event(void *ud, const claude_event *e) {
     case CLAUDE_EV_INIT:        ev.kind = BACKEND_EV_INIT;        break;
     case CLAUDE_EV_CWD:         ev.kind = BACKEND_EV_CWD;         break;
     case CLAUDE_EV_TASK:        ev.kind = BACKEND_EV_TASK;        break;
+    case CLAUDE_EV_USER:        ev.kind = BACKEND_EV_USER;        break;
     default: return;
     }
     backend_emit(&x->st, &ev);
+}
+
+static void backend_claude_set_steer(Backend *b, int (*take)(void *ud, char **id, char **text),
+                                     void (*refuse)(void *ud, const char *id), void *ud) {
+    backend_claude *x = b->ctx;
+    backend_set_steer_generic(b, take, refuse, ud);
+    if (x->client) claude_set_steer(x->client, take, refuse, ud);
 }
 
 static int backend_claude_permission(void *ud, const claude_permission *p) {
@@ -544,6 +577,7 @@ static int backend_claude_start(Backend *b, const char *resume) {
     claude_set_event_cb(c, backend_claude_event, b);
     claude_set_permission_cb(c, backend_claude_permission, b);
     claude_set_abort_check(c, x->st.abort);
+    claude_set_steer(c, x->st.steer_take, x->st.steer_refuse, x->st.steer_ud);
     if (x->client) claude_stop(x->client);
     x->client = c;
     x->live.context_tokens = x->live.context_window = 0;
@@ -756,7 +790,8 @@ static Backend *backend_claude_open(const backend_opts *o) {
     backend_state_init(&x->st, o);
     b->ctx = x;
     b->caps = BACKEND_CAP_RESUME | BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT |
-              BACKEND_CAP_TASKS;
+              BACKEND_CAP_TASKS | BACKEND_CAP_STEER;
+    b->set_steer = backend_claude_set_steer;
     b->ask = backend_claude_ask;
     b->reset = backend_claude_reset;
     b->close = backend_claude_close;
@@ -820,6 +855,10 @@ static void backend_codex_event(void *ud, const codex_event *cev) {
         } else if (cev->kind == CODEX_EV_WARNING) {
             ev.kind = BACKEND_EV_WARNING;
             ev.text = cev->text;
+        } else if (cev->kind == CODEX_EV_USER) {
+            ev.kind = BACKEND_EV_USER;
+            ev.id = cev->id;
+            ev.text = cev->text;
         } else if (cev->kind == CODEX_EV_TASK) {
             ev.kind = BACKEND_EV_TASK;
             ev.id = cev->id;
@@ -869,6 +908,7 @@ static int backend_codex_start(Backend *b, const char *resume) {
     if (!c) return 0;
     codex_set_event_cb(c, backend_codex_event, b);
     codex_set_abort_check(c, x->st.abort);
+    codex_set_steer(c, x->st.steer_take, x->st.steer_refuse, x->st.steer_ud);
     if (x->client) codex_stop(x->client);
     x->client = c;
     backend_set(&x->st.resume, resume);
@@ -953,6 +993,13 @@ static void backend_codex_set_event_cb(Backend *b,
     if (x->client) codex_set_event_cb(x->client, backend_codex_event, b);
 }
 
+static void backend_codex_set_steer(Backend *b, int (*take)(void *ud, char **id, char **text),
+                                    void (*refuse)(void *ud, const char *id), void *ud) {
+    backend_codex *x = b->ctx;
+    backend_set_steer_generic(b, take, refuse, ud);
+    if (x->client) codex_set_steer(x->client, take, refuse, ud);
+}
+
 static void backend_codex_set_abort(Backend *b, int (*cb)(void)) {
     backend_codex *x = b->ctx;
     x->st.abort = cb;
@@ -1033,7 +1080,8 @@ static Backend *backend_codex_open(const backend_opts *o) {
     backend_state_init(&x->st, o);
     b->ctx = x;
     b->caps = BACKEND_CAP_RESUME | BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT |
-              BACKEND_CAP_TASKS;
+              BACKEND_CAP_TASKS | BACKEND_CAP_STEER;
+    b->set_steer = backend_codex_set_steer;
     b->ask = backend_codex_ask;
     b->reset = backend_codex_reset;
     b->close = backend_codex_close;
@@ -1105,6 +1153,12 @@ static void backend_grok_event(void *ud, const grok_event *e) {
         backend_emit(&x->st, &ev);
         return;
     }
+    case GROK_EV_USER: {
+        backend_event ev = { .kind = BACKEND_EV_USER, .id = e->id, .text = e->text };
+        backend_flush(&x->st);
+        backend_emit(&x->st, &ev);
+        return;
+    }
     }
 }
 
@@ -1126,6 +1180,7 @@ static int backend_grok_start(Backend *b, const char *resume) {
     if (!c) return 0;
     grok_set_event_cb(c, backend_grok_event, b);
     grok_set_abort_check(c, x->st.abort);
+    grok_set_steer(c, x->st.steer_take, x->st.steer_refuse, x->st.steer_ud);
     /* A new session stays lazy, but a requested resume must be known-good
      * before it displaces the client that is currently usable. */
     if (resume && !grok_connect(c)) {
@@ -1177,6 +1232,13 @@ static void backend_grok_set_event_cb(Backend *b,
     backend_grok *x = b->ctx;
     x->st.on_event = cb; x->st.event_ud = ud;
     if (x->client) grok_set_event_cb(x->client, backend_grok_event, b);
+}
+
+static void backend_grok_set_steer(Backend *b, int (*take)(void *ud, char **id, char **text),
+                                   void (*refuse)(void *ud, const char *id), void *ud) {
+    backend_grok *x = b->ctx;
+    backend_set_steer_generic(b, take, refuse, ud);
+    if (x->client) grok_set_steer(x->client, take, refuse, ud);
 }
 
 static void backend_grok_set_abort(Backend *b, int (*cb)(void)) {
@@ -1275,7 +1337,8 @@ static Backend *backend_grok_open(const backend_opts *o) {
     backend_state_init(&x->st, o);
     b->ctx = x;
     b->caps = BACKEND_CAP_RESUME | BACKEND_CAP_EFFORT | BACKEND_CAP_LIVE_EFFORT |
-              BACKEND_CAP_TASKS;
+              BACKEND_CAP_TASKS | BACKEND_CAP_STEER;
+    b->set_steer = backend_grok_set_steer;
     b->ask = backend_grok_ask;
     b->reset = backend_grok_reset;
     b->close = backend_grok_close;

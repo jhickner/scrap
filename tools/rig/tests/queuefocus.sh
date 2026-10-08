@@ -5,7 +5,9 @@ R=./scraprig
 n=$($R start --fake); trap '$R stop $n' EXIT
 $R wait $n '❯'
 $R say $n 'run: sleep 4' '\[bash\] sleep 4'
-$R say $n 'queued one' '▌ queued one'
+$R type $n 'queued one'
+$R send $n M-Enter
+$R wait $n '▌ queued one'
 $R send $n Tab
 $R type $n x
 sleep 0.5

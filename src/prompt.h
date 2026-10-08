@@ -61,6 +61,9 @@ void prompt_set_takeover(struct prompt *p, int (*pending)(void *ud), void (*run)
 
 void prompt_set_cancel(struct prompt *p, int (*fn)(void *ud), void *ud);
 
+void prompt_set_queue_key(struct prompt *p, int (*fn)(void *ud), void *ud);
+int  prompt_take_queue_flag(struct prompt *p);
+
 void prompt_set_switcher(struct prompt *p, void (*fn)(void *ud), void *ud);
 
 void prompt_set_click(struct prompt *p, int (*fn)(void *ud, int row, int col),
@@ -112,9 +115,5 @@ void prompt_echo_message(const char *text);
 
 #define PROMPT_ECHO_KIND "echo"
 void prompt_echo_load(const cJSON *st);
-
-void        prompt_hold(char *text);
-void        prompt_drop_held(void);
-const char *prompt_held_label(void);
 
 #endif

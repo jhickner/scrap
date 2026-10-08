@@ -1,0 +1,22 @@
+{"l":0,"i":0,"text":"user: run: echo first","size":21}
+{"l":0,"i":1,"text":"tool: bash `echo first`","size":23}
+{"l":1,"i":0,"text":"user: run: echo first\ntool: bash `echo first`","size":45}
+{"l":0,"i":2,"text":"echo: first","size":11}
+{"l":0,"i":3,"text":"talk: tool said: first\n","size":23}
+{"l":1,"i":1,"text":"echo: first\ntalk: tool said: first\n","size":35}
+{"l":2,"i":0,"text":"user: run: echo first\ntool: bash `echo first`\necho: first\ntalk: tool said: first\n","size":81}
+{"l":0,"i":4,"text":"user: hello there","size":17}
+{"l":0,"i":5,"text":"talk: echo: hello there","size":23}
+{"l":1,"i":2,"text":"user: hello there\ntalk: echo: hello there","size":41}
+{"l":0,"i":6,"text":"user: run: printf \"a\\nb\\n\"","size":26}
+{"l":0,"i":7,"text":"tool: bash `printf \"a\\nb\\n\"`","size":28}
+{"l":1,"i":3,"text":"user: run: printf \"a\\nb\\n\"\ntool: bash `printf \"a\\nb\\n\"`","size":55}
+{"l":2,"i":1,"text":"user: hello there\ntalk: echo: hello there\nuser: run: printf \"a\\nb\\n\"\ntool: bash `printf \"a\\nb\\n\"`","size":97}
+{"l":3,"i":0,"text":"user: run: echo first\ntool: bash `echo first`\necho: first\ntalk: tool said: first\n\nuser: hello there\ntalk: echo: hello there\nuser: run: printf \"a\\nb\\n\"\ntool: bash `printf \"a\\nb\\n\"`","size":179}
+{"l":0,"i":8,"text":"echo: a\nb","size":9}
+{"l":0,"i":9,"text":"talk: tool said: a\nb\n","size":21}
+{"l":1,"i":4,"text":"echo: a\nb\ntalk: tool said: a\nb\n","size":31}
+{"l":0,"i":10,"text":"user: last words","size":16}
+{"l":0,"i":11,"text":"talk: echo: last words","size":22}
+{"l":1,"i":5,"text":"user: last words\ntalk: echo: last words","size":39}
+{"l":2,"i":2,"text":"echo: a\nb\ntalk: tool said: a\nb\n\nuser: last words\ntalk: echo: last words","size":71}

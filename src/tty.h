@@ -41,6 +41,8 @@ typedef enum {
     TK_NONE,
 } tty_key;
 
+#define TTY_ALT_ENTER 13u
+
 typedef struct {
     tty_key   key;
     uint32_t  cp;

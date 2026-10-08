@@ -33,7 +33,65 @@ struct remote {
     void (*on_event)(void *ud, const backend_event *ev);
     void *event_ud;
     int (*abort)(void);
+    int  (*steer_take)(void *ud, char **id, char **text);
+    void (*steer_refuse)(void *ud, const char *id);
+    void *steer_ud;
+    struct {
+        char *id;
+        int   acked;
+    } steers[16];
+    int nsteers;
 };
+
+static void steer_drop(struct remote *r, int i, int refuse)
+{
+    if (refuse && r->steer_refuse)
+        r->steer_refuse(r->steer_ud, r->steers[i].id);
+    free(r->steers[i].id);
+    memmove(r->steers + i, r->steers + i + 1, (size_t)(r->nsteers - i - 1) * sizeof *r->steers);
+    r->nsteers--;
+}
+
+static int put(struct remote *r, cJSON *o);
+
+static void steer_pull(struct remote *r)
+{
+    char *id, *text;
+    while (r->steer_take && r->nsteers < 16 && r->steer_take(r->steer_ud, &id, &text)) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "steer", text ? text : "");
+        cJSON_AddStringToObject(o, "id", id ? id : "");
+        free(text);
+        if (!id || !put(r, o)) {
+            if (id && r->steer_refuse)
+                r->steer_refuse(r->steer_ud, id);
+            free(id);
+            continue;
+        }
+        r->steers[r->nsteers].id = id;
+        r->steers[r->nsteers].acked = 0;
+        r->nsteers++;
+    }
+}
+
+static void steer_answer(struct remote *r, const char *id, int ok)
+{
+    for (int i = 0; id && i < r->nsteers; i++) {
+        if (strcmp(r->steers[i].id, id))
+            continue;
+        if (ok)
+            r->steers[i].acked = 1;
+        else
+            steer_drop(r, i, 1);
+        return;
+    }
+}
+
+static void steer_end(struct remote *r)
+{
+    while (r->nsteers)
+        steer_drop(r, r->nsteers - 1, !r->steers[r->nsteers - 1].acked);
+}
 
 static void side_keep(struct remote *r, cJSON *o)
 {
@@ -123,6 +181,12 @@ static void forward(struct remote *r, const cJSON *e)
     int kind = stream_kind_of(jstr(e, "kind"));
     if (kind < 0 || !r->on_event)
         return;
+    if (kind == BACKEND_EV_USER)
+        for (int i = 0; jstr(e, "arg") && i < r->nsteers; i++)
+            if (!strcmp(r->steers[i].id, jstr(e, "arg"))) {
+                steer_drop(r, i, 0);
+                break;
+            }
     backend_event ev = {
         .kind = (backend_event_kind)kind,
         .text = jstr(e, "text"),
@@ -159,7 +223,7 @@ static void fill(backend_result *m, const cJSON *res)
     snprintf(m->subtype, sizeof m->subtype, "%s", jstr(res, "subtype") ? jstr(res, "subtype") : "");
 }
 
-static char *turn(struct remote *r, const char *mine, backend_result *meta)
+static char *turn_read(struct remote *r, const char *mine, backend_result *meta)
 {
     int ours = mine == NULL, asked_stop = 0;
     for (;;) {
@@ -169,6 +233,8 @@ static char *turn(struct remote *r, const char *mine, backend_result *meta)
             put(r, o);
             asked_stop = 1;
         }
+        if (!asked_stop)
+            steer_pull(r);
         char *line = next_line(r, TICK_MS);
         if (!line) {
             if (r->closed)
@@ -181,6 +247,9 @@ static char *turn(struct remote *r, const char *mine, backend_result *meta)
         cJSON      *e = cJSON_GetObjectItem(o, "ev");
         if (e)
             forward(r, e);
+        else if (jstr(o, "steer_ok") || jstr(o, "steer_refused"))
+            steer_answer(r, jstr(o, "steer_ok") ? jstr(o, "steer_ok") : jstr(o, "steer_refused"),
+                         jstr(o, "steer_ok") != NULL);
         else if (cJSON_GetObjectItem(o, "side"))
             side_keep(r, o);
         else if (t && !strcmp(t, "begin") && !ours && jstr(o, "prompt") &&
@@ -199,6 +268,13 @@ static char *turn(struct remote *r, const char *mine, backend_result *meta)
         }
         cJSON_Delete(o);
     }
+}
+
+static char *turn(struct remote *r, const char *mine, backend_result *meta)
+{
+    char *reply = turn_read(r, mine, meta);
+    steer_end(r);
+    return reply;
 }
 
 static int connect_remote(struct remote *r);
@@ -333,6 +409,8 @@ static void close_remote(Backend *b)
     free(r->buf);
     free(r->model);
     free(r->pending_prompt);
+    while (r->nsteers)
+        steer_drop(r, r->nsteers - 1, 0);
     free(r);
     free(b);
 }
@@ -389,6 +467,14 @@ static void set_abort_check(Backend *b, int (*cb)(void))
     R(b)->abort = cb;
 }
 
+static void set_steer(Backend *b, int (*take)(void *ud, char **id, char **text),
+                      void (*refuse)(void *ud, const char *id), void *ud)
+{
+    R(b)->steer_take = take;
+    R(b)->steer_refuse = refuse;
+    R(b)->steer_ud = ud;
+}
+
 static int busy(Backend *b)
 {
     (void)b;
@@ -438,6 +524,8 @@ Backend *remote_open(const char *target)
         .set_permission = set_permission,
         .set_event_cb = set_event_cb,
         .set_abort_check = set_abort_check,
+        .set_steer = set_steer,
+        .caps = BACKEND_CAP_STEER,
         .idle_fd = idle_fd,
         .idle_pump = idle_pump,
         .take_continuation = take_continuation,

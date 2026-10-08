@@ -57,6 +57,18 @@
 #include "vncinset.h"
 #include "voice.h"
 
+#define STEER_MAX 8
+
+
+struct steer {
+    char   id[40];
+    char  *line;
+    char  *shown;
+    char  *label[2];
+    int    lab;
+    int    state;
+};
+
 struct session {
     Backend *agent;
     char    *remote;
@@ -129,6 +141,12 @@ struct session {
     int      stall_told;
     volatile double heard_at;
     volatile int    tool_open;
+    char            tool_name[32];
+    volatile double tool_at;
+    struct steer    steer[STEER_MAX];
+    int             nsteer;
+    unsigned        steer_serial;
+    char           *steered;
     int      interrupted;
     int      ask_open;
     int      unseen;
@@ -260,7 +278,40 @@ static void turn_log_event(struct session *s, const backend_event *ev)
     }
 }
 
+static void render_body(struct session *s, const backend_event *ev);
+static char *steer_shown(struct session *s, const char *id);
+static void steered_add(struct session *s, const char *text);
+
+static void render_user(struct session *s, const backend_event *ev)
+{
+    const char *key = ev->id ? ev->id : ev->arg;
+    char       *shown = steer_shown(s, key);
+    if (!shown && (!s->remote || !ev->text || !*ev->text))
+        return;
+    if (!shown)
+        shown = strdup(ev->text);
+    if (!shown)
+        return;
+    backend_event user = *ev;
+    user.id = NULL;
+    user.arg = key;
+    user.text = shown;
+    turn_log_add(s, "user: ", shown);
+    steered_add(s, shown);
+    render_body(s, &user);
+    free(shown);
+}
+
 static void render_event(struct session *s, const backend_event *ev)
+{
+    if (ev->kind == BACKEND_EV_USER && (ev->id || ev->arg)) {
+        render_user(s, ev);
+        return;
+    }
+    render_body(s, ev);
+}
+
+static void render_body(struct session *s, const backend_event *ev)
 {
     s->heard++;
     turn_log_event(s, ev);
@@ -377,10 +428,106 @@ static void heard(struct session *s, const backend_event *ev)
     s->heard_at = now_seconds();
     if (ev->kind == BACKEND_EV_ASSISTANT && s->tail_bot[0])
         s->tail_mark.ms = now_seconds() * 1000.0;
-    if (ev->kind == BACKEND_EV_TOOL)
+    if (ev->kind == BACKEND_EV_TOOL) {
         s->tool_open = 1;
-    else if (ev->kind == BACKEND_EV_TOOL_RESULT)
+        if (!(ev->parent && *ev->parent)) {
+            pthread_mutex_lock(&s->lock);
+            snprintf(s->tool_name, sizeof s->tool_name, "%s", ev->name ? ev->name : "tool");
+            s->tool_at = s->heard_at;
+            pthread_mutex_unlock(&s->lock);
+        }
+    } else if (ev->kind == BACKEND_EV_TOOL_RESULT) {
         s->tool_open = 0;
+        if (!(ev->parent && *ev->parent))
+            s->tool_at = 0;
+    }
+}
+
+static void steer_free(struct steer *e)
+{
+    free(e->line);
+    free(e->shown);
+    free(e->label[0]);
+    free(e->label[1]);
+    memset(e, 0, sizeof *e);
+}
+
+static void steer_remove(struct session *s, int i)
+{
+    steer_free(&s->steer[i]);
+    memmove(s->steer + i, s->steer + i + 1, (size_t)(s->nsteer - i - 1) * sizeof *s->steer);
+    s->nsteer--;
+    memset(&s->steer[s->nsteer], 0, sizeof s->steer[s->nsteer]);
+}
+
+static int steer_take(void *ud, char **id, char **text)
+{
+    struct session *s = ud;
+    int got = 0;
+    pthread_mutex_lock(&s->lock);
+    for (int i = 0; i < s->nsteer && !got; i++) {
+        struct steer *e = &s->steer[i];
+        if (e->state != STEER_PENDING)
+            continue;
+        *id = strdup(e->id);
+        *text = strdup(e->line);
+        e->state = STEER_SENT;
+        got = 1;
+    }
+    pthread_mutex_unlock(&s->lock);
+    if (got)
+        wake_write(s);
+    return got;
+}
+
+static void steer_refuse(void *ud, const char *id)
+{
+    struct session *s = ud;
+    pthread_mutex_lock(&s->lock);
+    for (int i = 0; i < s->nsteer; i++)
+        if (!strcmp(s->steer[i].id, id))
+            s->steer[i].state = STEER_REFUSED;
+    pthread_mutex_unlock(&s->lock);
+    wake_write(s);
+}
+
+static void steer_id(struct session *s, char *out, size_t size)
+{
+    unsigned char r[16];
+    arc4random_buf(r, sizeof r);
+    r[6] = (unsigned char)((r[6] & 0x0f) | 0x40);
+    r[8] = (unsigned char)((r[8] & 0x3f) | 0x80);
+    snprintf(out, size,
+             "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+             r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12],
+             r[13], r[14], r[15]);
+    s->steer_serial++;
+}
+
+static char *steer_shown(struct session *s, const char *id)
+{
+    char *shown = NULL;
+    pthread_mutex_lock(&s->lock);
+    for (int i = 0; i < s->nsteer; i++) {
+        if (strcmp(s->steer[i].id, id))
+            continue;
+        shown = strdup(s->steer[i].shown ? s->steer[i].shown : s->steer[i].line);
+        steer_remove(s, i);
+        break;
+    }
+    pthread_mutex_unlock(&s->lock);
+    return shown;
+}
+
+static void steered_add(struct session *s, const char *text)
+{
+    if (!text || !*text)
+        return;
+    char *joined = s->steered ? text_dsprintf("%s\n\n%s", s->steered, text) : strdup(text);
+    if (!joined)
+        return;
+    free(s->steered);
+    s->steered = joined;
 }
 
 static void on_event(void *ud, const backend_event *ev)
@@ -1102,6 +1249,9 @@ void session_free(struct session *s)
     free(s->prompt);
     free(s->status_last);
     free(s->turn_log);
+    free(s->steered);
+    for (int i = 0; i < s->nsteer; i++)
+        steer_free(&s->steer[i]);
     free(s->permission);
     permission_clear(&s->perm);
     free(s->error_note);
@@ -1350,6 +1500,8 @@ struct session *session_agent_open(struct agent_job *j)
     s->compact     = settings_get_int(SETTING_COMPACT, 0);
     s->agent->set_event_cb(s->agent, on_event, s);
     s->agent->set_abort_check(s->agent, abort_check);
+    if (s->agent->set_steer)
+        s->agent->set_steer(s->agent, steer_take, steer_refuse, s);
     /* Before its first turn starts the CLI: without the callback claude gets
      * no --permission-prompt-tool and refuses, unasked, every call its
      * permission mode would ask about (all of them where policy disables
@@ -1450,6 +1602,8 @@ static Backend *agent(struct session *s)
             quota_want(q);
         s->agent->set_event_cb(s->agent, on_event, s);
         s->agent->set_abort_check(s->agent, abort_check);
+        if (s->agent->set_steer)
+            s->agent->set_steer(s->agent, steer_take, steer_refuse, s);
         if (s->agent->set_permission_cb)
             s->agent->set_permission_cb(s->agent, on_permission, s);
         if (s->agent->set_agent_host)
@@ -2548,7 +2702,10 @@ static void turn_prepare(struct session *s, const char *text)
     free(s->turn_log);
     s->turn_log = NULL;
     s->turn_len = 0;
+    free(s->steered);
+    s->steered = NULL;
     s->tool_open = 0;
+    s->tool_at = 0;
     s->idle_busy = 1;
     s->stall_told = 0;
     s->stall_at = 0;
@@ -2637,7 +2794,9 @@ static int turn_finish(struct session *s, char *reply, const backend_result *met
         if (continuing)
             continuation_fallback(s);
     } else if (!continuing || s->remote) {
-        transcript_add(&s->transcript, s->backend, text, reply, m.interrupted);
+        char *user = s->steered ? text_dsprintf("%s\n\n%s", text, s->steered) : NULL;
+        transcript_add(&s->transcript, s->backend, user ? user : text, reply, m.interrupted);
+        free(user);
         replace(&s->failed_prompt, NULL);
     } else {
         replace(&s->failed_prompt, NULL);
@@ -2826,6 +2985,184 @@ void session_interrupt(struct session *s)
         s->autobackend_due = 0;
         s->abort_request = 1;
     }
+}
+
+int session_can_steer(const struct session *s)
+{
+    return s && s->agent && s->agent->set_steer && (s->agent->caps & BACKEND_CAP_STEER);
+}
+
+int session_steer(struct session *s, const char *line, const char *shown)
+{
+    return session_steer_id(s, line, shown, NULL);
+}
+
+int session_steer_id(struct session *s, const char *line, const char *shown, const char *id)
+{
+    if (!s || !line || !*line || !s->running || s->finished || s->abort_request ||
+        !session_can_steer(s))
+        return 0;
+    struct steer e = {0};
+    if (id && *id && strlen(id) < sizeof e.id)
+        snprintf(e.id, sizeof e.id, "%s", id);
+    else
+        steer_id(s, e.id, sizeof e.id);
+    e.line = strdup(line);
+    e.shown = shown && *shown ? strdup(shown) : NULL;
+    if (!e.line || (shown && *shown && !e.shown)) {
+        steer_free(&e);
+        return 0;
+    }
+    pthread_mutex_lock(&s->lock);
+    int ok = s->nsteer < STEER_MAX;
+    if (ok)
+        s->steer[s->nsteer++] = e;
+    pthread_mutex_unlock(&s->lock);
+    if (!ok)
+        steer_free(&e);
+    return ok;
+}
+
+int session_steer_count(const struct session *s)
+{
+    return s ? s->nsteer : 0;
+}
+
+static void steer_elapsed(double secs, char *out, size_t size)
+{
+    long t = secs > 0 ? (long)secs : 0;
+    if (t >= 60)
+        snprintf(out, size, "%ldm%02lds", t / 60, t % 60);
+    else
+        snprintf(out, size, "%lds", t);
+}
+
+const char *session_steer_label(struct session *s, int i)
+{
+    if (!s || i < 0 || i >= s->nsteer)
+        return NULL;
+    char head[160];
+    pthread_mutex_lock(&s->lock);
+    struct steer *e = &s->steer[i];
+    if (e->state == STEER_PENDING) {
+        snprintf(head, sizeof head, "steer \xc2\xb7 next tool step");
+    } else if (e->state == STEER_REFUSED) {
+        snprintf(head, sizeof head, "steer \xc2\xb7 after this turn");
+    } else if (s->tool_at > 0) {
+        char took[32];
+        steer_elapsed(now_seconds() - s->tool_at, took, sizeof took);
+        snprintf(head, sizeof head, "steer \xc2\xb7 sent, waiting on %s %s \xc2\xb7 esc sends now",
+                 s->tool_name, took);
+    } else {
+        snprintf(head, sizeof head, "steer \xc2\xb7 sent");
+    }
+    char *label = text_dsprintf("%s \xc2\xb7 %s", head, e->shown ? e->shown : e->line);
+    if (label && (!e->label[e->lab] || strcmp(label, e->label[e->lab]))) {
+        e->lab = !e->lab;
+        free(e->label[e->lab]);
+        e->label[e->lab] = label;
+    } else {
+        free(label);
+    }
+    const char *out = e->label[e->lab];
+    pthread_mutex_unlock(&s->lock);
+    return out;
+}
+
+int session_steer_drop(struct session *s, const char *label)
+{
+    int dropped = 0;
+    if (!s || !label)
+        return 0;
+    pthread_mutex_lock(&s->lock);
+    for (int i = 0; i < s->nsteer; i++) {
+        struct steer *e = &s->steer[i];
+        if (e->state != STEER_PENDING ||
+            !((e->label[0] && !strcmp(e->label[0], label)) ||
+              (e->label[1] && !strcmp(e->label[1], label)) ||
+              !strcmp(e->shown ? e->shown : e->line, label)))
+            continue;
+        steer_remove(s, i);
+        dropped = 1;
+        break;
+    }
+    pthread_mutex_unlock(&s->lock);
+    return dropped;
+}
+
+int session_steer_item(struct session *s, int i, char **text, char **tool, double *since)
+{
+    *text = *tool = NULL;
+    *since = 0;
+    if (!s)
+        return -1;
+    pthread_mutex_lock(&s->lock);
+    int state = -1;
+    if (i >= 0 && i < s->nsteer) {
+        struct steer *e = &s->steer[i];
+        state = e->state;
+        *text = strdup(e->shown ? e->shown : e->line);
+        if (state == STEER_SENT && s->tool_at > 0) {
+            *tool = strdup(s->tool_name);
+            *since = s->tool_at;
+        }
+    }
+    pthread_mutex_unlock(&s->lock);
+    return state;
+}
+
+char *session_steer_recall(struct session *s)
+{
+    char *back = NULL;
+    if (!s)
+        return NULL;
+    pthread_mutex_lock(&s->lock);
+    for (int i = s->nsteer - 1; i >= 0; i--) {
+        struct steer *e = &s->steer[i];
+        if (e->state != STEER_PENDING)
+            continue;
+        back = strdup(e->shown ? e->shown : e->line);
+        if (back)
+            steer_remove(s, i);
+        break;
+    }
+    pthread_mutex_unlock(&s->lock);
+    return back;
+}
+
+int session_steer_leftover(struct session *s, char **line, char **shown)
+{
+    *line = *shown = NULL;
+    if (!s || s->running)
+        return 0;
+    pthread_mutex_lock(&s->lock);
+    int n = s->nsteer;
+    for (int i = 0; i < n; i++) {
+        struct steer *e = &s->steer[i];
+        if (s->remote && e->state == STEER_SENT) {
+            steer_free(e);
+            continue;
+        }
+        const char *view = e->shown ? e->shown : e->line;
+        char *l = *line ? text_dsprintf("%s\n\n%s", *line, e->line) : strdup(e->line);
+        char *v = *shown ? text_dsprintf("%s\n\n%s", *shown, view) : strdup(view);
+        if (l) {
+            free(*line);
+            *line = l;
+        }
+        if (v) {
+            free(*shown);
+            *shown = v;
+        }
+        steer_free(e);
+    }
+    s->nsteer = 0;
+    pthread_mutex_unlock(&s->lock);
+    if (*line && *shown && !strcmp(*line, *shown)) {
+        free(*shown);
+        *shown = NULL;
+    }
+    return *line != NULL;
 }
 
 int session_stop_task(struct session *s, const char *task_id)

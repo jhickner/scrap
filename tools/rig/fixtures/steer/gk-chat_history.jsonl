@@ -1,0 +1,8 @@
+{"type": "user", "content": [{"type": "text", "text": "<system-reminder>\nMCP servers connected.\n</system-reminder>"}], "synthetic_reason": "system_reminder"}
+{"type": "user", "content": [{"type": "text", "text": "<user_query>\nRun the shell command `sleep 8; echo slept`, then reply with one short sentence.\n</user_query>"}], "prompt_index": 0}
+{"type": "user", "content": [{"type": "text", "text": "<system-reminder>\nMCP servers connected.\n</system-reminder>"}], "synthetic_reason": "system_reminder"}
+{"type": "assistant", "content": "I'll run that sleep command and then reply briefly.", "tool_calls": [{"id": "call-bfb18240-9661-412a-9836-030a2fd6fe60-0", "name": "run_terminal_command", "arguments": "{\"command\":\"sleep 8; echo slept\",\"description\":\"Sleep 8 seconds then echo slept\",\"block_until_ms\":15000}"}], "model_id": "grok-4.5-build", "model_fingerprint": "fp_a685565a45638e34", "reasoning_effort": "high"}
+{"type": "tool_result", "tool_call_id": "call-bfb18240-9661-412a-9836-030a2fd6fe60-0", "content": "exit: 0\nslept\n"}
+{"type": "user", "content": [{"type": "text", "text": "The user sent a message while you were working:\n<user_query>\nAlso include the word PINEAPPLE in your final reply.\n</user_query>\nIf the user is asking for a response, address the user first. After replying, complete any unfinished tasks from previous turns."}], "synthetic_reason": "interjection"}
+{"type": "user", "content": [{"type": "text", "text": "<system-reminder>\nMCP servers connected.\n</system-reminder>"}], "synthetic_reason": "system_reminder"}
+{"type": "assistant", "content": "The command finished and printed “slept”; PINEAPPLE.", "model_id": "grok-4.5-build", "model_fingerprint": "fp_a685565a45638e34", "reasoning_effort": "high"}

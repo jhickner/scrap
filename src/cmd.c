@@ -1968,6 +1968,11 @@ enum cmd_result cmd_dispatch(struct session *s, const char *line)
 
 enum cmd_result cmd_submit(struct session *s, const char *line)
 {
+    return cmd_submit_ex(s, line, 0);
+}
+
+enum cmd_result cmd_submit_ex(struct session *s, const char *line, int queue)
+{
     if (!s || !line)
         return CMD_NOT_A_COMMAND;
 
@@ -1985,7 +1990,7 @@ enum cmd_result cmd_submit(struct session *s, const char *line)
         char *full = strcmp(session_backend(s), "grokbot")
                          ? voice_with_preamble(line)
                          : NULL;
-        workspace_send_typed(tab, line, full);
+        workspace_send_typed_ex(tab, line, full, queue);
         free(full);
     }
     return CMD_NOT_A_COMMAND;

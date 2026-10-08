@@ -5,9 +5,11 @@ R=./scraprig
 n=$($R start --fake); trap '$R stop $n' EXIT
 $R wait $n '❯'
 $R say $n 'run: sleep 4' 'thinking'
-$R say $n 'one' '▌ one'
+$R type $n 'one'
+$R send $n M-Enter
+$R wait $n '▌ one'
 $R type $n 'two'
-$R send $n Enter
+$R send $n M-Enter
 sleep 0.5
 $R wait $n 'echo: one'
 $R idle $n

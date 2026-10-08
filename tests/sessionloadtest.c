@@ -33,7 +33,8 @@ static char fixture_dir[1024];
 
 int sessionlist_available(const char *backend)
 {
-    return backend && (!strcmp(backend, "claude") || !strcmp(backend, "codex"));
+    return backend && (!strcmp(backend, "claude") || !strcmp(backend, "codex") ||
+                       !strcmp(backend, "grok"));
 }
 
 int sessionlist_dir(const char *backend, const char *cwd, char *out, size_t size)
@@ -60,10 +61,93 @@ int grokbottail_show(struct session *s, int limit, int only_new)
     return 0;
 }
 
+static int steers;
+
 void prompt_echo_message(const char *text)
 {
     if (text && !strcmp(text, "do the work"))
         users++;
+    if (text && !strcmp(text, "Also include the word PINEAPPLE in your final reply."))
+        steers++;
+}
+
+static void steer_test(void)
+{
+    char src[] = "tools/rig/fixtures/steer/cl-transcript.jsonl", path[1200];
+    snprintf(path, sizeof path, "%s/session-steer.jsonl", fixture_dir);
+    FILE *in = fopen(src, "r"), *out = fopen(path, "w");
+    expect(in && out, "steer transcript fixture");
+    if (!in || !out) {
+        if (in)
+            fclose(in);
+        if (out)
+            fclose(out);
+        return;
+    }
+    char buf[8192];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0)
+        fwrite(buf, 1, n, out);
+    fputs("{\"type\":\"attachment\",\"attachment\":{\"type\":\"queued_command\","
+          "\"prompt\":\"<task-notification>\\n<task-id>b1</task-id>\\n</task-notification>\","
+          "\"commandMode\":\"task-notification\"}}\n", out);
+    fclose(in);
+    fclose(out);
+
+    struct transcript t = {0};
+    expect(sessionload_fill(&t, "claude", "/worktree", "session-steer") == 1,
+           "steer joins the turn it entered");
+    expect(t.count == 1 && strstr(t.turns[0].user, "sleep 8") &&
+               strstr(t.turns[0].user,
+                      "\n\nAlso include the word PINEAPPLE in your final reply."),
+           "prompt then steer");
+    expect(t.count == 1 && strstr(t.turns[0].assistant, "PINEAPPLE"), "reply after the steer");
+    transcript_free(&t);
+
+    steers = 0;
+    sessionload_replay("claude", "/worktree", "session-steer", 0);
+    expect(steers == 1, "steer drawn once on replay");
+    unlink(path);
+}
+
+static void grok_steer_test(void)
+{
+    char dir[1100], path[1200];
+    snprintf(dir, sizeof dir, "%s/gk-steer", fixture_dir);
+    snprintf(path, sizeof path, "%s/chat_history.jsonl", dir);
+    mkdir(dir, 0700);
+    FILE *in = fopen("tools/rig/fixtures/steer/gk-chat_history.jsonl", "r"), *out = fopen(path, "w");
+    expect(in && out, "grok steer fixture");
+    if (!in || !out) {
+        if (in)
+            fclose(in);
+        if (out)
+            fclose(out);
+        return;
+    }
+    char buf[8192];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0)
+        fwrite(buf, 1, n, out);
+    fclose(in);
+    fclose(out);
+
+    struct transcript t = {0};
+    expect(sessionload_fill(&t, "grok", "/worktree", "gk-steer") == 1,
+           "grok interjection joins the turn it entered");
+    expect(t.count == 1 && strstr(t.turns[0].user, "sleep 8") &&
+               strstr(t.turns[0].user,
+                      "\n\nAlso include the word PINEAPPLE in your final reply.") &&
+               !strstr(t.turns[0].user, "while you were working"),
+           "grok prompt then steer");
+    expect(t.count == 1 && strstr(t.turns[0].assistant, "PINEAPPLE"), "grok reply after the steer");
+    transcript_free(&t);
+
+    steers = 0;
+    sessionload_replay("grok", "/worktree", "gk-steer", 0);
+    expect(steers == 1, "grok steer drawn once on replay");
+    unlink(path);
+    rmdir(dir);
 }
 
 void md_render_kept(const char *text, int own)
@@ -237,6 +321,9 @@ int main(void)
            "handoff omitted the other session");
     free(handoff);
     transcript_free(&filled);
+
+    steer_test();
+    grok_steer_test();
 
     unlink(mine);
     unlink(other);

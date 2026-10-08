@@ -31,7 +31,7 @@ static const char *const KINDS[] = {
     [BACKEND_EV_TOOL] = "tool",           [BACKEND_EV_TOOL_RESULT] = "tool_result",
     [BACKEND_EV_INIT] = "init",           [BACKEND_EV_CWD] = "cwd",
     [BACKEND_EV_TRUST] = "trust",         [BACKEND_EV_WARNING] = "warning",
-    [BACKEND_EV_TASK] = "task",
+    [BACKEND_EV_TASK] = "task",           [BACKEND_EV_USER] = "user",
 };
 
 const char *stream_kind_name(int kind)
@@ -178,8 +178,20 @@ static void command(struct sub *u, const char *line)
     cJSON      *o = cJSON_Parse(line);
     const char *prompt = cJSON_GetStringValue(cJSON_GetObjectItem(o, "prompt"));
     const char *btw = cJSON_GetStringValue(cJSON_GetObjectItem(o, "btw"));
+    const char *steer = cJSON_GetStringValue(cJSON_GetObjectItem(o, "steer"));
     if (prompt && *prompt)
         dispatch_send(workspace_index_of(u->s), prompt);
+    else if (steer && *steer) {
+        const char *id = cJSON_GetStringValue(cJSON_GetObjectItem(o, "id"));
+        const char *shown = cJSON_GetStringValue(cJSON_GetObjectItem(o, "shown"));
+        int         ok = session_steer_id(u->s, steer, shown, id);
+        if (id && *id) {
+            cJSON *r = cJSON_CreateObject();
+            cJSON_AddStringToObject(r, ok ? "steer_ok" : "steer_refused", id);
+            put(u, r);
+        } else if (!ok)
+            dispatch_send(workspace_index_of(u->s), steer);
+    }
     else if (btw && *btw) {
         char label[4096];
         snprintf(label, sizeof label, "/btw %s", btw);
