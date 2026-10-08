@@ -7,6 +7,8 @@ int tg_start(struct session *s);
 void tg_stop(void);
 const char *tg_start_error(void);
 
+void tg_poll(void);
+
 const char *tg_label(void);
 
 int tg_fds(int *out, int max);

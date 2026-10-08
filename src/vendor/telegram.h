@@ -175,6 +175,12 @@ int  tg_download_file(tg_client *c, const char *file_id, const char *dest_path);
 #define TG_API_BASE  "https://api.telegram.org"
 #endif
 
+/* $TELEGRAM_API_BASE points the client somewhere else (a local stand-in in tests). */
+static const char *tg_api_base(void) {
+    const char *b = getenv("TELEGRAM_API_BASE");
+    return (b && *b) ? b : TG_API_BASE;
+}
+
 struct tg_client {
     char *token;
     CURL *curl;   /* reused across calls (single-threaded); reset each time */
@@ -250,7 +256,7 @@ void tg_free(tg_client *c) {
  */
 static cJSON *tg_post(tg_client *c, const char *method, const char *body) {
     char url[512];
-    snprintf(url, sizeof url, TG_API_BASE "/bot%s/%s", c->token, method);
+    snprintf(url, sizeof url, "%s/bot%s/%s", tg_api_base(), c->token, method);
 
     struct curl_slist *hdr =
         curl_slist_append(NULL, "content-type: application/json");
@@ -596,7 +602,7 @@ static int tg_upload(tg_client *c, const char *method, long chat_id,
                      const char *field, const char *file_path, const char *caption) {
     if (!c || !field || !file_path) return -1;
     char url[512];
-    snprintf(url, sizeof url, TG_API_BASE "/bot%s/%s", c->token, method);
+    snprintf(url, sizeof url, "%s/bot%s/%s", tg_api_base(), c->token, method);
     char chat[32];
     snprintf(chat, sizeof chat, "%ld", chat_id);
 
@@ -680,7 +686,7 @@ int tg_download_file(tg_client *c, const char *file_id, const char *dest_path) {
 
     /* Step 2: GET https://api.telegram.org/file/bot<token>/<file_path> */
     char url[1024];
-    snprintf(url, sizeof url, TG_API_BASE "/file/bot%s/%s", c->token, file_path);
+    snprintf(url, sizeof url, "%s/file/bot%s/%s", tg_api_base(), c->token, file_path);
     free(file_path);
 
     FILE *f = fopen(dest_path, "wb");

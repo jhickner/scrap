@@ -23,6 +23,7 @@
 
 #include "app.h"
 #include "bash.h"
+#include "bridges.h"
 #include "chatnav.h"
 #include "cmd.h"
 #include "frontend.h"
@@ -96,6 +97,10 @@ struct tg_runtime {
     char               *last_said;
     char                last_log[240];
     int                 log_repeats;
+    char                trouble[400];
+    int                 trouble_fatal;
+    int                 trouble_new;
+    int                 poll_failing;
     pthread_mutex_t     log_lock;
     int                 from_chat;
     int                 repeat_task;
@@ -140,6 +145,10 @@ static struct tg_runtime runtime = {
 #define last_log     runtime.last_log
 #define log_repeats  runtime.log_repeats
 #define log_lock     runtime.log_lock
+#define trouble      runtime.trouble
+#define trouble_fatal runtime.trouble_fatal
+#define trouble_new  runtime.trouble_new
+#define poll_failing runtime.poll_failing
 #define from_chat    runtime.from_chat
 #define repeat_task  runtime.repeat_task
 #define inbox        runtime.inbox
@@ -158,11 +167,22 @@ static struct session *current_session(void)
 static void tg_cleanup(void);
 
 static struct settings tgcfg;
-static char            start_error[256];
+static char            start_error[600];
+static char            cfg_path[4200];
+static char            token_where[4300];
 
 const char *tg_start_error(void)
 {
     return start_error[0] ? start_error : NULL;
+}
+
+__attribute__((format(printf, 1, 2)))
+static void fail_why(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(start_error, sizeof start_error, fmt, ap);
+    va_end(ap);
 }
 
 static const char *cfg_get(const char *key, const char *dflt)
@@ -1099,6 +1119,80 @@ static int is_bare_stop(const char *s)
     return *s == '\0';
 }
 
+/* Tell the main thread, once per outage, that polling fails. A rejected token
+   or a second poller won't heal by retrying, so those stop the bridge. */
+static int poll_trouble(void)
+{
+    pthread_mutex_lock(&log_lock);
+    const char *why = last_log[0] ? last_log : "getUpdates failed";
+    int fatal = 1;
+    if (strstr(why, "Unauthorized") || strstr(why, "Not Found"))
+        snprintf(trouble, sizeof trouble, "telegram: Telegram rejected the bot token (%s); "
+                 "fix the token in %s, then /telegram on", why, token_where);
+    else if (strstr(why, "Conflict"))
+        snprintf(trouble, sizeof trouble, "telegram: another program is polling this bot (%s); "
+                 "stop it, then /telegram on", why);
+    else
+        fatal = 0;
+    if (!fatal && !poll_failing)
+        snprintf(trouble, sizeof trouble, "telegram: can't reach Telegram (%s); "
+                 "still trying in the background", why);
+    if (fatal || !poll_failing) {
+        trouble_fatal = fatal;
+        trouble_new = 1;
+    }
+    poll_failing = 1;
+    pthread_mutex_unlock(&log_lock);
+    wake_up();
+    return fatal;
+}
+
+static void poll_recovered(void)
+{
+    pthread_mutex_lock(&log_lock);
+    int was = poll_failing;
+    if (was) {
+        snprintf(trouble, sizeof trouble, "telegram: reached Telegram again");
+        trouble_fatal = 0;
+        trouble_new = 1;
+        poll_failing = 0;
+    }
+    pthread_mutex_unlock(&log_lock);
+    if (was)
+        wake_up();
+}
+
+void tg_poll(void)
+{
+    if (!running)
+        return;
+    pthread_mutex_lock(&log_lock);
+    int fresh = trouble_new, fatal = trouble_fatal;
+    char line[sizeof trouble];
+    snprintf(line, sizeof line, "%s", trouble);
+    trouble_new = 0;
+    pthread_mutex_unlock(&log_lock);
+    if (!fresh)
+        return;
+    wake_drain();
+    if (tg_pending())
+        wake_up();
+    if (fatal) {
+        char msg[300];
+        snprintf(start_error, sizeof start_error, "%s", line);
+        bridges_set("telegram", 0, msg, sizeof msg);
+    }
+    if (!viewport_active())
+        return;
+    viewport_item_begin(VIEWPORT_ROWS(1, 1));
+    if (fatal)
+        ui_error("%s", line);
+    else
+        ui_note("%s", line);
+    viewport_item_end();
+    ui_flush();
+}
+
 static void *poller_thread(void *ud)
 {
     (void)ud;
@@ -1111,6 +1205,12 @@ static void *poller_thread(void *ud)
 
         tg_update *u = NULL;
         int n = tg_get_updates(rx, offset, poll_seconds, &u);
+        if (n < 0 && poller_stop)
+            break;
+        if (n < 0 && poll_trouble())
+            break;
+        if (n >= 0)
+            poll_recovered();
         if (n < 0) {
             for (int i = 0; i < 20 && !poller_stop; i++) {
                 struct timespec nap = {0, 100 * 1000 * 1000};
@@ -1449,6 +1549,22 @@ done:
     free(line);
 }
 
+/* <bot id>:<secret>, as @BotFather hands it out. */
+static int looks_like_token(const char *t)
+{
+    const char *colon = strchr(t, ':');
+    if (!colon || colon == t || strlen(colon + 1) < 30)
+        return 0;
+    for (const char *p = t; p < colon; p++)
+        if (*p < '0' || *p > '9')
+            return 0;
+    for (const char *p = colon + 1; *p; p++)
+        if (!(*p == '_' || *p == '-' || (*p >= '0' && *p <= '9') ||
+              (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z')))
+            return 0;
+    return 1;
+}
+
 static const char *bot_token(void)
 {
     const char *var = cfg_get("token_env", "TELEGRAM_TOKEN");
@@ -1464,34 +1580,53 @@ int tg_start(struct session *s)
     if (running)
         return 0;
     if (im_label()) {
-        snprintf(start_error, sizeof start_error, "--telegram and --imessage do not combine");
-        fprintf(stderr, APP_NAME ": %s\n", start_error);
+        fail_why("telegram: imessage is on in this window; turn it off first, they don't combine");
         return 0;
     }
 
     poller_stop = 0;
     stop_wanted = 0;
+    poll_failing = 0;
+    trouble_new = 0;
+    last_log[0] = '\0';
+    log_repeats = 0;
     from_chat = 0;
     repeat_task = 0;
-    char cfgpath[4200];
-    if (path_config_file(cfgpath, sizeof cfgpath, "telegram"))
-        settings_load(&tgcfg, cfgpath);
-    else
-        settings_load(&tgcfg, "");
-    const char *token = bot_token();
-    if (!token || !*token) {
-        char path[4200];
-        path_config_file(path, sizeof path, "telegram");
-        fprintf(stderr, APP_NAME ": --telegram needs a bot token — $%s, or `token` in %s\n",
-                cfg_get("token_env", "TELEGRAM_TOKEN"), path);
+    if (!path_config_file(cfg_path, sizeof cfg_path, "telegram")) {
+        fail_why("telegram: no config directory; set HOME or XDG_CONFIG_HOME");
         return 0;
     }
-    runtime.chat_id = cfg_get_long("chat_id", 0);
-    if (!runtime.chat_id) {
-        char path[4200];
-        path_config_file(path, sizeof path, "telegram");
-        fprintf(stderr, APP_NAME ": set chat_id in %s — refusing to serve every chat\n",
-                path);
+    settings_load(&tgcfg, cfg_path);
+    const char *var = cfg_get("token_env", "TELEGRAM_TOKEN");
+    const char *token = bot_token();
+    int from_env = token && getenv(var) == token;
+    if ((!token || !*token) && access(cfg_path, R_OK) != 0) {
+        fail_why("telegram: no config at %s; create it with token=<bot token from @BotFather> "
+                 "and chat_id=<your chat id> (or export $%s)", cfg_path, var);
+        return 0;
+    }
+    if (!token || !*token) {
+        fail_why("telegram: no bot token; add token=<bot token from @BotFather> to %s, "
+                 "or export $%s", cfg_path, var);
+        return 0;
+    }
+    snprintf(token_where, sizeof token_where, from_env ? "$%s" : "%s", from_env ? var : cfg_path);
+    if (!looks_like_token(token)) {
+        fail_why("telegram: the token in %s isn't a bot token (want <digits>:<35 chars> "
+                 "from @BotFather); fix it", token_where);
+        return 0;
+    }
+    const char *chat = cfg_get("chat_id", NULL);
+    char *end = NULL;
+    runtime.chat_id = chat ? strtol(chat, &end, 10) : 0;
+    if (!chat) {
+        fail_why("telegram: no chat_id in %s; add chat_id=<your chat id> "
+                 "(it won't serve every chat)", cfg_path);
+        return 0;
+    }
+    if (!runtime.chat_id || (end && *end)) {
+        runtime.chat_id = 0;
+        fail_why("telegram: chat_id=%s in %s isn't a number; use your numeric chat id", chat, cfg_path);
         return 0;
     }
 
@@ -1515,11 +1650,11 @@ int tg_start(struct session *s)
     rx = tg_new(token);
     tx = tg_new(token);
     if (!rx || !tx) {
-        fprintf(stderr, APP_NAME ": telegram init failed\n");
+        fail_why("telegram: could not set up the HTTP client (libcurl)");
         goto fail;
     }
     if (pipe(wake) != 0) {
-        fprintf(stderr, APP_NAME ": telegram wake pipe: %s\n", strerror(errno));
+        fail_why("telegram: wake pipe: %s", strerror(errno));
         goto fail;
     }
     fcntl(wake[0], F_SETFL, O_NONBLOCK);
@@ -1551,11 +1686,11 @@ int tg_start(struct session *s)
     running = 1;
     sendq = tgqueue_new(tx, runtime.chat_id);
     if (!sendq) {
-        fprintf(stderr, APP_NAME ": can't start the telegram sender\n");
+        fail_why("telegram: can't start the sender thread");
         goto fail;
     }
     if (pthread_create(&poller, NULL, poller_thread, NULL) != 0) {
-        fprintf(stderr, APP_NAME ": can't start the telegram poller\n");
+        fail_why("telegram: can't start the poller thread: %s", strerror(errno));
         goto fail;
     }
     poller_live = 1;

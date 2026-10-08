@@ -242,6 +242,7 @@ static int idle_render(void *ud)
     voice_pending();
     relay_poll(NULL);
     api_poll();
+    tg_poll();
     bridges_tick();
     quota_tick();
     struct session *drew = session_set_drawing(workspace_current());
@@ -990,12 +991,6 @@ int main(int argc, char **argv)
             session_set_remote(session, attach_arg);
     }
 
-    const char *wanted[] = {telegram ? "telegram" : NULL};
-    for (int i = 0; i < 1 && session; i++) {
-        char msg[300];
-        if (wanted[i] && !bridges_set(wanted[i], 1, msg, sizeof msg))
-            fprintf(stderr, APP_NAME ": %s\n", msg);
-    }
     if (imessage && session && im_start(session))
         workspace_republish();
 
@@ -1123,6 +1118,14 @@ int main(int argc, char **argv)
         sessionload_into(session);
     if (attach_arg && !restore_arg)
         sessionpresent_replay(session_transcript(session));
+
+    char tg_msg[300];
+    if (telegram && interactive && !bridges_set("telegram", 1, tg_msg, sizeof tg_msg)) {
+        viewport_item_begin(VIEWPORT_ROWS(1, 1));
+        ui_error("%s", tg_msg);
+        viewport_item_end();
+        ui_flush();
+    }
 
     char api_msg[300];
     if (api_on && interactive && !bridges_set("api", 1, api_msg, sizeof api_msg)) {
