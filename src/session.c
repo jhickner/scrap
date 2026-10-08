@@ -3254,6 +3254,8 @@ const char *session_last_reply(const struct session *s) { return s->last_reply; 
 const char *session_last_block(const struct session *s) { return s->last_block; }
 int session_ask_open(const struct session *s) { return s && s->ask_open; }
 void session_set_ask_open(struct session *s, int on) { if (s) s->ask_open = on; }
+unsigned session_ask_mark(const struct session *s) { return s ? s->present.ask_mark : 0; }
+void session_ask_release(struct session *s, int show) { if (s) sessionpresent_ask_release(&s->present, show); }
 const char *session_prompt(const struct session *s) { return s ? s->prompt : NULL; }
 double session_turn_started(const struct session *s) { return s ? s->started : 0; }
 const char *session_failed_prompt(const struct session *s)

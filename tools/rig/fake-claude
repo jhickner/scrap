@@ -175,6 +175,22 @@ def main():
                 text = "bg started"
             elif text == "askme":
                 text = "Pick one.\n\n@ask\n1. Color?\n- red\n- blue"
+            elif text == "askthen":
+                # an @ask reply, then a later one: the turn ends without asking
+                emit({"type": "assistant", "message": {"role": "assistant", "model": MODEL,
+                      "content": [{"type": "text", "text": "Pick one.\n\n@ask\n1. Color?\n- red"}]}})
+                text = "never mind"
+            elif text == "askslow":
+                # the reply arrives well before the turn ends
+                text = "Pick one.\n\n@ask\n1. Color?\n- red\n- blue"
+                emit({"type": "assistant", "message": {"role": "assistant", "model": MODEL,
+                      "content": [{"type": "text", "text": text}]}})
+                time.sleep(2)
+                record("assistant", text)
+                emit({"type": "result", "subtype": "success", "is_error": False,
+                      "duration_ms": 1, "num_turns": 1, "total_cost_usd": 0,
+                      "usage": {"input_tokens": 1, "output_tokens": 1}, "result": text})
+                continue
             elif text.startswith("run: "):
                 out = run(text[5:])
                 text = out if out.startswith("interrupted: ") else "ran: " + out

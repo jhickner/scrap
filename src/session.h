@@ -277,6 +277,9 @@ const char *session_last_reply(const struct session *s);
 const char *session_last_block(const struct session *s);
 int  session_ask_open(const struct session *s);
 void session_set_ask_open(struct session *s, int on);
+/* The reply item drawn with its @ask block hidden, and letting go of it. */
+unsigned session_ask_mark(const struct session *s);
+void     session_ask_release(struct session *s, int show);
 
 const char *session_prompt(const struct session *s);
 double      session_turn_started(const struct session *s);

@@ -211,7 +211,7 @@ $(BUILD)/transcripttest: tests/transcripttest.c $(BUILD)/transcript.o | $(BUILD)
 
 $(BUILD)/sessionviewtest: tests/sessionviewtest.c $(BUILD)/sessionview.o $(BUILD)/filediff.o $(BUILD)/highlight.o $(BUILD)/toolstyle.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/block.o $(BUILD)/settings.o $(BUILD)/tty.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
-$(BUILD)/sessionpresenttest: tests/sessionpresenttest.c tests/stubs/tabbar.c tests/stubs/keyhelp.c tests/stubs/taskrows.c $(BUILD)/sessionpresent.o $(BUILD)/sessionview.o $(BUILD)/filediff.o $(BUILD)/highlight.o $(BUILD)/md.o $(MERMAID_OBJ) $(BUILD)/prompt.o $(BUILD)/status.o $(BUILD)/tasks.o $(BUILD)/transcript.o $(BUILD)/toolstyle.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/bash.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/image.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
+$(BUILD)/sessionpresenttest: tests/sessionpresenttest.c tests/stubs/tabbar.c tests/stubs/keyhelp.c tests/stubs/taskrows.c $(BUILD)/sessionpresent.o $(BUILD)/askblock.o $(BUILD)/sessionview.o $(BUILD)/filediff.o $(BUILD)/highlight.o $(BUILD)/md.o $(MERMAID_OBJ) $(BUILD)/prompt.o $(BUILD)/status.o $(BUILD)/tasks.o $(BUILD)/transcript.o $(BUILD)/toolstyle.o $(BUILD)/replframe.o $(BUILD)/replkeys.o $(BUILD)/files.o $(BUILD)/paste.o $(BUILD)/bash.o $(BUILD)/chrome.o $(BUILD)/block.o $(BUILD)/tty.o $(BUILD)/ui.o $(BUILD)/viewport.o $(BUILD)/settings.o $(BUILD)/image.o $(BUILD)/text.o $(BUILD)/vendor/impl.o $(BUILD)/vendor/cJSON.o | $(BUILD)
 
 
 $(BUILD)/grokvnctest: tests/grokvnctest.c src/vendor/vnc/grokvnc.h | $(BUILD)

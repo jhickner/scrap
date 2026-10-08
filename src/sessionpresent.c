@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "askblock.h"
 #include "highlight.h"
 #include "md.h"
 #include "prompt.h"
@@ -52,10 +53,33 @@ void sessionpresent_free(struct sessionpresent *p)
     filediff_clear(&p->filediff);
 }
 
+void sessionpresent_ask_release(struct sessionpresent *p, int show)
+{
+    if (!p || !p->ask_mark)
+        return;
+    if (show)
+        md_kept_hide(p->ask_mark, 0, 0, 0);
+    p->ask_mark = 0;
+}
+
+/* A reply ending in an @ask block is drawn with the block already hidden, so
+ * it never flashes up before the ask form takes its place; a later reply in
+ * the turn is the one asking, so an earlier hidden block comes back. */
+static void render_reply(struct sessionpresent *p, const char *text)
+{
+    size_t from, to;
+    sessionpresent_ask_release(p, 1);
+    if (p && askblock_span(text, &from, &to))
+        p->ask_mark = md_render_kept_hiding(text, 0, from, to);
+    else
+        md_render_kept(text, 0);
+}
+
 void sessionpresent_turn_begin(struct sessionpresent *p)
 {
     if (!p)
         return;
+    sessionpresent_ask_release(p, 1);
     stream_reset(p);
     p->view.after_collapse = 0;
     p->call_open = 0;
@@ -214,7 +238,7 @@ void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
             view_keep_break();
             view_keep_activity("", ev->text, UI_DIM);
         } else {
-            md_render_kept(ev->text, 0);
+            render_reply(p, ev->text);
             stream_append(p, ev->text);
             view_keep_break();
         }
@@ -434,7 +458,7 @@ void sessionpresent_turn_result(struct sessionpresent *p, const char *backend,
         viewport_item_end();
         ui_flush();
     } else if (*reply && !shown) {
-        md_render_kept(reply, 0);
+        render_reply(p, reply);
     }
 
     if (meta->interrupted) {

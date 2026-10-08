@@ -27,11 +27,17 @@ struct sessionpresent {
     int      calls;
     struct turnview view;
     struct filediff_snapshot filediff;
+    /* the reply drawn with its @ask block hidden for the ask form */
+    unsigned ask_mark;
 };
 
 void sessionpresent_free(struct sessionpresent *p);
 void sessionpresent_turn_begin(struct sessionpresent *p);
 void sessionpresent_turn_end(struct sessionpresent *p);
+
+/* Lets go of the reply whose @ask block is hidden, showing the block again
+ * when show is set. */
+void sessionpresent_ask_release(struct sessionpresent *p, int show);
 
 void sessionpresent_event(struct sessionpresent *p, const backend_event *ev,
                           const char *cwd, const struct tasktab *tasks,

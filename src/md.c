@@ -1160,6 +1160,11 @@ void md_kept_load(const cJSON *st)
 
 void md_render_kept(const char *text, int indent)
 {
+    md_render_kept_hiding(text, indent, 0, 0);
+}
+
+unsigned md_render_kept_hiding(const char *text, int indent, size_t from, size_t to)
+{
     struct kept *k = calloc(1, sizeof *k);
     if (k) {
         k->text = strdup(text ? text : "");
@@ -1167,6 +1172,9 @@ void md_render_kept(const char *text, int indent)
         if (!k->text) {
             free(k);
             k = NULL;
+        } else if (to > from && to <= strlen(k->text)) {
+            k->hide_from = from;
+            k->hide_to = to;
         }
     }
     unsigned mark = 0;
@@ -1174,11 +1182,14 @@ void md_render_kept(const char *text, int indent)
         mark = viewport_item_begin(&(struct viewport_entry){
             .render = kept_render, .ud = k, .free_ud = kept_free, .reflow = 1,
             .pad_before = 1, .pad_after = 1});
-    md_render(text, indent);
+    char *shown = k ? kept_shown(k) : NULL;
+    md_render(shown ? shown : text, indent);
+    free(shown);
     if (k) {
         viewport_item_end();
         viewport_item_persist(mark, MD_KEPT_KIND, kept_encode);
     }
+    return mark;
 }
 
 void md_render(const char *text, int indent)

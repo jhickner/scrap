@@ -431,8 +431,12 @@ static void drop_asked(void)
 static int ask_ready(void)
 {
     struct session *s = workspace_current();
-    if (!session_ask_open(s))
+    if (!session_ask_open(s)) {
+        /* no form is coming for the reply's hidden block */
+        if (!session_turn_running(s))
+            session_ask_release(s, 1);
         return 0;
+    }
     if (session_turn_running(s) || workspace_queued(workspace_index())) {
         session_set_ask_open(s, 0);
         return 0;
@@ -453,10 +457,13 @@ static int ask_interrupted(void)
 }
 
 /* The form stands in for the reply's @ask block, so the block leaves the
- * transcript while the form is up; it comes back unless an answer was sent. */
-static unsigned ask_hide_block(int keep)
+ * transcript while the form is up (the reply is drawn with it hidden already);
+ * it comes back unless an answer was sent. */
+static unsigned ask_hide_block(struct session *s, int keep)
 {
-    unsigned mark = viewport_item_find(MD_KEPT_KIND);
+    unsigned mark = session_ask_mark(s);
+    if (!mark)
+        mark = viewport_item_find(MD_KEPT_KIND);
     size_t   from, to;
     if (!mark || !askblock_span(md_kept_text(mark), &from, &to))
         return 0;
@@ -464,8 +471,9 @@ static unsigned ask_hide_block(int keep)
     return mark;
 }
 
-static void ask_show_block(unsigned mark)
+static void ask_show_block(struct session *s, unsigned mark)
 {
+    session_ask_release(s, 1);
     if (mark)
         md_kept_hide(mark, 0, 0, 0);
 }
@@ -473,7 +481,8 @@ static void ask_show_block(unsigned mark)
 static void ask_run_form(void)
 {
     enum askform_exit how;
-    unsigned          block = ask_hide_block(0);
+    struct session   *by = asked_by;
+    unsigned          block = ask_hide_block(by, 0);
     chrome_modal_interrupt(ask_interrupted);
     asking = 1;
     char *answer = askform_run(asked, &how);
@@ -481,27 +490,28 @@ static void ask_run_form(void)
     chrome_modal_interrupt(handoff_wanted);
     if (ask_stale) {
         ask_stale = 0;
-        ask_show_block(block);
+        ask_show_block(by, block);
         drop_asked();
         free(answer);
         return;
     }
+    /* leaving the tab keeps the question open, and the form comes back with
+     * it, so the block stays hidden meanwhile */
     if (how == ASKFORM_NEW_TAB) {
-        ask_show_block(block);
         another(NULL);
         return;
     }
     if (how != ASKFORM_DONE) {
-        ask_show_block(block);
         workspace_cycle(how == ASKFORM_NEXT_TAB ? 1 : -1);
         return;
     }
     session_set_ask_open(asked_by, 0);
     drop_asked();
-    if (answer && *answer)
-        ask_hide_block(1);
-    else
-        ask_show_block(block);
+    if (answer && *answer) {
+        ask_hide_block(by, 1);
+        session_ask_release(by, 0);
+    } else
+        ask_show_block(by, block);
     if (answer && *answer) {
         prompt_echo_message(answer);
         workspace_send(workspace_index(), answer, answer);

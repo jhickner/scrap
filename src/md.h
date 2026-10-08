@@ -23,4 +23,8 @@ void md_kept_load(const cJSON *st);
 const char *md_kept_text(unsigned mark);
 void        md_kept_hide(unsigned mark, size_t from, size_t to, int keep);
 
+/* md_render_kept with a byte span hidden from the first draw on; returns the
+ * item's mark for md_kept_hide. */
+unsigned md_render_kept_hiding(const char *text, int indent, size_t from, size_t to);
+
 #endif
