@@ -97,6 +97,8 @@ void prompt_set_idle(struct prompt *p, int (*fds)(void *ud, int *out, int max),
 char *prompt_take_queued(struct prompt *p);
 
 void prompt_set_external(struct prompt *p, char *(*fn)(void *ud), void *ud);
+/* Lines the prompt returns as if typed once it is idle at the top of its loop. */
+void prompt_set_held(struct prompt *p, char *(*fn)(void *ud), void *ud);
 
 void prompt_set_line(struct prompt *p, const char *text);
 void prompt_set_command(struct prompt *p, char *(*fn)(void *ud, int nth), void *ud);

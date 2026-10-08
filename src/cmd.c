@@ -320,10 +320,20 @@ static void note_identity(const struct session *s)
     ui_flush();
 }
 
+static int running_deferred;
+static int deferred_wants_pick;
+
 /* `remote`: the command takes the choice as its argument, so a captured list can be
  * answered by rerunning it. */
 static int can_pick(const char *usage, int remote)
 {
+    /* A command held until a turn ended runs from that turn's end, inside the
+     * idle pump and maybe for a tab that isn't in front: a list opened there
+     * reads the keyboard unseen and stalls the window. It waits for its tab. */
+    if (running_deferred && frontend_has_keyboard()) {
+        deferred_wants_pick = 1;
+        return 0;
+    }
     if (chrome_modal_active()) {
         reply_note("%s \xe2\x80\x94 a list is already open", usage);
         return 0;
@@ -1839,8 +1849,8 @@ int cmd_runs_live(const char *line)
 static struct {
     char           *line;
     struct session *s;
-} deferred[DEFERRED_MAX];
-static int   deferred_count;
+} deferred[DEFERRED_MAX], held[DEFERRED_MAX];
+static int   deferred_count, held_count;
 
 void cmd_dispatch_live(struct session *s, const char *line)
 {
@@ -1883,9 +1893,30 @@ void cmd_run_deferred(struct session *s)
     deferred_count = kept;
 
     for (int i = 0; i < n; i++) {
+        running_deferred = 1;
+        deferred_wants_pick = 0;
         cmd_dispatch(s, mine[i]);
+        running_deferred = 0;
+        if (deferred_wants_pick && held_count < DEFERRED_MAX) {
+            held[held_count].line = mine[i];
+            held[held_count].s = s;
+            held_count++;
+            continue;
+        }
         free(mine[i]);
     }
+}
+
+char *cmd_take_held(struct session *s)
+{
+    for (int i = 0; s && i < held_count; i++) {
+        if (held[i].s != s)
+            continue;
+        char *line = held[i].line;
+        memmove(held + i, held + i + 1, (size_t)(--held_count - i) * sizeof *held);
+        return line;
+    }
+    return NULL;
 }
 
 void cmd_forget_session(struct session *s)
@@ -1898,6 +1929,15 @@ void cmd_forget_session(struct session *s)
             deferred[kept++] = deferred[i];
     }
     deferred_count = kept;
+
+    kept = 0;
+    for (int i = 0; i < held_count; i++) {
+        if (held[i].s == s)
+            free(held[i].line);
+        else
+            held[kept++] = held[i];
+    }
+    held_count = kept;
 }
 
 enum cmd_result cmd_dispatch(struct session *s, const char *line)

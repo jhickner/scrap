@@ -52,6 +52,8 @@ struct prompt {
     char        *file_root;
     char      *(*external)(void *ud);
     void        *external_ud;
+    char      *(*held)(void *ud);
+    void        *held_ud;
     int          external_taken;
     int        (*idle_fds)(void *ud, int *out, int max);
     int        (*idle_render)(void *ud);
@@ -1416,6 +1418,17 @@ static char *read_loop(struct prompt *p)
             return NULL;
         }
 
+        /* Only here, at the top of the read loop and not inside the idle pump,
+         * may a held command open its list. */
+        if (p->held && !chrome_modal_active()) {
+            char *line = p->held(p->held_ud);
+            if (line) {
+                p->external_taken = 0;
+                chrome_clear();
+                return line;
+            }
+        }
+
         if (p->external) {
             char *line = p->external(p->external_ud);
             if (line) {
@@ -1562,6 +1575,12 @@ void prompt_set_external(struct prompt *p, char *(*fn)(void *ud), void *ud)
 {
     p->external = fn;
     p->external_ud = ud;
+}
+
+void prompt_set_held(struct prompt *p, char *(*fn)(void *ud), void *ud)
+{
+    p->held = fn;
+    p->held_ud = ud;
 }
 
 int prompt_line_was_external(struct prompt *p)

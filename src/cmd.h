@@ -40,6 +40,9 @@ int cmd_self_echoes(const char *line);
 void cmd_dispatch_live(struct session *s, const char *line);
 
 void cmd_run_deferred(struct session *s);
+/* A deferred command that wants a list, held until its tab is in front and the
+ * prompt is idle; the caller frees it. */
+char *cmd_take_held(struct session *s);
 void cmd_turn_done(struct session *s);
 
 void cmd_forget_session(struct session *s);

@@ -253,6 +253,12 @@ static int idle_render(void *ud)
     return busy;
 }
 
+static char *held_command(void *ud)
+{
+    (void)ud;
+    return cmd_take_held(workspace_current());
+}
+
 static int im_took;
 
 static char *chat_line(void *ud)
@@ -1102,6 +1108,7 @@ int main(int argc, char **argv)
     prompt_set_animate(prompt, side_busy, side_tick, NULL);
     viewport_on_cover(inset_cover);
     prompt_set_external(prompt, chat_line, prompt);
+    prompt_set_held(prompt, held_command, NULL);
     tty_on_focus(focus_changed);
     tty_on_key(stamp_clear);
 
