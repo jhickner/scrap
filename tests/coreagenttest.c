@@ -599,6 +599,18 @@ static int mock_claude(int argc, char **argv)
                    "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":["
                    "{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":\"x-out\"}]}}\n");
             fflush(stdout);
+            if (text && strstr(text, "BOILER"))
+                printf("{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":["
+                       "{\"type\":\"tool_use\",\"id\":\"t3\",\"name\":\"Bash\",\"input\":{\"command\":\"make\",\"description\":\"Build it\"}},"
+                       "{\"type\":\"tool_use\",\"id\":\"t4\",\"name\":\"Edit\",\"input\":{\"file_path\":\"/a.c\",\"old_string\":\"x\\n\",\"new_string\":\"y\",\"replace_all\":false}},"
+                       "{\"type\":\"tool_use\",\"id\":\"t5\",\"name\":\"Bash\",\"input\":{\"command\":\"\",\"description\":\"Nothing\"}}]}}\n"
+                       "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":["
+                       "{\"type\":\"tool_result\",\"tool_use_id\":\"t3\",\"content\":\"built\\nShell cwd was reset to /tmp\"},"
+                       "{\"type\":\"tool_result\",\"tool_use_id\":\"t4\",\"content\":\"The file /a.c has been updated successfully. "
+                       "(file state is current in your context \xe2\x80\x94 no need to Read it back)\"},"
+                       "{\"type\":\"tool_result\",\"tool_use_id\":\"t5\",\"content\":\"(Bash completed with no output)\\nShell cwd was reset to /tmp\"},"
+                       "{\"type\":\"tool_result\",\"tool_use_id\":\"t6\",\"content\":[{\"type\":\"image\",\"source\":{}}]}]}}\n");
+            fflush(stdout);
             if (text && strstr(text, "SLOW"))
                 usleep(300000);
             const char *mcp = arg_after(argc, argv, "--mcp-config") ?: "{}";
@@ -643,16 +655,25 @@ static void drive_test(void)
     CHECK(reply && !strcmp(reply, "done"));
     free(reply);
     reply = ask(b, "drive ZOOM", &meta);
-    CHECK(reply && !strcmp(reply, "0+0|user: drive one"));
+    CHECK(reply && !strcmp(reply, "message 0 (user):\ndrive one"));
     free(reply);
     reply = ask(b, "drive PAR", &meta);
     CHECK(reply && !strcmp(reply, "order: 3 2"));
     free(reply);
     b->close(b);
+    CHECK(strstr(get_file("drive/memory/view.json"), "\"seen\":8"));
+    b = backend_open_ex(&o);
+    b->set_event_cb(b, on_event, NULL);
+    b->set_abort_check(b, should_abort);
+    CHECK(b->start(b, NULL));
+    reply = ask(b, "drive again", &meta);
+    CHECK(reply);
+    free(reply);
+    b->close(b);
 
     char *log = get_file("drive/cli.log");
     CHECK(strstr(log, "SYSTEM \"You are scrap") && strstr(log, "tools of the optchat MCP server"));
-    CHECK(strstr(log, "MCP \"{\\\"mcpServers\\\":{\\\"optchat\\\":{\\\"command\\\":\\\"relay\\\",\\\"args\\\":[\\\"mcp-memory\\\",\\\"/tmp/optchat-"));
+    CHECK(strstr(log, "MCP \"{\\\"mcpServers\\\":{\\\"optchat\\\":{\\\"command\\\":\\\"relay\\\",\\\"args\\\":[\\\"mcp-memory\\\",\\\"/tmp/optchat-") && strstr(log, "\\\"alwaysLoad\\\":true}}}"));
     /* Every turn, the first included, follows a /clear, so each starts with
        the same blocks the CLI adds after one. */
     char *first = strstr(log, "PROMPT "), *clear = strstr(log, "CLEAR"), *second = first ? strstr(first + 1, "PROMPT ") : NULL;
@@ -663,8 +684,53 @@ static void drive_test(void)
        adds lines, starts with this one's cached prefix. */
     CHECK(second && strstr(second, "|echo: x-out\\n^|</chat>\\ndrive ZOOM\""));
     CHECK(second && strstr(second, "|user: drive one\\n") && strstr(second, "|talk: cli says hi\\n") &&
-          strstr(second, "|tool: Bash {\\\"command\\\":\\\"echo x\\\"}\\n") && strstr(second, "|echo: x-out\\n"));
+          strstr(second, "|tool: Bash `echo x`\\n") && strstr(second, "|echo: x-out\\n"));
     CHECK(!strstr(log, "/sub"));
+    char *restarted = strstr(log, "PROMPT \"<chat>\\n0+1|user: drive one");
+    while (restarted && strstr(restarted + 1, "PROMPT \"<chat>\\n0+1|user: drive one"))
+        restarted = strstr(restarted + 1, "PROMPT \"<chat>\\n0+1|user: drive one");
+    CHECK(restarted && strstr(restarted, "7+1|echo: x-out\\n|8+1|user: drive PAR\\n") &&
+          strstr(restarted, "11+1|echo: x-out\\n^|</chat>\\ndrive again\""));
+}
+
+static void boiler_test(void)
+{
+    char home[512];
+    snprintf(home, sizeof home, "%s/boiler", dir);
+    mkdir(home, 0700);
+    mkdir(strcat(home, "/agent"), 0700);
+    put_file("boiler/agent/providers.json", get_file("agent/providers.json"));
+    snprintf(home, sizeof home, "%s/boiler", dir);
+    setenv("SCRAP_CONFIG_DIR", home, 1);
+    backend_opts o = {.name = "claude", .cwd = dir, .memory = 1, .memory_relay = "relay"};
+    Backend *b = backend_open_ex(&o);
+    b->set_event_cb(b, on_event, NULL);
+    b->set_abort_check(b, should_abort);
+    CHECK(b->start(b, NULL));
+    backend_result meta;
+    char *reply = ask(b, "BOILER", &meta);
+    CHECK(reply && !strcmp(reply, "done"));
+    free(reply);
+    b->close(b);
+    char cmd[600];
+    snprintf(cmd, sizeof cmd, "cat %s/boiler/memory/main/*.jsonl > %s/boiler.jsonl", dir, dir);
+    CHECK(system(cmd) == 0);
+    char *log = strdup(get_file("boiler.jsonl")), got[2048] = "";
+    for (char *line = strtok(log, "\n"); line; line = strtok(NULL, "\n")) {
+        cJSON *j = cJSON_Parse(line);
+        const char *kind = cJSON_GetStringValue(cJSON_GetObjectItem(j, "kind"));
+        const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(j, "text"));
+        snprintf(got + strlen(got), sizeof got - strlen(got), "%s: %s|", kind ? kind : "?", text ? text : "?");
+        cJSON_Delete(j);
+    }
+    const char *want = "user: BOILER|talk: cli says hi|tool: Bash `echo x`|echo: x-out|"
+                       "tool: Bash `make`|tool: Edit file_path=/a.c, old_string=x\n, new_string=y, replace_all=false|"
+                       "tool: Bash `` (Nothing)|echo: built|echo: The file /a.c has been updated successfully.|"
+                       "echo: (no output)|echo: image|";
+    CHECK(!strcmp(got, want));
+    if (strcmp(got, want))
+        fprintf(stderr, "boiler log: %s\n", got);
+    free(log);
 }
 
 static void memory_test(void)
@@ -709,7 +775,7 @@ static void memory_test(void)
     cJSON_Delete(req);
 
     reply = ask(b, "tool: zoom|{\"id\":0,\"n\":1}", &meta);
-    CHECK(!strcmp(last_tool, "zoom") && !last_failed && !strcmp(last_result, "0+0|user: first"));
+    CHECK(!strcmp(last_tool, "zoom") && !last_failed && !strcmp(last_result, "message 0 (user):\nfirst"));
     free(reply);
     msgs = request_messages(&req);
     CHECK(strstr(msg_text(msgs, 1), "6+1|echo: ") && !strstr(msg_text(msgs, 1), "not summarized"));
@@ -730,7 +796,7 @@ static void memory_test(void)
     free(reply);
     CHECK(strstr(get_file("last-request.json"), "\"name\":\"agent\""));
     char *sub = get_file("sub-request.json");
-    CHECK(strstr(sub, "|tool: agent {") && strstr(sub, "</chat>\\nrun: echo sub") && strstr(sub, "zoom(id, n)"));
+    CHECK(strstr(sub, "|tool: agent task=run: echo sub\\n") && strstr(sub, "</chat>\\nrun: echo sub") && strstr(sub, "zoom(id, n)"));
     CHECK(!strstr(sub, "\"name\":\"agent\"") && strstr(sub, "\"name\":\"zoom\""));
     CHECK(!strstr(sub, "to a subagent with agent"));
 
@@ -740,6 +806,8 @@ static void memory_test(void)
     free(reply);
     CHECK(strstr(get_file("last-request.json"),
                  "{\"type\":\"text\",\"text\":\"blocks\",\"cache_control\":{\"type\":\"ephemeral\"}}"));
+    reply = ask(b, "[from @w] report: done", &meta);
+    free(reply);
     char hang[700];
     snprintf(hang, sizeof hang, "hang-compactor %0600d", 0);
     reply = ask(b, hang, &meta);
@@ -762,13 +830,13 @@ static void memory_test(void)
         if (kind && !strcmp(kind, "echo") && text && strlen(text) > 1000)
             CHECK(strlen(text) < 30100 && strstr(text, "bytes cut]"));
         if (kind && !strcmp(kind, "tool") && text && strstr(text, "head -c"))
-            CHECK(strstr(text, "bash {\"command\":\"head") == text);
+            CHECK(strstr(text, "bash `head -c 40000 /dev/zero") == text);
         cJSON_Delete(j);
     }
     CHECK(!strcmp(kinds, "user talk user talk user tool echo talk user tool echo talk user tool echo talk "
-                         "user tool echo talk user tool echo talk user talk user talk "));
+                         "user tool echo talk user tool echo talk user talk work talk user talk "));
     if (strcmp(kinds, "user talk user talk user tool echo talk user tool echo talk user tool echo talk "
-                      "user tool echo talk user tool echo talk user talk user talk "))
+                      "user tool echo talk user tool echo talk user talk work talk user talk "))
         fprintf(stderr, "kinds: %s\n", kinds);
     free(log);
 }
@@ -983,6 +1051,7 @@ int main(int argc, char **argv)
     memory_test();
     agent_choice_test();
     drive_test();
+    boiler_test();
 
     kill(server, SIGKILL);
     waitpid(server, NULL, 0);

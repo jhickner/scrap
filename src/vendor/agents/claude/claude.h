@@ -784,6 +784,30 @@ static const char *cl_tool_result_text(cJSON *blk) {
     return NULL;
 }
 
+static const char *cl_tool_result_refs(cJSON *blk, char *out, size_t n) {
+    cJSON *content = cJSON_GetObjectItem(blk, "content"), *part;
+    size_t at = 0;
+    out[0] = '\0';
+    if (!cJSON_IsArray(content)) return NULL;
+    cJSON_ArrayForEach(part, content) {
+        const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(part, "tool_name"));
+        if (!name || at + 1 >= n) continue;
+        int k = snprintf(out + at, n - at, "%s%s", at ? ", " : "tools loaded: ", name);
+        if (k > 0) at += (size_t)k < n - at ? (size_t)k : n - at - 1;
+    }
+    return at ? out : NULL;
+}
+
+static const char *cl_tool_result_image(cJSON *blk) {
+    cJSON *content = cJSON_GetObjectItem(blk, "content"), *part;
+    if (!cJSON_IsArray(content)) return NULL;
+    cJSON_ArrayForEach(part, content) {
+        const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(part, "type"));
+        if (type && !strcmp(type, "image")) return "image";
+    }
+    return NULL;
+}
+
 /* A subagent's messages come up the same stream as the session's own, told
  * apart only by the tool_use that started it. */
 static void cl_emit(claude_client *c, cJSON *ev, const char *type) {
@@ -816,7 +840,10 @@ static void cl_emit(claude_client *c, cJSON *ev, const char *type) {
             cl_sink(c, &out);
             free(is);
         } else if (strcmp(type, "user") == 0 && strcmp(bt, "tool_result") == 0) {
+            char refs[2048];
             const char *t = cl_tool_result_text(blk);
+            if (!t) t = cl_tool_result_refs(blk, refs, sizeof refs);
+            if (!t) t = cl_tool_result_image(blk);
             out.kind = CLAUDE_EV_TOOL_RESULT;
             out.failed = cJSON_IsTrue(cJSON_GetObjectItem(blk, "is_error"));
             out.text = t ? t : (out.failed ? "failed" : "(result)");
@@ -1469,6 +1496,7 @@ int claude_turn_open(claude_client *c) { return c ? c->turn_open : 0; }
 #define CL_CACHE_MARK '\x1e'
 #define CL_BLOCK_MARK '\x1f'
 #define CL_CACHE_LINES 19
+#define CL_CACHE_GRID 4
 
 static void cl_text_block(cJSON *content, const char *s, size_t n, int cache) {
     if (!n) return;
@@ -1494,9 +1522,9 @@ static void cl_cache_content(cJSON *content, const char *text) {
         e = strchr(s, CL_CACHE_MARK);
         if (e != last) { cl_text_block(content, s, (size_t)(e - s), 0); continue; }
         const char *cut[CL_CACHE_LINES + 1];
-        int k = 0;
+        int k = 0, lines = 0;
         for (const char *p = e; p > s && k < CL_CACHE_LINES - 1; p--)
-            if (p[-1] == '\n' && p != e) cut[k++] = p;
+            if (p[-1] == '\n' && p != e && ++lines % CL_CACHE_GRID == 0) cut[k++] = p;
         const char *from = s;
         for (int j = k - 1; j >= 0; j--) {
             cl_text_block(content, from, (size_t)(cut[j] - from), 0);

@@ -5,9 +5,12 @@
 
 #define OC_NODE 512
 #define OC_VIEW 128000
-#define OC_SLACK 4
+#define OC_SLACK 2
+#define OC_GRID 4
 #define OC_JOBS 8
+#define OC_SPLIT 30000
 #define OC_TRIES 5
+#define OC_ATTEMPTS 3
 #define OC_OVER 15 /* percent over the node limit a reply may run and still be kept */
 #define OC_AGENT "scrap"
 #define OC_COMPACT_BACKEND "claude"
@@ -16,6 +19,9 @@
 #ifndef OC_RETRY_MS
 #define OC_RETRY_MS 10000
 #define OC_TIMEOUT_S 90L
+#endif
+#ifndef OC_WAIT_MS
+#define OC_WAIT_MS 1000
 #endif
 
 typedef struct oc_mem oc_mem;
@@ -47,6 +53,7 @@ int         oc_view(oc_mem *m, oc_ref **parts);
 long        oc_view_size(oc_mem *m);
 char       *oc_render(oc_mem *m, int marks);
 char       *oc_render_from(oc_mem *m, int marks, long *seen);
+char       *oc_render_turn(oc_mem *m);
 char       *oc_zoom(oc_mem *m, long id, long n);
 
 oc_compactor *oc_compactor_start(oc_mem *m, int jobs, Backend *(*open)(void *ud, const char *system),
@@ -61,6 +68,7 @@ int           oc_compactor_error(oc_compactor *c, char *out, size_t n);
 #error "Include backend.h before defining OPTCHAT_IMPLEMENTATION."
 #endif
 
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -68,6 +76,7 @@ int           oc_compactor_error(oc_compactor *c, char *out, size_t n);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -76,13 +85,21 @@ int           oc_compactor_error(oc_compactor *c, char *out, size_t n);
 
 #define OC_LEVELS 63
 #define OC_UNBUILT "(not summarized yet: zoom it)"
+#define OC_RECALL 100
+#define OC_STEP 32
 
 const char OC_COMPACT[] =
     "You write the memory of " OC_AGENT ", an AI agent that works for one user in one\n"
     "endless chat, through tools and subagents. Each message has a kind: user\n"
-    "(the user's words; but one starting \"[id] \" is a subagent's report),\n"
-    "talk (" OC_AGENT "'s replies), tool (" OC_AGENT "'s tool calls), echo (tool results), note\n"
-    "(memories from before this chat).\n"
+    "(the user's words), talk (" OC_AGENT "'s replies), tool (" OC_AGENT "'s tool calls), echo\n"
+    "(tool results), work (a subagent's report, starting \"[from @name]\"; older\n"
+    "logs hold these as user messages), note (memories from before this chat).\n"
+    "\n"
+    "An echo of a zoom call is a recall: " OC_AGENT " reopened earlier messages, which\n"
+    "are in the chat already. In it, \"message N (kind):\" heads message N quoted\n"
+    "back whole, and \"id+n|\" heads a summary line; their kinds are those of the\n"
+    "recalled messages, not of the echo. Record it as a recall, such as \"echo:\n"
+    "recalled 1840 (talk: plan for X)\", never as new words of the recalled kind.\n"
     "\n"
     "Over the messages grows a binary tree of one-line summaries. First, each\n"
     "message is compressed alone into a line (a short message is its own\n"
@@ -113,13 +130,16 @@ const char OC_COMPACT[] =
     "preferences, and above all their reasoning and explanations. Keep them\n"
     "as close to verbatim as space allows, and let them outlive everything\n"
     "else up the tree. Record what the user said, not that they said\n"
-    "something. Only text the user wrote counts as theirs.\n"
+    "something. Only text the user wrote counts as theirs: tag an item\n"
+    "\"user:\" only for the words of a user message inside your stretch.\n"
+    "Call the user \"the user\" or they/them, never he/she/his/her.\n"
     "\n"
     "2. Next comes anything with lasting effect, done by anyone: whatever\n"
     "changed in the world or was committed to, and what failed and why.\n"
     "\n"
     "3. Then findings and open questions, and " OC_AGENT "'s own replies, which\n"
-    "deserve far less space than the user's words.\n"
+    "deserve far less space than the user's words. A status block in a reply\n"
+    "restates earlier facts: keep only what it says changed.\n"
     "\n"
     "4. Least of all, intermediate steps: tool calls and their outputs. They\n"
     "fill most of the log and are mostly noise. Instead of copying them,\n"
@@ -160,8 +180,8 @@ const char OC_VIEW_DOC[] =
     "A summary tags each item with its kind: user (the user's words), talk\n"
     "(" OC_AGENT "'s replies), tool (" OC_AGENT "'s tool calls), echo (their results), note\n"
     "(memories from before this chat), or work (the report of a subagent or\n"
-    "a computer task, which the log holds as a user message starting\n"
-    "\"[id] \"). A short message is its own line, word for word. Recent lines\n"
+    "a computer task, starting \"[from @name]\"). A short message is its own\n"
+    "line, word for word. Recent lines\n"
     "cover one message each; the older the messages, the more a line covers.\n"
     "A message not summarized yet shows as \"(not summarized yet: zoom it)\".\n"
     "No message appears in full, not even the last ones.\n"
@@ -171,14 +191,6 @@ const char OC_VIEW_DOC[] =
     "whenever a summary only mentions something you need, such as what your\n"
     "last reply said, a decision, a past attempt or where a file is, before\n"
     "you act, guess or ask. date(id) gives the date and time of message id.";
-
-static const char OC_SCALE[] =
-    "user: greenhouse controller vents open at 29 C, close at 24 C; talk: fan relay on GPIO 17, "
-    "pump on GPIO 22; tool: read sensors.py read_temp, read_humidity: DHT22 polled every 30 s; echo: "
-    "pytest passed, 41 tests; work: added hysteresis to vent logic, logged readings to "
-    "/var/log/greenhouse.csv; user: never run the pump longer than 90 s; talk: water at 06:00 and "
-    "18:00 only; tool: edit schedule.py: watering times moved to config.toml; echo: dry run ok, "
-    "relay clicked twice; user: add a frost alarm below 3 C next";
 
 typedef struct { char *kind, *text, *date; } oc_msg;
 typedef struct { char **t; long cap, low; } oc_level;
@@ -195,6 +207,12 @@ struct oc_mem {
     int             np, pcap;
     long            size;
     int             shrinking;
+    oc_ref         *cparts;
+    int             ncp, cpcap, cshrinking;
+    long            csize, seen;
+    int             dirty;
+    oc_ref         *ready;
+    int             nready, rcap;
     pthread_mutex_t mu;
     pthread_cond_t  cond;
 };
@@ -220,7 +238,27 @@ static void oc_flat(oc_buf *b, const char *s) {
         if (b->p[j] == '\n') b->p[j] = ' ';
 }
 
+static void oc_ruler(oc_buf *b, long n) {
+    char dash[64];
+    memset(dash, '-', sizeof dash);
+    for (; n > 0; n -= (long)sizeof dash) oc_cat(b, dash, n < (long)sizeof dash ? (size_t)n : sizeof dash);
+}
+
+static void oc_cut(char *s, long max) {
+    size_t n = strlen(s);
+    if ((long)n <= max) return;
+    n = (size_t)max;
+    while (n && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
+    size_t k = n;
+    while (k && s[k] != ' ' && s[k] != '\n') k--;
+    if (k > n / 2) n = k;
+    while (n && (s[n - 1] == ' ' || s[n - 1] == '\n' || s[n - 1] == ';' || s[n - 1] == ',')) n--;
+    s[n] = '\0';
+}
+
 static long oc_start(oc_ref p) { return p.i << p.l; }
+
+static long oc_aim(long node) { return node - node / 12; }
 
 static const char *oc_get(const oc_mem *m, int l, long i) {
     if (l < 0 || l >= OC_LEVELS || i < 0 || i >= m->lev[l].cap) return NULL;
@@ -268,6 +306,13 @@ static void oc_set(oc_mem *m, int l, long i, const char *text) {
     if (v->t[i]) return;
     v->t[i] = strdup(text);
     while (v->low < v->cap && v->t[v->low]) v->low++;
+    if (l + 1 < OC_LEVELS - 1 && oc_get(m, l, i ^ 1) && !oc_get(m, l + 1, i / 2)) {
+        if (m->nready == m->rcap) {
+            m->rcap = m->rcap ? m->rcap * 2 : 64;
+            m->ready = realloc(m->ready, (size_t)m->rcap * sizeof *m->ready);
+        }
+        m->ready[m->nready++] = (oc_ref){ l + 1, i / 2 };
+    }
 }
 
 static int oc_store(oc_mem *m, int l, long i, const char *text) {
@@ -281,8 +326,75 @@ static int oc_store(oc_mem *m, int l, long i, const char *text) {
     return 1;
 }
 
+static int oc_num(const char **p, long *v) {
+    const char *s = *p;
+    *v = 0;
+    while (*s >= '0' && *s <= '9' && *v < 1000000000L) *v = *v * 10 + (*s++ - '0');
+    if (s == *p) return 0;
+    *p = s;
+    return 1;
+}
+
+static int oc_kindword(const char *s, size_t n) {
+    const char *kinds[] = { "user", "talk", "tool", "echo", "work", "note" };
+    for (size_t k = 0; k < sizeof kinds / sizeof *kinds; k++)
+        if (n == 4 && !strncasecmp(s, kinds[k], 4)) return 1;
+    return 0;
+}
+
+static char *oc_recall(const oc_mem *m, long i) {
+    const char *t = m->msgs[i].text, *p = t, *topic = NULL;
+    char ids[64];
+    long a, b, h, h2;
+    oc_buf top = {0};
+    if (!strncmp(p, "message ", 8) && (p += 8, oc_num(&p, &a)) && !strncmp(p, " (", 2)) {
+        const char *k = p + 2, *e = k;
+        while (*e >= 'a' && *e <= 'z') e++;
+        if (strncmp(e, "):\n", 3) || !oc_kindword(k, (size_t)(e - k))) return NULL;
+        snprintf(ids, sizeof ids, "%ld", a);
+        oc_cat(&top, k, (size_t)(e - k));
+        oc_cats(&top, ": ");
+        topic = e + 3;
+    } else if (oc_num(&p, &a) && *p == '+' && (p++, oc_num(&p, &h)) && *p == '|') {
+        topic = p + 1;
+        const char *q = strchr(topic, '\n');
+        if (q && (q++, oc_num(&q, &b)) && *q == '+' && (q++, oc_num(&q, &h2)) && *q == '|' && h2 == h && b == a + h)
+            h *= 2;
+        if (h > 1) snprintf(ids, sizeof ids, "%ld+%ld", a, h);
+        else snprintf(ids, sizeof ids, "%ld", a);
+    } else {
+        return NULL;
+    }
+    size_t len = top.n ? strlen(topic) : strcspn(topic, "\n"), w = 0;
+    oc_cat(&top, topic, len < 400 ? len : 400);
+    for (size_t j = 0; j < top.n; j++) {
+        char ch = top.p[j] == '\n' || top.p[j] == '\t' || top.p[j] == '\r' ? ' ' : top.p[j];
+        if (ch != ' ' || (w && top.p[w - 1] != ' ')) top.p[w++] = ch;
+    }
+    while (w && top.p[w - 1] == ' ') w--;
+    top.p[w] = '\0';
+    oc_buf out = {0};
+    oc_cats(&out, "echo: recalled ");
+    oc_cats(&out, ids);
+    long room = OC_RECALL - 1 - (long)out.n - 3;
+    if (room > 8 && *top.p) {
+        oc_cut(top.p, room);
+        oc_cats(&out, " (");
+        oc_cats(&out, top.p);
+        oc_cats(&out, ")");
+    }
+    free(top.p);
+    return out.p;
+}
+
 static int oc_free(oc_mem *m, int l, long i) {
     oc_buf b = {0};
+    char *recall = l == 0 && !strcmp(m->msgs[i].kind, "echo") ? oc_recall(m, i) : NULL;
+    if (recall) {
+        int ok = oc_store(m, l, i, recall);
+        free(recall);
+        return ok;
+    }
     if (l == 0) {
         oc_cats(&b, m->msgs[i].kind);
         oc_cats(&b, ": ");
@@ -309,29 +421,113 @@ static void oc_climb(oc_mem *m, int l, long i) {
    so merging a little each turn would change the view near its top every
    turn and no cached prefix would outlive a turn. In batches, the turns
    between them only add lines at the end. */
-static void oc_fit(oc_mem *m) {
-    long size = 0, low = m->view - m->view / OC_SLACK;
-    for (int k = 0; k < m->np; k++) size += oc_part_len(m, m->parts[k]);
-    if (size > m->view) m->shrinking = 1;
-    while (m->shrinking && size > low) {
+static long oc_sum(const oc_mem *m, const oc_ref *parts, int np) {
+    long size = 0;
+    for (int k = 0; k < np; k++) size += oc_part_len(m, parts[k]);
+    return size;
+}
+
+static long oc_merge(const oc_mem *m, oc_ref *parts, int *np, long size, long low, int *merged) {
+    while (size > low) {
         int best = -1;
         double due = 0;
-        for (int k = 0; k + 1 < m->np; k++) {
-            oc_ref a = m->parts[k], b = m->parts[k + 1];
-            if (a.l != b.l || a.i % 2 || b.i != a.i + 1 || !oc_get(m, a.l + 1, a.i / 2)) continue;
-            double d = (double)(m->n - oc_start(a)) / (double)(1L << (a.l + 2));
+        for (int k = 0; k + 1 < *np; k++) {
+            oc_ref a = parts[k], b = parts[k + 1];
+            if (a.l != b.l || a.i % 2 || b.i != a.i + 1) continue;
+            double d = (double)(m->n + 1) / (double)(1L << a.l) - (double)a.i;
             if (best < 0 || d > due) { best = k; due = d; }
         }
         if (best < 0) break;
-        oc_ref a = m->parts[best], b = m->parts[best + 1], p = { a.l + 1, a.i / 2 };
+        oc_ref a = parts[best], b = parts[best + 1], p = { a.l + 1, a.i / 2 };
+        if (!oc_get(m, p.l, p.i)) break;
         size += oc_part_len(m, p) - oc_part_len(m, a) - oc_part_len(m, b);
-        m->parts[best] = p;
-        memmove(m->parts + best + 1, m->parts + best + 2, (size_t)(m->np - best - 2) * sizeof *m->parts);
-        m->np--;
+        parts[best] = p;
+        memmove(parts + best + 1, parts + best + 2, (size_t)(*np - best - 2) * sizeof *parts);
+        (*np)--;
+        (*merged)++;
     }
+    return size;
+}
+
+static void oc_ccopy(oc_mem *m, int from) {
+    if (m->ncp + m->np - from > m->cpcap) {
+        m->cpcap = (m->ncp + m->np - from) * 2;
+        m->cparts = realloc(m->cparts, (size_t)m->cpcap * sizeof *m->cparts);
+    }
+    for (int k = from; k < m->np; k++) m->cparts[m->ncp++] = m->parts[k];
+    m->dirty = 1;
+}
+
+static void oc_cfit(oc_mem *m, int reset) {
+    long cview = m->view / 4, low = cview - cview / OC_SLACK;
+    if (!reset) {
+        oc_ref *e = m->ncp ? &m->cparts[m->ncp - 1] : NULL;
+        long end = e ? oc_start(*e) + (1L << e->l) : 0;
+        int k = m->np;
+        while (k > 0 && oc_start(m->parts[k - 1]) >= end) k--;
+        long at = k ? oc_start(m->parts[k - 1]) + (1L << m->parts[k - 1].l) : 0;
+        if (at == end && k < m->np) oc_ccopy(m, k);
+        reset = at != end || oc_sum(m, m->cparts, m->ncp) > cview;
+    }
+    if (reset) {
+        m->ncp = 0;
+        oc_ccopy(m, 0);
+        m->cshrinking = 1;
+    }
+    long size = oc_sum(m, m->cparts, m->ncp);
+    int merged = 0;
+    if (m->cshrinking) size = oc_merge(m, m->cparts, &m->ncp, size, low, &merged);
+    if (size <= low) m->cshrinking = 0;
+    if (merged) m->dirty = 1;
+    m->csize = size;
+}
+
+static void oc_fit(oc_mem *m) {
+    long size = oc_sum(m, m->parts, m->np), low = m->view - m->view / OC_SLACK;
+    int merged = 0;
+    if (size > m->view) m->shrinking = 1;
+    if (m->shrinking) size = oc_merge(m, m->parts, &m->np, size, low, &merged);
     if (size <= low) m->shrinking = 0;
     m->size = size;
+    if (merged) m->dirty = 1;
+    oc_cfit(m, merged);
     pthread_cond_broadcast(&m->cond);
+}
+
+static cJSON *oc_refs(const oc_ref *parts, int np) {
+    cJSON *a = cJSON_CreateArray();
+    for (int k = 0; k < np; k++) {
+        cJSON *r = cJSON_CreateArray();
+        cJSON_AddItemToArray(r, cJSON_CreateNumber(parts[k].l));
+        cJSON_AddItemToArray(r, cJSON_CreateNumber((double)parts[k].i));
+        cJSON_AddItemToArray(a, r);
+    }
+    return a;
+}
+
+static int oc_save_view(oc_mem *m) {
+    if (!m->dirty) return 1;
+    cJSON *j = cJSON_CreateObject();
+    cJSON_AddNumberToObject(j, "n", (double)m->n);
+    cJSON_AddNumberToObject(j, "seen", (double)m->seen);
+    cJSON_AddBoolToObject(j, "shrinking", m->shrinking);
+    cJSON_AddBoolToObject(j, "cshrinking", m->cshrinking);
+    cJSON_AddItemToObject(j, "parts", oc_refs(m->parts, m->np));
+    cJSON_AddItemToObject(j, "cparts", oc_refs(m->cparts, m->ncp));
+    char *s = cJSON_PrintUnformatted(j);
+    cJSON_Delete(j);
+    if (!s) return 0;
+    char tmp[4200], path[4200];
+    snprintf(tmp, sizeof tmp, "%s/view.json.tmp", m->dir);
+    snprintf(path, sizeof path, "%s/view.json", m->dir);
+    size_t len = strlen(s);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    int ok = fd >= 0 && write(fd, s, len) == (ssize_t)len && fsync(fd) == 0;
+    if (fd >= 0) close(fd);
+    ok = ok && rename(tmp, path) == 0;
+    free(s);
+    if (ok) m->dirty = 0;
+    return ok;
 }
 
 static void oc_push(oc_mem *m, const char *kind, const char *text, const char *date) {
@@ -345,6 +541,7 @@ static void oc_push(oc_mem *m, const char *kind, const char *text, const char *d
         m->parts = realloc(m->parts, (size_t)m->pcap * sizeof *m->parts);
     }
     m->parts[m->np++] = (oc_ref){ 0, m->n - 1 };
+    m->dirty = 1;
 }
 
 static int oc_put_locked(oc_mem *m, int l, long i, const char *text) {
@@ -353,6 +550,7 @@ static int oc_put_locked(oc_mem *m, int l, long i, const char *text) {
     if (!oc_store(m, l, i, text)) return 0;
     oc_climb(m, l, i);
     oc_fit(m);
+    oc_save_view(m);
     return 1;
 }
 
@@ -362,19 +560,22 @@ static long oc_first(const oc_mem *m) {
     return m->n;
 }
 
-static int oc_due_locked(const oc_mem *m, oc_ref *out, int max) {
-    long first = oc_first(m);
-    int k = 0;
-    for (int l = 0; l < OC_LEVELS - 1 && (1L << l) <= m->n; l++) {
-        for (long i = m->lev[l].low; (i + 1) << l <= m->n; i++) {
-            long end = l == 0 ? i : (i + 1) << l;
-            if (end > first) break;
-            if (oc_get(m, l, i)) continue;
-            if (l > 0 && (!oc_get(m, l - 1, 2 * i) || !oc_get(m, l - 1, 2 * i + 1))) continue;
-            if (k == max) return k;
-            out[k++] = (oc_ref){ l, i };
-        }
+static int oc_due_locked(oc_mem *m, oc_ref *out, int max) {
+    int k = 0, unbuilt = 0;
+    for (long i = m->lev[0].low; i < m->n && unbuilt < OC_JOBS; i++) {
+        if (oc_get(m, 0, i)) continue;
+        unbuilt++;
+        if (k == max) return k;
+        out[k++] = (oc_ref){ 0, i };
     }
+    int kept = 0;
+    for (int j = 0; j < m->nready; j++) {
+        oc_ref r = m->ready[j];
+        if (oc_get(m, r.l, r.i)) continue;
+        m->ready[kept++] = r;
+        if (k < max) out[k++] = r;
+    }
+    m->nready = kept;
     return k;
 }
 
@@ -406,22 +607,50 @@ const char *oc_node(oc_mem *m, int l, long i) {
     return s;
 }
 
-long oc_append(oc_mem *m, const char *kind, const char *text) {
-    char date[40];
-    oc_now(date, sizeof date, NULL, 0);
-    pthread_mutex_lock(&m->mu);
+static long oc_append_one(oc_mem *m, const char *kind, const char *text, const char *date) {
     cJSON *j = cJSON_CreateObject();
     cJSON_AddNumberToObject(j, "i", (double)m->n);
     cJSON_AddStringToObject(j, "kind", kind);
     cJSON_AddStringToObject(j, "text", text);
     cJSON_AddNumberToObject(j, "size", (double)(strlen(kind) + 2 + strlen(text)));
     cJSON_AddStringToObject(j, "date", date);
+    if (!oc_write(m, "main", j)) return -1;
+    oc_push(m, kind, text, date);
+    oc_climb(m, 0, m->n - 1);
+    oc_fit(m);
+    oc_save_view(m);
+    return m->n - 1;
+}
+
+static size_t oc_piece(const char *s, size_t n) {
+    if (n <= OC_SPLIT) return n;
+    size_t k = OC_SPLIT;
+    while (k && ((unsigned char)s[k] & 0xC0) == 0x80) k--;
+    for (size_t j = k; j > OC_SPLIT * 3 / 4; j--)
+        if (s[j - 1] == '\n') return j;
+    for (size_t j = k; j > OC_SPLIT * 3 / 4; j--)
+        if (s[j - 1] == ' ') return j;
+    return k;
+}
+
+long oc_append(oc_mem *m, const char *kind, const char *text) {
+    char date[40];
+    oc_now(date, sizeof date, NULL, 0);
+    pthread_mutex_lock(&m->mu);
     long id = -1;
-    if (oc_write(m, "main", j)) {
-        oc_push(m, kind, text, date);
-        oc_climb(m, 0, m->n - 1);
-        oc_fit(m);
-        id = m->n - 1;
+    size_t n = strlen(text);
+    if (!strcmp(kind, "echo") || n <= OC_SPLIT) {
+        id = oc_append_one(m, kind, text, date);
+    } else {
+        for (size_t at = 0; at < n;) {
+            size_t k = oc_piece(text + at, n - at);
+            char *part = strndup(text + at, k);
+            long got = oc_append_one(m, kind, part, date);
+            free(part);
+            if (got < 0) break;
+            if (id < 0) id = got;
+            at += k;
+        }
     }
     pthread_mutex_unlock(&m->mu);
     return id;
@@ -498,15 +727,6 @@ long oc_view_size(oc_mem *m) {
     return s;
 }
 
-static const size_t oc_marks[] = { 50000, 80000, 100000 };
-
-static void oc_mark(oc_buf *b, size_t add, int *next) {
-    while (*next < 3 && b->n + add > oc_marks[*next]) {
-        if (b->n) oc_cats(b, BACKEND_CACHE_MARK);
-        (*next)++;
-    }
-}
-
 static void oc_line(oc_buf *b, long id, long n, const char *text) {
     char head[64];
     int k = snprintf(head, sizeof head, "%ld+%ld|", id, n);
@@ -520,26 +740,46 @@ static void oc_line(oc_buf *b, long id, long n, const char *text) {
    this render's last line. */
 char *oc_render_from(oc_mem *m, int marks, long *seen) {
     oc_buf b = {0};
-    int next = marks ? 0 : 3;
-    long end = 0;
+    long end = 0, mark = 0;
     oc_cats(&b, "<chat>\n");
     pthread_mutex_lock(&m->mu);
+    int grid = marks ? m->np / OC_GRID * OC_GRID : -1;
+    if (!grid) oc_cats(&b, BACKEND_CACHE_MARK);
     for (int k = 0; k < m->np; k++) {
         oc_ref p = m->parts[k];
         const char *t = oc_get(m, p.l, p.i);
-        oc_mark(&b, strlen(t ? t : OC_UNBUILT) + 24, &next);
         oc_line(&b, oc_start(p), 1L << p.l, t ? t : OC_UNBUILT);
         oc_cats(&b, "\n");
         end = oc_start(p) + (1L << p.l);
-        if (seen && *seen > 0 && end == *seen && k + 1 < m->np) oc_cats(&b, BACKEND_CACHE_MARK);
+        if (k + 1 == grid) {
+            oc_cats(&b, BACKEND_CACHE_MARK);
+            mark = end;
+        } else if (seen && *seen > 0 && end == *seen && k + 1 < grid) {
+            oc_cats(&b, BACKEND_CACHE_MARK);
+        }
     }
     pthread_mutex_unlock(&m->mu);
     oc_cats(&b, "</chat>");
-    if (seen) *seen = end;
+    if (seen && marks) *seen = mark;
     return b.p;
 }
 
 char *oc_render(oc_mem *m, int marks) { return oc_render_from(m, marks, NULL); }
+
+char *oc_render_turn(oc_mem *m) {
+    pthread_mutex_lock(&m->mu);
+    long seen = m->seen;
+    pthread_mutex_unlock(&m->mu);
+    char *view = oc_render_from(m, 1, &seen);
+    pthread_mutex_lock(&m->mu);
+    if (seen != m->seen) {
+        m->seen = seen;
+        m->dirty = 1;
+    }
+    oc_save_view(m);
+    pthread_mutex_unlock(&m->mu);
+    return view;
+}
 
 char *oc_zoom(oc_mem *m, long id, long n) {
     oc_buf b = {0};
@@ -549,7 +789,7 @@ char *oc_zoom(oc_mem *m, long id, long n) {
         snprintf(s, sizeof s, "No line %ld+%ld.", id, n);
         oc_cats(&b, s);
     } else if (n == 1) {
-        snprintf(s, sizeof s, "%ld+0|%s: ", id, m->msgs[id].kind);
+        snprintf(s, sizeof s, "message %ld (%s):\n", id, m->msgs[id].kind);
         oc_cats(&b, s);
         oc_cats(&b, m->msgs[id].text);
     } else {
@@ -650,6 +890,50 @@ static int oc_load(oc_mem *m, const char *sub, int main, char *err, size_t errsz
     return ok;
 }
 
+static int oc_parse_refs(const oc_mem *m, const cJSON *a, oc_ref *out, int max, long *end) {
+    int np = 0;
+    long at = 0;
+    const cJSON *r;
+    cJSON_ArrayForEach(r, a) {
+        const cJSON *jl = cJSON_GetArrayItem(r, 0), *ji = cJSON_GetArrayItem(r, 1);
+        if (np == max || !cJSON_IsNumber(jl) || !cJSON_IsNumber(ji)) return -1;
+        int l = (int)jl->valuedouble;
+        long i = (long)ji->valuedouble;
+        if (l < 0 || l >= OC_LEVELS - 1 || i < 0 || i << l != at || (l > 0 && !oc_get(m, l, i))) return -1;
+        out[np++] = (oc_ref){ l, i };
+        at += 1L << l;
+    }
+    *end = at;
+    return np;
+}
+
+static long oc_load_view(oc_mem *m) {
+    char path[4200];
+    snprintf(path, sizeof path, "%s/view.json", m->dir);
+    size_t len;
+    char *buf = oc_slurp(path, &len);
+    cJSON *j = buf ? cJSON_Parse(buf) : NULL;
+    free(buf);
+    const cJSON *jn = cJSON_GetObjectItem(j, "n"), *js = cJSON_GetObjectItem(j, "seen");
+    long n = cJSON_IsNumber(jn) ? (long)jn->valuedouble : -1, seen = cJSON_IsNumber(js) ? (long)js->valuedouble : 0;
+    long end = -1, cend = -1;
+    int np = n >= 0 && n <= m->n ? oc_parse_refs(m, cJSON_GetObjectItem(j, "parts"), m->parts, m->pcap, &end) : -1;
+    if (np < 0 || end != n || seen < 0 || seen > n) {
+        cJSON_Delete(j);
+        return -1;
+    }
+    m->np = np;
+    m->seen = seen;
+    m->shrinking = cJSON_IsTrue(cJSON_GetObjectItem(j, "shrinking"));
+    m->cpcap = np ? np * 2 : 64;
+    m->cparts = realloc(m->cparts, (size_t)m->cpcap * sizeof *m->cparts);
+    int ncp = oc_parse_refs(m, cJSON_GetObjectItem(j, "cparts"), m->cparts, m->cpcap, &cend);
+    m->ncp = ncp >= 0 && cend == n ? ncp : 0;
+    m->cshrinking = m->ncp && cJSON_IsTrue(cJSON_GetObjectItem(j, "cshrinking"));
+    cJSON_Delete(j);
+    return n;
+}
+
 oc_mem *oc_open(const char *dir, long node, long view, char *err, size_t errsz) {
     oc_mem *m = calloc(1, sizeof *m);
     snprintf(m->dir, sizeof m->dir, "%s", dir);
@@ -680,15 +964,25 @@ oc_mem *oc_open(const char *dir, long node, long view, char *err, size_t errsz) 
         oc_close(m);
         return NULL;
     }
-    long n = m->n;
-    m->n = 0;
-    m->np = 0;
-    for (long i = 0; i < n; i++) {
+    long n = m->n, from = oc_load_view(m);
+    if (from >= 0) {
+        for (long i = 0; i < from; i++) oc_climb(m, 0, i);
+    } else {
+        from = 0;
+        m->np = 0;
+        m->ncp = 0;
+        m->seen = 0;
+    }
+    m->n = from;
+    for (long i = from; i < n; i++) {
         m->parts[m->np++] = (oc_ref){ 0, i };
         m->n = i + 1;
         oc_climb(m, 0, i);
         oc_fit(m);
     }
+    oc_fit(m);
+    m->dirty = 1;
+    oc_save_view(m);
     return m;
 }
 
@@ -724,12 +1018,18 @@ void oc_release(oc_mem *m) {
         free(m->lev[l].t);
     }
     free(m->parts);
+    free(m->cparts);
+    free(m->ready);
     pthread_mutex_destroy(&m->mu);
     pthread_cond_destroy(&m->cond);
     free(m);
 }
 
-typedef struct { oc_ref r; long long at; } oc_retry;
+typedef struct { oc_ref r; long long at; int used; } oc_retry;
+typedef struct { oc_ref r; unsigned long long key; long long at; } oc_job;
+
+#define OC_LOOKBACK 18
+#define OC_WRITTEN 64
 
 struct oc_compactor {
     oc_mem     *m;
@@ -737,12 +1037,14 @@ struct oc_compactor {
     void       *ud;
     int         jobs, stop;
     pthread_t  *threads;
-    oc_ref     *busy;
+    oc_job     *busy;
     int         nbusy;
     oc_retry   *retry;
     int         nretry, cretry;
     char        err[512];
     int         errors;
+    unsigned long long written[OC_WRITTEN];
+    int         nwritten;
 };
 
 static long long oc_ms(void) {
@@ -766,7 +1068,7 @@ static int oc_pick(oc_compactor *c, oc_ref *out, long *wait) {
     *wait = -1;
     for (int k = 0; k < n; k++) {
         int busy = 0;
-        for (int b = 0; b < c->nbusy && !busy; b++) busy = oc_same(c->busy[b], due[k]);
+        for (int b = 0; b < c->nbusy && !busy; b++) busy = oc_same(c->busy[b].r, due[k]);
         if (busy) continue;
         int r = oc_retry_find(c, due[k]);
         if (r >= 0 && c->retry[r].at > now) {
@@ -783,27 +1085,42 @@ static int oc_pick(oc_compactor *c, oc_ref *out, long *wait) {
 static char *oc_context(const oc_mem *m, oc_ref r) {
     long end = r.l == 0 ? r.i : (r.i + 1) << r.l;
     oc_buf b = {0};
-    int next = 0;
-    oc_cats(&b, "<chat>\n");
-    for (int k = 0; k < m->np && oc_start(m->parts[k]) < end; k++) {
-        const char *t = oc_get(m, m->parts[k].l, m->parts[k].i);
-        oc_mark(&b, strlen(t ? t : OC_UNBUILT) + 1, &next);
-        oc_flat(&b, t ? t : OC_UNBUILT);
-        oc_cats(&b, "\n");
+    int n = 0;
+    while (n < m->ncp && oc_start(m->cparts[n]) + (1L << m->cparts[n].l) <= end &&
+           oc_get(m, m->cparts[n].l, m->cparts[n].i))
+        n++;
+    int from = n;
+    for (long size = 0; from > 0; from--) {
+        size += oc_part_len(m, m->cparts[from - 1]);
+        if (size > m->view / 4) break;
     }
-    oc_cats(&b, BACKEND_CACHE_MARK "</chat>\n\n");
+    if (from) {
+        int up = (from + OC_STEP - 1) / OC_STEP * OC_STEP;
+        from = up < n ? up : n;
+    }
+    int grid = from + (n - from) / OC_GRID * OC_GRID;
+    oc_cats(&b, "<chat>\n");
+    if (grid == from) oc_cats(&b, BACKEND_CACHE_MARK);
+    for (int k = from; k < n; k++) {
+        oc_flat(&b, oc_get(m, m->cparts[k].l, m->cparts[k].i));
+        oc_cats(&b, "\n");
+        if (k + 1 == grid) oc_cats(&b, BACKEND_CACHE_MARK);
+    }
+    oc_cats(&b, "</chat>\n\n");
     char head[256];
-    snprintf(head, sizeof head, "For scale only, a fictional line unrelated to this chat, exactly %ld bytes:\n", m->node);
+    long aim = oc_aim(m->node);
+    snprintf(head, sizeof head, "Aim for about %ld bytes (about %ld words), the length of this ruler; never more than %ld:\n",
+             aim, aim / 7, m->node);
     oc_cats(&b, head);
-    oc_cat(&b, OC_SCALE, strlen(OC_SCALE) < (size_t)m->node ? strlen(OC_SCALE) : (size_t)m->node);
+    oc_ruler(&b, aim);
     if (r.l == 0) {
-        snprintf(head, sizeof head, "\n\nThe chat above is context only. Compress only the message below into one line, in at most %ld bytes; include nothing said only in other messages:\n", m->node);
+        snprintf(head, sizeof head, "\n\nThe chat above is context only. Compress only the message below into one line, in about %ld bytes; include nothing said only in other messages:\n", aim);
         oc_cats(&b, head);
         oc_cats(&b, m->msgs[r.i].kind);
         oc_cats(&b, ": ");
         oc_cats(&b, m->msgs[r.i].text);
     } else {
-        snprintf(head, sizeof head, "\n\nThe chat above is context only. Merge only the two lines below into one, in at most %ld bytes; include nothing that is not in these two lines or the messages they cover:\n", m->node);
+        snprintf(head, sizeof head, "\n\nThe chat above is context only. Merge only the two lines below into one, in about %ld bytes; include nothing that is not in these two lines or the messages they cover:\n", aim);
         oc_cats(&b, head);
         oc_flat(&b, oc_get(m, r.l - 1, 2 * r.i));
         oc_cats(&b, "\n");
@@ -833,43 +1150,303 @@ static int oc_failed(const char *line) {
    only made it fail every try. Lines live on the heap, so nothing breaks. */
 static long oc_over(long node) { return node + node * OC_OVER / 100; }
 
-static char *oc_build(Backend *b, long node, const char *prompt) {
-    char *best = NULL;
-    b->reset(b);
-    char *msg = strdup(prompt);
-    for (int t = 0; t < OC_TRIES; t++) {
+static void oc_untag(char *line) {
+    const char *tags[] = { "<line>", "<br>", "<br/>", "<br />" };
+    for (size_t k = 0; k < sizeof tags / sizeof *tags; k++) {
+        char *tag;
+        while ((tag = strstr(line, tags[k])))
+            memmove(tag, tag + strlen(tags[k]), strlen(tag + strlen(tags[k])) + 1);
+    }
+    for (char *p = line; (p = strstr(p, "</"));) {
+        char *e = p + 2;
+        while (*e && *e != '>' && *e != '<' && *e != ' ' && *e != '\n' && e - p < 40) e++;
+        if (*e == '>') memmove(p, e + 1, strlen(e + 1) + 1);
+        else p += 2;
+    }
+    oc_trim(line);
+}
+
+static int oc_tagged(const char *line) {
+    const char *kinds[] = { "user", "talk", "tool", "echo", "work", "note" };
+    for (size_t k = 0; k < sizeof kinds / sizeof *kinds; k++)
+        if (!strncasecmp(line, kinds[k], 4) && line[4] && strchr(":([ ,/", line[4])) return 1;
+    return 0;
+}
+
+static int oc_lead(const char *line, const char *kind) {
+    size_t n = strlen(kind);
+    return !strncasecmp(line, kind, n) && line[n] && strchr(":([ ,/", line[n]);
+}
+
+static int oc_user_item(const char *line) {
+    for (const char *p = line; *p; p++) {
+        if (strncasecmp(p, "user", 4) || !p[4] || !strchr(":([/", p[4])) continue;
+        const char *q = p;
+        while (q > line && q[-1] == ' ') q--;
+        if (q == line || strchr(";([,.|/\n", q[-1])) return 1;
+    }
+    return 0;
+}
+
+static int oc_gendered(const char *line) {
+    const char *pro[] = { "he", "she", "him", "his", "her", "hers", "himself", "herself" };
+    int named = 0, quoted = 0;
+    for (const char *p = line; *p;) {
+        unsigned char ch = (unsigned char)*p;
+        if (ch == ';' || ch == '"') {
+            if (ch == ';') named = 0;
+            else quoted = !quoted;
+            p++;
+            continue;
+        }
+        if (!isalpha(ch) && ch != '@') { p++; continue; }
+        const char *w = p++;
+        while (isalnum((unsigned char)*p) || *p == '_' || *p == '-') p++;
+        size_t n = (size_t)(p - w);
+        if (*p == ':' && oc_kindword(w, n)) { named = 0; continue; }
+        int pronoun = 0;
+        for (size_t k = 0; k < sizeof pro / sizeof *pro && !pronoun; k++)
+            pronoun = strlen(pro[k]) == n && !strncasecmp(w, pro[k], n);
+        if (pronoun) {
+            if (!named && !quoted && (w == line || w[-1] != '/') && *p != '/') return 1;
+        } else if (*w == '@' || (isupper(ch) && !(n == 1 && ch == 'I'))) {
+            named = 1;
+        }
+    }
+    return 0;
+}
+
+static const char *oc_want(const oc_mem *m, long i) {
+    const oc_msg *g = &m->msgs[i];
+    return !strcmp(g->kind, "user") && !strncmp(g->text, "[from @", 7) ? "work" : g->kind;
+}
+
+static int oc_users(const oc_mem *m, oc_ref r) {
+    for (long k = oc_start(r); k < oc_start(r) + (1L << r.l) && k < m->n; k++)
+        if (!strcmp(oc_want(m, k), "user")) return 1;
+    return 0;
+}
+
+static char *oc_unuser(char *s) {
+    oc_buf b = {0};
+    oc_cats(&b, "");
+    for (const char *seg = s; *seg;) {
+        const char *end = strchr(seg, ';');
+        if (!end) end = seg + strlen(seg);
+        const char *lead = seg, *stop = end;
+        while (lead < end && (*lead == ' ' || *lead == '\n')) lead++;
+        for (const char *p = lead; p < end; p++) {
+            if (strncasecmp(p, "user", 4) || !p[4] || !strchr(":([/", p[4])) continue;
+            const char *q = p;
+            while (q > lead && q[-1] == ' ') q--;
+            if (q != lead && !strchr(";([,.|/\n", q[-1])) continue;
+            stop = q == lead ? lead : q - 1;
+            break;
+        }
+        while (stop > lead && strchr(" ,;.(/|[\n", stop[-1])) stop--;
+        if (stop > lead) {
+            if (b.n) oc_cats(&b, "; ");
+            oc_cat(&b, lead, (size_t)(stop - lead));
+        }
+        seg = *end ? end + 1 : end;
+    }
+    free(s);
+    return b.p;
+}
+
+static int oc_content(const char *line) {
+    for (const char *p = line + 4; *p; p++)
+        if (isalnum((unsigned char)*p)) return 1;
+    return 0;
+}
+
+static int oc_fits(const char *line, const char *kind, int user) {
+    return oc_tagged(line) && oc_content(line) && (!kind || oc_lead(line, kind)) && (user || !oc_user_item(line));
+}
+
+static char *oc_repair(char *line, const char *kind, int user, long node) {
+    if (strstr(line, "\xe2\x86\x90 LIMIT")) { free(line); return NULL; }
+    if (kind && !oc_lead(line, kind)) {
+        oc_buf b = {0};
+        oc_cats(&b, kind);
+        if (oc_tagged(line)) oc_cats(&b, line + 4);
+        else { oc_cats(&b, ": "); oc_cats(&b, line); }
+        free(line);
+        line = b.p;
+    }
+    if (!user) line = oc_unuser(line);
+    oc_cut(line, node);
+    if (oc_fits(line, kind, user)) return line;
+    free(line);
+    return NULL;
+}
+
+static char *oc_source(const oc_mem *m, oc_ref r) {
+    oc_buf b = {0};
+    const char *want = oc_want(m, oc_start(r));
+    if (r.l == 0) {
+        oc_cats(&b, want);
+        oc_cats(&b, ": ");
+        oc_cats(&b, m->msgs[r.i].text);
+    } else {
+        for (int c = 0; c < 2; c++) {
+            char *half = strdup(oc_get(m, r.l - 1, 2 * r.i + c));
+            oc_cut(half, (m->node - 1) / 2);
+            if (c) oc_cats(&b, "\n");
+            oc_cats(&b, half);
+            free(half);
+        }
+    }
+    int user = oc_users(m, r);
+    char *s = user ? b.p : oc_unuser(b.p);
+    if (!oc_tagged(s)) {
+        oc_buf t = {0};
+        oc_cats(&t, want);
+        oc_cats(&t, ": ");
+        oc_cats(&t, s);
+        free(s);
+        s = t.p;
+    }
+    oc_cut(s, m->node);
+    if (oc_fits(s, r.l ? NULL : want, user)) return s;
+    free(s);
+    oc_buf t = {0};
+    oc_cats(&t, want);
+    oc_cats(&t, ": (no summary: zoom it)");
+    return t.p;
+}
+
+static char *oc_build(Backend *b, long node, const char *prompt, const char *source, const char *kind, int user,
+                      int *left, const char **how) {
+    char *best = NULL, *soft = NULL, *last = NULL;
+    int cap = OC_ATTEMPTS, *rest = left ? left : &cap;
+    const char *none;
+    if (!how) how = &none;
+    *how = NULL;
+    char *msg = *rest > 0 ? strdup(prompt) : NULL;
+    if (msg) b->reset(b);
+    for (int t = 0; t < OC_TRIES && msg; t++) {
         char *line = oc_trim(b->ask(b, msg));
         free(msg);
         msg = NULL;
-        if (oc_failed(line)) { free(line); break; }
-        const char *tags[] = { "<line>", "</line>", "<br>", "<br/>", "<br />", "</br>" };
-        for (size_t k = 0; k < sizeof tags / sizeof *tags; k++) {
-            char *tag;
-            while ((tag = strstr(line, tags[k])))
-                memmove(tag, tag + strlen(tags[k]), strlen(tag + strlen(tags[k])) + 1);
-        }
-        oc_trim(line);
-        if (oc_failed(line)) { free(line); break; }
+        if (oc_failed(line)) { free(line); free(best); free(soft); free(last); return NULL; }
+        oc_untag(line);
         size_t len = strlen(line);
-        int copied = strstr(line, "\xe2\x86\x90 LIMIT") != NULL ||
-                     (best && (!strncmp(best, line, len) || !strncmp(best, line, strlen(best))));
-        if (!copied && (long)len <= oc_over(node)) { free(best); return line; }
-        if (!best || (!copied && len < strlen(best))) { free(best); best = line; }
-        else free(line);
-        if (t + 1 == OC_TRIES) break;
         oc_buf r = {0};
-        char head[400];
-        snprintf(head, sizeof head, BACKEND_BLOCK_MARK "\n\nYour line was %zu bytes; the limit is %ld. Rewrite the whole line noticeably shorter, about %ld bytes, preserving complete thoughts. Return only the complete line, without markup or a limit marker. The rejected reply follows in full:\n",
-                 strlen(best), node, node * 9 / 10);
-        b->reset(b);
-        oc_cats(&r, prompt);
-        oc_cats(&r, head);
-        oc_cats(&r, best);
-        msg = r.p;
+        int bad = 1;
+        if (!oc_tagged(line) || strstr(line, "\xe2\x86\x90 LIMIT")) {
+            oc_cats(&r, "Rejected: reply with the line alone, starting with the kind tag of its first item, such as \"user: \". Write the whole line again for the same input.");
+        } else if (kind && !oc_lead(line, kind)) {
+            char head[200];
+            snprintf(head, sizeof head, "Rejected: this is a %.20s message, so the line must start with \"%.20s: \". Write the whole line again for the same input.", kind, kind);
+            oc_cats(&r, head);
+        } else if (!user && oc_user_item(line)) {
+            oc_cats(&r, "Rejected: no message in your stretch is the user's, so no item may be tagged \"user:\"; what the user said elsewhere in <chat> is context only. Write the whole line again for the same input.");
+        } else if (oc_gendered(line)) {
+            if (!soft || len < strlen(soft)) { free(soft); soft = strdup(line); }
+            oc_cats(&r, "Rejected: call the user \"the user\" or they/them, never he/she/his/her. Write the whole line again for the same input.");
+        } else if ((long)len <= oc_over(node)) {
+            free(best);
+            free(soft);
+            free(last);
+            return line;
+        } else {
+            bad = 0;
+            if (!best || len < strlen(best)) { free(best); best = line; }
+            else free(line);
+            char head[200];
+            snprintf(head, sizeof head, "Too long: your line is %zu bytes, over the %ld-byte limit, the length of this ruler:\n", len, node);
+            oc_cats(&r, head);
+            oc_ruler(&r, node);
+            oc_cats(&r, "\nWrite the whole line again for the same input, cutting just enough of the least valuable items to fit. Return only the line.");
+        }
+        if (bad) {
+            free(last);
+            last = line;
+            --*rest;
+        }
+        if (t + 1 < OC_TRIES && *rest > 0) msg = r.p;
+        else free(r.p);
     }
     free(msg);
-    free(best);
-    return NULL;
+    if (best) {
+        free(soft);
+        free(last);
+        oc_cut(best, node);
+        return best;
+    }
+    if (soft) {
+        free(last);
+        oc_cut(soft, node);
+        *how = "pronoun";
+        return soft;
+    }
+    char *line = last ? oc_repair(last, kind, user, node) : NULL;
+    *how = line ? "repair" : "source";
+    if (!line && source) line = strdup(source);
+    return line;
+}
+
+static void oc_log_fallback(oc_mem *m, oc_ref r, const char *how, int tries) {
+    char path[4200];
+    snprintf(path, sizeof path, "%s/usage.jsonl", m->dir);
+    FILE *f = fopen(path, "a");
+    if (!f) return;
+    fprintf(f, "{\"t\":%ld,\"fallback\":\"%s\",\"l\":%d,\"i\":%ld,\"tries\":%d}\n", (long)time(NULL), how, r.l, r.i, tries);
+    fclose(f);
+}
+
+static int oc_keys(const char *p, unsigned long long *keys) {
+    const char *mark = strrchr(p, *BACKEND_CACHE_MARK), *cut[OC_LOOKBACK];
+    if (!mark) return 0;
+    int k = 0, lines = 0;
+    for (const char *q = mark; q > p && k < OC_LOOKBACK; q--)
+        if (q[-1] == '\n' && q != mark && ++lines % OC_GRID == 0) cut[k++] = q;
+    unsigned long long h = 1469598103934665603ULL;
+    int n = 0;
+    for (const char *q = p;; q++) {
+        if (q == mark) { keys[n++] = h; break; }
+        for (int j = 0; j < k; j++)
+            if (cut[j] == q) keys[n++] = h;
+        h = (h ^ (unsigned char)*q) * 1099511628211ULL;
+    }
+    unsigned long long last = keys[n - 1];
+    memmove(keys + 1, keys, (size_t)(n - 1) * sizeof *keys);
+    keys[0] = last;
+    return n;
+}
+
+static int oc_was_written(const oc_compactor *c, unsigned long long key) {
+    for (int k = 0; k < OC_WRITTEN; k++)
+        if (c->written[k] == key) return 1;
+    return 0;
+}
+
+static void oc_written(oc_compactor *c, unsigned long long key) {
+    if (!key || oc_was_written(c, key)) return;
+    c->written[c->nwritten++ % OC_WRITTEN] = key;
+}
+
+static unsigned long long oc_writer_wait(oc_compactor *c, const unsigned long long *keys, int nk) {
+    while (nk && !c->stop) {
+        long long now = oc_ms(), until = 0;
+        for (int b = 0; b < c->nbusy; b++) {
+            oc_job *j = &c->busy[b];
+            if (!j->key) continue;
+            if (now - j->at >= OC_WAIT_MS) {
+                oc_written(c, j->key);
+                j->key = 0;
+                continue;
+            }
+            for (int k = 0; k < nk; k++)
+                if (j->key == keys[k] && j->at + OC_WAIT_MS > until) until = j->at + OC_WAIT_MS;
+        }
+        if (!until) return oc_was_written(c, keys[0]) ? 0 : keys[0];
+        struct timespec ts;
+        oc_deadline(&ts, (long)(until - now));
+        pthread_cond_timedwait(&c->m->cond, &c->m->mu, &ts);
+    }
+    return 0;
 }
 
 static void *oc_worker(void *arg) {
@@ -889,19 +1466,29 @@ static void *oc_worker(void *arg) {
             }
             continue;
         }
-        c->busy[c->nbusy++] = r;
+        c->busy[c->nbusy++] = (oc_job){ r, 0, 0 };
         m->busy++;
-        char *prompt = oc_context(m, r);
+        char *prompt = oc_context(m, r), *source = oc_source(m, r);
+        const char *kind = r.l ? NULL : oc_want(m, r.i), *how = NULL;
+        int user = oc_users(m, r), at = oc_retry_find(c, r);
+        int left = OC_ATTEMPTS - (at >= 0 ? c->retry[at].used : 0);
+        unsigned long long keys[OC_LOOKBACK + 1];
+        unsigned long long key = left > 0 ? oc_writer_wait(c, keys, oc_keys(prompt, keys)) : 0;
+        for (int k = 0; k < c->nbusy; k++)
+            if (oc_same(c->busy[k].r, r)) c->busy[k] = (oc_job){ r, key, oc_ms() };
         long node = m->node;
         pthread_mutex_unlock(&m->mu);
-        char *line = b ? oc_build(b, node, prompt) : NULL;
+        char *line = b || left <= 0 ? oc_build(b, node, prompt, source, kind, user, &left, &how) : NULL;
         free(prompt);
+        free(source);
         pthread_mutex_lock(&m->mu);
         for (int k = 0; k < c->nbusy; k++)
-            if (oc_same(c->busy[k], r)) { c->busy[k] = c->busy[--c->nbusy]; break; }
+            if (oc_same(c->busy[k].r, r)) { c->busy[k] = c->busy[--c->nbusy]; break; }
+        if (line) oc_written(c, key);
         m->busy--;
-        int at = oc_retry_find(c, r);
+        at = oc_retry_find(c, r);
         if (line && oc_put_locked(m, r.l, r.i, line)) {
+            if (how) oc_log_fallback(m, r, how, OC_ATTEMPTS - left);
             if (at >= 0) { c->retry[at] = c->retry[--c->nretry]; m->failing--; }
         } else {
             if (at < 0) {
@@ -917,6 +1504,7 @@ static void *oc_worker(void *arg) {
                          why && *why ? why : line ? "could not save" : "no reply");
                 c->errors++;
             }
+            c->retry[at].used = OC_ATTEMPTS - left;
             c->retry[at].at = oc_ms() + OC_RETRY_MS;
         }
         free(line);

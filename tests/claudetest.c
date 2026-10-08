@@ -160,6 +160,17 @@ static int mock_cli(int argc, char **argv)
             result(v ? v : "unset");
         }
 
+        else if (text && !strcmp(text, "toolref")) {
+            printf("{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"mock\"}\n"
+                   "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\","
+                   "\"tool_use_id\":\"t1\",\"content\":[{\"type\":\"tool_reference\",\"tool_name\":\"WebFetch\"},"
+                   "{\"type\":\"tool_reference\",\"tool_name\":\"mcp__mem__mem_search\"}]}]}}\n"
+                   "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\","
+                   "\"tool_use_id\":\"t2\",\"content\":[{\"type\":\"image\"}]}]}}\n");
+            fflush(stdout);
+            result("loaded");
+        }
+
         else if (text && !strcmp(text, "reauth")) {
             const char *marker = getenv("CLAUDETEST_AUTH_MARKER");
             if (marker && access(marker, F_OK) == 0 &&
@@ -226,6 +237,17 @@ static int mock_cli(int argc, char **argv)
     }
     free(line);
     return 0;
+}
+
+static char results[512];
+
+static void collect_results(void *ud, const claude_event *ev)
+{
+    (void)ud;
+    if (ev->kind == CLAUDE_EV_TOOL_RESULT && ev->text) {
+        size_t n = strlen(results);
+        snprintf(results + n, sizeof results - n, "%s;", ev->text);
+    }
 }
 
 static claude_client *asking;
@@ -303,7 +325,7 @@ int main(int argc, char **argv)
     }
 
     reply = claude_send(client, "head\n\x1e" "a\nb\nc\n\x1e" "tail");
-    if (!reply || strcmp(reply, "L|L|L|L*|T")) {
+    if (!reply || strcmp(reply, "L|L*|T")) {
         fprintf(stderr, "claudetest: cache marks became %s\n", reply ? reply : "none");
         free(reply);
         claude_stop(client);
@@ -324,12 +346,25 @@ int main(int argc, char **argv)
     /* A long marked piece keeps its start (where a caller last ended) within
        the API's 20-block lookback: 18 line blocks plus the rest. */
     char longer[512] = "head\n\x1e";
-    for (int i = 0; i < 25; i++)
+    for (int i = 0; i < 80; i++)
         strcat(longer, "x\n");
     strcat(longer, "\x1e" "tail");
     reply = claude_send(client, longer);
     if (!reply || strcmp(reply, "L|L|L|L|L|L|L|L|L|L|L|L|L|L|L|L|L|L|L|L*|T")) {
         fprintf(stderr, "claudetest: long marked piece became %s\n", reply ? reply : "none");
+        free(reply);
+        claude_stop(client);
+        return 1;
+    }
+    free(reply);
+
+    char grid[128] = "head\n\x1e";
+    for (int i = 0; i < 25; i++)
+        strcat(grid, "x\n");
+    strcat(grid, "\x1e" "tail");
+    reply = claude_send(client, grid);
+    if (!reply || strcmp(reply, "L|L|L|L|L|L|L|L*|T")) {
+        fprintf(stderr, "claudetest: grid blocks became %s\n", reply ? reply : "none");
         free(reply);
         claude_stop(client);
         return 1;
@@ -362,6 +397,18 @@ int main(int argc, char **argv)
     reply = claude_send(client, "env");
     if (!reply || strcmp(reply, "worker-7") || getenv("CLAUDETEST_ENV")) {
         fprintf(stderr, "claudetest: env did not reach only the child (%s)\n", reply ? reply : "none");
+        free(reply);
+        claude_stop(client);
+        return 1;
+    }
+    free(reply);
+
+    claude_set_event_cb(client, collect_results, NULL);
+    reply = claude_send(client, "toolref");
+    claude_set_event_cb(client, NULL, NULL);
+    if (!reply || strcmp(reply, "loaded") ||
+        strcmp(results, "tools loaded: WebFetch, mcp__mem__mem_search;image;")) {
+        fprintf(stderr, "claudetest: tool_reference results became %s\n", results);
         free(reply);
         claude_stop(client);
         return 1;

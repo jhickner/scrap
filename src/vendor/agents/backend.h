@@ -532,6 +532,7 @@ static int backend_claude_start(Backend *b, const char *resume) {
         cJSON_AddStringToObject(srv, "command", x->st.mcp[0]);
         for (char **a = x->st.mcp + 1; *a; a++) cJSON_AddItemToArray(args, cJSON_CreateString(*a));
         cJSON_AddItemToObject(srv, "args", args);
+        cJSON_AddBoolToObject(srv, "alwaysLoad", 1);
         mcp = cJSON_PrintUnformatted(root);
         cJSON_Delete(root);
     }

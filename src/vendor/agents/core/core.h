@@ -882,9 +882,36 @@ static void sa_write_line(sa_agent *x, const cJSON *line) {
     free(s);
 }
 
-static void sa_echo(sa_agent *x, const char *text) {
+static char *sa_unboiler(const char *text) {
+    static const char state[] = "(file state is current in your context \xe2\x80\x94 no need to Read it back)";
+    sa_buf b = {0};
+    for (const char *p = text; *p;) {
+        size_t len = strcspn(p, "\n");
+        int drop = !strncmp(p, "Shell cwd was reset to ", 23) ||
+                   (len == 31 && !strncmp(p, "(Bash completed with no output)", 31));
+        if (!drop) sa_put(&b, p, len + (p[len] == '\n'));
+        p += len + (p[len] == '\n');
+    }
+    char *s = strdup(sa_str(&b));
+    sa_free(&b);
+    for (char *at; (at = strstr(s, state));) {
+        char *from = at > s && at[-1] == ' ' ? at - 1 : at;
+        memmove(from, at + sizeof state - 1, strlen(at + sizeof state - 1) + 1);
+    }
+    size_t n = strlen(s);
+    while (n && (s[n - 1] == '\n' || s[n - 1] == ' ')) n--;
+    s[n] = '\0';
+    if (!n && *text) {
+        free(s);
+        s = strdup("(no output)");
+    }
+    return s;
+}
+
+static void sa_echo(sa_agent *x, const char *raw) {
+    char *text = sa_unboiler(raw);
     size_t n = strlen(text), head = SA_ECHO_CAP / 2, tail = n - SA_ECHO_CAP / 2;
-    if (n <= SA_ECHO_CAP) { oc_append(x->mem, "echo", text); return; }
+    if (n <= SA_ECHO_CAP) { oc_append(x->mem, "echo", text); free(text); return; }
     while (head && ((unsigned char)text[head] & 0xC0) == 0x80) head--;
     while (tail < n && ((unsigned char)text[tail] & 0xC0) == 0x80) tail++;
     sa_buf b = {0};
@@ -893,6 +920,34 @@ static void sa_echo(sa_agent *x, const char *text) {
     sa_put(&b, text + tail, n - tail);
     oc_append(x->mem, "echo", sa_str(&b));
     sa_free(&b);
+    free(text);
+}
+
+static void sa_tool_log(sa_buf *b, const char *name, const cJSON *in, const char *raw) {
+    sa_printf(b, "%s", name ? name : "");
+    const char *cmd = sa_jstr(in, "command"), *desc = sa_jstr(in, "description");
+    if (name && !strcasecmp(name, "bash") && cmd) {
+        sa_printf(b, " `%s`", cmd);
+        if (desc && *desc && (!*cmd || strlen(cmd) > OC_NODE)) sa_printf(b, " (%s)", desc);
+        return;
+    }
+    if (!cJSON_IsObject(in)) {
+        sa_printf(b, " %s", raw ? raw : "{}");
+        return;
+    }
+    const cJSON *f;
+    int first = 1;
+    cJSON_ArrayForEach(f, in) {
+        sa_printf(b, "%s%s=", first ? " " : ", ", f->string ? f->string : "");
+        first = 0;
+        if (cJSON_IsString(f)) {
+            sa_printf(b, "%s", f->valuestring);
+        } else {
+            char *v = cJSON_PrintUnformatted(f);
+            sa_printf(b, "%s", v ? v : "");
+            free(v);
+        }
+    }
 }
 
 static void sa_remember(sa_agent *x, const cJSON *line) {
@@ -906,9 +961,10 @@ static void sa_remember(sa_agent *x, const cJSON *line) {
         if (kind && !strcmp(kind, "text")) {
             oc_append(x->mem, "talk", sa_jstr(block, "text") ? sa_jstr(block, "text") : "");
         } else if (kind && !strcmp(kind, "tool_use")) {
-            char *in = cJSON_PrintUnformatted(cJSON_GetObjectItem(block, "input"));
+            const cJSON *input = cJSON_GetObjectItem(block, "input");
+            char *in = cJSON_PrintUnformatted(input);
             sa_buf b = {0};
-            sa_printf(&b, "%s %s", sa_jstr(block, "name") ? sa_jstr(block, "name") : "", in ? in : "{}");
+            sa_tool_log(&b, sa_jstr(block, "name"), input, in);
             oc_append(x->mem, "tool", sa_str(&b));
             sa_free(&b);
             free(in);
@@ -2518,6 +2574,10 @@ static int sa_start(Backend *b, const char *resume);
 
 static int sa_settle_abort(void *ud) { return sa_aborted(ud); }
 
+static const char *sa_user_kind(const char *user) {
+    return strncmp(user, "[from ", 6) ? "user" : "work";
+}
+
 static int sa_memory_turn(sa_agent *x, const char *user, const sa_buf *reminder, sa_buf *out) {
     /* A subagent starts mid-turn, while the parent's latest lines (at least
        its own agent call) are still being summarized; its task carries that
@@ -2526,7 +2586,7 @@ static int sa_memory_turn(sa_agent *x, const char *user, const sa_buf *reminder,
     if (!x->sub && !oc_settle(x->mem, sa_settle_abort, x)) {
         char why[512];
         if (x->compactor && oc_compactor_error(x->compactor, why, sizeof why)) sa_warn(x, why);
-        oc_append(x->mem, "user", user);
+        oc_append(x->mem, sa_user_kind(user), user);
         return 0;
     }
     if (!x->sub && !oc_settled(x->mem)) {
@@ -2541,14 +2601,11 @@ static int sa_memory_turn(sa_agent *x, const char *user, const sa_buf *reminder,
        the API's lookback when many lines came since. Other drives would see
        the marks as raw text. */
     int marks = !out || !strcmp(x->drive, "claude");
-    char *view = oc_render_from(x->mem, marks, out && marks ? &x->view_seen : NULL);
-    if (!x->sub) oc_append(x->mem, "user", user);
+    char *view = out && marks && !x->sub ? oc_render_turn(x->mem)
+               : oc_render_from(x->mem, marks, out && marks ? &x->view_seen : NULL);
+    if (!x->sub) oc_append(x->mem, sa_user_kind(user), user);
     if (out) {
-        size_t n = strlen(view);
-        if (marks && n >= 7 && !strcmp(view + n - 7, "</chat>"))
-            sa_printf(out, "%.*s" BACKEND_CACHE_MARK "</chat>\n%s", (int)(n - 7), view, user);
-        else
-            sa_printf(out, "%s\n%s", view, user);
+        sa_printf(out, "%s\n%s", view, user);
         free(view);
         return 1;
     }
@@ -3026,9 +3083,12 @@ static void sa_drive_event(void *ud, const backend_event *ev) {
         oc_append(x->mem, "talk", ev->text);
     } else if (ev->kind == BACKEND_EV_TOOL) {
         sa_buf b = {0};
-        sa_printf(&b, "%s %s", ev->name ? ev->name : "", ev->input_json ? ev->input_json : ev->arg ? ev->arg : "{}");
+        const char *raw = ev->input_json ? ev->input_json : ev->arg;
+        cJSON *input = ev->input_json ? cJSON_Parse(ev->input_json) : NULL;
+        sa_tool_log(&b, ev->name, input, raw);
         oc_append(x->mem, "tool", sa_str(&b));
         sa_free(&b);
+        cJSON_Delete(input);
     } else if (ev->kind == BACKEND_EV_TOOL_RESULT) {
         sa_echo(x, ev->text ? ev->text : "");
     }
