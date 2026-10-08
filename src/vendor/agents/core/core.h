@@ -2336,7 +2336,10 @@ static int sa_tool_agent(sa_agent *x, const cJSON *input, sa_buf *out, int *inte
     if (effort && (!*effort || !strcmp(effort, "default"))) effort = NULL;
     backend_opts o = { .name = backend, .model = model, .effort = effort,
                        .cwd = cwd, .system = x->st.system, .memory = 1, .memory_relay = x->relay,
-                       .permission_mode = x->st.permission, .env = (const char *const *)x->st.env };
+                       .permission_mode = x->st.permission, .env = (const char *const *)x->st.env,
+                       /* the parent's settings files, so its permission rules too */
+                       .allow_customizations = x->st.allow_customizations,
+                       .no_browser_login = x->st.no_browser_login };
     Backend *b = core_agent_open(&o);
     if (!b) {
         sa_puts(out, "could not open a subagent");

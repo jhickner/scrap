@@ -128,16 +128,19 @@ def main():
                     "rateLimitType": "five_hour", "utilization": used / 100,
                     "resetsAt": 2000000000}})
                 text = "ran: " + bash("sleep 2")[0] if "wait" in text else "quota %d" % used
-            elif text.startswith("ask: "):
+            elif text.startswith("ask: ") or "permask: " in text:
+                # "permask: CMD" may sit anywhere, as in a memory-mode prompt
+                cmd = text[5:] if text.startswith("ask: ") else \
+                    text.rsplit("permask: ", 1)[1].split("\n")[0].strip()
                 if "--permission-prompt-tool" not in sys.argv:
                     text = "denied: no permission prompt tool"
                 else:
                     emit({"type": "control_request", "request_id": "perm-1", "request": {
                         "subtype": "can_use_tool", "tool_name": "Bash",
-                        "input": {"command": text[5:]}, "description": "run a command"}})
+                        "input": {"command": cmd}, "description": "run a command"}})
                     reply = json.loads(sys.stdin.readline())
                     behavior = reply["response"]["response"]["behavior"]
-                    text = ("allowed: " if behavior == "allow" else "denied: ") + text[5:]
+                    text = ("allowed: " if behavior == "allow" else "denied: ") + cmd
             elif text.startswith("tool: "):
                 run(text[6:])
                 text = "tool done"

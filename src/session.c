@@ -1167,6 +1167,7 @@ struct agent_job {
     char             *report;
     char              name[INTERCOM_NAME_MAX];
     int               status, taken, started, refs;
+    int               customizations;   /* the parent's, which the tab keeps */
 };
 
 #define AGENT_PENDING (-2)
@@ -1217,6 +1218,7 @@ static int host_agent(void *ud, Backend *child, const char *task, const char *cw
     j->model  = model ? strdup(model) : NULL;
     j->effort = effort ? strdup(effort) : NULL;
     j->backend = strdup(backend);
+    j->customizations = s->customizations;
     j->status = AGENT_PENDING;
     j->refs   = 2;
 
@@ -1286,10 +1288,17 @@ struct session *session_agent_open(struct agent_job *j)
     s->agent       = j->child;
     s->job         = j;
     s->subagent    = 1;
+    s->customizations = j->customizations;
     s->thinking    = settings_get_int(SETTING_THINKING, 1);
     s->compact     = settings_get_int(SETTING_COMPACT, 0);
     s->agent->set_event_cb(s->agent, on_event, s);
     s->agent->set_abort_check(s->agent, abort_check);
+    /* Before its first turn starts the CLI: without the callback claude gets
+     * no --permission-prompt-tool and refuses, unasked, every call its
+     * permission mode would ask about (all of them where policy disables
+     * bypassPermissions). */
+    if (s->agent->set_permission_cb)
+        s->agent->set_permission_cb(s->agent, on_permission, s);
     claim_name(s);
     pthread_mutex_lock(&job_mu);
     snprintf(j->name, sizeof j->name, "%s", s->name);
